@@ -17,7 +17,7 @@
  * behaving perfectly, and teaches its user to ignore the one signal that
  * matters.
  *
- * So: Ran on time and Caught up share the success colour, Caught up one weight
+ * So: Ran on time and Ran late share the success colour, Ran late one weight
  * quieter because it is still a success. Missed is idle grey, the only state
  * where nothing ran at all. Failed is the danger colour. Amber appears
  * nowhere: the palette already spends it on "needs the user, not an error",
@@ -71,7 +71,7 @@
    */
   const OUTCOMES = {
     'on-time': { tone: 'ok', lead: 'Ran' },
-    'caught-up': { tone: 'ok-quiet', lead: 'Caught up' },
+    'caught-up': { tone: 'ok-quiet', lead: 'Ran late' },
     'missed': { tone: 'neutral', lead: 'Missed' },
     'failed': { tone: 'failed', lead: 'Failed' },
     // A run somebody deliberately stopped. History, like a missed slot,
@@ -144,23 +144,32 @@
   /**
    * What a row says when the scheduler cannot read its schedule.
    *
-   * THE SILENCE THIS ENDS. `parseSchedule` accepts two shapes and returns null
-   * for everything else, at which point the tick skips the routine with no
-   * error, no warning and no log line. A cron-scheduled routine then sits in a
-   * first-class Routines view looking exactly like a routine, and the silence
-   * has moved from a log nobody reads to a surface everybody reads. Migration
-   * never touches a schedule, so every such entry survives an upgrade exactly
-   * as written, which means anyone arriving from cron arrives with these.
+   * THE SILENCE THIS ENDS. `parseSchedule` accepts daily, weekly and monthly
+   * shapes and returns null for everything else, at which point the tick skips
+   * the routine with no error, no warning and no log line. A cron-scheduled
+   * routine then sits in a first-class Routines view looking exactly like a
+   * routine, and the silence has moved from a log nobody reads to a surface
+   * everybody reads. Migration never touches a schedule, so every such entry
+   * survives an upgrade exactly as written, which means anyone arriving from
+   * cron arrives with these.
    *
    * IT NAMES WHAT TO CHANGE, BY EXAMPLE. "Unsupported schedule" sends the
    * reader to documentation this product does not put in front of them. The
-   * two shapes that work, written out, send them to the editor instead. Both
-   * are given because a reader whose job is weekly should not have to guess
+   * editor, and three shapes that work written out, send them to a fix
+   * instead: a reader whose job is weekly or monthly should not have to guess
    * that the daily example generalises.
+   *
+   * A hand-typed day 29 to 31 gets a body of its own (`monthDay`), naming the
+   * last-day form at the file's own time, because that is almost always what
+   * was meant and Rundock will not move the slot itself.
    */
   const SCHEDULE_PROBLEM = {
     lead: 'Rundock cannot read this schedule, so this routine will not run.',
-    body: 'Change it to say every day at 07:00, or a weekday, like every Monday at 07:00.',
+    body: 'Use Edit schedule, or change the file to say every day at 07:00, every Monday at 07:00 '
+      + 'or on day 15 of every month at 07:00.',
+    monthDay: 'Day {day} is not in every month, and Rundock will not pick another day for you. '
+      + 'To run on the last day of every month, change it to on the last day of every month at {time}, '
+      + 'or use Edit schedule.',
   };
 
   /**
@@ -570,6 +579,16 @@
   }
 
   /**
+   * "1 November", the date a monthly slot is named by, however near it is,
+   * on `zone`'s clock when one is given.
+   */
+  function dateWords(instant, zone) {
+    const when = asDate(instant);
+    const at = when ? wallClock(when, zone) : null;
+    return at ? `${at.day} ${MONTHS[at.month]}` : null;
+  }
+
+  /**
    * "today, 7:00am, London time", the shape every time in this list takes,
    * worked out on `inZone`'s clock when one is given.
    */
@@ -602,19 +621,15 @@
    * The plain sentence a routine reads as: its schedule, then the skill it
    * runs.
    *
-   * BOTH HALVES ARE LOOKED UP IN THE EDITOR'S OWN LISTS, never formatted from
-   * the string. A schedule the editor never offered has no plain words, so it
+   * READ THROUGH THE EDITOR'S OWN REOPEN AND WORDS, never formatted from the
+   * string. A schedule the editor never offered has no plain words, so it
    * assembles into nothing rather than into a sentence that reads as though
-   * the product understood it.
+   * the product understood it, and the row says a schedule exactly as the
+   * editor's preview does.
    */
   function scheduleWords(schedule) {
-    if (!schedule || typeof schedule !== 'string') return null;
-    const parts = /^every ([a-z]+) at (\d{2}:\d{2})$/.exec(schedule.toLowerCase());
-    if (!parts) return null;
-    const freq = editor.FREQUENCIES.filter(f => f.value === parts[1])[0];
-    const time = editor.times().filter(t => t.value === parts[2])[0];
-    if (!freq || !time) return null;
-    return `Every ${freq.label} at ${time.label}`;
+    const words = editor.whenWords(editor.readSchedule(schedule));
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : null;
   }
 
   /**
@@ -738,24 +753,32 @@
   /**
    * What happened last time, in the words and the tone that state gets.
    *
-   * Caught up names BOTH times, the actual and the due, so it is legible as a
+   * Ran late names BOTH times, the actual and the due, so it is legible as a
    * delay rather than an event with no explanation. Missed names the cause,
    * Rundock being closed, and the slot it was closed through.
+   *
+   * A MONTHLY ROUTINE NAMES DATES. Its slot can be weeks before the run that
+   * served it, so the due time carries its date, and a missed slot, which the
+   * scheduler records only once its month has closed, says the month ended
+   * first. Which form a routine is comes from the server (`scheduleKind`).
    */
   function runStatus(input) {
     const kind = outcomeOf(input);
     if (!kind) return null;
     const now = asDate(input && input.now);
     const { zone, inZone } = rowClock(input);
+    const monthly = input.scheduleKind === 'monthly';
     const outcome = OUTCOMES[kind];
     let text = null;
     if (kind === 'missed') {
       const slot = asDate(input.missedSlot);
       const place = zoneWords(zone);
-      const when = `${clockWords(slot, inZone)} ${dayWords(slot, now, inZone)}`;
+      const when = `${clockWords(slot, inZone)} ${monthly ? dateWords(slot, inZone) : dayWords(slot, now, inZone)}`;
       text = `Missed: Rundock was closed at ${place ? `${when}, ${place} time` : when}`;
+      if (monthly) text += ', and not opened again before the month ended.';
     } else if (kind === 'caught-up') {
-      text = `Caught up: ran ${timeWords(input.lastStart, now, zone, inZone)}, due ${clockWords(input.lastSlot, inZone)}`;
+      const due = monthly ? `${dateWords(input.lastSlot, inZone)}, ${clockWords(input.lastSlot, inZone)}` : clockWords(input.lastSlot, inZone);
+      text = `Ran late: ${timeWords(input.lastStart, now, null, inZone)}. Due ${due}.`;
     } else if (kind === 'failed') {
       text = `Failed: ${timeWords(input.lastStart, now, zone, inZone)}`;
     } else if (kind === 'stopped') {
@@ -907,13 +930,21 @@
    * fault, and telling its owner to change a schedule they never wrote is an
    * answer to a question nobody asked.
    *
-   * @param {{schedule?: any, scheduleReadable?: boolean}} [input]
+   * THE BODY FOR A DAY 29 TO 31 IS THE SERVER'S ANSWER TOO, sent beside the
+   * verdict as `unreadableMonthDay`, for the same reason: reading those days
+   * here would be a second copy of the grammar.
+   *
+   * @param {{schedule?: any, scheduleReadable?: boolean, unreadableMonthDay?: {day: number, time: string}|null}} [input]
    */
   function scheduleProblem(input) {
     if (!input || input.scheduleReadable !== false) return null;
     const schedule = input.schedule;
     if (typeof schedule !== 'string' || !schedule.trim()) return null;
-    return { text: `${SCHEDULE_PROBLEM.lead} ${SCHEDULE_PROBLEM.body}` };
+    const fact = input.unreadableMonthDay;
+    const body = fact
+      ? SCHEDULE_PROBLEM.monthDay.replace('{day}', () => String(fact.day)).replace('{time}', () => fact.time)
+      : SCHEDULE_PROBLEM.body;
+    return { lead: SCHEDULE_PROBLEM.lead, body, text: `${SCHEDULE_PROBLEM.lead} ${body}` };
   }
 
   /**
@@ -1244,7 +1275,16 @@
     // which is the exact reassurance the reader came for and the one this row
     // must not give. The note below takes its place.
     if (!isServed(input)) return null;
+    // A MONTHLY SLOT THE TICK STILL OWES. The server names a monthly slot that
+    // has passed only when the tick will fire it (it steps over one that was
+    // never owed), so with no refusal it is a catch-up a moment away, and a
+    // time in the past would read as a fault. Daily and weekly keep theirs.
+    const at = asDate(input.nextRun);
+    const now = asDate(input.now);
     const clock = rowClock(input);
+    if (input.scheduleKind === 'monthly' && !input.refusal && at && now && at <= now) {
+      return { text: `Next run: shortly. It was due ${dateWords(at, clock.inZone)}, ${clockWords(at, clock.inZone)}.`, className: 'next-run' };
+    }
     const words = timeWords(input && input.nextRun, input && input.now, clock.zone, clock.inZone);
     if (!words) return null;
     return { text: `Next run: ${words}`, className: 'next-run' };

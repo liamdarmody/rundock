@@ -213,6 +213,55 @@ describe('the workspace boundary says what it enforces, per platform', () => {
   });
 });
 
+describe('ARCHITECTURE.md: what happens to a call when the permission hook fails', () => {
+  // The claim: on Claude Code 2.1.295 and later a failing permission hook
+  // blocks the call, earlier versions let it through with the hook's own
+  // refusal the only answer, and a wrong value for the field voids the whole
+  // settings file, which is why only one constant is ever written. A reader
+  // trusting the first half while the field had quietly gone from the entries
+  // would be trusting a block that is not there, so the value the passage
+  // quotes is checked against what an open actually writes.
+  const scaffoldLib = require('../../lib/workspace/scaffold.js');
+  const passage = architecture.split('\n\n').find((p) => p.includes('onFailure') && p.includes('2.1.295 and later')) || '';
+
+  test('the passage gives the outcome by version, as observed, and says why only the constant is written', () => {
+    assert.ok(passage, 'a paragraph names the field and the versions that honor it');
+    assert.match(passage, /2\.1\.294/, 'and the last version observed to ignore it');
+    assert.match(passage, /[Oo]bserved/, 'stated as observed, not as a guess');
+    assert.match(passage, /hook's own refusal is the only answer/, 'before 2.1.295 the hook alone answers');
+    assert.match(passage, /skip the whole settings file/, 'a wrong value voids the file');
+    assert.match(passage, /only the constant is ever written/, 'and that is why one constant is written');
+    assert.match(passage, /`HOOK_ON_FAILURE`/, 'naming it');
+    assert.doesNotMatch(passage, /\/Users\/|\/home\/|[A-Z]:\\/, 'with no personal paths');
+    assert.doesNotMatch(architecture, /registration does not set/, 'the sentence saying Rundock does not set it is gone');
+  });
+
+  test('the value the passage quotes is the one every PreToolUse entry gets, and no PostToolUse entry', () => {
+    const quoted = passage.match(/`"onFailure": "([^"]*)"`/);
+    assert.ok(quoted, 'the passage quotes the field as it is written');
+    assert.strictEqual(quoted[1], scaffoldLib.HOOK_ON_FAILURE, 'the quoted value is the constant');
+    const dir = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
+    assert.strictEqual(settings.hooks.PreToolUse.length, 4);
+    for (const e of settings.hooks.PreToolUse) assert.strictEqual(e.hooks[0].onFailure, quoted[1], `${e.matcher} carries it`);
+    for (const event of ['PostToolUse', 'PostToolUseFailure']) {
+      for (const e of settings.hooks[event]) assert.ok(!('onFailure' in e.hooks[0]), `${event} does not`);
+    }
+  });
+
+  test('going back to an earlier release keeps the field, as the record the passage names shows', () => {
+    const named = passage.match(/`(scripts\/hook-on-failure-undo\/[a-z-]+\.json)`/);
+    assert.ok(named, 'the passage names the record');
+    const record = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', named[1]), 'utf-8'));
+    assert.match(passage, new RegExp(`the ${record.release.replace(/\./g, '\\.')} release's own scaffold`), 'the release the passage names is the one recorded');
+    assert.match(passage, /left the settings file byte for byte/);
+    assert.strictEqual(record.releaseChangedTheFile, false, 'and the record says the release left it as it was');
+    assert.deepStrictEqual(record.leftByRelease, record.written);
+    assert.match(passage, /renamed over it only once that write has finished/, 'the passage says the file is written whole');
+  });
+});
+
 describe('ARCHITECTURE.md: the oldest Claude Code Rundock starts', () => {
   // The number a contributor reads is the one the flag table derives, so a
   // flag that raises the floor fails here until the sentence says so.
@@ -515,6 +564,18 @@ describe('ROUTINES.md: the hook experiment reports the capture\'s own numbers', 
       + 'again would be worse than one that could not be stopped');
   });
 
+  test('a run that used the shell is said to be one, on the record and on the run screen', () => {
+    // A shell write is not on the list, and the page used to stop there. The
+    // record now says when the shell was used, under the field name the
+    // scheduler writes, and the run screen says what that means for the list.
+    assert.match(routinesDoc, /The record says when the run used the shell \(`usedShell: true`\), and the run screen says so under the list/,
+      'ROUTINES.md must say the run screen tells you when a run used the shell');
+    assert.ok(fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8').includes('{ usedShell: true }'),
+      'the field the page names is the one the scheduler writes');
+    assert.doesNotMatch(routinesDoc, /shell command is invisible/,
+      'the page no longer says only that shell writes are invisible');
+  });
+
   test('the word a restart-orphaned record reports is the routine state\'s own', () => {
     // The page and the two stores have to use ONE word here. A run cut off by
     // a restart is described in three places (the routine's status, the run's
@@ -642,6 +703,142 @@ describe('ROUTINES.md: same-day catch-up', () => {
     // rather than merely corrected.
     assert.doesNotMatch(routinesDoc, /There is no catch-up/i,
       'ROUTINES.md must not contradict the catch-up window it documents');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/ROUTINES.md: the run guard, said by time
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: the run guard holds a slot by time, not by hour', () => {
+  const { getNextRun, wireSchedulerDeps } = require('../../lib/scheduler.js');
+  // The paragraph that says what the guard does, found by its first words.
+  const paragraph = routinesDoc.split('\n').find(line => line.startsWith('Each routine has a `lastRun` guard.')) || '';
+
+  // The claim, asked of getNextRun at a fixed instant rather than the wall
+  // clock, so it says the same thing whenever the suite runs. Friday 3 July
+  // 2026, built from local components.
+  const friday = (hour, minute) => new Date(2026, 6, 3, hour, minute);
+  function askedAt(now, schedule, lastRun) {
+    const previous = wireSchedulerDeps({ now: () => now });
+    try {
+      return getNextRun(schedule, lastRun.toISOString());
+    } finally {
+      wireSchedulerDeps(previous);
+    }
+  }
+
+  test('the doc states the guard by time and says what a later time on the same day does', () => {
+    assert.match(paragraph, /Daily and weekly routines do not re-fire once they have run at or after their scheduled time in that period/,
+      'ROUTINES.md must state the guard by time');
+    assert.match(paragraph, /Moving one to a later time on a day it has already run makes it run again at the new time, including a later time that has already gone/,
+      'ROUTINES.md must say what a move to a later time on the same day does');
+    assert.match(paragraph, /A run still going at the new time counts for it/);
+    assert.doesNotMatch(paragraph, /scheduled hour|same weekday/,
+      'ROUTINES.md must not keep the rule by hour, or by weekday alone, beside it');
+  });
+
+  for (const schedule of ['every day at 20:30', 'every friday at 20:30']) {
+    test(`a run stamped at 20:03 does not hold a 20:30 slot: ${schedule}`, () => {
+      assert.deepStrictEqual(askedAt(friday(20, 30), schedule, friday(20, 3)), friday(20, 30),
+        'moved to 20:30 after a run at 20:01, it runs at 20:30');
+    });
+
+    test(`a run stamped at 20:31 holds the 20:30 slot: ${schedule}`, () => {
+      assert.strictEqual(askedAt(friday(20, 45), schedule, friday(20, 31)), null,
+        'having run at 20:30, it does not re-fire that day');
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// docs/ROUTINES.md: a monthly schedule, and its window
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: a monthly routine runs once a month and catches up within it', () => {
+  const { getNextRun, wireSchedulerDeps } = require('../../lib/scheduler.js');
+  const section = (heading) => {
+    const start = routinesDoc.indexOf(`\n## ${heading}\n`);
+    const end = routinesDoc.indexOf('\n## ', start + 1);
+    return start === -1 ? '' : routinesDoc.slice(start, end === -1 ? undefined : end);
+  };
+  const format = section('Schedule format');
+  const behaviour = section('Scheduler behaviour');
+
+  // Asked at fixed instants in October 2026, built from local components.
+  const october = (day, hour, minute = 0) => new Date(2026, 9, day, hour, minute);
+  function askedAt(now, schedule, lastRun) {
+    const previous = wireSchedulerDeps({ now: () => now });
+    try {
+      return getNextRun(schedule, lastRun ? lastRun.toISOString() : null);
+    } finally {
+      wireSchedulerDeps(previous);
+    }
+  }
+  const DAY_15 = 'on day 15 of every month at 09:00';
+
+  test('the format table gives both monthly forms, and says why 29 to 31 are refused', () => {
+    assert.match(format, /\| `on day N of every month at HH:MM` \|.*N is a day from 1 to 28/,
+      'ROUTINES.md must give the day-of-month form with its range');
+    assert.match(format, /\| `on the last day of every month at HH:MM` \|/, 'and the last-day form');
+    assert.match(format, /Days 29, 30 and 31 are refused, because they are not in every month, and Rundock will not move a slot to another date/,
+      'and why the days some months lack are refused');
+  });
+
+  test('both forms parse, and day 31 does not', () => {
+    assert.ok(askedAt(october(1, 8), DAY_15, null), 'the day-of-month form is read');
+    assert.ok(askedAt(october(1, 8), 'on the last day of every month at 18:00', null), 'and the last-day form');
+    assert.strictEqual(askedAt(october(1, 8), 'on day 31 of every month at 09:00', null), null, 'day 31 is not');
+  });
+
+  test('the catch-up section gives the monthly window, and what is never owed', () => {
+    assert.match(behaviour, /A monthly routine catches up within its month\./);
+    assert.match(behaviour, /runs once, at the first tick Rundock is open later in the same month, and its row marks the run as late/);
+    assert.match(behaviour, /If the month ends first, it does not run, and the slot is recorded as missed/);
+    assert.match(behaviour, /not owed at all if it passed before the routine existed, while it was paused or switched off, or before its plan was approved/);
+    assert.match(behaviour, /A monthly routine does not re-fire once it has run at or after its scheduled time in that month/,
+      'and the guard sentence covers the monthly period');
+  });
+
+  // What a late monthly run carries is its record's dueAt, and its row marks it
+  // late, naming when it was due.
+  test('the catch-up section says the record carries dueAt, and the row marks a late run', () => {
+    assert.match(behaviour, /Its run record names the slot it was due at, in a `dueAt` field, on every scheduled run/);
+    assert.match(behaviour, /its row marks the run as late, naming when it was due/);
+  });
+
+  test('a slot earlier this month is still due', () => {
+    assert.deepStrictEqual(askedAt(october(20, 10), DAY_15, null), october(15, 9),
+      'on the 20th, the 15th is still owed and the next tick fires it');
+  });
+
+  test("last month's slot is not", () => {
+    const next = askedAt(october(2, 10), DAY_15, null);
+    assert.deepStrictEqual(next, october(15, 9), "on 2 October, the next run is this month's, not September's");
+  });
+
+  test('one that ran this month is suppressed', () => {
+    assert.strictEqual(askedAt(october(25, 10), DAY_15, october(20, 10, 5)), null,
+      'having caught up on the 20th, it is not due again that month');
+  });
+
+  // The row's word for a late run is the model's own lead, read off it, so the
+  // page and the row cannot part company on it.
+  test('the page calls a late run what the row calls it', () => {
+    const { OUTCOMES, CATCH_UP_AFTER_MS } = require('../../public/routines-model.js');
+    const lead = OUTCOMES['caught-up'].lead;
+    assert.strictEqual(lead, 'Ran late');
+    assert.match(routinesDoc, /The row's on-time, ran-late and missed verdicts are computed from scheduled runs only/,
+      'the verdict words follow the row');
+    assert.ok(behaviour.includes(`its row then leads with **${lead}**, naming when it started and when it was due`),
+      'and so does the description of a late run');
+    assert.match(behaviour, new RegExp(`A run counts as late from ${CATCH_UP_AFTER_MS / 60000} minutes after its slot\\.`));
+    assert.doesNotMatch(routinesDoc, /caught-up verdict|Caught up:/, 'the old word is gone from the page');
+  });
+
+  test('the page no longer says there are only two forms, or a run once per day or week', () => {
+    assert.doesNotMatch(routinesDoc, /only two patterns|the two forms that work|both forms that work|two accepted forms|once per day or week/,
+      'every sentence that counted two forms follows the change');
   });
 });
 
@@ -1278,6 +1475,163 @@ describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its c
       }
     } finally {
       console.error = realError;
+    }
+  });
+});
+
+// docs/ROUTINES.md: what a pause you applied looks like on its row
+describe('ROUTINES.md: a pause you applied dims the avatar, not the row', () => {
+  test('the doc says the avatar dims and the text stays at full strength, which is what the stylesheet does', () => {
+    const paragraph = routinesDoc.split('\n').find(l => l.includes('A pause you applied is quieter'));
+    assert.ok(paragraph, 'ROUTINES.md describes a pause you applied');
+    assert.ok(paragraph.includes('A pause you applied is quieter: its avatar dims while its text stays at full strength'),
+      'ROUTINES.md must say what a pause you applied dims');
+    assert.ok(!paragraph.includes('the row dims'), 'the old sentence, which is no longer true, is gone');
+    const css = fs.readFileSync(path.join(ROOT, 'public', 'styles', 'views', 'routines.css'), 'utf-8');
+    assert.ok(css.includes('.routine-row.paused .avatar { opacity: 0.5; }'), 'the sentence is true of the stylesheet');
+    assert.ok(!css.includes('.routine-row.paused { opacity'), 'and nothing dims the row as a whole');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// scaffold/rundock-guide.md: what happens to a long conversation
+// ---------------------------------------------------------------------------
+
+describe('rundock-guide.md: a long conversation is summarized automatically and stays on screen', () => {
+  // What Doc answers when someone asks what happens once a conversation grows
+  // past what the agent can hold. The runtime's half, that Claude Code and
+  // Codex summarize a long session on their own and the agent then works
+  // from the summary, is theirs: it is stated here, not run. Rundock's half
+  // is pinned by doing it: a session holding a summary is read back through
+  // the history the chat is drawn from, and everything said before the
+  // summary is still there, without the summary itself.
+  const guide = fs.readFileSync(path.join(ROOT, 'scaffold', 'rundock-guide.md'), 'utf-8');
+  const section = (() => {
+    const from = guide.indexOf('### Conversations');
+    const to = guide.indexOf('\n#', from + 1);
+    return from < 0 ? '' : guide.slice(from, to < 0 ? undefined : to);
+  })();
+
+  test('the guide says it where it explains conversations, and names no limit or number', () => {
+    assert.ok(section.length > 0, 'the guide has a Conversations section among what Doc knows');
+    assert.ok(guide.indexOf('### Conversations') > guide.indexOf('## What you know'), 'and it is among what Doc knows');
+    assert.match(section, /A long conversation is summarized automatically so the agent can carry on: Claude Code and Codex each do this on their own when a conversation grows past what the agent can hold at once\./);
+    assert.match(section, /The whole conversation stays on screen in Rundock, but from then on the agent works from the summary rather than every earlier message, so details from early on can be lost\./);
+    assert.match(section, /A new topic is best started in a new conversation\./);
+    assert.doesNotMatch(section, /\d/, 'the section names no limit or number');
+  });
+
+  test('and the whole conversation stays on screen: the history keeps every message before a summary, and not the summary', async () => {
+    const home = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-home-'));
+    const was = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const dir = useWorkspace();
+      const sessions = path.join(home, '.claude', 'projects', dir.replace(/\//g, '-'));
+      fs.mkdirSync(sessions, { recursive: true });
+      const at = (n) => `2026-01-14T09:${String(n).padStart(2, '0')}:00.000Z`;
+      const said = (role, text, n) => (role === 'user'
+        ? { type: 'user', message: { role: 'user', content: text }, timestamp: at(n) }
+        : { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] }, timestamp: at(n) });
+      // Claude Code's own lines when it summarizes a session: a boundary, and
+      // the summary written as the person's message.
+      const lines = [
+        said('user', 'Plan the launch.', 0),
+        said('assistant', 'Here is the plan.', 1),
+        { type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', timestamp: at(2) },
+        { type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true, timestamp: at(3),
+          message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The conversation is summarized below: planning the launch.' } },
+        said('user', 'Add a timeline.', 4),
+        said('assistant', 'Timeline added.', 5),
+      ];
+      fs.writeFileSync(path.join(sessions, 'doc-claims-summarized.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      const history = await srv.parseSessionHistory('doc-claims-summarized', 50);
+      assert.deepStrictEqual(history.messages.map((m) => m.content),
+        ['Plan the launch.', 'Here is the plan.', 'Add a timeline.', 'Timeline added.']);
+    } finally {
+      if (was === undefined) delete process.env.HOME; else process.env.HOME = was;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ARCHITECTURE.md: a PowerShell command runs with no card only when every part of it is a read Rundock can name', () => {
+  // The claim a reader on Windows relies on, where no sandbox sits under the
+  // card. Pinned by asking the reading the page names about the very cmdlets
+  // and constructs the page lists, so the page cannot keep saying it after the
+  // code stops doing it.
+  const shell = require('../../public/read-only-shell.js');
+  const P = require('../../public/permissions.js');
+  const LEAD = '**A PowerShell command runs with no card only when every part of it is a read Rundock can name.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const sharedSrc = fs.readFileSync(path.join(ROOT, 'public', 'read-only-shell.js'), 'utf-8');
+  const graderSrc = fs.readFileSync(path.join(ROOT, 'public', 'permissions.js'), 'utf-8');
+
+  test('the audit section says what a PowerShell read is, why the list is named, and that anything not read all the way cards', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    assert.ok(passage.includes('`isReadOnlyPowerShellCommand` in `public/read-only-shell.js`'), 'it names the one reading');
+    assert.ok(passage.includes('every part of it, split at `;`, `|`, `&&`, `||` and each new line, starts with one of these, in any case:'),
+      'it says what a read is');
+    assert.ok(passage.includes('named one cmdlet at a time and not matched by verb'), 'it says why the list is named');
+    assert.ok(passage.includes('Anything the reading cannot follow all the way is not a read, and cards'), 'it says what cards');
+  });
+
+  test('the comments beside the list say the same three things', () => {
+    for (const said of ['A POWERSHELL READ IS A COMMAND WHOSE EVERY PART STARTS WITH A NAME ON THIS', 'NAMED, NOT MATCHED BY VERB.',
+      'ANYTHING NOT READ ALL THE WAY CARDS.']) {
+      assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
+    }
+    assert.ok(!graderSrc.includes('SCOPED TO BASH'), 'and the grader no longer says its PowerShell answer is its own');
+    assert.ok(graderSrc.includes('ONE ANSWER FOR EACH SHELL, AND NO LIST HERE.'), 'it says there is one answer for each shell');
+  });
+
+  test('the cmdlets the page names are the list the code reads, and each is a read', () => {
+    const named = /starts with one of these, in any case: ([^.]+)\./.exec(passage);
+    assert.ok(named, 'the page names the list');
+    const onPage = [...named[1].matchAll(/`([A-Za-z-]+)`/g)].map(m => m[1].toLowerCase()).sort();
+    const declared = /var READ_ONLY_POWERSHELL_COMMANDS = \[([^\]]+)\]/.exec(sharedSrc);
+    assert.ok(declared, 'the shared definition declares the list');
+    const inCode = [...declared[1].matchAll(/'([a-z-]+)'/g)].map(m => m[1]).sort();
+    assert.ok(inCode.length >= 20, `the list was read whole: ${inCode.length} names`);
+    assert.deepStrictEqual(onPage, inCode, 'the page names exactly the list');
+    for (const name of onPage) {
+      assert.strictEqual(shell.isReadOnlyPowerShellCommand(name), true, `${name} is a read`);
+      assert.strictEqual(P.classifyRisk('PowerShell', { command: name }), 'low', `${name} runs with no card`);
+    }
+  });
+
+  test('what the page says cards does card', () => {
+    for (const command of ['Get-Clipboard', 'Get-Credential', 'Get-Content (Remove-Item notes.md)', 'Write-Output "$(Set-Content notes.md x)"',
+      'Write-Output @(Set-Content notes.md x)', 'Get-ChildItem | Where-Object { Remove-Item notes.md }', 'Get-Date; & Set-Content notes.md x',
+      'Get-Date; . .\\setup.ps1', "Write-Output `'x", 'Get-Date --% x', 'Get-Date # x', 'Get-Content notes.md > copy.md',
+      'Gеt-Date', '$cmd notes.md', "Get-Content 'notes.md", 'Get-Date; powershell -c x', 'Get-Date; cmd /c x']) {
+      assert.strictEqual(shell.isReadOnlyPowerShellCommand(command), false, command);
+      assert.notStrictEqual(P.classifyRisk('PowerShell', { command }), 'low', command);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/RUNDOCK-UI.md: one rule for a destructive button that acts at once
+// ---------------------------------------------------------------------------
+
+describe('RUNDOCK-UI.md: the danger rule says the same thing in both places', () => {
+  // The button section names "Stop this run" as a destructive button that
+  // acts at once and is drawn as a neutral outline. The design rules near
+  // the end of the page state the danger rule again, and a reader who meets
+  // only that statement must not be told every such button is solid.
+  const uiDoc = fs.readFileSync(path.join(ROOT, 'docs', 'RUNDOCK-UI.md'), 'utf-8');
+  const ruleOf = (start) => uiDoc.split('\n').find(line => line.startsWith(start)) || '';
+
+  test('the design rule names the outline exception the button section makes', () => {
+    const button = ruleOf('The rule is about where the click lands');
+    const design = ruleOf('- **Danger differs by form as well as colour.**');
+    assert.ok(button && design, 'both statements of the danger rule are on the page');
+    for (const [where, text] of [['the button section', button], ['the design rules', design]]) {
+      assert.match(text, /Stop this run/, `${where} names the control the exception is for`);
+      assert.match(text, /neutral outline that takes the danger colors on hover and keyboard focus/,
+        `${where} says how that control is drawn`);
     }
   });
 });

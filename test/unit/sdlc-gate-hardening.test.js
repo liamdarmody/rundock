@@ -16,6 +16,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { parseWorkflow, readWorkflow, runCommands } = require('../helpers/workflow-text.js');
+
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
 
@@ -254,6 +256,8 @@ const ENUMERATIONS = [
   { file: 'test/unit/preflight.test.js', extraction: "the extraction registry's own rows, read out of sdlc-gate-hardening.test.js to check the cheap phase covers every pinned-count suite", failLoudBy: 'count', where: 'the row count is floored before the rows are used, so a read that stops matching fails rather than proving every suite covered by finding none', anchor: "sanity: the inventory was read and has rows" },
   { file: 'test/unit/release-ci.test.js', extraction: "the job names out of .github/workflows/ci.yml, with the Node matrix expanded", failLoudBy: 'count', where: 'the expanded names and the matrix are floored before each required check is looked up, so a read that stops matching fails rather than reporting every check missing from an empty list', anchor: "sanity: the workflow's job names were read" },
   { file: 'test/unit/precommit-gate.test.js', extraction: "the job names out of .github/workflows/ci.yml, with the Node matrix expanded, to check every CI owner the gate record names", failLoudBy: 'count', where: 'the expanded names and the ownership list are floored before any owner is looked up, so a read that stops matching fails rather than reporting every owner missing from an empty list', anchor: "sanity: the workflow's job names were read" },
+  { file: 'test/integration/harness-log-readers.test.js', extraction: 'every split on newlines followed by a JSON.parse, in each file under test/ that names a stub log', failLoudBy: 'count', where: 'the pattern must find each reader shape in a specimen, and the files naming a log are floored at four, before the offender list is judged, so a pattern that stops matching fails rather than reporting no readers of their own', anchor: 'sanity: the logs are named in' },
+  { file: 'test/unit/scheduler-state-writes.test.js', extraction: 'every write call in lib/ and the path it writes, in each file that names a state file', failLoudBy: 'count', where: 'the call pattern and the argument reader must find the writes in a specimen, the files naming a state file are held to exactly the scheduler and the runtime, and the writes found in them are held to exact equality with the listed ones, so a pattern that stops matching fails rather than finding no direct write', anchor: 'sanity: the stores are named in the scheduler and the runtime' },
   { file: 'test/unit/flake-register.test.js', extraction: 'the rows of docs/FLAKES.md, and every retry configured in the browser specs', failLoudBy: 'count', where: 'the register is floored at one row and the retries at one before either is trusted, so a read that stops matching fails rather than finding nothing to object to', anchor: 'sanity: the seeded test has its retry' },
   { file: 'test/unit/page-ready.test.js', extraction: "the orchestrator file the persona journey writes, out of scripts/smoke/personas.mjs", failLoudBy: 'count', where: 'the file is asserted found before its frontmatter is judged, so a read that stops matching fails rather than passing on nothing', anchor: 'the journey writes an orchestrator file' },
   { file: 'test/unit/ci-verdict.test.js', extraction: "the permissions block out of .github/workflows/ci-retry.yml", failLoudBy: 'count', where: 'the block is asserted found before its grants are read, and the write grants are held to exact equality, so a read that stops matching fails rather than finding no write permission to object to', anchor: "the workflow declares its permissions" },
@@ -277,6 +281,7 @@ const ENUMERATIONS = [
   { file: 'test/unit/extension-install.test.js', extraction: "the onclick names inside packagesSectionHtml out of settings.js, and the packages reply dispatch case cut out of app.js and run", failLoudBy: 'count', where: 'the section match is asserted found before it is parsed, a specimen name the markup must carry is asserted in the parsed set, and the dispatch case is asserted found before it is turned into the function every rendered-view test routes replies through, so a pattern that stops matching fails rather than routing nothing', anchor: 'app.js no longer carries the packages reply dispatch case' },
   { file: 'test/unit/rundock-ui-contrast.test.js', extraction: 'the colour declarations of every Rundock UI component out of rundock-ui.css, and the dark and light token blocks out of tokens.css', failLoudBy: 'mutation', where: 'every pairing names its rule and property and refuses when either is missing, and test/tools/mutate-rundock-ui-guards.js removes a measured rule and requires this suite to redden', anchor: 'if the rule moved, move this row with it' },
   { file: 'test/unit/permission-card-contrast.test.js', extraction: 'the permission card button rules out of chat.css, and the dark and light token blocks out of tokens.css', failLoudBy: 'mutation', where: 'every pairing names its rule and property and refuses when either is missing, and test/tools/mutate-workspace-boundary-guards.js removes the Deny edge and the light success text and requires this suite to redden', anchor: 'declares no ${prop}' },
+  { file: 'test/unit/run-screen-contrast.test.js', extraction: 'the run screen rules out of run-detail.css, and the :root and body.light token blocks out of tokens.css', failLoudBy: 'mutation', where: 'every pairing names its rule and property and refuses when either is missing, a specimen known to fail must measure below the bar, and test/tools/mutate-run-detail-guards.js takes body.light out of the link color\u2019s rule, leaving it declared on the root alone so the light theme inherits the dark mix, reddening this suite', anchor: 'run-detail.css has no' },
   { file: 'test/unit/editor-link-contrast.test.js', extraction: 'the link and value colour rules out of editor.css, the pane background out of base.css, and the dark and light token blocks out of tokens.css', failLoudBy: 'count', where: 'every pairing names its rule and property and refuses when either is missing, and each token read refuses when tokens.css does not declare it', anchor: 'if the rule moved, move this row with it' },
   { file: 'test/unit/full-bleed.test.js', extraction: 'the full-bleed rules out of editor.css, extension-frame.css, embed.css and extension-base.css', failLoudBy: 'mutation', where: 'every rule it reads refuses when missing, and test/tools/mutate-rundock-ui-guards.js removes the pane padding rule, the frame and document colours and the document padding, each reddening this suite', anchor: 'has no rule for' },
   { file: 'test/unit/rundock-ui-frame.test.js', extraction: "the frame document's scripts, styles and policy out of the srcdoc the host builds", failLoudBy: 'mutation', where: 'exact counts of scripts and styles in their order, and test/tools/mutate-rundock-ui-guards.js removes the library from each builder and reorders it, each reddening this suite', anchor: 'bootstrap, library, entry' },
@@ -304,7 +309,10 @@ const ENUMERATIONS = [
   { file: 'test/tools/style-resolve-diff.js', extraction: 'declarations and rule blocks out of stylesheets', failLoudBy: 'count', where: 'its companion test file proves the patterns on specimens', anchor: 'tokensAt' },
   { file: 'test/unit/sdlc-gate-hardening.test.js', extraction: 'destructive commands in tracked markdown, redTests and report bodies out of the harnesses, scanner rules out of check-internal-refs', failLoudBy: 'count', where: 'specimen self-tests, document and per-directory floors, and exact extraction counts throughout this file', anchor: 'looksLikeExtraction' },
   { file: 'test/helpers/scheduler-statuses.js', extraction: 'status literals out of the scheduler writers', failLoudBy: 'count', where: 'its consumers assert the vocabulary in both directions (profile-boxes) and drive every word', anchor: 'statusesTheSchedulerRecords' },
+  { file: 'test/helpers/workflow-text.js', extraction: 'jobs, steps and the commands each step runs, out of the workflow files', failLoudBy: 'count', where: 'it refuses a workflow with no jobs and a job with no steps, its consumers floor the jobs and commands they read and find each mutation job exactly once, and mutation-workflows.test.js proves it on a specimen workflow', anchor: 'the workflow text has no jobs' },
+  { file: 'test/integration/held-catch-up-restart.test.js', extraction: "the sign-in link out of each server's startup output", failLoudBy: 'count', where: 'a server whose output never matches the banner rejects its boot with that output, so a pattern that stops matching fails the test rather than reading nothing', anchor: 'no banner within' },
   { file: 'test/integration/http-api.test.js', extraction: 'script and stylesheet links out of served index.html', failLoudBy: 'count', where: 'floors on both lists plus a token-sheet canary', anchor: 'tokens.css' },
+  { file: 'test/integration/powershell-read-approvals.test.js', extraction: "the socket message handler, the conversation line of handle() and its control_request arm, cut out of app.js and run on the real server's frames", failLoudBy: 'count', where: "appPiece refuses when a piece is missing, and the cut dispatch is then run on the real socket, so a request it stops handing on leaves the reads unanswered and the chains uncarded; test/tools/mutate-workspace-boundary-guards.js removes the dispatch and reddens this suite", anchor: 'app.js no longer has ' },
   { file: 'test/integration/ws-handler-edges.test.js', extraction: 'frontmatter and order lines out of written agent files', failLoudBy: 'count', where: 'exact match counts; missing frontmatter refuses', anchor: 'exactly one order line' },
   { file: 'test/tools/innerhtml-sites.js', extraction: 'innerHTML assignment sites across the client', failLoudBy: 'count', where: 'pinned per-file totals in innerhtml-inventory.test.js', anchor: 'ASSIGNMENT.source' },
   { file: 'test/unit/app-retentions.test.js', extraction: 'DOM-writing functions out of app.js', failLoudBy: 'count', where: 'owners.size floor plus the stale-manifest check in both directions', anchor: 'owners.size' },
@@ -318,10 +326,15 @@ const ENUMERATIONS = [
   { file: 'test/unit/skills-empty.test.js', extraction: 'markup regions cut out of index.html', failLoudBy: 'count', where: 'every cut refuses when its region is missing', anchor: 'no longer carries' },
   { file: 'test/unit/style-drift.test.js', extraction: 'value literals out of allowlist reasons', failLoudBy: 'count', where: 'specimen beside the pattern, added with this registry row', anchor: 'no longer matches its own specimen' },
   { file: 'test/unit/attention-token.test.js', extraction: 'the theme token blocks out of tokens.css, and the new-workspace notice rules out of workspace.css', failLoudBy: 'count', where: 'the token parse is floored before any ratio is computed, each value refuses a shape it cannot read, and each rule lookup asserts its selector is found', anchor: 'the attention token parse found almost nothing' },
+  { file: 'test/unit/danger-text-card-contrast.test.js', extraction: 'the theme token blocks out of tokens.css, and the settings content rule out of settings.css', failLoudBy: 'count', where: 'the token parse is floored before any ratio is computed, each value refuses a shape it cannot resolve, and the settings recipe is asserted present by value', anchor: 'the token parse found almost nothing in :root' },
   { file: 'test/unit/danger-token.test.js', extraction: 'text-coloured declarations that reference the danger fill, and the danger-family references, out of the stylesheets', failLoudBy: 'count', where: 'specimen self-test beside the prohibition scan, biting on every text shape and silent on every fill or edge shape; a per-file floor of one and a total floor on the family references', anchor: 'the text-on-fill pattern no longer matches its own specimen' },
   { file: 'test/unit/packages-manage.test.js', extraction: "the Packages page stylesheet block cut between its two markers and read rule by rule, the settings nav items out of index.html, and the roster-carrying dispatch arms and the roster wiring cut out of app.js and run", failLoudBy: 'count', where: 'the block is asserted found and floored on its rule count before any literal scan, each rule lookup refuses when its selector is missing, the nav parse is held to exact order equality, and appPiece refuses when an arm or function is missing before it is run against a stub window', anchor: 'an empty read here is a broken instrument' },
   { file: 'test/unit/claude-version-floor.test.js', extraction: "every quoted '--flag' literal in the four files that start Claude Code, to hold each to a row in the flag table", failLoudBy: 'count', where: 'the read is floored on its size and must find five named specimens before any flag is checked for a row, so a pattern that stops matching fails rather than passing on an empty inventory', anchor: 'the inventory read no flags: the pattern has gone blind' },
+  { file: 'test/unit/routine-screens-contrast.test.js', extraction: 'the rules of tokens.css and of the routine screens\' four stylesheets, read rule by rule, and each token resolved in each theme', failLoudBy: 'count', where: 'the token parse is floored on :root and on body.light before anything is measured, each rule lookup refuses when its selector or property is missing, and a token taken out of a specimen tokens.css fails its row by name', anchor: 'the token parse found almost nothing on :root, so nothing below is measured' },
   { file: 'test/unit/hook-never-crashes.test.js', extraction: "the test-only environment names the permission hook reads, out of permission-hook.js", failLoudBy: 'count', where: 'the collected names are compared with an exact deepStrictEqual against the Keychain platform pair, so a pattern that stops matching fails rather than proving the hook has no other switch by finding none', anchor: "['RUNDOCK_TEST_PLATFORM', 'RUNDOCK_TEST_SEAMS']" },
+  { file: 'test/unit/mutation-harness-runner.test.js', extraction: 'the calls that start a process, the runner import and the awaited calls out of every mutation harness, read past string and comment text, and each harness\'s redTests, push site and report cut out and driven', failLoudBy: 'count', where: 'a floor on the harness count, a specimen the literal reader must classify, each harness\'s redTests, entry point and exports found as code exactly once before its calls are trusted, and every cut-out asserted found exactly once', anchor: 'assert.ok(HARNESS_FILES.length >= 35' },
+  { file: 'test/unit/child-coverage-switch.test.js', extraction: 'every line in the test tree that deletes the coverage key from a child\'s environment, and every file that sets it to an empty value', failLoudBy: 'count', where: 'the deletion pattern must match a specimen in every form it is written and miss the forms that are not one, and the walk is floored on the files it reads and on the files that set the key to an empty value', anchor: 'a deletion the scan must see' },
+  { file: 'test/unit/artifact-review-attach.test.js', extraction: "the files view's attachArtifactReviewForCurrentFile, cut out of files.js and run against a stand-in frame", failLoudBy: 'count', where: 'the cut asserts the function is found and still imports the review module the way the test stubs it, so a rename fails by name rather than testing nothing', anchor: 'public/views/files.js no longer carries attachArtifactReviewForCurrentFile' },
 ];
 
 // What makes a file a source-walking extraction. Deliberately the same
@@ -439,6 +452,11 @@ const HARNESSES = fs.readdirSync(path.join(ROOT, 'test', 'tools'))
   .map(f => `test/tools/${f}`)
   .sort();
 
+// The workflow steps that ask the selector for every harness, read from what
+// each step runs: a comment that names the command is not a step.
+const allHarnessRuns = (workflow) => runCommands(workflow).filter((r) => /mutation-scope\.js --all\b/.test(r.run));
+const unplannedAllRuns = (workflow) => allHarnessRuns(workflow).filter((r) => !/--plan(?=\s|$)/.test(r.run));
+
 // THE ROLL IS THE DIRECTORY. A hand-kept chain of every harness used to sit in
 // package.json beside this list, so adding a harness meant editing two places
 // and forgetting one meant a harness that never ran. The selector, CI and the
@@ -468,12 +486,12 @@ assert.deepStrictEqual(HARNESSES, DISCOVERED_HARNESSES,
 // drives all of them: uniformity is a claim, and a claim needs a test.
 function buildRedTests(file) {
   const src = read(file);
-  const m = src.match(/function redTests\((?:suite)?\) \{[\s\S]*?\n\}/);
+  const m = src.match(/async function redTests\((?:suite)?\) \{[\s\S]*?\n\}/);
   assert.ok(m, `${file}: redTests could not be cut out; if it moved or was renamed, update this extraction`);
   const body = m[0];
-  return (fakeExec) => {
-    const factory = new Function('execFileSync', 'REPORTER', 'ROOT', 'SUITE', `${body}; return redTests;`);
-    return factory(fakeExec, [], ROOT, 'stub-suite');
+  return (fakeRun) => {
+    const factory = new Function('runSuite', 'REPORTER', 'ROOT', 'SUITE', `${body}; return redTests;`);
+    return factory(fakeRun, [], ROOT, 'stub-suite');
   };
 }
 
@@ -488,18 +506,18 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
   const GARBAGE = 'Bootstrapping… progress 42%\ninterleaved output with no summary at all\n';
 
   for (const file of HARNESSES) {
-    test(`${path.basename(file)} refuses unreadable output and reads readable output`, () => {
+    test(`${path.basename(file)} refuses unreadable output and reads readable output`, async () => {
       const build = buildRedTests(file);
 
-      const unparsable = build(failWith(GARBAGE))();
+      const unparsable = await build(failWith(GARBAGE))();
       assert.deepStrictEqual(unparsable, { unparsable: true },
         `${file}: a failed suite with no readable summary must come back as a named refusal, never a throw`);
 
-      const red = build(failWith(WELL_FORMED))();
+      const red = await build(failWith(WELL_FORMED))();
       assert.deepStrictEqual(red, ['the guard was noticed'],
         `${file}: a well-formed summary must still yield the red test names`);
 
-      const green = build(() => 'all fine\n')();
+      const green = await build(() => 'all fine\n')();
       assert.deepStrictEqual(green, [], `${file}: a passing suite reads as no red tests`);
     });
   }
@@ -517,9 +535,9 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
     const src = read(file);
     const m = src.match(/results\.push\(red && red\.unparsable[\s\S]*?\);/);
     assert.ok(m, `${file}: the run() push site for a parser refusal could not be cut out; update this extraction with the new shape`);
-    const factory = new Function('red', 'label', 'matches', 'target',
+    const factory = new Function('red', 'label', 'matches', 'target', 'suiteOutput',
       `const rows = []; const results = { push: (r) => rows.push(r) }; ${m[0]}; return rows[0];`);
-    return factory({ unparsable: true }, 'probe-mutation', 1, { suite: 'stub-suite' });
+    return factory({ unparsable: true }, 'probe-mutation', 1, { suite: 'stub-suite' }, () => null);
   }
 
   for (const file of HARNESSES) {
@@ -569,9 +587,32 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
       assert.doesNotMatch(cmd, /test\/tools\/mutate-[\w-]+-guards\.js/,
         `package.json script ${name} names a harness by hand`);
     }
-    const nightly = read('.github', 'workflows', 'mutation-nightly.yml');
-    assert.match(nightly, /node scripts\/mutation-scope\.js --all/,
+    assert.ok(allHarnessRuns(readWorkflow('mutation-nightly.yml')).some((r) => r.run.startsWith('node scripts/mutation-scope.js --all')),
       'the nightly sweep no longer asks the selector for every harness');
+  });
+
+  // THE SCAN FOR --all READS WHAT RUNS. Read over the whole file, a comment
+  // that names the command (one explaining why the sweep plans, say) was read
+  // as a step running every harness in one job, and a command folded over two
+  // lines was not read at all.
+  test('the nightly scan for every harness reads what each step runs, never a comment', () => {
+    const specimen = parseWorkflow([
+      'jobs:',
+      '  sweep:',
+      '    steps:',
+      '      # node scripts/mutation-scope.js --all, named in a comment',
+      '      - run: node scripts/mutation-scope.js --all --plan --out plan.json',
+      '      - run: >-',
+      '          node scripts/mutation-scope.js',
+      '          --all',
+      '',
+    ].join('\n'), 'specimen');
+    assert.deepStrictEqual(allHarnessRuns(specimen).map((r) => r.run), [
+      'node scripts/mutation-scope.js --all --plan --out plan.json',
+      'node scripts/mutation-scope.js --all',
+    ], 'the planned command and the folded one are read, and the comment is not');
+    assert.deepStrictEqual(unplannedAllRuns(specimen).map((r) => r.run), ['node scripts/mutation-scope.js --all'],
+      'only the folded command runs every harness unplanned');
   });
 
   // ONE JOB OUTGREW ITS CLOCK. Run end to end in a single job, the complete set
@@ -590,9 +631,11 @@ describe('a mutation result that cannot be parsed is a refusal, not a crash', ()
       else if (current && !/^ {2}#/.test(line)) jobs[current] = `${jobs[current] || ''}${line}\n`;
     }
     const names = Object.keys(jobs);
-    assert.doesNotMatch(nightly, /mutation-scope\.js --all(?![^\n]*--plan)/,
+    const workflow = readWorkflow('mutation-nightly.yml');
+    assert.deepStrictEqual(unplannedAllRuns(workflow), [],
       'a nightly step runs every harness in one job; the complete set must be planned into shards');
-    const plan = names.find((n) => /mutation-scope\.js --all\b[^\n]*--plan\b/.test(jobs[n])
+    const planned = allHarnessRuns(workflow).map((r) => r.job);
+    const plan = names.find((n) => planned.includes(n)
       && /^ +matrix: \$\{\{ steps\.[\w-]+\.outputs\.matrix \}\}/m.test(jobs[n]));
     assert.ok(plan, 'no nightly job plans every harness (--all --plan) and publishes the matrix');
     const shard = names.find((n) => jobs[n].includes(`fromJSON(needs.${plan}.outputs.matrix)`));

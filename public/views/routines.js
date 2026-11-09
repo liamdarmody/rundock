@@ -330,6 +330,10 @@ function rowHtml(entry, index, withActions) {
     // roster. Passed through untouched: a client that decided this for itself
     // would be a second copy of a grammar that lives beside the tick.
     scheduleReadable: r.scheduleReadable,
+    // And its reading of a hand-typed day 29 to 31, for the notice's body.
+    unreadableMonthDay: r.unreadableMonthDay,
+    // Which form the scheduler reads it as, so a monthly row names dates.
+    scheduleKind: r.scheduleKind,
     // THE SCHEDULER'S OWN REFUSAL, published beside the roster by the same
     // enrichment that stamps scheduleReadable, and passed through untouched
     // for the same reason: the row's offer promises what the tick would do,
@@ -383,9 +387,10 @@ function rowHtml(entry, index, withActions) {
   // confirmation too, unlike the controls: somebody about to remove a routine
   // is entitled to know it was never going to run.
   if (row.scheduleProblem) {
-    body += '<div class="rr-meta rr-problem-line">'
-      + `<span class="schedule-problem">${esc(row.scheduleProblem.text)}</span>`
-      + '</div>';
+    body += '<div class="rr-meta rr-problem-line"><span class="schedule-problem">'
+      + `<span class="schedule-problem-lead">${esc(row.scheduleProblem.lead)}</span> `
+      + `<span class="schedule-problem-body">${esc(row.scheduleProblem.body)}</span>`
+      + '</span></div>';
   }
   // AND THE OTHER FAULT OF THE SAME KIND: a routine that says when it runs and
   // never says what to do. Drawn on its own line and in the same tone, because
@@ -438,7 +443,7 @@ function rowHtml(entry, index, withActions) {
   }
   // A run in progress, checked before the three-tone line below and instead
   // of it: outcomeOf (routines-model.js) deliberately answers `null` while
-  // `lastRunStatus` is 'running', because "on time / caught up / missed /
+  // `lastRunStatus` is 'running', because "on time / ran late / missed /
   // failed" are all verdicts on a run that has ENDED, and this one has not.
   // That withholding is right for the model; it is not a reason for the row
   // to say nothing. Before this, the row went blank for exactly as long as a

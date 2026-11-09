@@ -368,7 +368,7 @@ describe('routine editor view: the schedule is built, not typed', () => {
     const frequency = doc.querySelector('select[data-routine-field="frequency"]');
     const time = doc.querySelector('select[data-routine-field="time"]');
     assert.ok(frequency && time, 'both halves of the sentence are chosen, not written');
-    assert.strictEqual(frequency.querySelectorAll('option').length, 8);
+    assert.strictEqual(frequency.querySelectorAll('option').length, 9);
     assert.strictEqual(time.querySelectorAll('option').length, 48);
     dom.window.close();
   });
@@ -1131,6 +1131,154 @@ describe('routine editor view: editing a saved routine', () => {
     const fixed = doc.querySelector('[data-routine-editor="run-on-fixed"]');
     assert.match(fixed.textContent, /Your Agent Computer/);
     assert.strictEqual(doc.querySelector('[data-run-on]'), null, 'and nothing offers to change it');
+    dom.window.close();
+  });
+});
+
+// ===== A MONTHLY SCHEDULE =====
+//
+// Month adds a third dropdown, the day, between the frequency and the time. It
+// is drawn only while month is chosen, and it is the same native select the
+// other two are, so the keyboard reaches and works it as it does them.
+describe('routine editor view: a monthly schedule', () => {
+  function atSchedule() {
+    const mounted = mount({ agentId: 'piper', agentName: 'Piper' });
+    mounted.w.routineEditorPick('ops-summary:piper');
+    mounted.w.routineEditorStep('schedule');
+    return mounted;
+  }
+  // Choose a value the way a person does: on the select, through its change.
+  function choose(w, field, value) {
+    const select = w.document.querySelector(`select[data-routine-field="${field}"]`);
+    assert.ok(select, `there is no ${field} dropdown to choose from`);
+    select.value = value;
+    assert.strictEqual(select.value, value, `the ${field} dropdown offers no ${value}`);
+    select.dispatchEvent(new w.Event('change'));
+  }
+  const sentenceParts = (doc) => [...doc.querySelector('.re-sentence').children]
+    .map(el => (el.matches('.re-select-wrap') ? `[${el.querySelector('select').getAttribute('data-routine-field')}]`
+      : el.textContent.trim()));
+  const preview = (doc) => doc.querySelector('[data-routine-editor="sentence"]').textContent;
+  const caveat = (doc) => doc.querySelector('[data-routine-editor="workspace-caveat"]').textContent;
+
+  test('the day dropdown is drawn only for month, between the frequency and the time', () => {
+    const { doc, w, dom } = atSchedule();
+    assert.strictEqual(doc.querySelector('select[data-routine-field="day"]'), null, 'no day before month is chosen');
+    choose(w, 'time', '07:30');
+    choose(w, 'frequency', 'month');
+    assert.deepStrictEqual(sentenceParts(doc),
+      ['Run', 'Compile the ops summary', 'every', '[frequency]', 'on the', '[day]', 'at', '[time]']);
+    assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, '1', 'it starts on the 1st');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '07:30', 'and keeps the time');
+    choose(w, 'frequency', 'friday');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="day"]'), null, 'another frequency removes it');
+    assert.deepStrictEqual(sentenceParts(doc),
+      ['Run', 'Compile the ops summary', 'every', '[frequency]', 'at', '[time]']);
+    dom.window.close();
+  });
+
+  // The keyboard. A native select in the wrapper the other two use is a Tab
+  // stop in sentence order with their focus ring, and the rule before the last
+  // day is not an option, so nothing can choose it or land on it.
+  test('the day dropdown is a native select like the other two, and the rule is not an option', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'frequency', 'month');
+    const selects = [...doc.querySelectorAll('.re-sentence select')];
+    assert.deepStrictEqual(selects.map(el => el.getAttribute('data-routine-field')), ['frequency', 'day', 'time'],
+      'the three are in sentence order, which is their Tab order');
+    for (const el of selects) {
+      assert.ok(el.classList.contains('re-select') && el.parentElement.classList.contains('re-select-wrap'),
+        `${el.getAttribute('data-routine-field')} is not in the shared select wrapper`);
+      assert.strictEqual(el.getAttribute('tabindex'), null, 'no select changes its place in the Tab order');
+      assert.strictEqual(el.getAttribute('onkeydown'), null, 'and none adds key handling of its own');
+    }
+    const day = doc.querySelector('select[data-routine-field="day"]');
+    assert.strictEqual(day.options.length, 29, '1st to 28th and the last day, and nothing else to choose');
+    const children = [...day.children].map(el => el.tagName.toLowerCase());
+    assert.deepStrictEqual(children, [...Array(28).fill('option'), 'hr', 'option'], 'one rule, before the last day');
+    assert.strictEqual(day.options[27].textContent, '28th');
+    assert.strictEqual(day.options[28].textContent, 'last day');
+    dom.window.close();
+  });
+
+  test('a day and a time read back in the preview and the note, and save as the monthly text', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'frequency', 'month');
+    choose(w, 'day', '15');
+    choose(w, 'time', '09:00');
+    assert.strictEqual(preview(doc), 'Run Compile the ops summary every month on the 15th at 9:00am, on this computer.');
+    assert.match(caveat(doc), /A missed slot is caught up the next time Rundock is open that month\.$/);
+    choose(w, 'day', 'last');
+    assert.strictEqual(preview(doc), 'Run Compile the ops summary every month on the last day at 9:00am, on this computer.');
+    doc.querySelector('.re-actions .settings-btn-primary').click();
+    doc.querySelector('[data-routine-editor="save"]').click();
+    assert.strictEqual(w.sent.length, 1);
+    assert.strictEqual(w.sent[0].type, 'save_routine');
+    assert.strictEqual(w.sent[0].routine.schedule, 'on the last day of every month at 09:00');
+    dom.window.close();
+  });
+
+  test('choosing month and then day again restores the daily sentence, with the time kept', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'time', '07:30');
+    choose(w, 'frequency', 'month');
+    choose(w, 'day', '15');
+    choose(w, 'frequency', 'day');
+    assert.strictEqual(preview(doc), 'Run Compile the ops summary every day at 7:30am, on this computer.');
+    assert.match(caveat(doc), /A missed slot is caught up the same day you return\.$/);
+    choose(w, 'frequency', 'month');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, '1',
+      'the day chosen before is gone with the month it belonged to');
+    dom.window.close();
+  });
+
+  // Edit schedule, opened from the roster the way the routines list opens it.
+  function editFromRoster(routine) {
+    const { dom, w, doc } = mount({ agentId: 'piper', agentName: 'Piper' });
+    w.agents = [{ id: 'piper', displayName: 'Piper', routines: [{ name: 'Context review', runOn: 'local', ...routine }] }];
+    w.editRoutineSchedule('piper', 'Context review', 0);
+    return { dom, w, doc };
+  }
+
+  test('a monthly routine reopens on its own day and time, and saves the day it shows', () => {
+    const { doc, w, dom } = editFromRoster({ schedule: 'on the last day of every month at 18:00' });
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'month');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, 'last');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '18:00');
+    assert.strictEqual(doc.querySelector('[data-routine-editor="stored-schedule"]'), null);
+    choose(w, 'day', '28');
+    doc.querySelector('.re-actions .settings-btn-primary').click();
+    doc.querySelector('[data-routine-editor="save"]').click();
+    assert.strictEqual(w.sent[0].type, 'set_routine_schedule');
+    assert.strictEqual(w.sent[0].schedule, 'on day 28 of every month at 18:00');
+    dom.window.close();
+  });
+
+  test('a hand-typed day 31 opens on month and the last day, says so, and sends nothing until saved', () => {
+    const { doc, w, dom } = editFromRoster({
+      schedule: 'on day 31 of every month at 09:00', scheduleReadable: false,
+      unreadableMonthDay: { day: 31, time: '09:00' },
+    });
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'month');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, 'last');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '09:00');
+    assert.strictEqual(doc.querySelector('[data-routine-editor="stored-schedule"]').textContent,
+      "This routine's schedule, on day 31 of every month at 09:00, is not one this editor can build. "
+      + 'The last day of the month is selected instead. Saving replaces it.');
+    doc.querySelector('.re-actions .settings-btn-primary').click();
+    assert.deepStrictEqual(w.sent, [], 'Continue writes nothing');
+    doc.querySelector('[data-routine-editor="save"]').click();
+    assert.strictEqual(w.sent[0].schedule, 'on the last day of every month at 09:00');
+    dom.window.close();
+  });
+
+  test('a day 31 at a time the editor cannot show opens on the default time', () => {
+    const { doc, dom } = editFromRoster({
+      schedule: 'on day 30 of every month at 09:07', scheduleReadable: false,
+      unreadableMonthDay: { day: 30, time: '09:07' },
+    });
+    assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, 'last');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '09:00');
     dom.window.close();
   });
 });

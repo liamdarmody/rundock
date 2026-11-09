@@ -89,22 +89,47 @@
   // fs.rmSync payload, or a fetch that sends a file somewhere, would run with
   // no card at all. They ask, exactly as `node script.js` already does.
 
-  // THE SAME REGISTRY FOR THE OTHER SHELL, because Windows is one of the two
-  // platforms this product builds for and its agents do not write `ls`.
+  // THE REGISTRY FOR THE OTHER SHELL, because Windows is one of the two
+  // platforms this product builds for, its agents do not write `ls`, and it
+  // has no sandbox under the card. It is read by isReadOnlyPowerShellCommand
+  // below, the one reading of PowerShell, which the card grader and the hook
+  // both call.
   //
-  // Enumerated rather than matched by verb. `Get-*` is read-shaped by
-  // PowerShell's own convention, and this registry frees a crossing into the
-  // runtime's own home, so it names the cmdlets actually seen rather than
-  // trusting a naming convention to hold for every cmdlet anyone ever writes.
-  // Compared case-insensitively because PowerShell is; the list above is not,
-  // because its shells are not.
+  // A POWERSHELL READ IS A COMMAND WHOSE EVERY PART STARTS WITH A NAME ON THIS
+  // LIST. Every part: the command is split at `;`, `|`, `&&`, `||` and each new
+  // line, and one part that is not a read makes the whole command not a read.
+  //
+  // NAMED, NOT MATCHED BY VERB. `Get-*` is read-shaped by PowerShell's own
+  // convention, and nothing holds a cmdlet to it: `Get-Clipboard` and
+  // `Get-Credential` hand an agent what it should not see unasked, and a cmdlet
+  // written tomorrow can take any name. This list frees a crossing into the
+  // runtime's own home as well as skipping a card, so it names cmdlets one at a
+  // time, each one that writes, sends and runs nothing when given plain words,
+  // and it stays short. Aliases are named one by one too: `sc`, `ac` and `ni`
+  // write, and are not here. Compared case-insensitively because PowerShell
+  // is; the list above is not, because its shells are not.
+  //
+  // ANYTHING NOT READ ALL THE WAY CARDS. A name on this list makes a read only
+  // when the reading has followed every way the text can run something else
+  // and found none. A command in brackets, a script block, a redirection to a
+  // file or an escape it cannot see past makes the command not a read,
+  // whatever names are in it, so a listed cmdlet handed a block or a
+  // calculated property cards too.
+  //
+  // Bash reads these names as well, with its own rules, as it always has
+  // (`dir`, `type`). A PowerShell command is never read by the Bash rules.
   var READ_ONLY_POWERSHELL_COMMANDS = [
     'get-childitem', 'gci', 'dir', 'ls', 'get-content', 'gc', 'cat', 'type',
     'get-item', 'gi', 'get-location', 'gl', 'pwd', 'test-path', 'resolve-path',
     'split-path', 'select-string', 'sls', 'measure-object', 'select-object',
     'sort-object', 'format-table', 'format-list', 'out-string', 'write-output',
-    'write-host', 'echo',
+    'write-host', 'echo', 'get-date', 'where-object',
   ];
+  // FOR THE POWERSHELL READING ONLY. These joined the list above when
+  // PowerShell got a reading of its own, and Bash reads that list too. Bash's
+  // answer was not to move with PowerShell's, so Bash reads the list as it
+  // stood before and these two are not reads there, as they were not.
+  var POWERSHELL_ONLY_READS = ['get-date', 'where-object'];
 
   // NO NAME OF ANY PARTICULAR TOOL LIVES HERE, and a package runner is not a
   // read whatever follows it.
@@ -295,6 +320,7 @@
       && EXECUTING_FLAGS[first].test(segment)) return false;
     if (Object.prototype.hasOwnProperty.call(WRITING_FLAGS, first)
       && WRITING_FLAGS[first].test(segment)) return false;
+    if (POWERSHELL_ONLY_READS.indexOf(first.toLowerCase()) >= 0) return false;
     if (READ_ONLY_SHELL_COMMANDS.indexOf(first) >= 0) return true;
     if (NO_TARGET_COMMANDS.indexOf(first) >= 0) return true;
     if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(first.toLowerCase()) >= 0) return true;
@@ -319,6 +345,110 @@
     if (HIDES_SUBCOMMAND.test(str)) return false;
     var segments = shellSegments(str);
     return segments.length > 0 && segments.every(segmentReads);
+  }
+
+  // ── PowerShell's own reading ──────────────────────────────────────────
+  // What makes a PowerShell read is set out beside its list, above. This
+  // reading notices each way PowerShell text can run a second command, and
+  // stops there: it never tries to judge what a construct would run.
+
+  // The longest command this reading follows. Longer text is not read at all.
+  var POWERSHELL_READ_LIMIT = 8192;
+  // Text that cannot be read with confidence: a control character other than
+  // a tab or a line break, a replacement character, or half a surrogate pair.
+  var UNREADABLE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f�]|[\ud800-\udbff](?![\udc00-\udfff])|(?:^|[^\ud800-\udbff])[\udc00-\udfff]/;
+  // Outside plain ASCII only letters, marks and digits are plain text.
+  // PowerShell takes some other characters as a quote, a dash or a space (a
+  // curly quote closes a string), and this reading would not see them as one.
+  var NOT_PLAIN = /[^\u0000-\u007f\p{L}\p{M}\p{N}]/u;
+  // A redirection that writes no file: output thrown away at `$null`, or one
+  // stream sent into another (`2>&1`).
+  var POWERSHELL_DISCARD = /^&[1-6]|^[ \t]*\$null(?![^\s;|&])/i;
+
+  // The name each part of the command starts with. Null when the text holds
+  // something this reading does not follow, and a throw when the text cannot
+  // be read to its end at all.
+  function powerShellPartNames(command) {
+    var text = String(command);
+    if (text.length > POWERSHELL_READ_LIMIT) throw new Error('longer than this reading follows');
+    if (UNREADABLE.test(text)) throw new Error('a character this reading cannot read');
+    var plain = !NOT_PLAIN.test(text);
+    var names = [];
+    var words = [];
+    var word = '';
+    var quote = '';
+    var open = [];
+    var endWord = function () { if (word) words.push(word); word = ''; };
+    var endPart = function () { endWord(); if (words.length) names.push(words[0]); words = []; };
+    for (var i = 0; i < text.length; i++) {
+      var c = text[i];
+      // An escape: what follows a backtick is not what it looks like.
+      if (c === '`') {
+        if (i === text.length - 1) throw new Error('a backtick with nothing after it');
+        plain = false; word += c + text[++i]; continue;
+      }
+      if (quote === "'") { word += c; if (c === "'") quote = ''; continue; }
+      if (quote === '"') {
+        word += c;
+        if (c === '"') quote = '';
+        else if (c === '$' && text[i + 1] === '(') plain = false;
+        continue;
+      }
+      if (c === "'" || c === '"') { quote = c; word += c; continue; }
+      if (c === '(') { open.push(')'); plain = false; word += c; continue; }
+      if (c === '{') { open.push('}'); plain = false; word += c; continue; }
+      if (c === ')' || c === '}') {
+        if (open.pop() !== c) throw new Error('a bracket closed that was never opened');
+        word += c; continue;
+      }
+      // A here-string, an array or hash literal, or splatting.
+      if (c === '@') { plain = false; word += c; continue; }
+      // A comment, whose quotes are not quotes.
+      if (c === '#') { plain = false; word += c; continue; }
+      // The stop-parsing token, after which quotes are not quotes either.
+      if (c === '-' && text.substr(i, 3) === '--%') { plain = false; word += c; continue; }
+      if (c === '>') {
+        endWord();
+        if (text[i + 1] === '>') i++;
+        var discard = POWERSHELL_DISCARD.exec(text.slice(i + 1));
+        if (discard) i += discard[0].length;
+        else plain = false;
+        continue;
+      }
+      // `&&` joins two parts. A lone `&` calls what follows or runs it in the
+      // background.
+      if (c === '&') {
+        if (text[i + 1] === '&') { i++; endPart(); continue; }
+        plain = false; word += c; continue;
+      }
+      if (c === '|') { if (text[i + 1] === '|') i++; endPart(); continue; }
+      if (c === ';' || c === '\n' || c === '\r') { endPart(); continue; }
+      if (c === ' ' || c === '\t') { endWord(); continue; }
+      word += c;
+    }
+    if (quote) throw new Error('a quote left open');
+    if (open.length) throw new Error('a bracket left open');
+    endPart();
+    return plain ? names : null;
+  }
+
+  // A FAILURE INSIDE THE READING IS AN ANSWER: not a read, so the command
+  // cards and nothing is allowed on its behalf. A test forces one through
+  // this seam. What it returns is ignored, so all it can do is fail.
+  var powerShellReadingSeam = { beforeReading: function () {} };
+
+  function isReadOnlyPowerShellCommand(command) {
+    try {
+      powerShellReadingSeam.beforeReading(command);
+      var names = powerShellPartNames(command);
+      if (!names || !names.length) return false;
+      for (var i = 0; i < names.length; i++) {
+        if (READ_ONLY_POWERSHELL_COMMANDS.indexOf(names[i].toLowerCase()) < 0) return false;
+      }
+      return true;
+    } catch (unreadable) {
+      return false;
+    }
   }
 
   // ── The other end of the same question ────────────────────────────────
@@ -377,6 +507,10 @@
 
   // Only what a caller actually uses. The registries stay private: exporting
   // them invites a second place to reason about membership, which is the
-  // shape this module exists to remove.
-  return { DISCARDING_REDIRECT_RE, shellSegments, isReadOnlyShellCommand, isDestructiveShellCommand };
+  // shape this module exists to remove. The seam is exported for the tests
+  // that force a failure inside the PowerShell reading.
+  return {
+    DISCARDING_REDIRECT_RE, shellSegments, isReadOnlyShellCommand, isReadOnlyPowerShellCommand,
+    isDestructiveShellCommand, powerShellReadingSeam,
+  };
 }));

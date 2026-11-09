@@ -20,6 +20,7 @@ const CODEX_GLUE_KEY = require.resolve('../../lib/runtime/codex-glue.js');
 const { createCodexAppServer } = require('../../codex-appserver.js');
 const { discoverAgents, invalidateAgentCache } = require('../../lib/agents/discovery.js');
 const { agentFile } = require('../helpers/workspace.js');
+const { readAppendedLog } = require('../helpers/appended-log.js');
 const asfx = require('../fixtures/codex-appserver-protocol.js');
 const fx = require('../fixtures/session-transcript.js');
 const PROMPT_KEY = require.resolve('../../lib/agents/prompt.js');
@@ -1248,6 +1249,10 @@ test('a restart leaves a run that already reached an outcome exactly as it was',
   });
 });
 
+// A record a dead process left open, under the name records are written and
+// read under: its run's uuid.
+const ORPHAN = '0e7a2b3c-4d5e-4f60-8172-8394a5b6c7d8';
+
 // AC-7, and it is the way this card most likely breaks something already
 // shipped. routineState.lastRun is the ONLY input to double-fire suppression.
 // This card touches startup, which is where the stores are loaded together, so
@@ -1269,8 +1274,8 @@ test('closing a restart-orphaned record writes nothing to the value double-fire 
       fs.writeFileSync(path.join(dir, 'routine-state.json'), JSON.stringify({
         [KEY]: { lastRun: cutOff.toISOString(), status: 'running', duration: null },
       }));
-      fs.writeFileSync(path.join(dir, 'runs', 'orphan.json'), JSON.stringify({
-        id: 'orphan', agent: 'runner', routine: 'r', sessionId: null,
+      fs.writeFileSync(path.join(dir, 'runs', `${ORPHAN}.json`), JSON.stringify({
+        id: ORPHAN, agent: 'runner', routine: 'r', sessionId: null,
         status: 'running', startedAt: cutOff.toISOString(), endedAt: null,
         durationMs: null, error: null, files: null, filesStatus: 'unknown', filesReason: 'running',
       }));
@@ -1343,12 +1348,12 @@ test('a capture a dead process left beside its record is removed when the record
     await withTempHomeAsync(async () => {
       const runs = path.join(ws, '.rundock', 'runs');
       fs.mkdirSync(runs, { recursive: true });
-      fs.writeFileSync(path.join(runs, 'orphan.json'), JSON.stringify({
-        id: 'orphan', agent: 'runner', routine: 'r', sessionId: null,
+      fs.writeFileSync(path.join(runs, `${ORPHAN}.json`), JSON.stringify({
+        id: ORPHAN, agent: 'runner', routine: 'r', sessionId: null,
         status: 'running', startedAt: new Date(2026, 7, 11, 9, 0, 0).toISOString(), endedAt: null,
         durationMs: null, error: null, files: null, filesStatus: 'unknown', filesReason: 'running',
       }));
-      fs.writeFileSync(path.join(runs, 'orphan.stderr'), "--agent 'runner' not found.\n");
+      fs.writeFileSync(path.join(runs, `${ORPHAN}.stderr`), "--agent 'runner' not found.\n");
 
       await withFakeSpawn(() => new EventEmitter(), async (sched) => {
         // A run going in this process, whose capture must survive the close.
@@ -1363,9 +1368,9 @@ test('a capture a dead process left beside its record is removed when the record
 
         sched.loadRoutineState();
 
-        assert.strictEqual(runRecords(ws).find(r => r.id === 'orphan').status, 'interrupted',
+        assert.strictEqual(runRecords(ws).find(r => r.id === ORPHAN).status, 'interrupted',
           'the orphaned record really was closed by this load');
-        assert.ok(!fs.existsSync(path.join(runs, 'orphan.stderr')), 'and the capture its child left went with it');
+        assert.ok(!fs.existsSync(path.join(runs, `${ORPHAN}.stderr`)), 'and the capture its child left went with it');
         assert.ok(fs.existsSync(path.join(runs, `${live.id}.stderr`)), 'while the capture of the run still going stays');
       });
     });
@@ -1816,10 +1821,7 @@ async function withRealCodexClient(dir, fn) {
 
 // Every request the stub app-server received, read off its own log.
 function stubRequests(dir) {
-  const file = path.join(dir, 'stub-invocations.jsonl');
-  let raw;
-  try { raw = fs.readFileSync(file, 'utf-8'); } catch (e) { return []; }
-  return raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  return readAppendedLog(path.join(dir, 'stub-invocations.jsonl'));
 }
 
 async function untilRequest(dir, method, tries = 400) {
@@ -3379,5 +3381,32 @@ test('the roster the scheduler broadcasts names the workspace it was read from',
       assert.strictEqual(roster.workspace, ws,
         'the workspace the roster was read from travels with it to every window');
     }
+  });
+});
+
+// A daily routine edited to monthly is a changed shape like any other: the walk
+// cannot say what was owed under a schedule that no longer exists, so the
+// anchor resyncs to the month's slot and nothing is recorded for the days the
+// daily schedule would have named. Afterwards the walk works under the monthly
+// rule, a month at a time.
+test('a daily routine edited to monthly resyncs its anchor and invents no missed record', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE); // every day at 23:00
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'on day 20 of every month at 23:00', prompt: 'p', enabled: true }]);
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+    const entry = sched.routineSlots.routines[LATE_KEY];
+    assert.deepStrictEqual(entry.missed, [],
+      'two nights passed under the daily schedule, and neither is recorded under the monthly one');
+    assert.strictEqual(entry.due, new Date(2026, 7, 20, 23, 0, 0).toISOString(), 'the anchor moved to this month\'s slot');
+    assert.strictEqual(entry.schedule, 'monthly:20:23:0', 'under the monthly shape');
+
+    observeOnce(t, sched, new Date(2026, 9, 2, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 20, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 8, 20, 23, 0, 0).toISOString() },
+    ], 'closed until October, it walks a month at a time and records the 20th of each');
   });
 });

@@ -7,7 +7,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert');
 
+// No turn a booted server runs ever watches the account's own startup files.
+require('./account-home-refused.js');
 const { makeWorkspace, makeTempDir, standardTeam } = require('./workspace.js');
+const { readAppendedLog } = require('./appended-log.js');
 
 const STUB_DIR = path.join(__dirname, 'stub-claude');
 const CODEX_STUB_DIR = path.join(__dirname, 'stub-codex');
@@ -52,6 +55,10 @@ async function boot(opts = {}) {
   // RUNDOCK_ELECTRON routes the recent-workspaces file into $HOME (now a temp
   // dir) instead of the repo checkout.
   process.env.RUNDOCK_ELECTRON = '1';
+  // The shell startup files a turn's guard watches resolve under the temp
+  // home too, not under an inherited ZDOTDIR or XDG_CONFIG_HOME.
+  delete process.env.ZDOTDIR;
+  delete process.env.XDG_CONFIG_HOME;
   for (const [k, v] of Object.entries(opts.env || {})) process.env[k] = v;
 
   workspaceDir = makeWorkspace({ agents: opts.agents || standardTeam(), claudeMd: '# Test Workspace\n', ...(opts.workspaceOpts || {}) });
@@ -110,9 +117,7 @@ function codexTurnPrompts() {
 }
 
 function readInvocations() {
-  const file = path.join(workspaceDir, 'stub-invocations.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(workspaceDir, 'stub-invocations.jsonl'));
 }
 
 function clearInvocations() {
@@ -133,9 +138,7 @@ function clearInvocations() {
 // spawn. These model MCP servers: grandchildren of the server that it has no
 // handle on, and which survive a single-pid kill of their parent.
 function readGrandchildren() {
-  const file = path.join(workspaceDir, 'stub-grandchildren.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(workspaceDir, 'stub-grandchildren.jsonl'));
 }
 
 // One line per --print run that finished writing: which agent, its pid, and
@@ -148,9 +151,7 @@ function readGrandchildren() {
 // wants to know about what a run emitted, this is where the child says it,
 // rather than the test inferring it from the size of the fixture it wrote.
 function readStubOutputs() {
-  const file = path.join(workspaceDir, 'stub-output.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(workspaceDir, 'stub-output.jsonl'));
 }
 
 // ── Prompt log (Claude stub) ──────────────────────────────────────────────
@@ -162,15 +163,11 @@ function readStubOutputs() {
 // What the permission hook answered each `hooks` call a stub made, in order
 // (test/helpers/stub-claude/claude, runHookCalls).
 function readHookAnswers() {
-  const file = path.join(workspaceDir, 'stub-hook-answers.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(workspaceDir, 'stub-hook-answers.jsonl'));
 }
 
 function readPrompts() {
-  const file = path.join(workspaceDir, 'stub-prompts.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(workspaceDir, 'stub-prompts.jsonl'));
 }
 
 /** True if the pid is still running (signal 0 probes without delivering). */
@@ -385,7 +382,7 @@ function freshConvoId(prefix = 'it') {
 
 module.exports = {
   boot, shutdown, connect, writeScenario, writeCodexScenario, codexTurnPrompts,
-  readInvocations, clearInvocations,
+  readInvocations, clearInvocations, readAppendedLog,
   readGrandchildren, readStubOutputs, readHookAnswers, pidAlive, waitForPidExit,
   readPrompts, promptsFor, unmatchedPrompts, assertAllPromptsMatched, clearPrompts,
   delay, waitUntil, freshConvoId, reapConvo,

@@ -4,10 +4,13 @@
 // independent of when the suite runs. All dates are constructed with local
 // components so the tests are timezone-independent.
 //
-// getNextRun supports exactly two grammars:
+// getNextRun supports these grammars:
 //   "every day at HH:MM"
 //   "every <weekday> at HH:MM"
-// Everything else silently returns null. Those silent-null behaviors are
+//   "on day N of every month at HH:MM", N from 1 to 28
+//   "on the last day of every month at HH:MM"
+// The two monthly forms are pinned in their own suites. Everything else
+// silently returns null. Those silent-null behaviors are
 // pinned AS-IS below; if they should later warn or throw, these tests flip
 // deliberately.
 const { test, describe, mock, afterEach } = require('node:test');
@@ -65,15 +68,15 @@ describe('getNextRun: daily grammar', () => {
     assert.ok(new Date() >= next, 'scheduler fire condition (now >= nextRun) is satisfied');
   });
 
-  test('pinned as-is: lastRun earlier today but BEFORE the scheduled hour does not suppress (getHours comparison)', () => {
+  test('pinned as-is: lastRun earlier today but BEFORE the scheduled time does not suppress', () => {
     atTime(new Date(2026, 6, 1, 14, 30, 0));
     const lastRun = new Date(2026, 6, 1, 13, 59, 0).toISOString(); // ran 13:59, schedule 14:00
     const next = srv.getNextRun('every day at 14:00', lastRun);
     assert.notStrictEqual(next, null);
   });
 
-  test('pinned as-is: suppression compares getHours() only, so a 14:59 run yesterday-style edge inside the same hour suppresses', () => {
-    // lastRun 14:59 today, schedule 14:00 -> lastRun.getHours() (14) >= 14 -> null
+  test('pinned as-is: a 14:59 run today is after the 14:00 slot, so it suppresses', () => {
+    // lastRun 14:59 today, schedule 14:00 -> at or after the slot, on its day -> null
     atTime(new Date(2026, 6, 1, 15, 30, 0));
     const lastRun = new Date(2026, 6, 1, 14, 59, 0).toISOString();
     assert.strictEqual(srv.getNextRun('every day at 14:00', lastRun), null);

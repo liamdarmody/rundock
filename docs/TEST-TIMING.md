@@ -220,6 +220,8 @@ polls, which would make them prove nothing.
 | `test/integration/workspace-rollback-poll.test.js:149` | `POLL_MS * 6` | "the rollback re-baselined the poll, so nothing was pushed" |
 | `test/integration/live-refresh.test.js:41,59` | `timeout: 1600` | a deliberate `waitFor` expiry inside `assert.rejects` |
 | `test/unit/codex-appserver.test.js:817` | 150 | "no auto-restart fired" |
+| `test/unit/startup-file-guard.test.js:207` | 200, five 40ms intervals | "one card, not one per workspace" |
+| `test/unit/startup-file-guard.test.js:501,537` | 200, ten 20ms intervals | "a check that keeps failing is not asked about again at every pass" |
 | `test/unit/scheduler-lib.test.js:648,1285,1294,1522` | `until(() => false, N)` | "no release / no death / nothing stronger sent" |
 | `test/e2e/viewers.spec.js:482,539,569,915` | 200, 300, 900, 2000 | "no toolbar", "no spurious autosave", "the flag outlived the old 600ms clear", "no false conflict past the watcher poll" |
 | `test/e2e/search.spec.js:93` | 600 | "the flash animation did not replay" |

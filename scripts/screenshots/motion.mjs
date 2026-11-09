@@ -4,8 +4,11 @@
 // silent, and loopable.
 //
 // ffmpeg is resolved in priority order: FFMPEG_PATH env, a system ffmpeg on
-// PATH, then the ffmpeg-static dev dependency. The first that works wins, so CI
-// can use a system binary while a local run falls back to ffmpeg-static.
+// PATH, then the ffmpeg-static package. The first that works wins, so CI can
+// use a system binary while a local run falls back to ffmpeg-static. That
+// package is an optional dependency: an install on a platform it publishes no
+// binary for, such as Windows on Arm, leaves it out rather than failing, and
+// there only the first two can be found.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -490,7 +493,7 @@ async function clipRoutineEditor(page, { mark }) {
 }
 
 // Clip registry. `themes` is which themes to record (theme reads in all of
-// these, but the spec only mandates parity for the org-status clip; the others
+// these, but only the org-status clip must match in both themes; the others
 // default to both for completeness).
 // `gif` overrides the default {fps:15, width:1280} for clips that would
 // otherwise crowd the file-size budget (the review clip has a lot of motion:
