@@ -74,6 +74,17 @@ let pendingProblem = null;
 // The raw words of a system error behind that refusal, for its Details, or
 // null. Shown only beside pendingProblem, so it never outlives it.
 let pendingProblemDetail = null;
+// What the server said when a change to the switch that turns routines off on
+// this computer could not be saved, and its raw words for Details, or null.
+// Held apart from pendingProblem because it answers the switch, not a row.
+let hereProblem = null;
+let hereProblemDetail = null;
+// The state the switch showed, and the workspace it was for, when that save
+// failed. A roster that arrives with either changed answers the question the
+// failure was about (another window made the change, or this one moved
+// workspace), so the line is dropped rather than left describing a switch
+// that no longer looks that way.
+let hereProblemFor = null;
 
 // The "Details" control under a failure's plain sentence: the raw words of a
 // system error (public/readable-error.js), or nothing when there are none.
@@ -134,6 +145,22 @@ function routinesServingWorkspace() {
  */
 function routinesRosterWorkspace() {
   return typeof rosterWorkspacePath === 'string' && rosterWorkspacePath ? rosterWorkspacePath : null;
+}
+
+/**
+ * Whether routines are off on this computer for the workspace the roster was
+ * read from, and this computer's name: the server's answer, carried on the
+ * roster, or null when this window has not been told. NEVER THE WINDOW'S OWN:
+ * the scheduler reads the record, so the switch draws what the record says.
+ */
+function routinesHereState() {
+  return typeof rosterRoutinesHere !== 'undefined' && rosterRoutinesHere && typeof rosterRoutinesHere === 'object'
+    ? rosterRoutinesHere : null;
+}
+
+function routinesOffHere() {
+  const here = routinesHereState();
+  return !!(here && here.off === true);
 }
 
 /**
@@ -357,6 +384,9 @@ function rowHtml(entry, index, withActions) {
     servingWorkspace: routinesServingWorkspace(),
     now: routinesClock(),
     zone: routinesZone(),
+    // Routines off on this computer, for this workspace: the row says so
+    // where its next run would be.
+    offHere: routinesOffHere(),
     serverZone: routinesServerZone(),
   });
   // A schedule the editor never offered has no plain words. The routine is
@@ -367,11 +397,13 @@ function rowHtml(entry, index, withActions) {
   const selfPaused = row.pausedState && row.pausedState.kind === 'self';
   // A PAUSED ROUTINE SAYS SO WHERE ITS NEXT RUN WOULD BE, with the way back
   // beside the word. Withheld on the delete confirmation, like every control.
+  // Off on this computer reads as a pause does, with the dot and without the
+  // way back: that is the switch above the list.
+  const dotted = (label) => `<span class="${label.className} rr-paused-label"><span class="rr-paused-dot"></span>${esc(label.text)}</span>`;
   const nextRun = row.nextRun
     ? (selfPaused
-      ? `<span class="${row.nextRun.className} rr-paused-label"><span class="rr-paused-dot"></span>${esc(row.nextRun.text)}</span>`
-        + (withActions ? `${sep}${pauseSwitch(index, true)}` : '')
-      : `<span class="${row.nextRun.className}">${esc(row.nextRun.text)}</span>`)
+      ? dotted(row.nextRun) + (withActions ? `${sep}${pauseSwitch(index, true)}` : '')
+      : (row.nextRun.off ? dotted(row.nextRun) : `<span class="${row.nextRun.className}">${esc(row.nextRun.text)}</span>`))
     : '';
 
   let meta = esc(row.meta || '');
@@ -565,7 +597,7 @@ function routinesScopeName() {
  * the list passes its scoped sentence, and the empty pane passes nothing,
  * because its state line lives in the box below rather than in the header.
  */
-function headerHtml(subtitle, workspace) {
+function headerHtml(subtitle, workspace, below) {
   const model = routinesModel();
   let h = '<div class="profile-header">'
     + `<div class="profile-avatar skill-avatar">${CLOCK_SVG}</div>`
@@ -587,6 +619,8 @@ function headerHtml(subtitle, workspace) {
       + (workspace ? `<div class="routines-workspace" data-routines-workspace>${esc(workspace)}</div>` : '')
       + '</div>';
   }
+  // The switch for this computer, under the header text on the list.
+  if (below) h += below;
   // On the header rather than in one of the three branches below, so the
   // refusal is on the page whichever state the list is in when it arrives.
   if (pendingProblem) {
@@ -611,10 +645,85 @@ function headerHtml(subtitle, workspace) {
 function listHeaderHtml() {
   const head = routinesModel().header({
     agentName: routinesScopeName(),
+    offHere: routinesOffHere(),
     workspace: routinesRosterWorkspace(),
     servingWorkspace: routinesServingWorkspace(),
   });
-  return headerHtml(head.subtitle, head.workspace);
+  return headerHtml(head.subtitle, head.workspace, hereHtml());
+}
+
+// A laptop, on the 24 grid the row's controls use. Decorative: the row's
+// title says what it is.
+const LAPTOP_SVG = '<svg class="routines-here-icon" viewBox="0 0 24 24" width="20" height="20" fill="none"'
+  + ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>';
+
+/**
+ * THE SWITCH THAT TURNS ROUTINES OFF ON THIS COMPUTER, for this workspace.
+ *
+ * A native checkbox with the switch role, so Tab reaches it, Space toggles it
+ * and a screen reader announces its name and whether it is on. Its words come
+ * from the model. Drawn from the server's answer only, and nothing until that
+ * answer arrives: a switch drawn from a guess would claim a state nobody read.
+ *
+ * PRESSING IT DOES NOT MOVE IT. The press is a request: the server writes the
+ * record and tells every window, and the switch moves when that answer is
+ * drawn. A save that fails leaves it where it was, with the reason under it.
+ */
+function hereHtml() {
+  if (hereProblemFor && (hereProblemFor.off !== routinesOffHere() || hereProblemFor.workspace !== routinesRosterWorkspace())) {
+    hereProblem = null;
+    hereProblemDetail = null;
+    hereProblemFor = null;
+  }
+  const view = routinesModel().hereSwitch({ workspace: routinesRosterWorkspace(), here: routinesHereState() });
+  if (!view) return '';
+  let h = `<div class="routines-here${view.off ? ' off' : ''}" data-routines-here>`
+    + LAPTOP_SVG
+    + '<div class="routines-here-text">'
+    + `<b class="routines-here-title">${esc(view.title)}</b>`
+    + `<span class="routines-here-hint" id="routines-here-hint">${esc(view.hint)}</span>`
+    + '</div>'
+    + '<label class="routines-here-switch">'
+    + `<span class="routines-here-word" aria-hidden="true">${esc(view.word)}</span>`
+    + `<input type="checkbox" role="switch" class="rui-toggle" aria-label="${esc(view.label)}"`
+    + ` aria-describedby="routines-here-hint" data-routines-action="here"${view.off ? '' : ' checked'}`
+    + ' onclick="routinesSetHere(event)">'
+    + '</label></div>';
+  if (hereProblem) {
+    h += `<p class="routines-problem" role="alert" data-routines-here-problem>${esc(hereProblem)}</p>`;
+    h += errorDetailsHtml(hereProblemDetail);
+  }
+  return h;
+}
+
+/**
+ * The switch was pressed: ask the server to turn routines on or off here.
+ * The default is prevented, so the switch moves only when the server's answer
+ * arrives on the roster. The workspace travels with the request, so a window
+ * left on another workspace's list cannot change the one now open.
+ */
+function routinesSetHere(event) {
+  if (event && typeof event.preventDefault === 'function') event.preventDefault();
+  const here = routinesHereState();
+  const workspace = routinesRosterWorkspace();
+  if (!here || !workspace || typeof ws === 'undefined' || !ws) return;
+  hereProblem = null;
+  hereProblemDetail = null;
+  hereProblemFor = null;
+  ws.send(JSON.stringify({ type: 'set_routines_here', on: here.off === true, workspace }));
+}
+
+/**
+ * The server could not save a change to the switch. The switch stays as the
+ * record has it, and a short line under it says the change did not happen,
+ * with the server's reason behind Details.
+ */
+function routinesHereFailed(reply) {
+  hereProblem = routinesModel().hereProblem(!!(reply && reply.on === false));
+  hereProblemDetail = reply && typeof reply.detail === 'string' && reply.detail ? reply.detail : null;
+  hereProblemFor = { off: routinesOffHere(), workspace: routinesRosterWorkspace() };
+  renderRoutines();
 }
 
 // The one thing each variant offers, and where pressing it goes. Held as a
@@ -662,7 +771,10 @@ function emptyHtml() {
   // above a card rather than as one thing. The header carries the title only
   // now; the box carries the whole message, what is true and what to do about
   // it, in one place.
-  let h = headerHtml(null)
+  // THE SWITCH IS HERE TOO. A workspace with no routines yet, or a list
+  // scoped to nothing, is still a workspace whose routines can be off on this
+  // computer, and the editor sends the reader here to turn them back on.
+  let h = headerHtml(null, null, hereHtml())
     + '<div class="settings-card flow routines-empty-card">'
     + `<p class="routines-empty-state">${esc(state.lead)}</p>`
     + `<p class="settings-lead">${esc(state.body)}</p>`;
@@ -731,11 +843,18 @@ function renderRoutines() {
   // removed it or because the panel stopped showing it, and either way the
   // reader is returned to the list rather than shown a question about
   // something they can no longer see.
+  // THE SWITCH KEEPS THE FOCUS ACROSS THE REDRAW its own answer causes. A
+  // press is answered by a roster that redraws this pane, and without this a
+  // keyboard reader who pressed Space is left on the page's body.
+  const active = document.activeElement;
+  const onSwitch = !!(active && content.contains(active) && active.matches('[data-routines-action="here"]'));
   const pending = pendingEntry(list);
   if (!pending) pendingDelete = null;
   if (pending) content.innerHTML = confirmHtml(pending, list.indexOf(pending));
   else if (list.length === 0) content.innerHTML = emptyHtml();
   else content.innerHTML = listHtml(list);
+  const again = onSwitch ? content.querySelector('[data-routines-action="here"]') : null;
+  if (again) again.focus();
 }
 
 /**
@@ -766,6 +885,9 @@ function showRoutinesForAgent(agentId) {
   //
   // The refusal goes with it, for the reason it is held at all: it answers a
   // control pressed on a list the reader has now left.
+  hereProblem = null;
+  hereProblemDetail = null;
+  hereProblemFor = null;
   pendingDelete = null;
   pendingProblem = null;
   if (typeof showView === 'function') showView('routines');
@@ -1013,6 +1135,7 @@ return {
   routinesAskDelete, routinesCancelDelete, routinesConfirmDelete, routinesSetPaused, routinesSetEnabled,
   routinesApprovePlan, routinesRunNow, routinesOpenSkill, routinesEditSchedule,
   routinesActionFailed, routinesActionCleared, routinesViewLastRun,
+  routinesSetHere, routinesHereFailed,
 };
 }));
 

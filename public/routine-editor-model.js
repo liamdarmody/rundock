@@ -12,8 +12,8 @@
  *
  * THE COPY RULE THIS FILE EXISTS TO HOLD, AND IT IS THE ONE MOST LIKELY TO BE
  * GOT WRONG. Where a routine runs is a choice between two options, and only
- * one of them is real in this release. `local` runs while Rundock is open on
- * this computer. The always-on option is reserved and refused, and its whole
+ * one of them is real in this release. `local` runs while Rundock is open, on
+ * each computer that has the workspace open. The always-on option is reserved and refused, and its whole
  * point is that it keeps running while the computer is off. Those words belong
  * to that option and to nothing else. Written onto the local option they would
  * advertise the single thing this release cannot do, at the exact moment the
@@ -44,8 +44,8 @@
    *
    * FOUR SEPARATE STRINGS PER OPTION, NOT ONE. `name` and `meta` are the row.
    * `sentence` is how the option reads inside the plain-words preview, which
-   * is a different grammatical position and therefore different words ("this
-   * computer", not "This computer"). `setupLabel` is the way in for an option
+   * is a different grammatical position and therefore different words ("your
+   * computers", not "Your computers"). `setupLabel` is the way in for an option
    * that is not set up. Keeping them apart is what lets every surface read the
    * option instead of rebuilding its own version of the same sentence.
    *
@@ -57,9 +57,12 @@
   const RUN_ON = [
     {
       value: 'local',
-      name: 'This computer',
-      meta: 'Runs while Rundock is open here.',
-      sentence: 'this computer',
+      // PLURAL, BECAUSE IT IS. A routine carries no machine: every computer
+      // with this workspace open runs it, so "This computer" named a
+      // different computer on each one and promised the routine ran on one.
+      name: 'Your computers',
+      meta: 'Runs on each computer that has this workspace open, while Rundock is open there.',
+      sentence: 'your computers',
       setupLabel: null,
     },
     {
@@ -74,18 +77,25 @@
 
   /**
    * The limitation a synced workspace hits, said plainly where the choice is
-   * made.
+   * made, with the way out.
    *
    * There is no machine identity in a routine and nothing coordinates two
    * copies of a workspace, so a workspace opened on four computers is four
-   * separate local schedulers. Each keeps the guard that stops a re-fire in
-   * memory, filled once when it starts, so each has its own idea of what has
-   * already run for as long as it stays up. That is four runs, and no sync
-   * tool changes it. None of it is solvable in this release, so the copy says
-   * what happens instead of leaving the user to find out.
+   * separate local schedulers, and four runs. The way to run them on one is
+   * the switch on the Routines page that turns routines off on a computer,
+   * for that workspace, without syncing. The second sentence is that way out,
+   * exported on its own so the view can give it weight.
    */
-  const RUN_ON_CAVEAT = 'Routines run on the machine they were made on. '
-    + 'A workspace open on more than one computer runs its routines on each of them.';
+  const RUN_ON_CAVEAT_ACTION = 'To run them on one only, turn routines off on the others, from the Routines page.';
+  const RUN_ON_CAVEAT = 'If you use this workspace on more than one computer, each one runs its routines. '
+    + RUN_ON_CAVEAT_ACTION;
+
+  /**
+   * Added to the local option's meta while routines are off on this computer
+   * for this workspace, so the reader is not told it runs here when it will
+   * not.
+   */
+  const RUN_ON_OFF_HERE = 'Routines are off on this computer, so this one will not run here until you turn them on, from the Routines page.';
 
   /**
    * What happens to this routine when its workspace is not the one open, said
@@ -229,8 +239,14 @@
    * constant can be rendered on a help page and nowhere else while every test
    * still passes; a field that carries it cannot be rendered without it.
    */
-  function runOnField() {
-    return { label: RUN_ON_LABEL, options: runOnOptions(), caveat: RUN_ON_CAVEAT };
+  function runOnField(input) {
+    const offHere = !!(input && input.offHere);
+    const options = runOnOptions().map(option => (offHere && option.value === 'local'
+      ? { ...option, meta: `${option.meta} ${RUN_ON_OFF_HERE}` }
+      : option));
+    return {
+      label: RUN_ON_LABEL, options, caveat: RUN_ON_CAVEAT, caveatAction: RUN_ON_CAVEAT_ACTION,
+    };
   }
 
   /**
@@ -255,7 +271,7 @@
       frequencies: FREQUENCIES,
       days: monthDays(),
       times: times(),
-      runOn: runOnField(),
+      runOn: runOnField(input),
       workspaceCaveat: input && input.frequency === 'month' ? MONTHLY_WORKSPACE_CAVEAT : WORKSPACE_CAVEAT,
     };
   }
@@ -625,7 +641,7 @@
   }
 
   return {
-    RUN_ON_SUPPORTED, RUN_ON_CAVEAT, WORKSPACE_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
+    RUN_ON_SUPPORTED, RUN_ON_CAVEAT, RUN_ON_CAVEAT_ACTION, RUN_ON_OFF_HERE, WORKSPACE_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
     UNASSIGNED_REASON, STORED_SCHEDULE_NOTE, storedScheduleNote,
     runOnOptions, runOnOption, runOnField, scheduleStepFields,
     skillChoices, stepLead,

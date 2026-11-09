@@ -357,16 +357,35 @@ describe('routine editor: a stored schedule read back into the builder', () => {
 
 describe('routine editor: where it runs', () => {
   // AC-5
-  test('the local option renders "This computer"', () => {
+  // A routine carries no computer: every computer with the workspace open
+  // runs it, so the option names them all rather than one that differs on
+  // each.
+  test('the local option renders "Your computers"', () => {
     const local = model.runOnOptions().find(o => o.value === 'local');
     assert.ok(local, 'the local option is offered');
-    assert.strictEqual(local.name, 'This computer');
+    assert.strictEqual(local.name, 'Your computers');
   });
 
   // AC-6
-  test('the local option renders "Runs while Rundock is open here"', () => {
+  test('the local option says it runs on each computer that has the workspace open', () => {
     const local = model.runOnOptions().find(o => o.value === 'local');
-    assert.strictEqual(local.meta, 'Runs while Rundock is open here.');
+    assert.strictEqual(local.meta, 'Runs on each computer that has this workspace open, while Rundock is open there.');
+  });
+
+  // While routines are off on this computer, the option says so, and says
+  // where to turn them back on. Only then, and only on the local option.
+  test('while routines are off on this computer, the local option says it will not run here', () => {
+    const off = model.runOnField({ offHere: true }).options;
+    const on = model.runOnField({ offHere: false }).options;
+    const local = (options) => options.find(o => o.value === 'local');
+    assert.strictEqual(local(off).meta,
+      'Runs on each computer that has this workspace open, while Rundock is open there. '
+      + 'Routines are off on this computer, so this one will not run here until you turn them on, from the Routines page.');
+    assert.strictEqual(local(on).meta, 'Runs on each computer that has this workspace open, while Rundock is open there.');
+    assert.deepStrictEqual(off.find(o => o.value === 'agent-computer'), on.find(o => o.value === 'agent-computer'),
+      'the off sentence reached the option that is not this computer\'s');
+    assert.deepStrictEqual(model.scheduleStepFields({ offHere: true }).runOn, model.runOnField({ offHere: true }),
+      'the schedule step does not carry the off state into its field');
   });
 
   // AC-7, AC-14. THE ASSERTION OF ABSENCE.
@@ -412,7 +431,7 @@ describe('routine editor: where it runs', () => {
     const args = { frequency: 'monday', time: '07:00', skillName: 'Compile the ops summary' };
     assert.strictEqual(
       model.previewSentence({ ...args, runOn: 'local' }),
-      'Run Compile the ops summary every Monday at 7:00am, on this computer.',
+      'Run Compile the ops summary every Monday at 7:00am, on your computers.',
     );
     assert.strictEqual(
       model.previewSentence({ ...args, runOn: 'agent-computer' }),
@@ -424,7 +443,7 @@ describe('routine editor: where it runs', () => {
   test('the confirmation line reads its second sentence off the same option', () => {
     assert.strictEqual(
       model.readyCaption({ zone: 'Europe/London', runOn: 'local' }),
-      'London time. Runs while Rundock is open here.',
+      'London time. Runs on each computer that has this workspace open, while Rundock is open there.',
     );
     assert.notStrictEqual(
       model.readyCaption({ zone: 'Europe/London', runOn: 'agent-computer' }),
@@ -454,17 +473,17 @@ describe('routine editor: where it runs', () => {
 });
 
 describe('routine editor: the caveat', () => {
-  // AC-9
-  test('the caveat states that routines run on the machine they were made on', () => {
-    assert.match(model.RUN_ON_CAVEAT, /machine they were made on/i);
-  });
-
-  // AC-9, the second half of what the multi-machine decision requires: a
-  // workspace opened on four computers is four locals, and the copy has to say
-  // so rather than be silent.
-  test('the caveat says a workspace on more than one computer runs on each', () => {
-    assert.match(model.RUN_ON_CAVEAT, /more than one computer/i);
-    assert.match(model.RUN_ON_CAVEAT, /each of them/i);
+  // A routine carries no machine, so the caveat it used to carry ("routines
+  // run on the machine they were made on") was untrue. One caveat replaces it:
+  // a workspace on four computers is four schedulers, and the way to run them
+  // on one is the switch on the Routines page.
+  test('the caveat says each computer runs the routines, and how to run them on one', () => {
+    assert.strictEqual(model.RUN_ON_CAVEAT,
+      'If you use this workspace on more than one computer, each one runs its routines. '
+      + 'To run them on one only, turn routines off on the others, from the Routines page.');
+    assert.doesNotMatch(model.RUN_ON_CAVEAT, /made on/i, 'the untrue sentence is back');
+    assert.ok(model.RUN_ON_CAVEAT.endsWith(model.RUN_ON_CAVEAT_ACTION), 'the way out is the caveat\'s own second sentence');
+    assert.strictEqual(model.runOnField().caveatAction, model.RUN_ON_CAVEAT_ACTION, 'and the field carries it, for the view to weight');
   });
 
   // THE OTHER DIRECTION OF THE SAME QUESTION. The caveat above is about one
@@ -503,7 +522,7 @@ describe('routine editor: the caveat', () => {
   test('the caveat is part of the run-on field itself', () => {
     const field = model.runOnField();
     assert.strictEqual(field.caveat, model.RUN_ON_CAVEAT);
-    assert.deepStrictEqual(field.options, model.runOnOptions());
+    assert.deepStrictEqual(field.options, model.runOnOptions(), 'routines on here: the options as offered');
     assert.ok(field.label, 'the field is labelled where it is shown');
   });
 });
@@ -593,13 +612,13 @@ describe('routine editor: a monthly schedule', () => {
 
   test('the preview names the day, and reads its last clause off the chosen option', () => {
     const local = model.runOnOption('local');
-    assert.strictEqual(local.sentence, 'this computer');
+    assert.strictEqual(local.sentence, 'your computers');
     assert.strictEqual(
       model.previewSentence({ frequency: 'month', day: '15', time: '09:00', skillName: 'Context review', runOn: 'local' }),
       `Run Context review every month on the 15th at 9:00am, on ${local.sentence}.`);
     assert.strictEqual(
       model.previewSentence({ frequency: 'month', day: 'last', time: '18:00', skillName: 'Context review', runOn: 'local' }),
-      'Run Context review every month on the last day at 6:00pm, on this computer.');
+      'Run Context review every month on the last day at 6:00pm, on your computers.');
     assert.strictEqual(
       model.previewSentence({ frequency: 'month', time: '09:00', skillName: 'Context review', runOn: 'local' }), null,
       'a month with no day is not a schedule, so there is no sentence to show');
@@ -799,7 +818,7 @@ describe('routine editor: time zones are words, and never the runner\'s', () => 
       'Piper reads this on the clock of the computer Rundock runs on, never the Agent Computer\'s.');
     assert.strictEqual(model.timezoneCaption({ zone: null, agentName: null }),
       'Your agents read this on the clock of the computer Rundock runs on, never the Agent Computer\'s.');
-    assert.strictEqual(model.readyCaption({ zone: null, runOn: 'local' }), 'Runs while Rundock is open here.');
+    assert.strictEqual(model.readyCaption({ zone: null, runOn: 'local' }), 'Runs on each computer that has this workspace open, while Rundock is open there.');
     assert.strictEqual(model.timezoneWords(''), null);
   });
 });

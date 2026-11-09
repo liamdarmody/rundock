@@ -302,7 +302,7 @@ describe('a server that reports no zone', () => {
     `the caption: ${zoneCaption(doc)}`);
     assert.doesNotMatch(zoneCaption(doc), /UTC| time,/);
     w.routineEditorStep('ready');
-    assert.ok(readyCaption(doc).startsWith('Runs while Rundock is open here.'), `the ready caption: ${readyCaption(doc)}`);
+    assert.ok(readyCaption(doc).startsWith('Runs on each computer that has this workspace open, while Rundock is open there.'), `the ready caption: ${readyCaption(doc)}`);
     assert.doesNotMatch(readyCaption(doc), /UTC/);
     dom.window.close();
   });

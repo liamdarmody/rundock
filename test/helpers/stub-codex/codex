@@ -14,6 +14,13 @@
 //   { "appServer": {
 //       "version": "0.144.3",             // embedded in the initialize userAgent
 //       "dropMethods": ["thread/resume"], // requests logged but never answered
+//       "initializeUntilFile": "...",     // answer initialize only once this file
+//                                         // exists, holding the server in its start
+//       "ignoreSigterm": true,            // log a SIGTERM and carry on, so only a
+//                                         // SIGKILL ends the process (read at spawn)
+//       "outliveStdin": true,             // keep running once stdin closes, so the
+//                                         // process outlives the Rundock that
+//                                         // started it unless a signal ends it
 //       "overload": {"method": "thread/start", "times": 2},  // first N get -32001
 //       "resumeFails": true,              // thread/resume -> -32600 "no rollout found"
 //       "resumeTransientFails": 2,        // first N thread/resume PER THREAD fail with
@@ -47,6 +54,9 @@
 //                      "afterDecision": {"accept":{"text":"..."}, "decline":{"text":"..."}}},
 //         "error": {"codexErrorInfo":"usageLimitExceeded", "message":"...", "willRetry":false},
 //         "delayMs": 0,                      // pause before the agent output
+//         "untilFile": "...",                // hold the turn before its output until
+//                                            // this file exists, so a test decides
+//                                            // when it ends
 //         "holdForInterrupt": true,          // after the first delta, stay running
 //                                            // until turn/interrupt arrives, so a test
 //                                            // cannot lose the race to a turn that is
@@ -124,6 +134,7 @@ function runAppServer() {
     } catch (e) { /* logging is best-effort */ }
   }
   log({ event: 'spawn', argv });
+  if (loadConfig().ignoreSigterm) process.on('SIGTERM', () => log({ event: 'sigterm-ignored' }));
 
   function send(obj) { writeOut(JSON.stringify(obj) + '\n'); }
 
@@ -169,6 +180,7 @@ function runAppServer() {
     send(asfx.itemCompletedUserMessage(threadId, turnId, userItemId, prompt));
 
     if (rule.delayMs > 0) await tick(rule.delayMs);
+    while (rule.untilFile && !fs.existsSync(rule.untilFile) && !t.finished) await tick(20);
     if (t.finished) return;
 
     let text = rule.text || '';
@@ -313,7 +325,12 @@ function runAppServer() {
       case 'initialize': {
         const version = cfg.version || '0.144.3';
         const ci = (params && params.clientInfo) || { name: 'unknown', version: '0' };
-        send(asfx.response(id, asfx.initializeResult(ci.name, ci.version, version)));
+        const answer = () => send(asfx.response(id, asfx.initializeResult(ci.name, ci.version, version)));
+        if (!cfg.initializeUntilFile) { answer(); return; }
+        (async () => {
+          while (!fs.existsSync(cfg.initializeUntilFile)) await tick(20);
+          answer();
+        })();
         return;
       }
       case 'initialized': {
@@ -472,5 +489,12 @@ function runAppServer() {
     }
   });
   // The real server exits cleanly on stdin EOF (RESEARCH.md, shutdown notes).
-  process.stdin.on('end', () => process.exit(0));
+  // With outliveStdin it is one that does not, as a server stuck in a turn may
+  // not, so only a signal ends it.
+  process.stdin.on('end', () => {
+    if (!loadConfig().outliveStdin) process.exit(0);
+    log({ event: 'stdin-closed' });
+    process.stdout.on('error', () => {});
+    setInterval(() => {}, 1 << 30);
+  });
 }
