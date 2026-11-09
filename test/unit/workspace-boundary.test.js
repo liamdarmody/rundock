@@ -8,6 +8,11 @@
 // are real directories, real symlinks and the machine's own /private alias,
 // because every false card in the field came from a spelling a hand-built
 // fixture would not have thought to write.
+// The blocks here are built for a made-up home folder, so the zsh and fish
+// files they deny resolve under it, not under an inherited ZDOTDIR or
+// XDG_CONFIG_HOME.
+delete process.env.ZDOTDIR;
+delete process.env.XDG_CONFIG_HOME;
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -1124,6 +1129,9 @@ function releasedBlock(n, ws, home, tail, shape) {
   if (shape === 'off') return { enabled: false, filesystem };
   return { filesystem };
 }
+// The shell startup files and Rundock's record of them, which follow the
+// console folder at the end of the list: the hook's own registry.
+const startupDeny = home => hook.shellStartupEntries(home).map(e => e.path);
 // The escape paths this change appends after the 0.15.6 list, under a home.
 function homeEscapes(home) {
   return [
@@ -1168,8 +1176,8 @@ describe('every credential the secrets tier names is denied by the OS block as w
   test('the deny list names no credential the registry does not, so neither list can grow alone', () => {
     const block = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], []);
     const outsideWorkspace = block.filesystem.denyWrite.filter((p) => !p.startsWith(WS + '/'));
-    assert.deepStrictEqual(outsideWorkspace, [...registryPaths(HOME), ...homeEscapes(HOME), `${HOME}/.rundock-console`],
-      'beyond the workspace\'s own files, the deny list is exactly the secrets registry, in registry order, then the runtime\'s escape paths, then Rundock\'s console folder');
+    assert.deepStrictEqual(outsideWorkspace, [...registryPaths(HOME), ...homeEscapes(HOME), `${HOME}/.rundock-console`, ...startupDeny(HOME)],
+      'beyond the workspace\'s own files, the deny list is exactly the secrets registry, in registry order, then the runtime\'s escape paths, then Rundock\'s console folder, then the shell startup files and Rundock\'s record of them');
   });
 
   test('the credential entries follow the workspace files, so every block written before them is a prefix and still ours', () => {
@@ -1430,8 +1438,10 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
   test('the workspace\'s connector files and the permission hook\'s launcher are denied last of all', () => {
     for (const mode of ['on', 'off']) {
       const deny = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode).filesystem.denyWrite;
-      assert.deepStrictEqual(deny.slice(-5), [`${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`, `${WS}/.rundock/mcp-secrets.json`, `${HOME}/.rundock-console`],
+      const n = startupDeny(HOME).length;
+      assert.deepStrictEqual(deny.slice(-5 - n, deny.length - n), [`${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`, `${WS}/.rundock/mcp-secrets.json`, `${HOME}/.rundock-console`],
         `the ${mode} block appends them after the project settings, each after the last, never inserting them, and Rundock's console folder after them`);
+      assert.deepStrictEqual(deny.slice(-n), startupDeny(HOME), `and the ${mode} block ends with the shell startup files and Rundock's record of them`);
     }
   });
 
@@ -1459,7 +1469,8 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
     const escapes = deny.slice(deny.indexOf(credentials(HOME).slice(-1)[0]) + 1);
     assert.ok(escapes.length > 0, 'sanity: there are escape paths to name');
     for (const p of escapes) {
-      const name = p.startsWith(`${HOME}/.claude/settings.json`) ? '~/.claude/settings.json'
+      const name = p.endsWith('startup-file-exposure.json') ? '~/.rundock-startup-file-exposure.json'
+        : p.startsWith(`${HOME}/.claude/settings.json`) ? '~/.claude/settings.json'
         : p.startsWith(`${HOME}/.claude/`) ? p.slice(`${HOME}/.claude/`.length)
           : p.startsWith(`${HOME}/.`) ? `~/${p.slice(`${HOME}/`.length)}`
             : p.startsWith(`${WS}/`) ? p.slice(`${WS}/`.length) : p;
@@ -1588,7 +1599,7 @@ describe('an existing workspace gains the escape-path denies on open, and keeps 
     const ws = tmp('wb-escape-removed-all-');
     open(ws);
     const settings = read(ws);
-    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -15);
+    settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -15 - startupDeny(home).length);
     assert.deepStrictEqual(settings.sandbox.filesystem.denyWrite, releasedDenyWrite(ws, home), 'sanity: exactly the 0.15.6 list');
     fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
     open(ws);

@@ -12,6 +12,8 @@
 // Registered only where Rundock owns the settings file, like the working
 // folders' additional directories: a settings file whose sandbox block a
 // person wrote gets no new entry.
+// Its turns run the guard, which watches the home folder's shell startup files.
+require('../helpers/made-up-home.js');
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

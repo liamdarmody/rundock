@@ -542,7 +542,7 @@
   function alwaysAskCopy(crossing) {
     if (!crossing) return null;
     if (crossing.secret) return ALWAYS_ASK_COPY.secret;
-    if (crossing.answerFile) return answerFileCopy(crossing.path);
+    if (crossing.answerFile) return answerFileCopy(crossing.path, crossing.startupFile);
     if (crossing.instructionFile) return ALWAYS_ASK_COPY.instructionFile;
     if (crossing.hiddenHome) return hiddenHomeCopy(crossing.hiddenHome, crossing.write === true);
     if (crossing.persistenceSurface) return ALWAYS_ASK_COPY.persistenceSurface;
@@ -723,7 +723,23 @@
         + 'decides what runs on your computer, outside the sandbox, the next time you reconnect. An agent can request a '
         + 'change to it, but never keep the permission: this asks every time, and there is no option to stop being asked.',
     },
+    // `~/.zshrc` and the other shell startup files (SHELL_STARTUP_FILES in the hook).
+    startup: {
+      summary: 'Wants to change what runs when you open a terminal',
+      context: 'This file runs each time you open a terminal, with your full access and outside every sandbox, so a change to '
+        + 'it decides what runs on your computer. An agent can request a change to it, but never keep the permission: this '
+        + 'asks every time, and there is no option to stop being asked.',
+    },
+    // Rundock's record of which startup files an agent could have changed.
+    record: {
+      summary: 'Wants to change Rundock\'s own record',
+      context: 'This is Rundock\'s own record of which shell startup files an agent could have changed, and only Rundock '
+        + 'writes it. An agent can request a change to it, but never keep the permission: this asks every time, and there '
+        + 'is no option to stop being asked.',
+    },
   };
+  const STARTUP_NAMES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout', '.bash_profile', '.bash_login', '.profile', '.bashrc', '.bash_logout'];
+  const RECORD_NAMES = ['.rundock-startup-file-exposure.json', '.startup-file-exposure.json'];
   function answerFileKind(paths) {
     const kinds = (Array.isArray(paths) ? paths : [paths]).map((p) => {
       const parts = String(p || '').split(/[\\/]+/).filter(Boolean).map(s => s.toLowerCase());
@@ -733,12 +749,22 @@
       if (parts[n - 1] === '.mcp.json' || (n >= 2 && parts[n - 2] === '.claude' && parts[n - 1] === 'settings.json')) return 'runs';
       if (parts.some((s, i) => s === '.claude' && parts[i + 1] === 'hooks')) return 'runs';
       if (parts.includes('.rundock-console')) return 'console';
+      if (RECORD_NAMES.includes(parts[n - 1])) return 'record';
+      if (STARTUP_NAMES.includes(parts[n - 1]) || (parts[n - 2] === 'fish' && parts[n - 1] === 'config.fish') || (parts[n - 3] === 'fish' && parts[n - 2] === 'conf.d')) return 'startup';
       return 'answers';
     });
-    return ['launcher', 'console', 'runs', 'connectorSecrets'].find(k => kinds.includes(k)) || 'answers';
+    return ['launcher', 'console', 'record', 'startup', 'runs', 'connectorSecrets'].find(k => kinds.includes(k)) || 'answers';
   }
-  function answerFileCopy(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].context; }
-  function answerFileSummary(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].summary; }
+  // A startup label (the `startup_file` the hook or Codex grading put on the
+  // request) marks a startup file, or a folder holding one, whatever its path
+  // is called: `~/.config/fish`, or `~` itself.
+  function answerFileKindFor(paths, startupLabel) {
+    const kind = answerFileKind(paths);
+    if (!startupLabel || ['launcher', 'console', 'record', 'startup'].includes(kind)) return kind;
+    return answerFileKind(startupLabel) === 'record' ? 'record' : 'startup';
+  }
+  function answerFileCopy(paths, startupLabel) { return ANSWER_FILE_COPY[answerFileKindFor(paths, startupLabel)].context; }
+  function answerFileSummary(paths, startupLabel) { return ANSWER_FILE_COPY[answerFileKindFor(paths, startupLabel)].summary; }
 
   // ── The put-back card ────────────────────────────────────────────────────
   // Rundock has already put back a change to one of the workspace's permission
@@ -752,6 +778,8 @@
     answers: { heading: 'Rundock put back a change to your permission answers', is: 'the file that holds your own answers about what agents may do' },
     launcher: { heading: 'Rundock put back a change to its permission checks', is: 'the file that starts Rundock\'s permission checks' },
     runs: { heading: 'Rundock put back a change to what runs', is: 'a file that decides what Rundock or Claude Code runs' },
+    startup: { heading: 'Rundock put back a change to what runs when you open a terminal', is: 'a file that runs each time you open a terminal' },
+    record: { heading: 'Rundock put back a change to its own record', is: 'Rundock\'s own record of which startup files an agent could have changed' },
   };
   function putBackCardCopy(putBack) {
     const p = putBack || {};

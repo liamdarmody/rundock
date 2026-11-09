@@ -1076,9 +1076,12 @@ function renderPermissionCard(d, convoId, host) {
     // this request would change the rules that decide what agents may do, or
     // what runs when they act.
     const named = [req.resolved_path, ...crossingList.map(c => c && c.path)].filter(Boolean);
-    summary = RundockPermissions.answerFileSummary(named);
-    detail = req.resolved_path || detail;
-    context = RundockPermissions.answerFileCopy(named);
+    // A shell startup file is named as `~/.zshrc`, wherever the write reached
+    // it, and a folder holding one as that folder, worded as a startup file.
+    const startupLabel = req.startup_file || (crossingList.find(c => c && c.startupFile) || {}).startupFile || null;
+    summary = RundockPermissions.answerFileSummary(named, startupLabel);
+    detail = startupLabel || req.resolved_path || detail;
+    context = RundockPermissions.answerFileCopy(named, startupLabel);
   } else if (boundary) {
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
     // A shell crossing does not say which act it is. The command may read,
