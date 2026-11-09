@@ -1018,11 +1018,15 @@ test('the reader keeps going past a file it cannot use', async (t) => {
 // to switch to would receive an ending for a run it never saw.
 //
 // Read through the filesystem rather than through the module's reader, because
-// the reader answers for the workspace open NOW, which is the other one.
+// the reader answers for the workspace open NOW, which is the other one. The
+// wait reads it there too: the run's ending is recorded in the workspace it
+// began in, so the open workspace's state never hears of it.
 test('a run that outlives a workspace switch closes its record where it began', async (t) => {
   begin(13, [KEEPER]);
   const home = runsDir();
   const elsewhere = makeWorkspace({ agents: {}, claudeMd: '# Elsewhere\n' });
+  const closedAtHome = () => fs.readdirSync(home).filter(f => f.endsWith('.json'))
+    .some(f => JSON.parse(fs.readFileSync(path.join(home, f), 'utf-8')).status !== 'running');
 
   driveTicks(t);
   // Synchronous with the pass: the child cannot have closed yet.
@@ -1030,7 +1034,7 @@ test('a run that outlives a workspace switch closes its record where it began', 
   clock.at = dayAt(13, 5, 40);
 
   try {
-    assert.ok(await settled(KEEPER), 'the run finished, in a process now pointed somewhere else');
+    assert.ok(await h.waitUntil(closedAtHome), 'the run finished, in a process now pointed somewhere else');
 
     const files = fs.readdirSync(home);
     assert.strictEqual(files.length, 1, 'the run left one record, where it started');

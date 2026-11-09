@@ -188,6 +188,10 @@ const ON_FAILURE = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), su
 const ON_FAILURE_DOC = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/doc-claims.test.js' };
 const ON_FAILURE_IMPORT = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: 'test/unit/hook-on-failure.test.js' };
 const STOP_ASK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
+// A workspace switch retires the shared Codex app-server, and one a routine
+// turn still holds shuts down when that turn ends: the switch never ends a
+// running routine. Watched by the suite that switches mid-turn.
+const SWITCH_CODEX_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/routine-outlives-switch.test.js' };
 // A run nobody can be asked from is told to carry on or say it failed: the
 // hook that decides who can be asked and hands every refusal over in those
 // words, and the words themselves, each driven by the suite that runs the real
@@ -4146,6 +4150,14 @@ const MUTATIONS = [
   [STARTUP_HOOK, 'Startup files: the dotfiles folder a startup file links into is not matched',
     '    if (link) forms.push(canonicalize(e.path));\n',
     ''],
+  [SWITCH_CODEX_GLUE, "Workspace switch: the Codex app-server is shut down while a routine turn still holds it",
+    "  if (_routineTurns.has(server)) _retiring.add(server);\n  else stopCodexAppServer(server);",
+    "  stopCodexAppServer(server);"],
+  // Read when it exits instead, the pid file is the open workspace's, and the
+  // one it was registered in keeps a dead pid for a later launch to signal.
+  [SWITCH_CODEX_GLUE, "Workspace switch: a Codex app-server that exits after a switch is taken off the pid file it was registered in",
+    "      if (ownPid) { deps.unregisterChildPid(ownPid, ownPidFile);",
+    "      if (ownPid) { deps.unregisterChildPid(ownPid);"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

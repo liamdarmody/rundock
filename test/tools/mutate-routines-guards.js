@@ -230,6 +230,15 @@ const ROUTINES = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 
 // complete copy beside a record, because with either guard gone every other
 // suite still loads a whole file and lists every record once.
 const SCHEDULER_LOADS = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-state-loads.test.js' };
+// A workspace switch never ends a running routine, and the run records into
+// the workspace it started in. Watched by the suite that switches over the
+// socket against real children, because a switch with its cleanup stubbed out
+// never reaches any of these guards. The cleanup's skip is watched by the unit
+// suite as well, which shows it is decided before the process table is read.
+const SWITCH = 'test/integration/routine-outlives-switch.test.js';
+const SWITCH_CLEANUP = { src: path.join(ROOT, 'server.js'), suite: SWITCH };
+const LIVE_RUN_CLEANUP = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/orphan-cleanup-live-runs.test.js' };
+const SWITCH_SCHEDULER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: SWITCH };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -1485,6 +1494,40 @@ const MUTATIONS = [
   [STYLES_PANEL, 'a scope row takes the browser\'s button type rather than the panel\'s',
     'color: var(--text-1); font: inherit;',
     'color: var(--text-1);'],
+
+  // A RUN THIS PROCESS IS STILL RUNNING IS NO ORPHAN. Without the skip, the
+  // cleanup a switch runs signals the run's child, on the process table's
+  // answer or for want of one.
+  [SWITCH_CLEANUP, 'the orphan cleanup a switch runs leaves a live run\'s child alone',
+    '    if (running.has(pid)) { survivors.push(rec); continue; }\n',
+    ''],
+  [LIVE_RUN_CLEANUP, 'the orphan cleanup skips a live run\'s pid before the process table is asked',
+    '    if (running.has(pid)) { survivors.push(rec); continue; }\n',
+    ''],
+  // THE ENDING RECORDS INTO THE WORKSPACE THE RUN STARTED IN. Read when the
+  // run ends instead, it stamps whichever workspace is open by then.
+  [SWITCH_SCHEDULER, 'a run\'s ending records into the workspace it started in',
+    '      }, run.workspace);\n',
+    '      });\n'],
+  // AND THE PLAIN SESSION IT FALLS BACK TO STARTS THERE.
+  [SWITCH_SCHEDULER, 'the plain session a run falls back to starts in the workspace the run started in',
+    '    const workspace = run.workspace;\n    const capture = openCapture(run);',
+    '    const workspace = getWorkspace();\n    const capture = openCapture(run);'],
+  // A WORKSPACE'S STATE IS CARRIED ONCE, at the first load after it was left.
+  // Taken again at a second switch, it is the state in memory by then, the
+  // workspace in between's, and the ending writes that into the run's file.
+  [SWITCH_SCHEDULER, 'a workspace\'s state is carried at the first load after it was left, not again at a second switch',
+    '    if (workspace !== open && !carriedStates.has(workspace)) carriedStates.set(workspace, { ...routineState });\n',
+    '    if (workspace !== open) carriedStates.set(workspace, { ...routineState });\n'],
+  // A RUN'S ENDING WITH NO STATE CARRIED FAILS CLOSED. Falling back to the
+  // open workspace's state, it writes the open workspace's file.
+  [SWITCH_SCHEDULER, 'a run\'s ending with no state carried never records into the open workspace',
+    '  if (workspace === getWorkspace()) return routineState;\n  if (!carriedStates.has(workspace)) carriedStates.set(workspace, stateInItsFile(workspace));\n  return carriedStates.get(workspace);\n',
+    '  return (workspace !== getWorkspace() && carriedStates.get(workspace)) || routineState;\n'],
+  // AND A FILE IT CANNOT READ IS NOT WRITTEN OVER with the one ending.
+  [SWITCH_SCHEDULER, 'a run\'s own state file that cannot be read is not written over with its ending',
+    '    else if (unreadStates.has(states)) throw new Error(`${unreadStates.get(states)}, so it is left as it is`);\n',
+    ''],
 
 ];
 
