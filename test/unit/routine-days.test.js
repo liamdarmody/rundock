@@ -113,6 +113,27 @@ describe('the grammar: a set of days', () => {
       { kind: 'daily', hour: 9, minute: 0 }, 'all seven are every day, and walk its slots');
   });
 
+  // A SET READS A CLOCK TIME OR NOTHING. 25:00 on a Saturday is 01:00 on
+  // Sunday, so a set read at an hour past 23 would put a slot on the next day,
+  // which the set may leave out, and the walk would skip a date. The forms an
+  // earlier release read keep rolling as they did.
+  test('a set at an hour past 23 or a minute past 59 reads as nothing, and the earlier forms still roll', () => {
+    for (const schedule of [
+      'every saturday and sunday at 25:00',
+      'every weekday at 24:00',
+      'every monday and friday at 09:60',
+      'every monday, wednesday and sunday at 99:99',
+    ]) {
+      assert.strictEqual(scheduler.parseSchedule(schedule), null, `parseSchedule on "${schedule}"`);
+      assert.strictEqual(scheduler.getNextRun(schedule, null), null, `"${schedule}" is never due`);
+      assert.strictEqual(isWritableSchedule(schedule), false, `isWritableSchedule on "${schedule}"`);
+    }
+    for (const schedule of ['every day at 25:00', 'every monday at 25:00', 'on day 15 of every month at 25:00']) {
+      assert.ok(priorParse(schedule), `sanity: the earlier grammar read "${schedule}"`);
+      assert.deepStrictEqual(scheduler.parseSchedule(schedule), priorParse(schedule), `"${schedule}" reads as it did`);
+    }
+  });
+
   test('every form the earlier release read gives the same result, form by form', () => {
     const differ = [];
     for (const schedule of priorForms()) {

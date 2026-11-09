@@ -325,3 +325,19 @@ test('a misspelled, shortened or empty list gives the hint, never fires and thro
     assert.strictEqual(editorModel.reopenSchedule(shown), null, 'and the editor opens on nothing of its own');
   }
 });
+
+// 25:00 on a Saturday is 01:00 on Sunday. A set read at that hour would fire
+// on the day after each chosen one, so it reads as nothing instead, as the
+// save check already refuses to write it.
+test('a set at an hour past 23 reads as nothing and never fires', async (t) => {
+  const schedule = 'every saturday and sunday at 25:00';
+  resetTimeline();
+  write(schedule);
+  await withTicks(t, async () => {
+    for (let day = 1; day <= 8; day++) for (const hour of [0, 1, 2, 9, 12]) await tickAt(t, at(day, hour));
+  });
+  assert.strictEqual(runs(), 0, `"${schedule}" fired`);
+  const shown = rowAsShown();
+  assert.strictEqual(shown.scheduleReadable, false, `"${schedule}" read as a schedule`);
+  assert.strictEqual(routinesModel.nextRunLabel(shown), null, 'and promises no run');
+});
