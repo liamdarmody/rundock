@@ -269,6 +269,25 @@ describe('a server that reports no zone', () => {
     assert.strictEqual(withIntlAnswering({ timeZone: 'Etc/Unknown' }, () => rosterFrom('Europe/London', dir)).zone, null);
   });
 
+  // The path failing harder: asking Intl at all throws. The roster still goes
+  // out whole, reporting no zone, because a roster that failed to build over
+  // a fact it carries only for showing would take the team list down with it.
+  test('a runtime whose Intl throws reports no zone, and the roster still builds', () => {
+    const dir = workspace();
+    const real = Intl.DateTimeFormat;
+    let roster = null;
+    Intl.DateTimeFormat = function () { throw new RangeError('no time zone data'); };
+    try {
+      assert.doesNotThrow(() => { roster = rosterFrom('Europe/London', dir); }, 'the throw escaped the roster builder');
+    } finally {
+      Intl.DateTimeFormat = real;
+    }
+    assert.strictEqual(Intl.DateTimeFormat, real, 'sanity: Intl is back as it was');
+    assert.strictEqual(roster.zone, null);
+    assert.strictEqual(roster.workspace, dir, 'and the rest of the roster is there');
+    assert.deepStrictEqual(roster.agents.find(a => a.id === 'piper').routines.map(r => r.name), ['Morning briefing']);
+  });
+
   // An older server sends no field at all. The caption still says whose clock
   // it is, names no place, and never falls back to the window's zone.
   test('a roster with no zone leaves the captions naming no place, and never the window\'s', () => {
