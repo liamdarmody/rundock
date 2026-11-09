@@ -455,14 +455,36 @@ describe('shards are planned by time, not rows', () => {
     for (const s of plan.shards) assert.ok(s.seconds <= 15 * 60, `shard ${s.index} is planned at ${s.seconds}s`);
   });
 
-  // Two slices of the boundary harness that CI ran in one shard each, from the
-  // first row's label to the last, and the seconds their harness run took.
-  // A third of their rows had no cost of their own and were planned at the
-  // harness's average, a fraction of what their suites take on CI, and the
-  // rest had costs inferred from older runs or timed on a developer machine,
-  // so the plan put each at about nine minutes: the first took twenty-eight,
-  // and the second ran to the job's thirty-minute limit and was cancelled.
+  // Every slice of the boundary harness that CI ran on main at 2ac7cce6, run
+  // 42640417868, from the first row's label to the last, and the seconds the
+  // slice took. Between them they held every row the harness had.
   const BOUNDARY = 'mutate-workspace-boundary-guards.js';
+  const TIMED = [
+      { first: "file targets are canonicalised before the comparison",
+        last: "M2: \"inside a git working tree\" always false", seconds: 721 },
+      { first: "M3a: the unsaved-work check on a delete always reports clean",
+        last: "Answer-file writes: code: Perl's write arrows are not a mode that writes", seconds: 541 },
+      { first: "Answer-file writes: code: A name's uses are not followed",
+        last: "Connector send: a tool that is not a connector is taken for a send", seconds: 1040 },
+      { first: "Connector send: a send or delete is allowed when Rundock cannot be asked",
+        last: "Keychain: Notes mode is handed every verdict", seconds: 160 },
+      { first: "Keychain: Notes mode finds nothing",
+        last: "Stop and ask: a Codex without turn/steer is never told", seconds: 1244 },
+      { first: "Stop and ask: the approval event carries no way to steer",
+        last: "Hook crash: a rejection is left to whatever the runtime was told to do with one", seconds: 1037 },
+      { first: "Hook crash: a failure after the answer prints a second one",
+        last: "Folder reads: a keyword before the program is taken as the program", seconds: 1321 },
+      { first: "Folder reads: xargs behind a program that runs it is not seen",
+        last: "Folder reads: the folder a cpio pass-through copies into is not counted", seconds: 436 },
+      { first: "Folder reads: the folder a cpio pass-through copies into is not counted, against the real server",
+        last: "Workspace switch: a Codex app-server that exits after a switch is taken off the pid file it was registered in", seconds: 996 },
+  ];
+  // Two slices CI ran past their plan, each in one shard. A third of their
+  // rows had no cost of their own and were planned at the harness's average,
+  // a fraction of what their suites take on CI, and the rest had costs
+  // inferred from older runs or timed on a developer machine, so the plan put
+  // each at about nine minutes: the first took twenty-eight, and the second
+  // ran to the job's thirty-minute limit and was cancelled.
   const OVERRUNS = [
     { run: 42625901207, first: 'Connector card: a well-known key makes the card warn',
       last: 'Credential reads: a cd that may not last is not taken as where the shell is', seconds: 1704 },
@@ -470,25 +492,34 @@ describe('shards are planned by time, not rows', () => {
       last: 'Shell code: a route-shaped literal whose first folder is not on this machine is a place', seconds: 1788 },
   ];
 
-  test('the boundary harness is planned at what CI measured: no shard past the margin, and no overrun slice in one shard', () => {
+  test('the boundary harness is planned at what CI measured: every shard within the margin, every slice CI timed planned near its time, and no overrun slice in one shard', () => {
     // Half the job's thirty minutes, the bound the full set is held to above.
-    // A row costed below what CI takes plans a slice short and the shard runs
-    // long, so the plan is checked against the slices CI timed, as well as
-    // against the margin.
+    // A shard's planned seconds are only as good as its rows' costs: a row
+    // costed below what CI takes plans its shard short, and the shard runs
+    // long however far under the margin it was planned. So every shard is
+    // held to the margin, and every slice CI timed, which together reach
+    // every row, must be planned at three quarters or more of what it took.
     const MARGIN = 15 * 60;
     const tools = path.join(REPO, 'test', 'tools');
     const costs = readCosts(tools);
     const h = loadHarnesses({ toolsDir: tools, root: REPO }).find((x) => x.tool === BOUNDARY);
     const { shards } = planShards([h], { costs });
     for (const s of shards) assert.ok(s.seconds <= MARGIN, `shard ${s.index} is planned at ${s.seconds}s, past ${MARGIN}s`);
-    for (const o of OVERRUNS) {
+    const rowsOf = (o, run) => {
       const from = h.rowLabels.indexOf(o.first);
       const to = h.rowLabels.indexOf(o.last);
-      assert.ok(from !== -1 && to > from, `sanity: the slice run ${o.run} timed is rows today (${from}, ${to})`);
+      assert.ok(from !== -1 && to > from, `sanity: the slice run ${run} timed is rows today (${from}, ${to})`);
+      return { from, to };
+    };
+    for (const o of [...TIMED.map((t) => ({ ...t, run: 42640417868 })), ...OVERRUNS]) {
+      const { from, to } = rowsOf(o, o.run);
       const slice = { tool: BOUNDARY, rows: to + 1 - from, rowLabels: h.rowLabels.slice(from, to + 1), rowSuites: h.rowSuites.slice(from, to + 1) };
       const planned = planShards([slice], { costs, target: Infinity }).seconds;
       assert.ok(planned >= o.seconds * 0.75,
         `rows ${from}:${to + 1} are planned at ${planned}s; CI run ${o.run} took ${o.seconds}s over them`);
+    }
+    for (const o of OVERRUNS) {
+      const { from, to } = rowsOf(o, o.run);
       const holding = shards.filter((s) => s.units.some((u) => u.tool === BOUNDARY && (u.start ?? 0) <= to && (u.end ?? h.rows) > from));
       assert.ok(holding.length >= 2, `rows ${from}:${to + 1} are planned in ${holding.length} shard(s)`);
     }
