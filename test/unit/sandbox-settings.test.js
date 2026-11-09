@@ -30,6 +30,14 @@ const { sandboxSettings, isRundockSandbox, WRITTEN_DENY_LENGTHS } = require('../
 
 const WS = '/tmp/sandbox-ws';
 const HOME = '/Users/someone';
+// The shell startup files the block denies are this process's own, so the
+// lists below are read with no ZDOTDIR or XDG_CONFIG_HOME, run from source.
+for (const name of ['ZDOTDIR', 'XDG_CONFIG_HOME', 'RUNDOCK_ELECTRON']) delete process.env[name];
+const RECORD = path.join(__dirname, '..', '..', '.startup-file-exposure.json');
+const STARTUP_DENY = [
+  ...['.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout', '.bash_profile', '.bash_login', '.profile', '.bashrc', '.bash_logout'].map(f => `${HOME}/${f}`),
+  `${HOME}/.config/fish/config.fish`, `${HOME}/.config/fish/conf.d`, RECORD,
+];
 
 describe('sandboxSettings', () => {
   test('on macOS the workspace is writable and the rest of the machine is not', () => {
@@ -215,8 +223,9 @@ describe('sandboxSettings: named working folders', () => {
     `${HOME}/.claude-staging-oauth.json`, `${HOME}/.claude-local-oauth.json`, `${HOME}/.claude-custom-oauth.json`,
     `${WS}/.claude/settings.json`,
     `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`, `${WS}/.rundock/mcp-secrets.json`,
+    `${HOME}/.rundock-console`,
   ];
-  const WRITTEN_LENGTHS = [0, 1, 2, 3, 8, 19, 21, 22];
+  const WRITTEN_LENGTHS = [0, 1, 2, 3, 8, 19, 21, 22, 23];
   function released(n, shape) {
     const allowWrite = [...SHIPPED_KNOWLEDGE_BLOCK.filesystem.allowWrite, ...FOLDERS];
     const filesystem = n ? { allowWrite, denyWrite: RELEASED_DENY.slice(0, n) } : { allowWrite };
@@ -240,8 +249,8 @@ describe('sandboxSettings: named working folders', () => {
         `${HOME}/.claude/agents`, `${HOME}/.claude/commands`, `${HOME}/.claude/backups`,
         `${HOME}/.claude-staging-oauth.json`, `${HOME}/.claude-local-oauth.json`, `${HOME}/.claude-custom-oauth.json`,
         `${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`, `${WS}/.rundock/mcp-secrets.json`,
-        `${HOME}/.rundock-console`],
-      'the intended difference, named: every file that holds answers to permission questions, the workspace\'s own permission configuration included, then the runtimes\' credential files, then what the runtime acts on outside the sandbox, then the workspace\'s connector file, the launcher the permission hook is started through, the per-user connector file, and Rundock\'s console folder');
+        `${HOME}/.rundock-console`, ...STARTUP_DENY],
+      'the intended difference, named: every file that holds answers to permission questions, the workspace\'s own permission configuration included, then the runtimes\' credential files, then what the runtime acts on outside the sandbox, then the workspace\'s connector file, the launcher the permission hook is started through, the per-user connector file, Rundock\'s console folder, and the shell startup files with Rundock\'s record of them');
     const { denyWrite, ...filesystem } = s.filesystem;
     assert.deepStrictEqual({ ...s, filesystem }, SHIPPED_KNOWLEDGE_BLOCK,
       'and with it removed, key for key and value for value, the block that shipped');
@@ -384,14 +393,16 @@ describe('sandboxSettings: named working folders', () => {
         assert.strictEqual(isRundockSandbox(edited, 'darwin'), false,
           `a ${mode} block with its last ${removed} deny entries removed is a person's edit`);
       }
-      // Removing all fifteen entries added after 0.15.6 leaves exactly the list
-      // 0.15.6 wrote, and removing the last four, two or one leaves a list a
-      // build after it wrote; none can be told apart from that build's own
-      // block, and each upgrades like it.
-      assert.deepStrictEqual(deny.slice(0, deny.length - 15), RELEASED_DENY.slice(0, 8), 'sanity: what is left is the 0.15.6 list');
-      assert.deepStrictEqual(deny.slice(0, deny.length - 4), RELEASED_DENY.slice(0, 19), 'sanity: and the nineteen-entry list');
-      assert.deepStrictEqual(deny.slice(0, deny.length - 2), RELEASED_DENY.slice(0, 21), 'sanity: and the twenty-one-entry list');
-      assert.deepStrictEqual(deny.slice(0, deny.length - 1), RELEASED_DENY, 'sanity: and the list the last build wrote');
+      // Removing the startup files and all fifteen entries added after 0.15.6
+      // leaves exactly the list 0.15.6 wrote, and removing them and the last
+      // four, two, one or none leaves a list a build after it wrote; none can
+      // be told apart from that build's own block, and each upgrades like it.
+      const n = STARTUP_DENY.length;
+      assert.deepStrictEqual(deny.slice(0, deny.length - n - 15), RELEASED_DENY.slice(0, 8), 'sanity: what is left is the 0.15.6 list');
+      assert.deepStrictEqual(deny.slice(0, deny.length - n - 4), RELEASED_DENY.slice(0, 19), 'sanity: and the nineteen-entry list');
+      assert.deepStrictEqual(deny.slice(0, deny.length - n - 2), RELEASED_DENY.slice(0, 21), 'sanity: and the twenty-one-entry list');
+      assert.deepStrictEqual(deny.slice(0, deny.length - n - 1), RELEASED_DENY.slice(0, 22), 'sanity: and the twenty-two-entry list');
+      assert.deepStrictEqual(deny.slice(0, deny.length - n), RELEASED_DENY, 'sanity: and the list the last build wrote');
     }
   });
 
@@ -441,5 +452,53 @@ describe('sandboxSettings: named working folders', () => {
     // changed mode recognise what it wrote before and converge on the new shape.
     assert.strictEqual(isRundockSandbox({ ...code, enabled: true }, 'darwin'), false,
       'a Code-mode block with an enable bolted on is not a shape we ever wrote');
+  });
+});
+
+describe('the shell startup files join the deny list', () => {
+  test('a block the last build wrote is ours, and the list that replaces it ends with the startup files and the record', () => {
+    for (const mode of ['knowledge', 'code']) {
+      const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode);
+      const deny = current.filesystem.denyWrite;
+      assert.deepStrictEqual(deny.slice(-STARTUP_DENY.length), STARTUP_DENY, `${mode}: the startup files, then the record, at the end`);
+      const lastBuild = JSON.parse(JSON.stringify(current));
+      lastBuild.filesystem.denyWrite = deny.slice(0, 23);
+      assert.strictEqual(lastBuild.filesystem.denyWrite[22], `${HOME}/.rundock-console`, 'sanity: the 23-entry list the last build wrote');
+      assert.strictEqual(isRundockSandbox(lastBuild, 'darwin'), true, `${mode}: the last build's block is recognised as Rundock's`);
+    }
+  });
+
+  test('the zsh files under ZDOTDIR come last, and that list is recognised too', () => {
+    process.env.ZDOTDIR = '/Users/someone/zdot';
+    try {
+      const deny = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t']).filesystem.denyWrite;
+      assert.deepStrictEqual(deny.slice(-5), ['.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout'].map(f => `/Users/someone/zdot/${f}`));
+      assert.ok(WRITTEN_DENY_LENGTHS.includes(deny.length), `the ${deny.length}-entry list is recorded as written`);
+      process.env.ZDOTDIR = HOME;
+      assert.strictEqual(sandboxSettings(WS, 'darwin', HOME, ['/tmp/t']).filesystem.denyWrite.length, deny.length - 5, 'a ZDOTDIR that is home adds nothing');
+    } finally { delete process.env.ZDOTDIR; }
+  });
+
+  test('at the next open, a block the last build wrote gains them at the end of its deny list', () => {
+    const fs = require('node:fs');
+    const { _internal: srv } = require('../../server.js');
+    const { makeWorkspace, cleanup } = require('../helpers/workspace.js');
+    try {
+      const dir = makeWorkspace({ claudeMd: '# x' });
+      const settings = path.join(dir, '.claude', 'settings.local.json');
+      srv.setWorkspace(dir);
+      srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+      const written = JSON.parse(fs.readFileSync(settings, 'utf-8'));
+      const want = written.sandbox.filesystem.denyWrite;
+      assert.ok(want.length > 23, 'sanity: this build writes the longer list');
+      written.sandbox.filesystem.denyWrite = want.slice(0, 23);
+      fs.writeFileSync(settings, JSON.stringify(written, null, 2));
+      srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+      const after = JSON.parse(fs.readFileSync(settings, 'utf-8')).sandbox.filesystem.denyWrite;
+      assert.deepStrictEqual(after, want, 'upgraded to the current list');
+      const home = require('node:os').homedir();
+      assert.deepStrictEqual(after.slice(23, 26), ['.zshenv', '.zprofile', '.zshrc'].map(f => path.posix.join(home, f)), 'the startup files follow the old list');
+      assert.ok(after.includes(require('../../scripts/permission-hook.js').exposureRecordPath()), 'and the record\'s path is among them');
+    } finally { cleanup(); }
   });
 });

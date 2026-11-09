@@ -13,6 +13,8 @@
 // These tests stand in for the agent by writing the files from outside the
 // guard, both as a file edit (a direct write) and as a shell redirect (a real
 // `sh -c "printf >> file"`), during a turn the glue is guarding.
+// Its turns run the guard, which watches the home folder's shell startup files.
+require('../helpers/made-up-home.js');
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

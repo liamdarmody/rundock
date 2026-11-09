@@ -126,12 +126,13 @@ for (const [label, wsOf] of [['the workspace is the home folder', () => home], [
 // THE OPERATING SYSTEM REFUSES IT TOO, where the sandbox block runs: the hook
 // reads the command, and a script or interpreter writes past what it reads.
 describe('the sandbox block denies the folder', () => {
-  test('appended last, for a workspace at the home folder and one under it, in both modes', () => {
+  test('appended after the rest, followed only by the shell startup files, for a workspace at the home folder and one under it, in both modes', () => {
     const { sandboxSettings, WRITTEN_DENY_LENGTHS } = require('../../lib/workspace/scaffold.js');
+    const after = hook.shellStartupEntries(home).length;
     for (const ws of [home, nested]) {
       for (const mode of ['knowledge', 'code']) {
         const deny = sandboxSettings(ws, 'darwin', home, ['/tmp/t'], [], mode).filesystem.denyWrite;
-        assert.strictEqual(deny[deny.length - 1], path.posix.join(home, '.rundock-console'), `${mode}: last`);
+        assert.strictEqual(deny[deny.length - 1 - after], path.posix.join(home, '.rundock-console'), `${mode}: last but the startup files`);
         assert.ok(WRITTEN_DENY_LENGTHS.includes(deny.length), `${mode}: the ${deny.length}-entry list is recorded as written`);
       }
     }

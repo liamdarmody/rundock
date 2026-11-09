@@ -14,6 +14,8 @@
 // by hand and by git, so a change found between turns is taken as the new
 // starting point, like the Claude Code settings files. The launcher is
 // Rundock's alone: Rundock writes it, recording that it did.
+// Its turns run the guard, which watches the home folder's shell startup files.
+require('../helpers/made-up-home.js');
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
