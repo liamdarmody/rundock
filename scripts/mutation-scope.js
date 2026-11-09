@@ -107,10 +107,13 @@ const FALLBACK_SECONDS_PER_ROW = 5;
  * job's limit while the others finished in minutes.
  *
  * THE COSTS BY LABEL ARE INFERRED, NOT MEASURED: no run records a row's own
- * time, so each slice's measured time is shared among its rows in
- * proportion to one plus the tests each turned red. A label keeps its cost
- * when rows are added around it. A row with no cost of its own is planned at
- * its harness's rate, or, where it reads an integration suite, at the rate
+ * time, so each slice's measured time on CI is shared among its rows, in
+ * proportion to one plus the tests each turned red or, where the table says
+ * so, to the time of the suite each row runs. A label keeps its cost when
+ * rows are added around it. A new row is costed from CI, never from a run
+ * on a developer machine, whose times are not the runner's; the table's
+ * `about` says how. A row with no cost of its own is planned at its
+ * harness's rate, or, where it reads an integration suite, at the rate
  * inferred for that harness's integration rows (`perIntegration[tool]`),
  * which start a server and run slower than the rest.
  */
