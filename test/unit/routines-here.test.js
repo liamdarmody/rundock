@@ -179,6 +179,80 @@ describe('the path failing', () => {
   });
 });
 
+describe('a record that could not be read is never written over', () => {
+  const asideOf = () => fs.readdirSync(path.dirname(record)).filter(n => n.startsWith('routines-here.json.unparsed-'));
+  const quietly = (fn) => {
+    const error = console.error;
+    console.error = () => {};
+    try { return fn(); } finally { console.error = error; }
+  };
+
+  test('a record of the wrong shape is kept under a dated name before the change is written', () => {
+    const ledger = workspace('ledger');
+    const notes = workspace('notes');
+    // Another workspace's off entry, in a shape this cannot read.
+    const held = JSON.stringify({ workspaces: [{ path: notes, off: true }] });
+    fs.writeFileSync(record, held);
+    assert.strictEqual(quietly(() => here.setOffHere(ledger, true)), true);
+    const aside = asideOf();
+    assert.strictEqual(aside.length, 1, 'the record that could not be read was written over');
+    assert.strictEqual(fs.readFileSync(path.join(path.dirname(record), aside[0]), 'utf-8'), held, 'what was set aside is not what was there');
+    assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(record, 'utf-8')).workspaces), [ledger]);
+  });
+
+  test('a record that cannot be read at all is kept under a dated name before the change is written', () => {
+    const ledger = workspace('ledger');
+    fs.mkdirSync(record);
+    fs.writeFileSync(path.join(record, 'inside'), 'kept');
+    assert.strictEqual(quietly(() => here.setOffHere(ledger, true)), true);
+    const aside = asideOf();
+    assert.strictEqual(aside.length, 1, 'the record that could not be read was not set aside');
+    assert.strictEqual(fs.readFileSync(path.join(path.dirname(record), aside[0], 'inside'), 'utf-8'), 'kept');
+    assert.strictEqual(here.offHere(ledger), true);
+  });
+
+  test('turning on what reads on writes nothing, so an unreadable record stays where it is', () => {
+    const ledger = workspace('ledger');
+    const held = JSON.stringify({ workspaces: 'not a record' });
+    fs.writeFileSync(record, held);
+    assert.strictEqual(quietly(() => here.setOffHere(ledger, false)), false);
+    assert.strictEqual(fs.readFileSync(record, 'utf-8'), held);
+    assert.deepStrictEqual(asideOf(), []);
+  });
+
+  test('when it cannot be set aside, nothing is written and the save fails', (t) => {
+    const ledger = workspace('ledger');
+    const held = JSON.stringify({ workspaces: [] });
+    fs.writeFileSync(record, held);
+    t.mock.method(fs, 'renameSync', () => { const e = new Error('operation not permitted'); e.code = 'EPERM'; throw e; });
+    let thrown;
+    try { quietly(() => here.setOffHere(ledger, true)); } catch (e) { thrown = e; }
+    t.mock.restoreAll();
+    assert.ok(thrown, 'the change was saved over a record that could not be kept');
+    assert.match(thrown.message, /setting it aside failed \(operation not permitted\), so nothing was written/);
+    assert.strictEqual(fs.readFileSync(record, 'utf-8'), held, 'the record was written over');
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(record)), ['routines-here.json'], 'something was left beside it');
+  });
+
+  test('and the window that asked is told the save failed', (t) => {
+    const ledger = workspace('ledger');
+    config.setWorkspace(ledger);
+    fs.writeFileSync(record, JSON.stringify({ workspaces: [] }));
+    const sent = [];
+    const told = [];
+    t.mock.method(fs, 'renameSync', () => { throw new Error('operation not permitted'); });
+    try {
+      quietly(() => handleSetRoutinesHere({ broadcast: (m) => told.push(m) }, { send: (m) => sent.push(JSON.parse(m)) },
+        { type: 'set_routines_here', on: false, workspace: ledger }));
+    } finally { t.mock.restoreAll(); }
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].type, 'routines_here_failed');
+    assert.strictEqual(sent[0].on, false);
+    assert.match(sent[0].detail, /setting it aside failed/);
+    assert.deepStrictEqual(told, []);
+  });
+});
+
 describe('the computer\'s name', () => {
   test('is the server\'s, without the .local a Mac adds', () => {
     assert.strictEqual(here.computerName(), COMPUTER);
