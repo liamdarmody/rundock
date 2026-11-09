@@ -91,6 +91,9 @@ const DISPATCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'index.js
 const ROUTINES_TZ = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-timezone.test.js' };
 // The editor's model, watched by the suite for a routine on a set of days.
 const DAYS_MODEL = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routine-days.test.js' };
+// The page's script order, watched by the suite that pins the order the
+// editor's model depends on.
+const SCRIPT_ORDER = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routine-editor-doors.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -568,6 +571,11 @@ const MUTATIONS = [
   [DAYS_MODEL, 'week from every day starts with all seven ticked',
     "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : (from === 'day' ? ALL_DAYS.slice() : []);",
     "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : [];"],
+  // The model is built in the browser from the global the days module sets,
+  // so the module loads first. Moved after it, the model has no days to read.
+  [SCRIPT_ORDER, 'the days module loads before the editor model',
+    '<script src="/schedule-days.js"></script>\n<script src="/routine-editor-model.js"></script>\n',
+    '<script src="/routine-editor-model.js"></script>\n<script src="/schedule-days.js"></script>\n'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

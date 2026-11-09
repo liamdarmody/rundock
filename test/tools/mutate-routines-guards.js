@@ -1562,6 +1562,11 @@ const MUTATIONS = [
   [SCHEDULER_PERIOD, 'the walk steps only to the chosen days',
     '      if (parsed.days.includes(at.getDay())) left -= 1;',
     '      left -= 1;'],
+  // A set reads a clock time or nothing: at 25:00 a slot rolls onto the day
+  // after a chosen one, which the set may leave out.
+  [SCHEDULER_DAYS, 'a set reads only a clock time',
+    '  if (hour > 23 || minute > 59) return null;\n',
+    ''],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
