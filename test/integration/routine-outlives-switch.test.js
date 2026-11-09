@@ -32,6 +32,7 @@ const path = require('node:path');
 const h = require('../helpers/harness.js');
 const { agentFile, makeWorkspace } = require('../helpers/workspace.js');
 const scheduler = require('../../lib/scheduler.js');
+const glue = require('../../lib/runtime/codex-glue.js');
 const { commandLineCapability } = require('../../lib/runtime/claude.js');
 
 const AGENT = 'keeper';
@@ -680,6 +681,41 @@ test('an app-server that stalls on the deferred shutdown is killed after the gra
   assert.ok(appServerLog(a).some(e => e.event === 'sigterm-ignored'), 'the deferred shutdown sent SIGTERM, which it ignored');
   assert.ok(h.pidAlive(server), 'so it was still running');
   assert.ok(await h.waitForPidExit(server, 6000), 'until SIGKILL ended it after the grace period');
+});
+
+// The shared app-server crashes, and a routine starts while the client is
+// waiting out its restart backoff, so the server it holds has no process yet.
+// The restarted one is a new process, registered in A's pid file like the
+// first. The run's pid has to follow it there, or re-selecting A has the
+// orphan cleanup signal the server the run's turn is on.
+test(`a Codex run's pid follows its server through a restart, so re-selecting the workspace leaves it alone (${SIDE})`, async (t) => {
+  const release = path.join(h.workspaceDir, `release-codex-restart-${process.pid}`);
+  t.after(() => fs.writeFileSync(release, ''));
+  const a = scribeWorkspace('codex restart body', { rule: { untilFile: release } });
+  await choose(a);
+  const first = (await glue.getCodexAppServer()).pid();
+  assert.ok(first, 'a shared app-server is up in A, as one is once any Codex turn has run there');
+  process.kill(first, 'SIGKILL');
+  await h.waitUntil(() => !glue.getCodexAppServerPids().includes(first));
+
+  clock.at = dayAt(23, 9, 30);
+  tick(t);
+  await h.waitUntil(() => turnFor(a, 'codex restart body'));
+  const spawns = appServerLog(a).filter(e => e.event === 'spawn').map(e => e.pid);
+  assert.strictEqual(spawns.length, 2, 'the routine\'s turn started on the restarted server');
+  const restarted = spawns[1];
+  assert.ok(pidsIn(a).includes(restarted), 'which is on record in A\'s pid file');
+
+  await choose(a);
+  await h.delay(300);
+  assert.deepStrictEqual(recordsIn(a).map(r => r.status), ['running'], 'the run is still going after re-selecting A');
+  assert.ok(h.pidAlive(restarted), 'and so is the restarted server it runs on');
+  assert.ok(scheduler.liveRunPids().has(restarted), 'which is the process the run names as its own');
+
+  fs.writeFileSync(release, '');
+  await h.waitUntil(() => closedIn(a) === 1);
+  assert.strictEqual(recordsIn(a)[0].status, 'succeeded', 'the run ends with the outcome its turn gave');
+  assert.ok(await h.waitForPidExit(restarted, 5000), 'and the server shut down once the turn holding it ended');
 });
 
 // ===== RUNDOCK STOPPED WHILE A RUN OUTLIVES A SWITCH =====
