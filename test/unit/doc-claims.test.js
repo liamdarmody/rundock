@@ -991,26 +991,35 @@ describe('ROUTINES.md: where a routine actually runs', () => {
   //
   // ASSERTED AGAINST THE SOURCE BECAUSE THE CLAIM IS THAT NOTHING EXISTS, and
   // a behavioural test can only ever show that one particular thing did not
-  // happen. Read at the time of writing: the file is named in exactly three
-  // places in lib/scheduler.js, one comment, one read inside loadRoutineState
-  // and one write inside saveRoutineState, and no watcher anywhere in the
-  // server names it.
-  test('nothing but the load ever reads the state file', () => {
+  // happen. Read at the time of writing: the file is named in lib/scheduler.js
+  // in comments, in one read inside loadRoutineState, in one write inside the
+  // save, and in one read of a workspace that is NOT open, for a run of it that
+  // ends with no state carried. That last read fills only the state carried for
+  // that workspace, which the tick never decides with. No watcher anywhere in
+  // the server names the file.
+  test('nothing but the load ever reads the open workspace\'s state file', () => {
     const scheduler = fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8');
     // Code lines only: a comment naming the file is prose, not a reader.
     const touches = scheduler.split('\n')
       .filter(line => line.includes('routine-state.json') && !line.trim().startsWith('//'));
-    assert.strictEqual(touches.length, 2,
-      `the state file is named in ${touches.length} code lines, not the read and the write:\n${touches.join('\n')}`);
+    assert.strictEqual(touches.length, 3,
+      `the state file is named in ${touches.length} code lines, not the read, the write and the read for a workspace not open:\n${touches.join('\n')}`);
 
-    // And each of the two sits in the one function it belongs to, so neither
-    // can be reached except by loading the state or saving it.
+    // And each sits in the one function it belongs to, so none can be reached
+    // except by loading the state, saving it, or building a closed workspace's.
     const between = (from, to) => scheduler.slice(scheduler.indexOf(from), scheduler.indexOf(to));
     const load = between('function loadRoutineState()', 'function saveRoutineState()');
     const save = between('function saveRoutineState()', '// ===== SLOTS THAT PASSED UNSERVED =====');
     assert.match(load, /readFileSync[\s\S]{0,80}routine-state\.json|routine-state\.json[\s\S]{0,80}readFileSync/,
-      'the only read is inside the load, which runs at boot and on a workspace switch');
+      'the only read of the open workspace\'s file is inside the load, which runs at boot and on a workspace switch');
     assert.match(save, /routine-state\.json/, 'and the only write is inside the save');
+    const built = between('function stateInItsFile(', '// ===== RUN RECORDS =====');
+    assert.match(built, /routine-state\.json[\s\S]{0,80}readFileSync/, 'the other read builds the state of a workspace');
+    const routed = between('function statesFor(', 'function stateInItsFile(');
+    assert.match(routed,
+      /if \(workspace === getWorkspace\(\)\) return routineState;\n\s*if \(!carriedStates\.has\(workspace\)\) carriedStates\.set\(workspace, stateInItsFile\(workspace\)\);/,
+      'only one that is not open, into the state carried for it, never into the one the tick reads');
+    assert.strictEqual(scheduler.split('stateInItsFile(').length, 3, 'and it is built there and nowhere else');
     // And nothing watches the folder it lives in.
     for (const file of ['lib/scheduler.js', 'server.js']) {
       const src = fs.readFileSync(path.join(ROOT, file), 'utf-8');
