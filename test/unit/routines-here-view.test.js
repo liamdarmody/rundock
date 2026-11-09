@@ -154,11 +154,13 @@ describe('the switch row, off', () => {
     dom.window.close();
   });
 
-  test('a routine nobody turned on is not offered Turn on, which would start nothing here', () => {
-    const { doc, dom } = shell({ off: true, computer: COMPUTER }, { routines: [routine('Held back', { enabled: false, refusal: 'enabled' })] });
-    assert.strictEqual(doc.querySelector('[data-routines-action="enable"]'), null);
-    assert.strictEqual(text(doc.querySelector('.next-run')), 'Off on this computer');
-    dom.window.close();
+  test('a routine nobody turned on is offered Turn on as it is with routines on, since that writes the agent file every computer reads', () => {
+    const held = [routine('Held back', { enabled: false, refusal: 'enabled' })];
+    for (const off of [false, true]) {
+      const { doc, dom } = shell({ off, computer: COMPUTER }, { routines: held });
+      assert.ok(doc.querySelector('[data-routines-action="enable"]'), `Turn on is not offered with routines ${off ? 'off' : 'on'} here`);
+      dom.window.close();
+    }
   });
 
   test('with Rundock moved elsewhere, the header says so, and the switch still shows this workspace\'s setting', () => {

@@ -898,9 +898,6 @@
     // this routine back and moving it would promise a run that the press
     // cannot deliver.
     if (!isServed(input)) return true;
-    // NOR ONE TURNED OFF ON THIS COMPUTER: turning it on here would start
-    // nothing here, so the offer's sentence would be false.
-    if (input.offHere) return true;
     // A roster that did not name a run target says nothing, for the same
     // reason an absent scheduleReadable says nothing: silence is not a fault.
     if (input.refusal === undefined && input.runOn !== undefined && input.runOn !== null) {
@@ -1258,10 +1255,6 @@
     // A routine whose consent was withdrawn is paused too, and promises no
     // next run: the consent line takes this line's place.
     if (approvalOffer(input)) return null;
-    // ROUTINES OFF ON THIS COMPUTER: none of them runs here on a schedule, so
-    // every row says so where its next run would be, in a pause's quiet tone.
-    // Not when Rundock has moved elsewhere, where the row's note says more.
-    if (input && input.offHere && isServed(input)) return { text: HERE.row, className: 'next-run paused-label', off: true };
     // A ROUTINE NOBODY HAS TURNED ON PROMISES NOTHING, and the guard is here
     // rather than at the caller because the instant is real. The server works
     // a next run out from the schedule alone, so a routine the upgrade held
@@ -1270,6 +1263,13 @@
     // worse than silence: it is the exact reassurance the reader came for.
     // The offer takes this line's place on the row.
     if (input && input.enabled === false) return null;
+    // ROUTINES OFF ON THIS COMPUTER: none of them runs here on a schedule, so
+    // every row says so where its next run would be, in a pause's quiet tone.
+    // After a routine nobody turned on, whose offer is the same one it gets
+    // with routines on: Turn on writes the agent file, which every computer
+    // reads. Not when Rundock has moved elsewhere, where the row's note says
+    // more.
+    if (input && input.offHere && isServed(input)) return { text: HERE.row, className: 'next-run paused-label', off: true };
     // Nor does a routine whose schedule nothing here can read. The server does
     // not supply an instant for one today, so on that path this changes
     // nothing; it is here for the row that carries both, which is a state the
