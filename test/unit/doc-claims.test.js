@@ -1609,6 +1609,53 @@ describe('ARCHITECTURE.md: a PowerShell command runs with no card only when ever
   });
 });
 
+describe('ARCHITECTURE.md and the hook header: a request the hook cannot name, or whose input it cannot read, is refused inside Rundock', () => {
+  // The claim a reader of either relies on when the runtime's request changes
+  // shape. Pinned by running the hook on such requests, so neither can keep
+  // saying it after the hook stops doing it.
+  const { spawnSync } = require('node:child_process');
+  const HOOK = path.join(ROOT, 'scripts', 'permission-hook.js');
+  const LEAD = '**A permission hook that cannot answer, or cannot read what it was asked, refuses the call.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const hookSrc = fs.readFileSync(HOOK, 'utf-8');
+  const header = hookSrc.slice(0, hookSrc.indexOf('*/')).split('\n').map(line => line.replace(/^\s*\*\s?/, '')).join(' ').replace(/\s+/g, ' ');
+  const COULD_NOT_CHECK = 'Rundock could not check this request, so it was refused rather than approved on your behalf.';
+  const hook = (raw, env) => {
+    const r = spawnSync(process.execPath, [HOOK], {
+      input: raw,
+      encoding: 'utf8',
+      env: { ...process.env, NODE_V8_COVERAGE: '', RUNDOCK: '1', RUNDOCK_PORT: '1', RUNDOCK_WORKSPACE: ROOT, RUNDOCK_CONVO_ID: 'c1', RUNDOCK_CODE_MODE: '', ...env },
+    });
+    let answer = null;
+    try { answer = JSON.parse(r.stdout); } catch (e) { /* asserted below */ }
+    return answer;
+  };
+  const request = (fields) => JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ROOT, session_id: 's', ...fields });
+
+  test('the audit section and the hook header both say it', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    assert.ok(passage.includes('A request the hook cannot name, or whose input it cannot read, is refused inside Rundock the same way, before anything is asked of the server'),
+      'the audit section says it');
+    assert.ok(passage.includes('a file, shell or connector tool whose `tool_input` is missing or is not an object'), 'and which input it means');
+    assert.ok(header.includes('A request the hook cannot name (no tool name, or one that is not a string, is empty or is only spaces), or whose input it cannot read (a file, shell or connector tool whose input is missing or is not an object), is refused inside Rundock'),
+      'the hook header says it');
+  });
+
+  test('and the hook does it: each is refused inside Rundock with nobody to ask, and passes through outside it', () => {
+    for (const raw of ['{}', request({ tool_name: 7 }), request({ tool_name: '' }), request({ tool_name: '  ' }),
+      request({ tool_name: 'Bash' }), request({ tool_name: 'Write', tool_input: 'x' }), request({ tool_name: 'mcp__example__update_thing', tool_input: null })]) {
+      const inside = hook(raw, {});
+      assert.strictEqual(inside && inside.hookSpecificOutput && inside.hookSpecificOutput.permissionDecision, 'deny', `${raw}: ${JSON.stringify(inside)}`);
+      assert.strictEqual(inside.hookSpecificOutput.permissionDecisionReason, COULD_NOT_CHECK, raw);
+      assert.deepStrictEqual(hook(raw, { RUNDOCK: '' }), {}, `${raw}, outside Rundock`);
+    }
+    const named = hook(request({ tool_name: 'WebFetch' }), {});
+    assert.strictEqual(named && named.hookSpecificOutput && named.hookSpecificOutput.permissionDecision, 'allow',
+      `a tool named properly whose checks read no input is judged as before: ${JSON.stringify(named)}`);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // docs/RUNDOCK-UI.md: one rule for a destructive button that acts at once
 // ---------------------------------------------------------------------------
