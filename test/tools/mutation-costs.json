@@ -299,6 +299,7 @@
       "a runtime that does not know its zone reports none": 0.62,
       "the list hands every row the zone the server reported": 0.61,
       "a row on a server in another zone is worked out in the server's zone": 0.2,
+      "a zone this window cannot read leaves the row's times out": 0.38,
       "the tick never reads a routine's declared zone": 1.03,
       "a row's next run never reads a routine's declared zone": 0.99
     },

@@ -618,6 +618,20 @@
   }
 
   /**
+   * Whether this window cannot work any time out in `inZone`.
+   *
+   * A server can report a zone this window's runtime has no data for, which
+   * an older browser's zone data can do. Then every time on the row comes back
+   * as nothing, so each line that carries one leaves the time out, rather than
+   * print an empty word in its place or fall back to this window's clock.
+   * Asked of a fixed instant, because whether Intl knows a zone does not
+   * depend on when, and this module reads no clock.
+   */
+  function zoneUnreadable(inZone) {
+    return !!inZone && !wallClock(new Date(0), inZone);
+  }
+
+  /**
    * The plain sentence a routine reads as: its schedule, then the skill it
    * runs.
    *
@@ -769,6 +783,8 @@
     const { zone, inZone } = rowClock(input);
     const monthly = input.scheduleKind === 'monthly';
     const outcome = OUTCOMES[kind];
+    // In a zone this window cannot read, the outcome is said with no time.
+    if (zoneUnreadable(inZone)) return { kind: kind, tone: outcome.tone, lead: outcome.lead, text: outcome.lead };
     let text = null;
     if (kind === 'missed') {
       const slot = asDate(input.missedSlot);
@@ -1221,7 +1237,8 @@
     const now = asDate(input.now);
     const clock = rowClock(input);
     let timing = '';
-    if (when && now) {
+    // In a zone this window cannot read, the offer names no time.
+    if (when && now && !zoneUnreadable(clock.inZone)) {
       timing = when <= now
         ? ` ${NOT_ENABLED.catchUpGone}`
         : ` ${NOT_ENABLED.catchUpAhead.replace('{when}', () => timeWords(when, now, clock.zone, clock.inZone))}`;
@@ -1282,6 +1299,8 @@
     const at = asDate(input.nextRun);
     const now = asDate(input.now);
     const clock = rowClock(input);
+    // In a zone this window cannot read, no next run rather than one with no time.
+    if (zoneUnreadable(clock.inZone)) return null;
     if (input.scheduleKind === 'monthly' && !input.refusal && at && now && at <= now) {
       return { text: `Next run: shortly. It was due ${dateWords(at, clock.inZone)}, ${clockWords(at, clock.inZone)}.`, className: 'next-run' };
     }

@@ -429,6 +429,50 @@ describe('a row on a server in another zone says the time the routine fires', ()
     assert.strictEqual(label.text, 'Next run: tomorrow, 8:00am, Auckland time');
   });
 
+  // A zone this window's runtime has no data for, which a server with newer
+  // zone data can report. No time on the row can be worked out in it, so each
+  // line leaves its time out: never a throw, never "null" where the time was,
+  // and never a time off this window's clock, which is an hour nobody
+  // scheduled. The outcome and its tone are still said.
+  test('a server zone this window cannot read leaves the times out, and never shows the window\'s clock', () => {
+    assert.throws(() => new Intl.DateTimeFormat('en-US', { timeZone: 'Not/AZone' }), RangeError,
+      'sanity: this runtime has no such zone');
+    const unknown = (input) => ({ ...input, now: NOW_UTC, zone: 'UTC', serverZone: 'Not/AZone' });
+    const ranAt = new Date(Date.UTC(2026, 9, 6, 7, 0, 12));
+    const slotAt = new Date(Date.UTC(2026, 9, 6, 7, 0));
+
+    assert.strictEqual(m.nextRunLabel(unknown({ nextRun: LONDON_SLOT })), null);
+    assert.strictEqual(m.nextRunLabel(unknown({ nextRun: new Date(Date.UTC(2026, 9, 1, 8, 0)), scheduleKind: 'monthly' })), null,
+      'nor a monthly slot still owed');
+
+    const said = (input) => m.runStatus(unknown({ lastStart: ranAt, lastSlot: slotAt, missedSlot: null, ...input }));
+    const statuses = [
+      [said({ lastRunStatus: 'completed' }), 'on-time', 'Ran'],
+      [said({ lastRunStatus: 'completed', lastStart: new Date(Date.UTC(2026, 9, 6, 9, 40)) }), 'caught-up', 'Ran late'],
+      [said({ lastRunStatus: 'failed' }), 'failed', 'Failed'],
+      [said({ lastRunStatus: 'cancelled' }), 'stopped', 'Stopped'],
+      [said({ lastRunStatus: 'completed', missedSlot: new Date(Date.UTC(2026, 9, 7, 3, 0)), lastStart: new Date(Date.UTC(2026, 9, 5, 7, 0)) }), 'missed', 'Missed'],
+    ];
+    for (const [status, kind, text] of statuses) {
+      assert.deepStrictEqual({ kind: status.kind, text: status.text }, { kind, text });
+    }
+    assert.strictEqual(statuses[2][0].tone, 'failed', 'a failure keeps its tone with its time left out');
+
+    const row = m.row(unknown({
+      name: 'Morning briefing', schedule: 'every day at 08:00', agentName: 'Piper', runOn: 'local',
+      lastStart: ranAt, lastRunStatus: 'completed', lastSlot: slotAt, missedSlot: null, nextRun: LONDON_SLOT,
+    }));
+    assert.strictEqual(row.status.text, 'Ran');
+    assert.strictEqual(row.nextRun, null);
+    const offer = m.enableOffer(unknown({
+      enabled: false, paused: false, nextRun: LONDON_SLOT, schedule: 'every day at 08:00', scheduleReadable: true, runOn: 'local',
+    }));
+    assert.ok(offer, 'sanity: the offer is still made');
+    for (const text of [...statuses.map(([s]) => s.text), row.status.text, offer.text]) {
+      assert.doesNotMatch(text, /null|undefined|\d:\d\d|UTC/, `a time, or nothing in its place, reached the row: ${text}`);
+    }
+  });
+
   // The same zone on both ends, or none reported: the row reads as it did, on
   // the window's clock, named as the server's zone when it gave one.
   test('when the two zones agree, or the server reports none, the row is the window\'s clock as before', () => {

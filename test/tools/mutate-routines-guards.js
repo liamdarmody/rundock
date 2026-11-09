@@ -1511,6 +1511,9 @@ const MUTATIONS = [
   [MODEL, 'a row on a server in another zone is worked out in the server\'s zone',
     '    if (server && server !== here) return { zone: server, inZone: server };\n',
     ''],
+  [MODEL, 'a zone this window cannot read leaves the row\'s times out',
+    '    return !!inZone && !wallClock(new Date(0), inZone);',
+    '    return false;'],
   // The other way round: a routine's own `timezone` field read where the
   // process's zone belongs. The field is words nothing reads when deciding
   // when a routine runs, so each of these works one routine's slot out in its
