@@ -760,6 +760,8 @@ function handle(d) {
       // it, and it only ever hid the cheap case.
       cachedFileTree = d.tree;
       renderFileTree(d.tree);
+      // Which of a run's changed files open is decided against this tree.
+      runDetailTreeUpdated();
       break;
     }
     case 'pins': handlePinsReply(d.pins); break;

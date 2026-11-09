@@ -58,8 +58,9 @@
 // starts, because afterwards there is nothing left to detect.
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -579,11 +580,421 @@ function rowsForShard(rows, argv = process.argv) {
  */
 function exitCodeFor(failed, results) {
   if (!failed) return 0;
-  const unreadable = (results || []).filter((r) => r && r.unparsable).length;
+  // Every harness ends through here, so this is where a row with no verdict
+  // gets the end of what its suite printed: once, for all of them.
+  const said = noVerdictOutput(results);
+  if (said) console.log(said);
+  // A row whose suite did not finish is no verdict too: a hang is not a test
+  // noticing, and it is not a guard nobody watches either.
+  const unreadable = (results || []).filter((r) => r && (r.unparsable || r.didNotFinish)).length;
   return unreadable >= failed ? NO_VERDICT : 1;
+}
+
+/**
+ * The end of what each row with no verdict had its suite print, by the row's
+ * label, or '' when no such row carries any.
+ *
+ * WITHOUT IT, A NO-VERDICT ROW SAYS ONLY THAT. Its suite failed with output
+ * the harness could not read, or ran out of time, and what the suite printed
+ * went with the row, so the cause was a guess until the row was run again; on
+ * CI a rerun was the only way to see it at all. The `output` a row carries is
+ * the runner's (see suiteOutput), already cut to its end and with paths
+ * outside the repository taken out.
+ */
+function noVerdictOutput(results) {
+  const rows = (results || []).filter((r) => r && (r.unparsable || r.didNotFinish) && r.output);
+  if (!rows.length) return '';
+  const stream = (name, text) => (text
+    ? `  ${name}:\n${text.split('\n').map((l) => `    ${l}`).join('\n')}`
+    : `  ${name}: (nothing)`);
+  return '\nThe end of what each suite with no verdict printed, with paths outside the repository taken out:\n'
+    + rows.map((r) => `\n${r.label}\n${stream('stdout', r.output.stdout)}\n${stream('stderr', r.output.stderr)}`).join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Running a row's suite, bounded
+// ---------------------------------------------------------------------------
+//
+// WHAT THIS REPLACES. Every harness ran a row's suite with a synchronous call
+// and no limit, so a row whose broken guard left a test waiting on a promise,
+// a timer or a deadline of its own held the run for as long as anything let
+// it: once for six hours, with the mutation in the source until the run was
+// stopped by hand. Two things made a plain limit on that call not enough.
+//
+// A SYNCHRONOUS CALL WAITS FOR EVERY HOLDER OF ITS OUTPUT PIPE. Its limit ends
+// the direct child, and then the call goes on waiting for the pipe to close,
+// which a grandchild the suite started can keep open for ever.
+//
+// AND WHILE IT WAITS, NO SIGNAL LISTENER IN THE HARNESS CAN RUN. The restore
+// above is a listener, so a harness told to stop while a suite hung neither
+// stopped nor put its file back until the suite ended, which it never did.
+//
+// So a suite is started here, asynchronously, in a process group of its own,
+// and at its limit the whole group is ended: its leader held, SIGTERM, a grace
+// for the rest of the group's tidying (test fixtures are removed from SIGTERM
+// handlers), then SIGKILL. The wait is on the direct child's exit and a short
+// drain, never on the pipes closing, so nothing a suite leaves behind can hold
+// the runner. A group is only ever signalled while its leader is held (see
+// endSuiteGroup), so a signal can never reach a group whose id has been handed
+// to another process.
+
+// THE LIMIT, one for every row of a kind. A node:test suite that runs past it
+// is stuck rather than slow: the slowest real rows measured locally took
+// minutes only because a test was waiting out a deadline of its own. Suites
+// under test/electron/ start the desktop app and print a JSON report; they
+// keep the limit they always had.
+const SUITE_LIMIT_SECONDS = 300;
+const ELECTRON_SUITE_LIMIT_SECONDS = 240;
+
+// How long an ended suite's group gets between SIGTERM and SIGKILL. The same
+// grace the pre-commit gate gives a step, for the same reason: the suites
+// under it remove their fixtures from SIGTERM handlers.
+const SUITE_END_GRACE_MS = 5000;
+
+// How long a suite's last lines get to arrive after it exits. The wait is
+// bounded because a process the suite left behind can hold the pipes open.
+const SUITE_DRAIN_MS = 250;
+
+// How much of each stream is kept: the end, which is where the spec reporter
+// writes the failures a harness reads. Bounds memory for a suite that prints
+// without stopping until its limit.
+const SUITE_OUTPUT_KEPT = 8 * 1024 * 1024;
+
+// How much of the end of each stream a row with no verdict shows: enough for
+// an error and the lines that led to it, little enough for a CI log.
+const SUITE_TAIL_CHARS = 400;
+
+const POSIX = process.platform !== 'win32';
+
+// A path outside the repository, as a suite prints one: from a slash, or a
+// drive letter, to the next space or quote. One that follows a letter, a
+// colon or a slash is inside a word or a web address and is left alone.
+const OUTSIDE_PATH = /(?<![\w.~:/@%+-])\/(?:[\w.@%+~-]+\/)+[\w.@%+~-]*|\b[A-Za-z]:\\(?:[^\\\s'"`()<>|]+\\)+[^\\\s'"`()<>|]*/g;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * `text` as a CI log may show it: the repository's own paths made relative
+ * to it, under either spelling it is reached by, and every other absolute
+ * path replaced with `<path>`.
+ *
+ * THESE LINES ARE PRINTED WHERE ANYONE CAN READ THEM, so what a suite says
+ * about the machine it ran on, a home folder or a temp folder, stays out. A
+ * path is taken to end at a space, so one with a space in it keeps what
+ * follows the space.
+ */
+function scrubPaths(text, root = ROOT) {
+  // A file URL is a path: without its scheme it is read as one below.
+  let out = String(text).replace(/file:\/\//g, '');
+  let real = root;
+  try { real = fs.realpathSync(root); } catch { /* no such folder: its own spelling only */ }
+  for (const r of [...new Set([path.resolve(root), path.resolve(real)])].sort((a, b) => b.length - a.length)) {
+    out = out.replace(new RegExp(`${escapeRe(r)}(?:${escapeRe(path.sep)}|(?![\\w.@%+~/-]))`, 'g'),
+      (m) => (m === r ? '.' : ''));
+  }
+  return out.replace(OUTSIDE_PATH, '<path>');
+}
+
+/**
+ * The end of a suite's stream as a row with no verdict shows it: at most
+ * SUITE_TAIL_CHARS characters, starting at a line, scrubbed (see scrubPaths).
+ *
+ * Scrubbed before it is cut, from a generous end that starts at a line, so a
+ * path is never halved where it can no longer be recognised.
+ */
+function outputTail(text, { root = ROOT, chars = SUITE_TAIL_CHARS } = {}) {
+  const fromLine = (s, cut) => {
+    if (!cut) return s;
+    const nl = s.indexOf('\n');
+    if (nl !== -1 && nl < s.length - 1) return s.slice(nl + 1);
+    const space = s.search(/\s/);
+    return space === -1 ? s : s.slice(space + 1);
+  };
+  const raw = String(text || '');
+  const wide = chars * 8;
+  let end = fromLine(raw.length > wide ? raw.slice(-wide) : raw, raw.length > wide);
+  end = scrubPaths(end, root).replace(/\s+$/, '');
+  return end.length > chars ? fromLine(end.slice(-chars), true) : end;
+}
+
+// WHAT THE SUITE RUN LAST PRINTED, the end of each stream, set as it settles
+// and cleared as the next one starts, so a row is never shown another row's
+// output. A harness takes it for a row with no verdict (suiteOutput) right
+// after the row's suite returns.
+let lastOutput = null;
+
+/** The end of each stream of the suite run last, or null while one runs. */
+function suiteOutput() {
+  return lastOutput;
+}
+
+/** The limit for a suite, from the arguments that start it. */
+function suiteLimitSeconds(args) {
+  return args.some((a) => String(a).startsWith('test/electron/')) ? ELECTRON_SUITE_LIMIT_SECONDS : SUITE_LIMIT_SECONDS;
+}
+
+/**
+ * The environment a suite runs in: the one given, with TMPDIR set to the real
+ * path of the temp folder.
+ *
+ * The verdict must not depend on the host. Where the temp folder is reached
+ * through a link (macOS's default) and not on a machine where it is not (CI's
+ * Linux runners), tests that compare a path they built against a path the
+ * product resolved can see a mutation in one place and miss it in the other,
+ * so a row could pass locally and survive in CI. Every suite is given the
+ * canonical folder, as CI's already is.
+ */
+function suiteEnv(env) {
+  const out = { ...env };
+  try { out.TMPDIR = fs.realpathSync(env.TMPDIR || os.tmpdir()); } catch { /* no such folder: left as given */ }
+  return out;
+}
+
+// THE GROUPS OF THE SUITES RUNNING NOW, keyed by group id, and the only thing
+// the listeners below ever signal. An entry leaves the moment its leader is
+// seen to exit, and after the SIGKILL that ends it, and never comes back.
+const liveSuites = new Map();
+// Set once this process has been told to stop. A suite ended for that reason
+// has no verdict for anyone, and its row must not hand control back to a
+// harness loop that would mutate the next row on the way out.
+let stopping = null;
+
+// How often an ending looks to see whether the leader was killed from outside
+// during the grace.
+const SUITE_POLL_MS = 100;
+
+// THE WAITS ON A SUITE'S PROCESSES RUN ON THE WALL CLOCK, captured here. A
+// process does not run on a mocked clock, so a test that mocks the clock to
+// reach a limit without waiting minutes must still see the processes it ends
+// watched in real time. The limit itself is read from the clock in use.
+const { setTimeout: wallSetTimeout, clearTimeout: wallClearTimeout } = globalThis;
+const nap = (ms) => new Promise((resolve) => { wallSetTimeout(resolve, ms); });
+
+/**
+ * End a suite's process group: hold its leader, SIGTERM the group, give the
+ * rest of it the grace, then SIGKILL the group, and return.
+ *
+ * A GROUP IS SIGNALLED ONLY WHILE ITS LEADER IS HELD. A group's id is its
+ * leader's pid, and once Node has collected the leader that number can be
+ * handed to any process started afterwards, which may lead a group of its
+ * own. Until the leader's 'exit' event it is running, or dead and not yet
+ * collected, and either way its pid, and so the group's id, is still the
+ * suite's. So the leader is stopped first, and SIGTERM cannot end it: the
+ * SIGKILL at the end of the grace goes to a group whose id is provably still
+ * the suite's. A leader seen to exit meanwhile, killed from outside, ends the
+ * ending there, and nothing signals its group again; anything of the suite's
+ * still running then is left to finish on its own.
+ *
+ * The rest of the group gets SIGTERM and the grace for its tidying: under
+ * node --test the tests run in a process of their own, and that is where
+ * their SIGTERM handlers remove fixtures. The leader, stopped, gets none,
+ * which is the price of the guarantee, and the grace is waited in full, since
+ * a group holding its stopped leader never empties on its own.
+ *
+ * NO WAIT AFTER SIGKILL. Nothing in the group can run again once it is sent,
+ * so the next row may start at once, and the call that timed out returns
+ * within its limit plus the grace. The kernel drops the killed processes, and
+ * Node collects the leader, on their own time.
+ */
+async function endSuiteGroup(pgid, live) {
+  const send = (target, signal) => {
+    if (live.released) return;
+    try { process.kill(target, signal); } catch { /* gone */ }
+  };
+  send(pgid, 'SIGSTOP');
+  send(-pgid, 'SIGTERM');
+  for (const deadline = Date.now() + live.graceMs; Date.now() < deadline;) {
+    await nap(SUITE_POLL_MS);
+    if (live.released) return;
+  }
+  send(-pgid, 'SIGKILL');
+}
+
+/**
+ * Forget a suite's group for good, so nothing signals it again: the moment
+ * its leader is seen to exit, and after the SIGKILL that ends it.
+ */
+function releaseSuite(pgid, live) {
+  live.released = true;
+  if (liveSuites.get(pgid) === live) liveSuites.delete(pgid);
+  if (!liveSuites.size && !stopping) disarmSuites();
+}
+
+/** End one live suite and everything it started, then forget it. */
+async function endSuite(pgid) {
+  const live = liveSuites.get(pgid);
+  if (!live) return;
+  if (POSIX) await endSuiteGroup(pgid, live);
+  else if (!live.released) { try { live.kid.kill('SIGKILL'); } catch { /* gone */ } }
+  releaseSuite(pgid, live);
+}
+
+// Kill every live suite outright. Each entry's leader has not been seen to
+// exit, so each group id is still its suite's.
+function killLiveSuites() {
+  for (const [pgid, live] of liveSuites) {
+    if (live.released) continue;
+    if (POSIX) { try { process.kill(-pgid, 'SIGKILL'); } catch { /* gone */ } }
+    else { try { live.kid.kill('SIGKILL'); } catch { /* gone */ } }
+    live.released = true;
+  }
+  liveSuites.clear();
+}
+
+// The way out that cannot wait: by 'exit' the event loop has finished, and a
+// suite given a grace here would outlive the process that was to end it. So a
+// suite still running when this process exits is killed outright.
+function onSuitesExit() {
+  killLiveSuites();
+}
+
+function reRaise(signal) {
+  if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+  // Another module kept the process alive. Whatever it does next, this run
+  // reached no verdict, so it must not end looking like a pass.
+  else if (!process.exitCode) process.exitCode = NO_VERDICT;
+}
+
+/**
+ * Told to stop while a suite runs: end it, then die of the signal.
+ *
+ * This and the restore's listener above can run in either order. This one
+ * stays registered until the suite has gone, so the restore's never finds the
+ * process unattended and re-raises early; then this re-raises, and the process
+ * still dies of the signal it was sent, with the file put back and the suite
+ * gone. A second signal while the suite is being ended means now: the groups
+ * are killed outright.
+ */
+function onSuitesSignal(signal) {
+  if (stopping) {
+    killLiveSuites();
+    disarmSuites();
+    reRaise(signal);
+    return;
+  }
+  stopping = signal;
+  Promise.all([...liveSuites.keys()].map(endSuite)).then(() => {
+    liveSuites.clear();
+    disarmSuites();
+    reRaise(signal);
+  });
+}
+
+function armSuites() {
+  process.on('exit', onSuitesExit);
+  for (const signal of SIGNALS) process.on(signal, onSuitesSignal);
+}
+
+function disarmSuites() {
+  process.removeListener('exit', onSuitesExit);
+  for (const signal of SIGNALS) process.removeListener(signal, onSuitesSignal);
+}
+
+/** The line a harness reports for a row whose suite did not finish. */
+function didNotFinishWhy(seconds) {
+  return `no verdict: the suite did not finish in ${seconds} s and was ended, so no test was seen to notice `
+    + 'this mutation; make the test that waits fail fast rather than raising the limit';
+}
+
+/**
+ * Run one row's suite, the one way every harness does.
+ *
+ * The contract is the synchronous call's it replaces, awaited: the suite's
+ * stdout when it exits 0, otherwise an Error carrying `stdout`, `stderr`,
+ * `status` and `signal`, so a harness reads its results exactly as it did.
+ * A suite that runs past its limit is ended with everything it started, and
+ * the Error then carries `didNotFinish`, the limit in seconds, which a harness
+ * reports as its own outcome: never caught, never survived.
+ *
+ * The wait is on the suite's exit and a short drain, never on its pipes
+ * closing, so a process it left behind holding them cannot hold the runner.
+ * A suite that exits on its own is not signalled afterwards: its group's id
+ * can be handed to another process from the moment it is collected, so
+ * whatever it left running is left to finish on its own, as before.
+ *
+ * A suite that runs past its limit returns within the limit plus the grace,
+ * since the ending does not wait for the kernel to drop what it killed.
+ *
+ * Once it settles, the end of each of its streams is what suiteOutput
+ * returns, for a harness to hand a row with no verdict.
+ *
+ * `limitMs` and `graceMs` exist for this module's own tests, which cannot wait
+ * minutes for a limit. No harness passes them: a row's limit is the runner's.
+ *
+ * @param {string} command
+ * @param {string[]} args
+ * @param {{cwd?: string, env?: NodeJS.ProcessEnv, limitMs?: number, graceMs?: number}} [options]
+ * @returns {Promise<string>}
+ */
+function runSuite(command, args, { cwd = ROOT, env = process.env, limitMs, graceMs = SUITE_END_GRACE_MS } = {}) {
+  // Cleared before anything can fail, so a suite that never starts shows no
+  // output rather than the row before it's.
+  lastOutput = null;
+  const limit = limitMs === undefined ? suiteLimitSeconds(args) * 1000 : limitMs;
+  const seconds = limit / 1000;
+  return new Promise((resolve, reject) => {
+    const kid = spawn(command, args, { cwd, env: suiteEnv(env), stdio: ['ignore', 'pipe', 'pipe'], detached: POSIX });
+    // Recorded on the line the child is created: from here on there is a
+    // group on this machine that only this map knows about.
+    const live = kid.pid ? { kid, graceMs, released: false } : null;
+    if (live) {
+      if (!liveSuites.size) armSuites();
+      liveSuites.set(kid.pid, live);
+    }
+    let stdout = '';
+    let stderr = '';
+    const keep = (text) => (text.length > SUITE_OUTPUT_KEPT * 2 ? text.slice(-SUITE_OUTPUT_KEPT) : text);
+    kid.stdout.setEncoding('utf8');
+    kid.stderr.setEncoding('utf8');
+    kid.stdout.on('data', (s) => { stdout = keep(stdout + s); });
+    kid.stderr.on('data', (s) => { stderr = keep(stderr + s); });
+
+    let ending = false;
+    let exited = null;
+    let drain = null;
+    // Ends the suite's group, then settles with what `outcome` makes of what
+    // the suite wrote. Told to stop meanwhile, it never settles: that suite
+    // was ended for the stop, its row has no outcome, and a harness handed one
+    // would move on to mutate the next row on its way out.
+    const settle = async (outcome) => {
+      if (ending || stopping) return;
+      ending = true;
+      clearTimeout(timer);
+      wallClearTimeout(drain);
+      if (kid.pid) await endSuite(kid.pid);
+      kid.stdout.destroy();
+      kid.stderr.destroy();
+      if (stopping) return;
+      lastOutput = { stdout: outputTail(stdout, { root: cwd }), stderr: outputTail(stderr, { root: cwd }) };
+      outcome();
+    };
+    const fail = (message, fields) => Object.assign(new Error(message), { stdout, stderr, ...fields });
+
+    const timer = setTimeout(() => {
+      if (ending || stopping) return;
+      console.error(`[mutation-run] ${args.join(' ')} did not finish in ${seconds} s; ending it and everything it started`);
+      settle(() => reject(fail(`the suite did not finish in ${seconds} s`, { didNotFinish: seconds, status: null, signal: null })));
+    }, limit);
+    kid.on('error', (err) => settle(() => reject(Object.assign(err, { stdout, stderr }))));
+    kid.on('exit', (status, signal) => {
+      // COLLECTED. From here the suite's pid, its group's id, can be handed to
+      // a process started after it, so the group is released and nothing
+      // signals it again.
+      if (live) releaseSuite(kid.pid, live);
+      exited = { status, signal };
+      drain = wallSetTimeout(finished, SUITE_DRAIN_MS);
+    });
+    kid.on('close', () => finished());
+    function finished() {
+      if (!exited) return;
+      const { status, signal } = exited;
+      settle(() => (status === 0 ? resolve(stdout) : reject(fail(`the suite exited with ${signal || status}`, { status, signal }))));
+    }
+  });
 }
 
 module.exports = {
   beginMutationRun, inspect, markerPath, markerDir, readMarkers, recoverAbandoned, MARKER, MARKER_DIR, ROOT,
   targetsFromRows, rowsForShard, exitCodeFor, suiteFile, NO_VERDICT, unstaged, unstagedRefusal, fixtureRootProblem,
+  runSuite, didNotFinishWhy, SUITE_LIMIT_SECONDS, ELECTRON_SUITE_LIMIT_SECONDS, SUITE_END_GRACE_MS,
+  suiteOutput, outputTail, noVerdictOutput, SUITE_TAIL_CHARS,
 };

@@ -8,18 +8,17 @@
 // The permission decision path spans THREE layers (see ARCHITECTURE.md):
 // the PreToolUse hook script, the server bridge, and THIS module in the
 // browser. The auto-allow POLICY for low-risk read-only commands lives here,
-// client-side, and nowhere else; what counts as read-only FOR A BASH COMMAND
-// is a separate question, answered once in public/read-only-shell.js and read
-// by the hook as well, because a command the hook read as harmless used to be
-// carded here anyway by a narrower list kept alongside the policy.
+// client-side, and nowhere else; what counts as read-only is a separate
+// question, answered once in public/read-only-shell.js and read by the hook as
+// well, because a command the hook read as harmless used to be carded here
+// anyway by a narrower list kept alongside the policy.
 //
-// SCOPED TO BASH, DELIBERATELY. classifyRisk's PowerShell branch below still
-// judges read-only-ness with a wider heuristic of its own (any `Get-*`,
-// `Where-Object`) that the shared module does not know about, so the hook and
-// this file can still disagree about the same PowerShell text in exactly the
-// shape the Bash path no longer can. That is a known gap carried on its own
-// card; this comment states where the single answer stops rather than
-// implying the whole file has one.
+// ONE ANSWER FOR EACH SHELL, AND NO LIST HERE. A Bash command is low only when
+// isReadOnlyShellCommand reads it as read-only, and a PowerShell command only
+// when isReadOnlyPowerShellCommand does. The PowerShell branch below used to
+// keep a heuristic of its own, anchored to the start of the command (any
+// `Get-*` first), so a write, a send or a delete after a read or inside its
+// brackets ran with no card, on the platform with no sandbox under it.
 //
 // What this module decides (pinned by test/unit/permissions.test.js):
 //   classifyRisk()        low / medium / high per tool request
@@ -39,6 +38,7 @@
   var DISCARDING_REDIRECT_RE = RundockReadOnlyShell.DISCARDING_REDIRECT_RE;
   var shellSegments = RundockReadOnlyShell.shellSegments;
   var isReadOnlyShellCommand = RundockReadOnlyShell.isReadOnlyShellCommand;
+  var isReadOnlyPowerShellCommand = RundockReadOnlyShell.isReadOnlyPowerShellCommand;
   var isDestructiveShellCommand = RundockReadOnlyShell.isDestructiveShellCommand;
 
   const BASH_DESCRIPTIONS = {
@@ -68,6 +68,15 @@
   // confirmation on Remove-Item, Copy-Item, Move-Item, Set-Content and
   // New-Item, which is why it was here in the first place.
   var FORCE_SAFE_READ_CMDLETS = /^(Get-ChildItem|gci|dir|ls|Get-Content|gc|cat|type|Get-Item|gi|Get-Location|gl|Test-Path|Resolve-Path|Split-Path|Select-String|sls|Get-Acl|Get-ItemProperty)\b/i;
+
+  // WHERE POWERSHELL STARTS A COMMAND: the start of the line, after `;`, `&`,
+  // `|` or a new line, and inside `( )`, `$( )`, `@( )` or a block, each of
+  // which runs what it holds. A delete is looked for at every one, so one
+  // inside a read's brackets is graded as the delete it is.
+  var POWERSHELL_COMMAND_START = /(^|[;&|\r\n({]\s*)/.source;
+  var POWERSHELL_DELETE = new RegExp(POWERSHELL_COMMAND_START + '(Remove-Item|ri|rm|del|erase|rmdir|rd)\\b', 'i');
+  var POWERSHELL_DESTRUCTIVE = new RegExp(POWERSHELL_COMMAND_START
+    + '(Remove-Item|ri|rm|del|erase|rmdir|rd|Stop-Process|spps|kill|Stop-Service|Format-Volume|Clear-Content|Clear-Item|Set-ExecutionPolicy|Uninstall-[A-Za-z]+)\\b', 'i');
 
   function forceIsDestructive(cmd) {
     if (!/-Force\b/i.test(cmd)) return false;
@@ -150,13 +159,13 @@
       // Windows shell tool. Same input shape as Bash (a `command` field).
       // Destructive checks run first so a read that also deletes can't be low.
       const cmd = (input.command || '').trim();
-      const highRisk = /(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd|Stop-Process|spps|kill|Stop-Service|Format-Volume|Clear-Content|Clear-Item|Set-ExecutionPolicy|Uninstall-[A-Za-z]+)\b/i.test(cmd)
+      const highRisk = POWERSHELL_DESTRUCTIVE.test(cmd)
         || forceIsDestructive(cmd)
         || /\b(iex|Invoke-Expression)\b/i.test(cmd)
         || /\b(irm|Invoke-RestMethod|iwr|Invoke-WebRequest|curl|wget)\b[\s\S]*\|\s*(iex|Invoke-Expression)/i.test(cmd);
       if (highRisk) return 'high';
-      const lowRisk = /^(Get-[A-Za-z]+|ls|dir|gci|gc|cat|type|pwd|gl|echo|Write-Output|Write-Host|Select-Object|Where-Object|Measure-Object|Test-Path|Resolve-Path|Split-Path|Format-Table|Format-List|Sort-Object)\b/i.test(cmd);
-      if (lowRisk) return 'low';
+      // Low only when the shared reading reads every part of it as a read.
+      if (isReadOnlyPowerShellCommand(cmd)) return 'low';
       return 'medium';
     }
     if (toolName === 'WriteFile') {
@@ -206,7 +215,7 @@
       const cmd = (input.command || '').trim();
       detail = cmd;
       summary = input.description || 'Run PowerShell command';
-      if (/(^|[;&|]\s*)(Remove-Item|ri|rm|del|erase|rmdir|rd)\b/i.test(cmd)) context = 'This will delete files';
+      if (POWERSHELL_DELETE.test(cmd)) context = 'This will delete files';
       else if (forceIsDestructive(cmd)) context = 'This uses -Force and may overwrite or delete without confirmation';
       else if (/\b(iex|Invoke-Expression)\b/i.test(cmd)) context = 'This executes a downloaded or dynamic script';
     } else if (toolName === 'WriteFile') {
@@ -533,7 +542,7 @@
   function alwaysAskCopy(crossing) {
     if (!crossing) return null;
     if (crossing.secret) return ALWAYS_ASK_COPY.secret;
-    if (crossing.answerFile) return answerFileCopy(crossing.path);
+    if (crossing.answerFile) return answerFileCopy(crossing.path, crossing.startupFile);
     if (crossing.instructionFile) return ALWAYS_ASK_COPY.instructionFile;
     if (crossing.hiddenHome) return hiddenHomeCopy(crossing.hiddenHome, crossing.write === true);
     if (crossing.persistenceSurface) return ALWAYS_ASK_COPY.persistenceSurface;
@@ -714,7 +723,23 @@
         + 'decides what runs on your computer, outside the sandbox, the next time you reconnect. An agent can request a '
         + 'change to it, but never keep the permission: this asks every time, and there is no option to stop being asked.',
     },
+    // `~/.zshrc` and the other shell startup files (SHELL_STARTUP_FILES in the hook).
+    startup: {
+      summary: 'Wants to change what runs when you open a terminal',
+      context: 'This file runs each time you open a terminal, with your full access and outside every sandbox, so a change to '
+        + 'it decides what runs on your computer. An agent can request a change to it, but never keep the permission: this '
+        + 'asks every time, and there is no option to stop being asked.',
+    },
+    // Rundock's record of which startup files an agent could have changed.
+    record: {
+      summary: 'Wants to change Rundock\'s own record',
+      context: 'This is Rundock\'s own record of which shell startup files an agent could have changed, and only Rundock '
+        + 'writes it. An agent can request a change to it, but never keep the permission: this asks every time, and there '
+        + 'is no option to stop being asked.',
+    },
   };
+  const STARTUP_NAMES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout', '.bash_profile', '.bash_login', '.profile', '.bashrc', '.bash_logout'];
+  const RECORD_NAMES = ['.rundock-startup-file-exposure.json', '.startup-file-exposure.json'];
   function answerFileKind(paths) {
     const kinds = (Array.isArray(paths) ? paths : [paths]).map((p) => {
       const parts = String(p || '').split(/[\\/]+/).filter(Boolean).map(s => s.toLowerCase());
@@ -724,12 +749,22 @@
       if (parts[n - 1] === '.mcp.json' || (n >= 2 && parts[n - 2] === '.claude' && parts[n - 1] === 'settings.json')) return 'runs';
       if (parts.some((s, i) => s === '.claude' && parts[i + 1] === 'hooks')) return 'runs';
       if (parts.includes('.rundock-console')) return 'console';
+      if (RECORD_NAMES.includes(parts[n - 1])) return 'record';
+      if (STARTUP_NAMES.includes(parts[n - 1]) || (parts[n - 2] === 'fish' && parts[n - 1] === 'config.fish') || (parts[n - 3] === 'fish' && parts[n - 2] === 'conf.d')) return 'startup';
       return 'answers';
     });
-    return ['launcher', 'console', 'runs', 'connectorSecrets'].find(k => kinds.includes(k)) || 'answers';
+    return ['launcher', 'console', 'record', 'startup', 'runs', 'connectorSecrets'].find(k => kinds.includes(k)) || 'answers';
   }
-  function answerFileCopy(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].context; }
-  function answerFileSummary(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].summary; }
+  // A startup label (the `startup_file` the hook or Codex grading put on the
+  // request) marks a startup file, or a folder holding one, whatever its path
+  // is called: `~/.config/fish`, or `~` itself.
+  function answerFileKindFor(paths, startupLabel) {
+    const kind = answerFileKind(paths);
+    if (!startupLabel || ['launcher', 'console', 'record', 'startup'].includes(kind)) return kind;
+    return answerFileKind(startupLabel) === 'record' ? 'record' : 'startup';
+  }
+  function answerFileCopy(paths, startupLabel) { return ANSWER_FILE_COPY[answerFileKindFor(paths, startupLabel)].context; }
+  function answerFileSummary(paths, startupLabel) { return ANSWER_FILE_COPY[answerFileKindFor(paths, startupLabel)].summary; }
 
   // ── The put-back card ────────────────────────────────────────────────────
   // Rundock has already put back a change to one of the workspace's permission
@@ -743,6 +778,8 @@
     answers: { heading: 'Rundock put back a change to your permission answers', is: 'the file that holds your own answers about what agents may do' },
     launcher: { heading: 'Rundock put back a change to its permission checks', is: 'the file that starts Rundock\'s permission checks' },
     runs: { heading: 'Rundock put back a change to what runs', is: 'a file that decides what Rundock or Claude Code runs' },
+    startup: { heading: 'Rundock put back a change to what runs when you open a terminal', is: 'a file that runs each time you open a terminal' },
+    record: { heading: 'Rundock put back a change to its own record', is: 'Rundock\'s own record of which startup files an agent could have changed' },
   };
   function putBackCardCopy(putBack) {
     const p = putBack || {};

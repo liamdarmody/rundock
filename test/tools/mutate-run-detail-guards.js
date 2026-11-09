@@ -48,11 +48,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -104,9 +104,59 @@ const COUNT_WRITER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test
 const COUNT_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/unattended-refusal.test.js' };
 const COUNT_ROUTE = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/unit/unattended-refusal.test.js' };
 const COUNT_DENY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'process-control.js'), suite: 'test/unit/unattended-refusal.test.js' };
+// Whether a run used the shell: found by the transcript reader, watched by
+// the reader's own suite; written by the two record writers, watched by the
+// file that closes real runs of a private scheduler with a stand-in reader.
+const SHELL_READER = { src: path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'), suite: 'test/unit/session-transcript.test.js' };
+const SHELL_RECORD = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/run-record-shell.test.js' };
+// The link color, watched by the file that measures the run screen's colors
+// in both themes as the browser computes them. The token's one rule is shared
+// with the routine screens, whose harness breaks it for their own suite; this
+// row breaks it the same way for the run screen's.
+const LINK_TOKEN = { src: path.join(ROOT, 'public', 'styles', 'tokens.css'), suite: 'test/unit/run-screen-contrast.test.js' };
+// Which transcript entries the reader reads, watched by the file that reads
+// the committed capture, where the entries it passes over are recorded.
+const ENTRY_READER = { src: path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'), suite: 'test/unit/session-transcript-capture.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
+  // ===== A RUN THAT STARTED LATE =====
+  // A scheduled run 5 minutes or more after its slot, said under its start
+  // time; the closed sentence only when the record says no tick saw the slot.
+  [MODEL, 'a pressed run is never called late',
+    "    if (triggerOf(record) !== 'scheduled') return null;\n    const due = record.dueAt",
+    '    const due = record.dueAt'],
+  [MODEL, 'a run within 5 minutes of its slot is not late',
+    '    if (started - due < LATE_AFTER_MS) return null;',
+    '    if (started - due < 0) return null;'],
+  [MODEL, 'late is the row\'s 5 minutes',
+    '  const LATE_AFTER_MS = 5 * 60 * 1000;',
+    '  const LATE_AFTER_MS = 4 * 60 * 1000;'],
+  [MODEL, 'a record with no dueAt says nothing about it',
+    "    if (!due || !started || isNaN(due.getTime()) || isNaN(started.getTime())) return null;",
+    "    if (!started) return null;"],
+  [MODEL, 'Rundock was closed is said only when the record says so',
+    "record.dueUnobserved === true ? `${text} ${LATE.closed}` : text",
+    '`${text} ${LATE.closed}`'],
+  [MODEL, 'the late line names the date it was due',
+    "    const text = LATE.due.replace('{date}', () => `${due.getDate()} ${MONTHS[due.getMonth()]}`)",
+    "    const text = LATE.due.replace('{date}', () => `${MONTHS[due.getMonth()]} ${due.getDate()}`)"],
+  [MODEL, 'the screen is handed the late line',
+    '      late: found ? lateWords(record) : null,\n',
+    ''],
+  [VIEW, 'the late line is drawn under the start time',
+    '    + when\n    + late\n',
+    '    + when\n'],
+  [VIEW, 'the late line leads with its word',
+    '<span><b>${escText(view.late.lead)}</b> ${escText(view.late.text)}</span>',
+    '<span>${escText(view.late.text)}</span>'],
+  [STYLES, 'the late line sits on the raised surface, in the strong secondary text',
+    'color: var(--text-2-strong); line-height: 1.5; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background-color: var(--elevated); }',
+    'color: var(--text-3); line-height: 1.5; margin: 0; padding: 8px 10px; }'],
+  [STYLES, 'the late line\'s lead word takes the primary text',
+    '.rd-late b { color: var(--text-1); font-weight: 600; }',
+    '.rd-late b { }'],
+
   // ===== UNKNOWN IS NOT EMPTY =====
   // THE ONE THIS FILE EXISTS FOR, in its exact form: the default that turns
   // "nobody could tell" into "it changed nothing".
@@ -184,7 +234,7 @@ const MUTATIONS = [
     "      headline: 'This run ran.',"],
   // The same ruling where a reader actually resolves it.
   [STYLES, 'a run whose ending never ran is not painted as a failure',
-    '.rd-chip.unwitnessed { color: var(--idle); font-weight: 500; }',
+    '.rd-chip.unwitnessed { color: var(--text-2-strong); font-weight: 500; }',
     '.rd-chip.unwitnessed { color: var(--danger-text); font-weight: 600; }'],
   // A run with no record on file is a third absence, and it has its own
   // sentence: blaming a reason code nobody can read describes a record that
@@ -219,9 +269,14 @@ const MUTATIONS = [
   [MODEL, 'a list from a run that stopped partway says so',
     '      files: changedFiles(found ? record : null, FILES_LABELS[state.filesLabel] || FILES_LABELS.complete),',
     '      files: changedFiles(found ? record : null, FILES_LABELS.complete),'],
-  [VIEW, 'the screen says plainly that it cannot open a changed file',
-    '    + `<p class="settings-caption rd-cannot-open">${escText(CANNOT_OPEN)}</p>`;',
-    ';'],
+  // Why some names are plain, drawn only while one is: drawn always here,
+  // then never in the row beside it.
+  [VIEW, 'the screen says which names cannot be opened, only while one cannot',
+    '    + (links.some(link => !link) ? ',
+    '    + (true ? '],
+  [VIEW, 'Plain names: the sentence never drawn',
+    '    + (links.some(link => !link) ? ',
+    '    + (false ? '],
 
   // ===== THE WAY IN AND THE WAY BACK =====
   [ROUTINES_VIEW, 'a row with a last run carries a way into that run',
@@ -302,19 +357,119 @@ const MUTATIONS = [
   [VIEW, 'Refused count: the line is never drawn',
     '    + refused\n',
     ''],
+  // ===== WHETHER A RUN USED THE SHELL =====
+  [SHELL_READER, 'Shell use: the shell tool names removed from the reader',
+    "const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);",
+    'const SHELL_TOOLS = new Set([]);'],
+  [SHELL_READER, 'Shell use: the sidechain shell scan removed',
+    '      if (SHELL_TOOLS.has(block.name)) shell = true;\n',
+    ''],
+  [SHELL_RECORD, 'Shell use: the shell field dropped from endRunRecord',
+    '    ...(observed.usedShell === true ? { usedShell: true } : {}),\n  });\n  // THE ONE PLACE A RUN STOPS BEING OPEN',
+    '  });\n  // THE ONE PLACE A RUN STOPS BEING OPEN'],
+  [SHELL_RECORD, 'Shell use: the shell field written on every record',
+    '    ...(observed.usedShell === true ? { usedShell: true } : {}),\n  });\n  // THE ONE PLACE A RUN STOPS BEING OPEN',
+    '    usedShell: observed.usedShell === true,\n  });\n  // THE ONE PLACE A RUN STOPS BEING OPEN'],
+  [SHELL_RECORD, 'Shell use: the shell field dropped from the startup close',
+    "        // From the same reader as the ending's, on the same terms.\n        ...(observed.usedShell === true ? { usedShell: true } : {}),\n",
+    ''],
+  // The note on the run screen, watched by the file that draws records
+  // through the real render.
+  [MODEL_VIEW, 'Shell use: the note drawn only on an empty list',
+    '      shell: shell ? (record.files.length ? SHELL_USED_SOME : SHELL_USED_NONE) : null,',
+    '      shell: shell && !record.files.length ? SHELL_USED_NONE : null,'],
+  [MODEL_VIEW, 'Shell use: the note on an empty list replaced by the old sentence',
+    '      shell: shell ? (record.files.length ? SHELL_USED_SOME : SHELL_USED_NONE) : null,',
+    '      shell: shell ? (record.files.length ? SHELL_USED_SOME : NO_FILES_CHANGED) : null,'],
+  [VIEW, 'Shell use: the note drawn on an unknown list',
+    '      + `<p class="rd-unknown-why">${escText(files.reason)}</p></div>`;',
+    '      + `<p class="rd-unknown-why">${escText(files.reason)}</p></div>`'
+      + ' + (record && record.usedShell ? `<p class="rd-note" data-run-detail="shell-note">${escText(\'This run used the shell. '
+      + 'Files written that way are not counted, so this list may be incomplete.\')}</p>` : \'\');'],
+  // ===== WHICH RECORDED PATH OPENS A FILE =====
+  // The matcher, watched by its case table.
+  [MODEL, 'File links: the tree lookup removed, so any path under the root links',
+    '    return listedFile(tree, full.slice(prefix.length));',
+    '    return full.slice(prefix.length);'],
+  [MODEL, 'File links: the remainder normalized before the lookup',
+    '    return listedFile(tree, full.slice(prefix.length));',
+    "    return listedFile(tree, full.slice(prefix.length).split('/')"
+      + ".reduce((kept, s) => (s === '..' ? kept.slice(0, -1) : (s && s !== '.' ? [...kept, s] : kept)), []).join('/'));"],
+  [MODEL, 'File links: the separator check removed',
+    '    if (!full.startsWith(prefix)) return null;',
+    '    if (!full.startsWith(slashes(root))) return null;'],
+  [MODEL, 'File links: a suffix match in place of the root prefix',
+    '    if (!full.startsWith(prefix)) return null;\n    return listedFile(tree, full.slice(prefix.length));',
+    "    const flat = (ns) => ns.flatMap(n => (n && n.type === 'folder' ? flat(n.children || []) : (n && n.type === 'file' ? [n.path] : [])));\n"
+      + '    return flat(tree).find(p => full.endsWith(`/${p}`)) || null;'],
+  [MODEL, 'File links: a case-blind comparison',
+    "      if (node.type === 'file' && node.path === wanted) return node.path;",
+    "      if (node.type === 'file' && node.path.toLowerCase() === wanted.toLowerCase()) return node.path;"],
+  [MODEL, 'File links: the Windows separator mapping removed',
+    "    const slashes = (p) => (windows ? p.replace(/\\\\/g, '/') : p);",
+    '    const slashes = (p) => p;'],
+  // The link on the run screen, watched by the file that draws it.
+  [VIEW, 'File links: the recorded string opened in place of the tree path',
+    'data-path="${attrText(links[i])}"',
+    'data-path="${attrText(entry.path)}"'],
+  [VIEW, 'File links: the path written into an inline handler',
+    ' onclick="runDetailOpenFile(this)">',
+    " onclick=\"openWorkspaceFilePath('${attrText(links[i])}')\">"],
+  [VIEW, 'File links: the click re-check removed',
+    '  const listed = root && drawn ? treePathOf(`${root}/${drawn}`) : null;',
+    '  const listed = drawn;'],
+  [VIEW, 'File links: the tree redraw removed',
+    '  if (JSON.stringify(links) !== drawnLinks) renderRunDetail();',
+    ''],
+  // A workspace opened through a symbolic link: the reply names the folder it
+  // resolves to, and the screen matches that spelling for its own workspace.
+  [MODEL, 'File links: only the first spelling of the root tried',
+    '    for (const spelling of Array.isArray(root) ? root : [root]) {',
+    '    for (const spelling of Array.isArray(root) ? root.slice(0, 1) : [root]) {'],
+  [VIEW, 'File links: the resolved folder used for any workspace',
+    '  return root && resolvedRoot.workspace === root ? [root, resolvedRoot.real] : root;',
+    '  return root ? [root, resolvedRoot.real] : root;'],
+  [VIEW, 'File links: the resolved folder used with no root known',
+    '  return root && resolvedRoot.workspace === root ? [root, resolvedRoot.real] : root;',
+    '  return resolvedRoot.workspace === root ? [root, resolvedRoot.real] : root;'],
+  [HANDLER, 'File links: the resolved folder left out of the reply',
+    '    ...workspaceSpellings(),\n',
+    ''],
+  [HANDLER, 'File links: a folder that cannot be resolved throws before the reply',
+    '  try { workspaceRealPath = fs.realpathSync.native(workspace); } catch { workspaceRealPath = null; }',
+    '  workspaceRealPath = fs.realpathSync.native(workspace);'],
+  // The entries the reader reads: every entry read as a message here.
+  [ENTRY_READER, 'Shell use: every transcript entry read as a message',
+    '    if (!entry || !READ_ENTRY_TYPES.has(entry.type) || !entry.message) continue;',
+    '    if (!entry || !entry.message) continue;'],
+  // The link color left on :root alone, so body.light inherits the mix
+  // computed there from the dark --accent-text and --text-1.
+  [LINK_TOKEN, 'File links: --link-text declared only on the root',
+    ':root, body.light {\n  --link-text:',
+    ':root {\n  --link-text:'],
+  // ===== STOP THIS RUN =====
+  [VIEW, 'Stop: back on settings-btn-danger',
+    '<button class="rd-stop" type="button" data-run-detail="stop" onclick="runDetailStop()">Stop this run</button>',
+    '<button class="settings-btn-danger rd-stop" type="button" data-run-detail="stop" onclick="runDetailStop()">Stop this run</button>'],
+  [STYLES, 'Stop: the focus rule removed',
+    '.rd-stop:not(:disabled):hover, .rd-stop:focus-visible { background: color-mix(in srgb, var(--danger) 5%, var(--elevated)); '
+      + 'color: var(--danger-text); border-color: var(--danger-text); }\n'
+      + '.rd-stop:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }\n',
+    '.rd-stop:not(:disabled):hover { background: color-mix(in srgb, var(--danger) 5%, var(--elevated)); '
+      + 'color: var(--danger-text); border-color: var(--danger-text); }\n'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
 // varies with whether stdout is a TTY.
 const REPORTER = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, suite],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -337,7 +492,7 @@ function redTests(suite) {
   return names;
 }
 
-function run() {
+async function run() {
   const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
@@ -361,9 +516,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
-        ? { label, applied: true, unparsable: true, red: [] }
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
@@ -385,6 +541,12 @@ function report(results, markdown) {
       const why = r.ambiguous
         ? `AMBIGUOUS: the guard text matches ${r.ambiguous} places`
         : 'THE GUARD TEXT WAS NOT FOUND';
+      console.log(markdown ? `| ${r.label} | **${why}** |` : `  ${why}: ${r.label}`);
+      continue;
+    }
+    if (r.didNotFinish) {
+      bad++;
+      const why = didNotFinishWhy(r.didNotFinish);
       console.log(markdown ? `| ${r.label} | **${why}** |` : `  ${why}: ${r.label}`);
       continue;
     }
@@ -421,13 +583,14 @@ if (require.main === module) {
   // read after the check, so deleting the check still fails that test rather
   // than passing it.
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const results = run();
-  const bad = report(results, process.argv.includes('--markdown'));
-  if (bad) {
-    console.error(`\n${bad} guard(s) could not be shown to be guarded. `
-      + 'A mutation that turns nothing red is an unexecuted experiment.');
-    process.exit(exitCodeFor(bad, results));
-  }
+  run().then((results) => {
+    const bad = report(results, process.argv.includes('--markdown'));
+    if (bad) {
+      console.error(`\n${bad} guard(s) could not be shown to be guarded. `
+        + 'A mutation that turns nothing red is an unexecuted experiment.');
+      process.exit(exitCodeFor(bad, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run };

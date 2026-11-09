@@ -326,7 +326,7 @@ describe('one path produces every row\'s next-run time', () => {
       assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TODAYS_SLOT);
       assert.deepStrictEqual(sched.routineDisplayFacts(KEY, SCHEDULE),
         { nextRun: TODAYS_SLOT.toISOString(), lastStart: null, lastSlot: null, missedSlot: null,
-          scheduleReadable: true });
+          scheduleReadable: true, scheduleKind: 'daily' });
     });
   });
 
@@ -342,7 +342,7 @@ describe('one path produces every row\'s next-run time', () => {
       // than being inferred from an absent instant.
       assert.deepStrictEqual(sched.routineDisplayFacts(KEY, '0 7 * * *'),
         { nextRun: null, lastStart: null, lastSlot: null, missedSlot: null,
-          scheduleReadable: false });
+          scheduleReadable: false, unreadableMonthDay: null });
     });
   });
 
@@ -356,19 +356,21 @@ describe('one path produces every row\'s next-run time', () => {
     });
   });
 
-  test('a last run absurdly far in the future stops walking rather than counting the years', () => {
+  // What a clock set wrong or a restored backup produces. The row used to step
+  // over every slot at or before the stamp, so a run stamped years ahead
+  // walked until a bound stopped it, while the tick fired the routine that
+  // morning. A run serves only the slot of its own period, which no stamp
+  // years away is in, so the row names today's slot: the one the tick fires.
+  test('a last run absurdly far in the future serves nothing today, so the row names today\'s slot', () => {
     withWorkspace((sched) => {
       sched.wireSchedulerDeps({ now: () => NOW });
-      // What a clock set wrong or a restored backup produces. The walk steps
-      // over periods a run has already served, so a run stamped years ahead
-      // would step for years; it is bounded instead.
       anchor(sched, TODAYS_SLOT);
       sched.routineState[KEY] = {
         lastRun: new Date(2030, 0, 1, 7, 0).toISOString(), status: 'completed', duration: 3,
       };
-      const next = sched.nextRunFor(KEY, SCHEDULE);
-      assert.ok(next < new Date(2030, 0, 1), 'the bound was reached and the walk stopped');
-      assert.strictEqual(next.getHours(), 7, 'and it stopped on a slot, not part way through one');
+      assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TODAYS_SLOT);
+      assert.deepStrictEqual(sched.getNextRun(SCHEDULE, sched.routineState[KEY].lastRun), TODAYS_SLOT,
+        'which is the slot the tick fires');
     });
   });
 
@@ -389,6 +391,99 @@ describe('one path produces every row\'s next-run time', () => {
       assert.strictEqual(sched.routineDisplayFacts(KEY, SCHEDULE).lastSlot, null);
       assert.deepStrictEqual(sched.nextRunFor(KEY, SCHEDULE), TODAYS_SLOT);
     });
+  });
+});
+
+// ===== THE ROW AND THE TICK AGREE ABOUT A ROUTINE MOVED ON A DAY IT RAN =====
+//
+// A routine keeps its run stamp when its schedule moves, and two readers then
+// ask that stamp whether the new slot has been served: the tick, which decides
+// whether to fire it, and the row, which tells a reader when it will run. They
+// used to ask different questions. The tick compared the stamp's hour for a
+// daily routine and its weekday alone for a weekly one, while the row compared
+// full times, so a routine moved to a later minute in the same hour, or to any
+// later time on a weekly routine's own day, showed a next run the tick never
+// fired, and nothing on the row said why.
+//
+// THE RULE THE TABLE HOLDS THEM TO. Wherever the tick names a slot, the row
+// names that slot. Wherever the tick holds the routine, the row names a slot in
+// a later period. Each case also states what the tick says, because two
+// readers that agree on the wrong answer would satisfy the rule alone.
+//
+// Every case starts from the same morning: a routine scheduled for 20:01 on
+// Friday 6 November 2026 ran then and was stamped at 20:03, when it finished.
+describe('the row and the tick agree about a routine moved on a day it ran', () => {
+  const friday = (hour, minute) => new Date(2026, 10, 6, hour, minute);
+  const thursday = (hour, minute) => new Date(2026, 10, 5, hour, minute);
+  const saturday = (hour, minute) => new Date(2026, 10, 7, hour, minute);
+  const nextThursday = (hour, minute) => new Date(2026, 10, 12, hour, minute);
+  const nextFriday = (hour, minute) => new Date(2026, 10, 13, hour, minute);
+  const RAN = friday(20, 3);
+
+  // [what changed, the schedule it now has, the stamp, [[asked at, what the tick says]]]
+  const CASES = [
+    ['a daily routine moved later in the same hour', 'every day at 20:30', RAN,
+      [[friday(20, 29), friday(20, 30)], [friday(20, 30), friday(20, 30)], [friday(20, 31), friday(20, 30)]]],
+    ['a daily routine moved later, into another hour', 'every day at 21:30', RAN,
+      [[friday(21, 29), friday(21, 30)], [friday(21, 30), friday(21, 30)], [friday(21, 31), friday(21, 30)]]],
+    ['a daily routine moved earlier', 'every day at 19:00', RAN,
+      [[friday(20, 10), null], [saturday(18, 59), saturday(19, 0)], [saturday(19, 0), saturday(19, 0)], [saturday(19, 1), saturday(19, 0)]]],
+    ['a daily routine moved to a time already gone, after the run finished', 'every day at 20:05', RAN,
+      [[friday(20, 10), friday(20, 5)], [friday(20, 11), friday(20, 5)]]],
+    ['a daily routine moved to a time already gone, while the run was still going', 'every day at 20:02', RAN,
+      [[friday(20, 10), null], [saturday(20, 1), saturday(20, 2)], [saturday(20, 2), saturday(20, 2)], [saturday(20, 3), saturday(20, 2)]]],
+    ['a daily routine moved to a time already gone, with no run that day', 'every day at 19:00', thursday(20, 3),
+      [[friday(20, 10), friday(19, 0)], [friday(20, 11), friday(19, 0)]]],
+    ['a weekly routine moved later on its own day', 'every friday at 20:30', RAN,
+      [[friday(20, 29), friday(20, 30)], [friday(20, 30), friday(20, 30)], [friday(20, 31), friday(20, 30)]]],
+    ['a weekly routine moved later on its own day, into another hour', 'every friday at 23:00', RAN,
+      [[friday(22, 59), friday(23, 0)], [friday(23, 0), friday(23, 0)], [friday(23, 1), friday(23, 0)]]],
+    ['a weekly routine moved earlier on its own day', 'every friday at 19:00', RAN,
+      [[friday(20, 10), null], [nextFriday(18, 59), nextFriday(19, 0)], [nextFriday(19, 0), nextFriday(19, 0)], [nextFriday(19, 1), nextFriday(19, 0)]]],
+    ['a weekly routine moved to a later weekday', 'every saturday at 20:01', RAN,
+      [[friday(20, 10), saturday(20, 1)], [saturday(20, 0), saturday(20, 1)], [saturday(20, 1), saturday(20, 1)], [saturday(20, 2), saturday(20, 1)]]],
+    ['a weekly routine moved to an earlier weekday', 'every thursday at 20:01', RAN,
+      [[friday(20, 10), nextThursday(20, 1)], [nextThursday(20, 0), nextThursday(20, 1)], [nextThursday(20, 1), nextThursday(20, 1)]]],
+  ];
+
+  for (const [change, schedule, stamp, probes] of CASES) {
+    test(change, () => {
+      for (const [now, fires] of probes) {
+        const sched = freshScheduler();
+        sched.wireSchedulerDeps({ now: () => now });
+        sched.routineState[KEY] = { lastRun: stamp.toISOString(), status: 'completed', duration: 120 };
+        const when = `${schedule}, asked at ${now.toString().slice(0, 21)}`;
+
+        const tick = sched.getNextRun(schedule, sched.routineState[KEY].lastRun);
+        const row = sched.routineDisplayFacts(KEY, schedule).nextRun;
+        if (tick) {
+          assert.strictEqual(row, tick.toISOString(), `${when}: the row names the slot the tick fires`);
+        } else {
+          const next = new Date(row);
+          assert.ok(next > now && next.toDateString() !== now.toDateString(),
+            `${when}: the tick holds the routine, so the row names a later period, not ${row}`);
+        }
+        assert.deepStrictEqual(tick, fires, `${when}: the tick`);
+      }
+    });
+  }
+
+  // A STAMP FROM THE FUTURE SERVES NOTHING TODAY, which a clock set wrong or a
+  // restored backup can produce. A run serves the slot of its own period and
+  // no other, so a run stamped tomorrow, or next Friday, is at or after
+  // today's slot without having served it. Both readers say so: the tick fires
+  // today's slot, and the row names it.
+  test('a run stamped on a later day holds nothing today, for the tick or the row', () => {
+    for (const [schedule, stamp] of [['every day at 20:30', saturday(20, 40)], ['every friday at 20:30', nextFriday(20, 40)]]) {
+      const sched = freshScheduler();
+      const now = friday(20, 31);
+      sched.wireSchedulerDeps({ now: () => now });
+      sched.routineState[KEY] = { lastRun: stamp.toISOString(), status: 'completed', duration: 120 };
+      assert.deepStrictEqual(sched.getNextRun(schedule, sched.routineState[KEY].lastRun), friday(20, 30),
+        `${schedule}: a run stamped ${stamp.toDateString()} held today's slot at the tick`);
+      assert.strictEqual(sched.routineDisplayFacts(KEY, schedule).nextRun, friday(20, 30).toISOString(),
+        `${schedule}: and the row named another`);
+    }
   });
 });
 

@@ -3296,3 +3296,30 @@ test('the roster the scheduler broadcasts names the workspace it was read from',
     }
   });
 });
+
+// A daily routine edited to monthly is a changed shape like any other: the walk
+// cannot say what was owed under a schedule that no longer exists, so the
+// anchor resyncs to the month's slot and nothing is recorded for the days the
+// daily schedule would have named. Afterwards the walk works under the monthly
+// rule, a month at a time.
+test('a daily routine edited to monthly resyncs its anchor and invents no missed record', (t) => {
+  withTempWorkspace((ws) => {
+    const sched = freshScheduler();
+    writeRoutineAgent(ws, LATE_ROUTINE); // every day at 23:00
+    observeOnce(t, sched, new Date(2026, 7, 15, 8, 0, 0));
+
+    writeRoutineAgent(ws, [{ name: 'late', schedule: 'on day 20 of every month at 23:00', prompt: 'p', enabled: true }]);
+    observeOnce(t, sched, new Date(2026, 7, 17, 8, 0, 0));
+    const entry = sched.routineSlots.routines[LATE_KEY];
+    assert.deepStrictEqual(entry.missed, [],
+      'two nights passed under the daily schedule, and neither is recorded under the monthly one');
+    assert.strictEqual(entry.due, new Date(2026, 7, 20, 23, 0, 0).toISOString(), 'the anchor moved to this month\'s slot');
+    assert.strictEqual(entry.schedule, 'monthly:20:23:0', 'under the monthly shape');
+
+    observeOnce(t, sched, new Date(2026, 9, 2, 8, 0, 0));
+    assert.deepStrictEqual(sched.routineSlots.routines[LATE_KEY].missed, [
+      { slot: new Date(2026, 7, 20, 23, 0, 0).toISOString() },
+      { slot: new Date(2026, 8, 20, 23, 0, 0).toISOString() },
+    ], 'closed until October, it walks a month at a time and records the 20th of each');
+  });
+});

@@ -33,11 +33,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -104,8 +104,8 @@ const MUTATIONS = [
     "  const RUN_ON_SUPPORTED = ['local'];",
     "  const RUN_ON_SUPPORTED = ['local', 'agent-computer'];"],
   [MODEL, 'the preview sentence reads the run-on words off the option',
-    '    return `Run ${skillName} every ${freq.label} at ${time.label}, on ${option.sentence}.`;',
-    '    return `Run ${skillName} every ${freq.label} at ${time.label}, on this computer.`;'],
+    '    return `Run ${skillName} ${when}, on ${option.sentence}.`;',
+    '    return `Run ${skillName} ${when}, on this computer.`;'],
   [MODEL, 'the confirmation line reads its second sentence off the option',
     '    return words ? `${words} time. ${option.meta}` : option.meta;',
     '    return words ? `${words} time. Runs while Rundock is open here.` : option.meta;'],
@@ -190,8 +190,8 @@ const MUTATIONS = [
     '<div class="re-name">${escText(option.name)}</div>${meta}',
     '<div class="re-name">${option.name}</div>${meta}'],
   [VIEW, 'the time zone reaches the page',
-    '    const note = [zone, m.scheduleStepFields().workspaceCaveat].filter(Boolean).join(\' \');',
-    '    const note = [m.scheduleStepFields().workspaceCaveat].filter(Boolean).join(\' \');'],
+    '    const note = [zone, m.scheduleStepFields({ frequency: state.frequency }).workspaceCaveat].filter(Boolean).join(\' \');',
+    '    const note = [m.scheduleStepFields({ frequency: state.frequency }).workspaceCaveat].filter(Boolean).join(\' \');'],
 
   // The reply path. A save that leaves before the server answers puts the
   // reader on a list without the routine and with nothing said, which is the
@@ -414,11 +414,11 @@ const MUTATIONS = [
     "  ['schedule', assertWritableSchedule],\n",
     ''],
   [ROUTINES_SCHEDULE, 'the grammar is the one the scheduler actually reads',
-    "const SCHEDULE_WORDS =\n  /^every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
+    "const SCHEDULE_WORDS =\n  /^(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
     'const SCHEDULE_WORDS = /^every (\\w+) at (\\d{2}):(\\d{2})$/;'],
   [ROUTINES_SCHEDULE, 'a schedule is read whole, not found inside a longer line',
-    "const SCHEDULE_WORDS =\n  /^every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
-    'const SCHEDULE_WORDS = /every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([01]\\d|2[0-3]):[0-5]\\d/;'],
+    "const SCHEDULE_WORDS =\n  /^(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
+    'const SCHEDULE_WORDS = /(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d/;'],
   // A REFUSAL BELONGS TO THE SURFACE THAT ASKED, and for this one that surface
   // is the editor. The reader is looking at the sentence builder with a save in
   // flight; routine_action_error draws on the routines list they have left.
@@ -497,11 +497,59 @@ const MUTATIONS = [
     '    if (note) h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(note)}</p>`;',
     '    if (note) h += \'\';'],
   [MODEL_STEP, 'the step carries the caveat, so a render of the step cannot drop it',
-    '      workspaceCaveat: WORKSPACE_CAVEAT,\n',
+    "      workspaceCaveat: input && input.frequency === 'month' ? MONTHLY_WORKSPACE_CAVEAT : WORKSPACE_CAVEAT,\n",
     ''],
   [MODEL, 'the caveat names the rule rather than only the consequence',
     "  const WORKSPACE_CAVEAT = 'Rundock only runs the routines of the workspace that is open, '",
     "  const WORKSPACE_CAVEAT = 'Routines run on a schedule, '"],
+
+  // ===== A MONTHLY SCHEDULE =====
+  //
+  // The day list stops at the 28th because the scheduler reads no later day:
+  // offering the 29th would save a routine that never runs.
+  [MODEL, 'the day dropdown offers no day after the 28th',
+    '    for (let n = 1; n <= 28; n++) {',
+    '    for (let n = 1; n <= 29; n++) {'],
+  [MODEL, 'the monthly catch-up note is for month only',
+    "      workspaceCaveat: input && input.frequency === 'month' ? MONTHLY_WORKSPACE_CAVEAT : WORKSPACE_CAVEAT,",
+    '      workspaceCaveat: WORKSPACE_CAVEAT,'],
+  [MODEL, 'leaving month drops its day',
+    "    const day = value === 'month' ? ((choice && choice.frequency === 'month' && choice.day) || '1') : null;",
+    "    const day = (choice && choice.day) || (value === 'month' ? '1' : null);"],
+  [MODEL, 'the day is looked up, never taken from the input',
+    '      const day = monthDay(input.day);\n      if (!day || !time) return null;',
+    '      const day = { value: input.day };\n      if (!time) return null;'],
+  [MODEL, 'a stored monthly schedule is read whole, not found inside a longer line',
+    '    const monthly = /^on (?:day 0?([1-9]|1\\d|2[0-8])|the last day) of every month at (\\d{2}:\\d{2})$/',
+    '    const monthly = /on (?:day 0?([1-9]|1\\d|2[0-8])|the last day) of every month at (\\d{2}:\\d{2})/'],
+  [MODEL, 'only the server\'s day 29 to 31 reopens on the last day',
+    '    if (read || !routine || !routine.unreadableMonthDay) return read;',
+    '    if (read || !routine) return read;'],
+  [MODEL, 'only the server\'s day 29 to 31 gets the last-day note',
+    "    if (input.unreadableMonthDay) return LAST_DAY_NOTE.replace('{schedule}', schedule);",
+    "    if (true) return LAST_DAY_NOTE.replace('{schedule}', schedule);"],
+  [VIEW, 'the day dropdown is drawn for month only',
+    "    if (state.frequency === 'month') {\n      h += '<span class=\"re-word\">on the</span>",
+    "    if (true) {\n      h += '<span class=\"re-word\">on the</span>"],
+  [VIEW, 'the rule before the last day is drawn',
+    "        if (d.afterRule) h += '<hr>';\n",
+    ''],
+  [VIEW, 'a new monthly routine saves the day it shows',
+    '      frequency: state.frequency,\n      day: state.day,\n      time: state.time,\n      runOn: state.runOn,',
+    '      frequency: state.frequency,\n      time: state.time,\n      runOn: state.runOn,'],
+  [VIEW, 'an edited monthly routine saves the day it shows',
+    '    const schedule = m.buildSchedule({ frequency: state.frequency, day: state.day, time: state.time });',
+    '    const schedule = m.buildSchedule({ frequency: state.frequency, time: state.time });'],
+  [VIEW, 'Edit schedule opens on the day it read',
+    '      day: parsed ? parsed.day : null,',
+    '      day: null,'],
+  [VIEW, 'Edit schedule carries the server\'s day 29 to 31',
+    '        unreadableMonthDay: routine.unreadableMonthDay || null,\n',
+    ''],
+  [VIEW, 'choosing a frequency follows the model\'s rule for the day',
+    "    if (field === 'frequency') Object.assign(state, model().chooseFrequency(state, value));\n"
+    + "    else if (field === 'time' || field === 'day') state[field] = value;",
+    "    if (field === 'frequency' || field === 'time' || field === 'day') state[field] = value;"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
@@ -511,13 +559,13 @@ const MUTATIONS = [
 // unguarded guards instead of one clear message about the reporter.
 const REPORTER = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, suite],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -540,7 +588,7 @@ function redTests(suite) {
   return names;
 }
 
-function run() {
+async function run() {
   // Every file is read up front and all of them are restored together, so a
   // throw part way through cannot leave one mutated, and neither can a signal.
   const targets = targetsFromRows(MUTATIONS);
@@ -574,9 +622,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
-        ? { label, applied: true, unparsable: true, red: [] }
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
@@ -589,7 +638,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -659,13 +714,14 @@ if (require.main === module) {
   // source file mutated on every red run. The flag is read after the check, so
   // deleting the check still fails that test rather than passing it.
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
-      + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(exitCodeFor(failed, results));
-  }
+  run().then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+        + ' and a mutation that could break more than one place proves nothing about either.');
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run };

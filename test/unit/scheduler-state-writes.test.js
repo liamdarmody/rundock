@@ -26,6 +26,7 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..', '..');
 const SCHEDULER_KEY = require.resolve('../../lib/scheduler.js');
 const claude = require('../../lib/runtime/claude.js');
+const { writeWholeFile } = require('../../lib/store/whole-file.js');
 
 // A private copy per test, so wiring and state never leak into the shared one.
 function freshScheduler() {
@@ -97,14 +98,15 @@ function writeMode(flags) {
 }
 
 // Run `fn` with the fs calls a write can make recorded, in order. `fail`, when
-// given, is asked before each call and may throw in its place.
+// given, is asked before each call, with what has been recorded so far, and
+// may throw in its place.
 function recordingFs(fn, fail = () => {}) {
   const log = [];
   const real = {};
   const wrap = (name, note) => {
     real[name] = fs[name];
     fs[name] = function (...args) {
-      fail(name, args);
+      fail(name, args, log);
       const result = real[name].apply(this, args);
       const entry = note(args, result);
       if (entry) log.push({ op: name, ...entry });
@@ -212,32 +214,106 @@ describe('every write of a state file replaces it whole', () => {
   }
 });
 
-// The control failing: a write cut off after its bytes are down and before the
-// rename. Whatever stopped it, the last whole file must still be the file.
+// The control failing: a write cut off at any step before its rename takes
+// effect, by a write of its bytes that fails (a full disk), a flush that fails,
+// or a rename that fails. Whatever stopped it, the last whole file must still
+// be the file, with nothing of the write's left beside it.
+const isTempOf = (target, log, fd) => log.some(e => e.op === 'openSync' && e.fd === fd
+  && e.path.startsWith(`${target}.`) && e.path.endsWith('.tmp'));
+const CUTS = [
+  ['its bytes are written', 'writeFileSync', (args, target, log) => isTempOf(target, log, args[0]), 'ENOSPC'],
+  ['they are flushed', 'fsyncSync', (args, target, log) => isTempOf(target, log, args[0]), 'EIO'],
+  ['it is renamed over the file', 'renameSync', (args, target) => path.resolve(String(args[1])) === target, 'EIO'],
+];
 describe('a write cut off before its rename leaves the last whole file', () => {
+  for (const [when, call, aimedAt, code] of CUTS) {
+    for (const writer of WRITERS) {
+      test(`${writer.store}, cut off as ${when}: the previous file stays, and the next load reads it rather than starting empty`, () => {
+        withWorkspace((ws) => {
+          const sched = freshScheduler();
+          writer.before(sched, ws);
+          const target = path.resolve(writer.target(ws));
+          const previous = fs.readFileSync(target);
+          const folder = fs.readdirSync(path.dirname(target)).sort();
+          let cut = 0;
+          errorsDuring(() => recordingFs(() => writer.write(sched, ws), (name, args, log) => {
+            if (name === call && aimedAt(args, target, log)) {
+              cut++;
+              throw Object.assign(new Error(`${code}: cut off here, ${call}`), { code });
+            }
+          }));
+          assert.ok(fs.readFileSync(target).equals(previous), `${writer.store} changed although its write was cut off`);
+          assert.strictEqual(cut, 1, `sanity: the write reached the step that is cut (${cut})`);
+          assert.deepStrictEqual(fs.readdirSync(path.dirname(target)).sort(), folder,
+            'the cut-off write left a file behind');
+          writer.readBack(ws);
+        });
+      });
+    }
+  }
+});
+
+// The name the helper's next temporary file in `target`'s folder takes, learned
+// from a write of its own beside it: the process and a count.
+function nextTempName(target) {
+  const probe = path.join(path.dirname(target), 'probe.json');
+  const log = recordingFs(() => writeWholeFile(probe, '{}'));
+  fs.rmSync(probe);
+  const opened = log.find(e => e.op === 'openSync' && e.write);
+  const count = Number(/\.(\d+)\.tmp$/.exec(opened.path)[1]);
+  return `${target}.${process.pid}.${count + 1}.tmp`;
+}
+
+// A file or a link already at the name a temporary file takes is never written
+// through: the temporary file is created new, or the write fails. A link
+// followed there would put the state wherever it points, and its rename would
+// then put the link itself in place of the file.
+describe('a temporary file is created new, never opened through what is already there', () => {
   for (const writer of WRITERS) {
-    test(`${writer.store}: the previous file stays, and the next load reads it rather than starting empty`, () => {
+    test(`${writer.store}: a link at the next temporary name leaves its target, and the file, as they were`, () => {
       withWorkspace((ws) => {
         const sched = freshScheduler();
         writer.before(sched, ws);
         const target = path.resolve(writer.target(ws));
         const previous = fs.readFileSync(target);
-        const folder = fs.readdirSync(path.dirname(target)).sort();
-        let cut = 0;
-        errorsDuring(() => recordingFs(() => writer.write(sched, ws), (name, args) => {
-          if (name === 'renameSync' && path.resolve(String(args[1])) === target) {
-            cut++;
-            throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
-          }
-        }));
-        assert.ok(fs.readFileSync(target).equals(previous), `${writer.store} changed although its write was cut off`);
-        assert.strictEqual(cut, 1, `sanity: the write reached its rename (${cut})`);
-        assert.deepStrictEqual(fs.readdirSync(path.dirname(target)).sort(), folder,
-          'the cut-off write left a file behind');
+        const elsewhere = path.join(ws, 'elsewhere.txt');
+        fs.writeFileSync(elsewhere, 'untouched\n');
+        const planted = nextTempName(target);
+        fs.symlinkSync(elsewhere, planted);
+        errorsDuring(() => writer.write(sched, ws));
+        assert.strictEqual(fs.readFileSync(elsewhere, 'utf-8'), 'untouched\n', `${writer.store}: the write went through the link`);
+        assert.ok(!fs.lstatSync(target).isSymbolicLink(), `${writer.store}: the link was renamed over the file`);
+        assert.ok(fs.readFileSync(target).equals(previous), `${writer.store}: the file changed although its write could not start`);
+        assert.ok(fs.lstatSync(planted).isSymbolicLink(), `${writer.store}: what was at the temporary name was removed or replaced`);
         writer.readBack(ws);
       });
     });
   }
+
+  test('the helper throws, as for any other failed write, and leaves the file as it was', () => {
+    withWorkspace((ws) => {
+      const target = stateFile(ws);
+      writeWholeFile(target, '{"before":true}');
+      const planted = nextTempName(target);
+      fs.writeFileSync(planted, 'somebody else\'s\n');
+      assert.throws(() => writeWholeFile(target, '{"after":true}'), (e) => e.code === 'EEXIST');
+      assert.strictEqual(fs.readFileSync(target, 'utf-8'), '{"before":true}');
+      assert.strictEqual(fs.readFileSync(planted, 'utf-8'), 'somebody else\'s\n', 'a file it did not make was written or removed');
+    });
+  });
+
+  // Readable by its owner alone, as the run's stderr capture beside the records is.
+  test('a state file is written readable by its owner alone', { skip: process.platform === 'win32' && 'no POSIX modes' }, () => {
+    withWorkspace((ws) => {
+      for (const writer of WRITERS) {
+        const sched = freshScheduler();
+        writer.before(sched, ws);
+        writer.write(sched, ws);
+        const mode = fs.statSync(writer.target(ws)).mode & 0o777;
+        assert.strictEqual(mode, 0o600, `${writer.store} is written as ${mode.toString(8)}`);
+      }
+    });
+  });
 });
 
 // ── AC: the inventory ──────────────────────────────────────────────────────

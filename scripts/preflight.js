@@ -58,6 +58,13 @@ const REGISTRY_SUITES = [
   // error handler where it started, so a write to one that has stopped is
   // logged and never ends the server.
   'test/unit/child-stdin-inventory.test.js',
+  // Every mutation harness starts a row's suite through the bounded runner and
+  // reports a row whose suite did not finish as its own outcome, so a harness
+  // added with a runner of its own fails here.
+  'test/unit/mutation-harness-runner.test.js',
+  // No test keeps a child it starts out of coverage by deleting the key,
+  // which Node puts back: each sets it to an empty value.
+  'test/unit/child-coverage-switch.test.js',
   // Every innerHTML assignment is classified, and the totals beside it.
   'test/unit/innerhtml-inventory.test.js',
   // Documents that state the code's own numbers, names and lists.
@@ -83,8 +90,12 @@ const REGISTRY_SUITES = [
   // is the membership rule for this phase exactly.
   'test/unit/danger-token.test.js',
   'test/unit/attention-token.test.js',
+  'test/unit/danger-text-card-contrast.test.js',
   // The same arithmetic over the colours links in a note are drawn in.
   'test/unit/editor-link-contrast.test.js',
+  // The same arithmetic over the routine screens' text, badges and focus
+  // ring, in both themes.
+  'test/unit/routine-screens-contrast.test.js',
   // Manifest equality over discovered call sites and doors. Each of these fails
   // when something is ADDED and not written down, which is the membership rule,
   // and each was previously reported only after the suite had run under coverage.
@@ -192,6 +203,7 @@ const NOT_CHEAP = {
   'test/unit/routines-panel.test.js': 'behaviour: boots a document and renders the routines panel',
   'test/unit/run-detail-view.test.js': 'behaviour: boots a document and renders a run',
   'test/unit/skills-empty.test.js': 'behaviour: boots a document and renders the empty skills state',
+  'test/unit/artifact-review-attach.test.js': 'behavior: runs the files view\'s review attach against a stand-in frame and a stubbed fetch, in each order the frame\'s document and the comments can arrive. It cuts that function out of files.js, which is why the inventory names it, but the cut serves a driven check rather than a bookkeeping one',
 };
 
 /**
@@ -265,6 +277,7 @@ const CHECKS = [
 const PINNED_RUNTIMES = [
   { name: 'stream grammar', capture: 'scripts/stream-truth/captured-grammar.json', recapture: 'npm run stream:truth -- --capture' },
   { name: 'transcript', capture: 'scripts/transcript-truth/captured-transcript.json', recapture: 'npm run transcript:truth -- --capture' },
+  { name: 'shell call', capture: 'scripts/transcript-truth/captured-shell-call.json', recapture: 'npm run transcript:truth -- --capture' },
 ];
 
 function installedRuntimeVersion() {

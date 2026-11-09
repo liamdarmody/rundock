@@ -668,7 +668,9 @@ const {
 } = claudeRuntime;
 const codexGlue = require('./lib/runtime/codex-glue.js');
 const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
-const { startingFresh, noteUnstartedWrite, takeUnstartedWrites, withFreshCatchUp } = require('./lib/runtime/missing-session.js');
+const {
+  startingFresh, noteUnstartedWrite, takeUnstartedWrites, withFreshCatchUp, storeHeldCatchUp, takeStoredCatchUp,
+} = require('./lib/runtime/missing-session.js');
 claudeRuntime.wireClaudeRuntimeDeps({
   getActualPort: () => ACTUAL_PORT,
   // Every Claude turn runs under the same answer-file guard as a Codex turn.
@@ -1459,8 +1461,8 @@ const { wireProcessHandlers, handleScopeReturn, handleDelegation, handleEndDeleg
 // ===== WS DISPATCH (lib/protocol/handlers/) =====
 // Every WS message type except the four root shims (chat, delegate,
 // end_delegation, flush_buffer) is handled in lib/protocol/handlers/ and
-// selected from this table. The context object's member list is frozen by
-// the decomposition spec: handlers reach root-owned capabilities through it
+// selected from this table. The context object's member list is fixed, and
+// a test pins it: handlers reach root-owned capabilities through it
 // (and lib modules by direct require); they never require the root.
 const protocolHandlers = require('./lib/protocol/handlers/index.js');
 const wsDispatch = protocolHandlers.buildDispatch();
@@ -1527,7 +1529,8 @@ wss.on('connection', (ws) => {
         // conversation comes back on screen is rebuilt HERE, so a field not
         // named here is lost on that path even though the first delivery
         // carried it.
-        ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {})
+        ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {}),
+        ...(pending.startupFile ? { startup_file: pending.startupFile } : {})
       },
       _conversationId: pending.conversationId,
       ...(pending.run ? { _run: pending.run } : {})
@@ -1648,8 +1651,8 @@ wss.on('connection', (ws) => {
             // A fresh start that had no prompt of its own gives its first
             // message the catch-up it is owed; every other message is as sent.
             const followUp = withFreshCatchUp(existing, msg.content);
-            // Kept until this process has started its session: one still
-            // starting may yet be refused, and then never reads this.
+            // Kept until this process has answered a turn: until then it may
+            // yet be refused, and then never reads this.
             noteUnstartedWrite(existing, followUp);
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUp } }) + '\n');
           } else {
@@ -1718,8 +1721,11 @@ wss.on('connection', (ws) => {
 
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
 
-            // Send the first message via stdin
-            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+            // Send the first message via stdin, behind any catch-up a fresh
+            // start held for this agent whose process has since gone (reaped,
+            // or the server restarted): given here, once.
+            const heldCatchUp = takeStoredCatchUp(convoId, entry.agentId);
+            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: heldCatchUp + msg.content } }) + '\n');
 
             const stderrRef = wireProcessHandlers(entry, convoId, ws, {
               enableInterception: true,
@@ -1787,6 +1793,10 @@ wss.on('connection', (ws) => {
                 console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
                 entry.missingSessionRecovered = true; // started again below
                 processes.delete(convoId);
+                // A catch-up this process was given was never read: it goes
+                // with the message into the fresh start.
+                entry.freshCatchUp = heldCatchUp;
+                storeHeldCatchUp(convoId, entry);
                 // Naming the session Claude Code refused, when it was refused,
                 // so the window forgets that one and not whichever is primary.
                 const freshName = (agentData && agentData.displayName) || null;
@@ -1800,9 +1810,9 @@ wss.on('connection', (ws) => {
                 // follows it, in order, into the fresh one: the first emit has
                 // already put a live process in place for these to reach. After
                 // any failure, not only a refusal: what is still kept went to a
-                // process that never started a session (its init clears the
-                // list), so it acted on none of it, and dropping it lost what
-                // the person had said.
+                // process that never answered a turn (its first result clears
+                // the list), so it acted on none of it, and dropping it lost
+                // what the person had said.
                 for (const carried of takeUnstartedWrites(entry)) {
                   liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
                 }
@@ -1881,7 +1891,9 @@ wss.on('connection', (ws) => {
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
 
-          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+          // Behind any catch-up stored for this agent, as on the interactive path.
+          const legacyCatchUp = takeStoredCatchUp(convoId, entry.agentId);
+          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: legacyCatchUp + msg.content } }) + '\n');
 
           // Legacy mode: no interception, no transcript, no idle tracking
           const legacyStderrRef = wireProcessHandlers(entry, convoId, ws, {
@@ -1904,6 +1916,8 @@ wss.on('connection', (ws) => {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
               entry.missingSessionRecovered = true; // started again below
               processes.delete(convoId);
+              entry.freshCatchUp = legacyCatchUp; // never read: it goes to the fresh start
+              storeHeldCatchUp(convoId, entry);
               const freshName = (agentData && agentData.displayName) || null;
               safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: startingFresh(freshName),
                 ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
@@ -2680,7 +2694,7 @@ function getRuntimeStatus() {
 // Code-mode verdict, a boundary crossing, an answer file), in the same fields a
 // hook request carries, so the card is drawn the same way whichever runtime
 // asked. Only those fields pass.
-const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'put_back'];
+const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'startup_file', 'put_back'];
 function requestServerPermission({ convoId, toolName, toolInput, onDecision, grading }) {
   // An id nothing can guess: an answer is matched to its card by this alone.
   const requestId = 'perm-' + require('crypto').randomBytes(16).toString('hex');
@@ -3164,7 +3178,7 @@ function reconcileSearchBeforeQuery() {
 }
 
 // Live-path hook, called after an agent turn's transcript append. Guarded so
-// an index failure can never affect message persistence (spec risk 2): the
+// an index failure can never affect message persistence: the
 // jsonl is written by Claude Code regardless, and the next reconcile-on-search
 // or reconcile-on-open catches anything missed here.
 function noteSearchConversationActivity(convoId) {

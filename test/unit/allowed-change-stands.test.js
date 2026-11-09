@@ -12,6 +12,8 @@
 //
 // Driven through the server's own answer handler and the Claude turn watcher,
 // against a workspace in the temp folder, so it needs no fixture.
+// Its turns run the guard, which watches the home folder's shell startup files.
+require('../helpers/made-up-home.js');
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

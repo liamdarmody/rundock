@@ -21,11 +21,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -221,8 +221,35 @@ const MUTATIONS = [
     '    fs.fsyncSync(fd);\n',
     ''],
   [SET_ASIDE, 'a state file that does not parse is set aside, not read as empty',
-    '    const aside = `${file}.unparsed-',
-    '    throw e;\n    const aside = `${file}.unparsed-'],
+    '    let aside = null;\n    try {\n      aside = asideName(file, clock());\n      fs.renameSync(file, aside);',
+    '    throw e;\n    let aside = null;\n    try {\n      aside = asideName(file, clock());\n      fs.renameSync(file, aside);'],
+  [WHOLE_FILE, 'a temporary file is created new, never opened through what is already there',
+    '  let fd = fs.openSync(temp, TEMP_FLAGS, 0o600);',
+    "  let fd = fs.openSync(temp, 'w', 0o600);"],
+  [WHOLE_FILE, 'a state file is written readable by its owner alone',
+    'fs.openSync(temp, TEMP_FLAGS, 0o600)',
+    'fs.openSync(temp, TEMP_FLAGS)'],
+  [WHOLE_FILE, 'a write cut off removes its temporary file',
+    "    try { fs.rmSync(temp, { force: true }); } catch (removing) { /* the write's own error is the one to report */ }\n",
+    ''],
+  [SET_ASIDE, 'the clock is read only for a file that does not parse',
+    '  try {\n    return JSON.parse(text);',
+    '  clock();\n  try {\n    return JSON.parse(text);'],
+  [SET_ASIDE, 'an unparseable routine state keeps its name until the file that replaces it is written',
+    '    fs.linkSync(file, aside);',
+    '    fs.renameSync(file, aside);'],
+  [SET_ASIDE, 'a replacement that cannot be written takes the dated name away again',
+    "    try { fs.rmSync(aside, { force: true }); } catch (removing) { /* the write's own error is the one to report */ }\n",
+    ''],
+  [SET_ASIDE, 'a temporary file a stopped process left is removed on load',
+    '    try { fs.rmSync(path.join(folder, name), { force: true }); } catch (e) { /* the next load tries again */ }\n',
+    ''],
+  [SET_ASIDE, 'a temporary file whose process still runs is never removed',
+    ' || running(Number(shape[2]))) continue;',
+    ') continue;'],
+  [SET_ASIDE, 'a temporary file of another store is never removed',
+    'if (!shape || !isTarget(shape[1]) || running',
+    'if (!shape || running'],
   [APPENDED_LOG, 'a stub log line still being appended is left out, not parsed',
     '  lines.pop();\n',
     ''],
@@ -250,13 +277,13 @@ const NOT_MUTATED = [
 
 const REPORTER = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, suite],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -279,7 +306,7 @@ function redTests(suite) {
   return names;
 }
 
-function run() {
+async function run() {
   const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
@@ -302,9 +329,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
-        ? { label, applied: true, matches, unparsable: true, red: [] }
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, matches, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable
+        ? { label, applied: true, matches, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, matches, red });
       fs.writeFileSync(target.src, original);
     }
@@ -317,7 +345,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, matches, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, matches, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | ${matches} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -370,13 +404,14 @@ function requireSaneTempRoot() {
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
-      + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(exitCodeFor(failed, results));
-  }
+  run().then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+        + ' and a mutation that could break more than one place proves nothing about either.');
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, NOT_MUTATED, run };

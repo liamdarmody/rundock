@@ -55,7 +55,7 @@ const FOUR_ROWS = [
     state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 7, 0, 12)),
     lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
   }),
-  routine('Caught up', {
+  routine('Ran late', {
     state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 9, 14)),
     lastSlot: iso(TODAYS_SLOT), nextRun: iso(TOMORROWS_SLOT),
   }),
@@ -74,6 +74,37 @@ const FOUR_ROWS = [
 // like can be read off the page rather than off a table beside it.
 const ROUTINES_CSS = read('public', 'styles', 'views', 'routines.css');
 const TOKENS_CSS = read('public', 'styles', 'tokens.css');
+
+// A token's value in one theme, its var() chain followed, as an upper-case
+// hex. The light theme restates some tokens on body.light and inherits the
+// rest from :root, where a token that names another is computed with the dark
+// values, so a token body.light does not declare is read as dark.
+function themedToken(name, theme) {
+  const clean = TOKENS_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+  const block = (selector) => {
+    const start = clean.indexOf(`${selector} {`);
+    assert.ok(start !== -1, `tokens.css has no ${selector} block`);
+    const out = new Map();
+    for (const d of clean.slice(clean.indexOf('{', start) + 1, clean.indexOf('}', start)).split(';')) {
+      const i = d.indexOf(':');
+      if (i > 0 && d.slice(0, i).trim().startsWith('--')) out.set(d.slice(0, i).trim(), d.slice(i + 1).trim());
+    }
+    return out;
+  };
+  const dark = block(':root');
+  const light = block('body.light');
+  assert.ok(dark.size > 30 && light.size > 10, 'the token parse found almost nothing, so nothing is compared');
+  const follow = (token, inLight, seen) => {
+    assert.ok(seen.length < 10, `${seen.join(' -> ')} does not end in a color`);
+    const own = inLight && light.has(token);
+    const raw = own ? light.get(token) : dark.get(token);
+    assert.ok(raw !== undefined, `${token} is declared nowhere in tokens.css`);
+    const m = /^var\((--[\w-]+)\)$/.exec(raw);
+    if (m) return follow(m[1], own, [...seen, token]);
+    return raw.toUpperCase();
+  };
+  return follow(`--${name}`, theme === 'light', []);
+}
 
 // The rail, the sidebar and both view panels are CUT OUT OF index.html rather
 // than written here. Whether an entry is on the rail is a claim about the
@@ -516,12 +547,12 @@ describe('the four rows', () => {
     assert.deepStrictEqual(statuses.map(s => text(s)), [
       'Missed: Rundock was closed at 7:00am yesterday, London time',
       'Ran today, 7:00am, London time',
-      'Caught up: ran today, 9:14am, London time, due 7:00am',
+      'Ran late: today, 9:14am. Due 7:00am.',
       'Failed: today, 7:00am, London time',
     ]);
     // The ruling: a late run is a success and keeps the success class, and the
     // one state where nothing ran is the only one told apart by colour.
-    assert.match(rowNamed(doc, 'Caught up').querySelector('.run-status').className, /ok-quiet/,
+    assert.match(rowNamed(doc, 'Ran late').querySelector('.run-status').className, /ok-quiet/,
       'a late run must not be dressed as a warning');
     assert.match(rowNamed(doc, 'Missed').querySelector('.run-status').className, /neutral/,
       'a passed slot is history, not an error');
@@ -677,7 +708,7 @@ describe('a run still going', () => {
     const { doc, w, dom } = shell();
     w.renderRoutines();
     assert.strictEqual(rows(doc).length, 4);
-    for (const name of ['Ran on time', 'Caught up', 'Missed', 'Failed']) {
+    for (const name of ['Ran on time', 'Ran late', 'Missed', 'Failed']) {
       assert.notStrictEqual(text(rowNamed(doc, name).querySelector('.run-status')), 'Still going');
     }
     dom.window.close();
@@ -729,6 +760,39 @@ describe('the ruling, against what the page resolves', () => {
     const tone = resolved();
     assert.notStrictEqual(tone['failed'].colour, tone['ok'].colour);
     assert.notStrictEqual(tone['failed'].colour, tone['ok-quiet'].colour);
+  });
+
+  // The rules above are compared as the tokens they name, because the document
+  // here does not resolve a var(). A failure drawn in a DIFFERENT success token
+  // than the successes wear (the fill, --success, where the successes wear the
+  // text token, --success-text) names a different token and passes those
+  // checks while painting the same green. So the failure's color is also
+  // followed through tokens.css to its value, in each theme, and held apart
+  // from every color a success draws: both success tones and both success
+  // tokens.
+  test('a failure resolves to no color a success paints, in either theme', () => {
+    const tone = resolved();
+    const named = (where, colour) => {
+      const m = /^var\(--([\w-]+)\)$/.exec(colour);
+      assert.ok(m, `${where} draws ${colour}, not a token this can follow`);
+      return m[1];
+    };
+    // Every clash in both themes is collected before anything is asserted, so
+    // the failure names each theme it paints green in.
+    const clashes = [];
+    for (const theme of ['dark', 'light']) {
+      const failed = themedToken(named('failed', tone['failed'].colour), theme);
+      const successes = {
+        'the ok tone': themedToken(named('ok', tone['ok'].colour), theme),
+        'the ok-quiet tone': themedToken(named('ok-quiet', tone['ok-quiet'].colour), theme),
+        '--success': themedToken('success', theme),
+        '--success-text': themedToken('success-text', theme),
+      };
+      for (const [what, value] of Object.entries(successes)) {
+        if (failed === value) clashes.push(`${theme}: a failure paints ${failed}, which is ${what}`);
+      }
+    }
+    assert.deepStrictEqual(clashes, []);
   });
 
   test('nothing on this row reaches for amber', () => {
@@ -783,8 +847,8 @@ describe('the empty state, where a skill exists', () => {
 
   // THE LOCKED COPY, WORD FOR WORD, and the point of asserting it at the
   // surface as well as in the model is that this state is the one the
-  // amendment does NOT touch. A variant added beside it that quietly reworded
-  // this one would be the amendment doing more than it was asked to.
+  // empty-state change does NOT touch. A variant added beside it that quietly
+  // reworded this one would be that change doing more than it was asked to.
   test('where any skill exists the locked copy is untouched, aside included', () => {
     const { doc, w, dom } = shell([]);
     w.renderRoutines();
@@ -800,7 +864,7 @@ describe('the empty state, where a skill exists', () => {
 });
 
 describe('the empty state, where no skill exists', () => {
-  // AMENDMENT 5. The locked body presupposes a tested skill, which gating
+  // The locked body presupposes a tested skill, which gating
   // quietly guaranteed: you could not reach this view without having had a
   // routine, and you could not have had a routine without a skill. A permanent
   // rail entry removes the guarantee and exposes a state the locked copy was
@@ -1935,6 +1999,53 @@ describe('a routine the upgrade held back', () => {
     assert.deepStrictEqual(prompt, schedule,
       'the two faults a row can carry are drawn differently, so one of them reads as something else');
     dom.window.close();
+  });
+
+  // The notice in two parts: the lead in the danger token made for a card, the
+  // body in the strong secondary text, each read off the page.
+  test('the unreadable-schedule notice draws a red lead and a quiet body', () => {
+    const { doc, w, dom } = shell([
+      routine('Context review', {
+        schedule: 'on day 31 of every month at 09:00', scheduleReadable: false,
+        unreadableMonthDay: { day: 31, time: '09:00' },
+      }),
+    ]);
+    w.renderRoutines();
+    const lead = doc.querySelector('.schedule-problem .schedule-problem-lead');
+    const body = doc.querySelector('.schedule-problem .schedule-problem-body');
+    assert.ok(lead && body, 'the notice is not drawn in two parts');
+    assert.strictEqual(text(lead), 'Rundock cannot read this schedule, so this routine will not run.');
+    assert.strictEqual(text(body), 'Day 31 is not in every month, and Rundock will not pick another day for you. '
+      + 'To run on the last day of every month, change it to on the last day of every month at 09:00, '
+      + 'or use Edit schedule.');
+    const style = (el) => dom.window.getComputedStyle(el);
+    assert.strictEqual(style(lead).color, 'var(--danger-text-card)');
+    assert.strictEqual(style(lead).fontWeight, '600');
+    assert.strictEqual(style(body).color, 'var(--text-2-strong)');
+    assert.strictEqual(style(body).fontWeight, '400');
+    dom.window.close();
+  });
+
+  // "Ran late" replaced "Caught up" as the word for a late run, daily, weekly
+  // and monthly, so the old word is nowhere on the list in any of its states,
+  // and no file that writes the row or the run screen still spells it.
+  test('no row says Caught up, and nothing that draws a row or a run spells it', () => {
+    const monthly = (name, extra) => routine(name, {
+      schedule: 'on day 20 of every month at 07:00', scheduleKind: 'monthly', ...extra,
+    });
+    const { doc, w, dom } = shell([
+      ...FOUR_ROWS,
+      monthly('Monthly late', { state: { status: 'completed', duration: 3 }, lastStart: iso(new Date(2026, 7, 20, 9, 14)), lastSlot: iso(TODAYS_SLOT) }),
+      monthly('Monthly owed', { nextRun: iso(TODAYS_SLOT), refusal: null }),
+    ]);
+    w.renderRoutines();
+    assert.match(text(rowNamed(doc, 'Monthly late')), /Ran late: today, 9:14am\. Due 20 August, 7:00am\./);
+    assert.doesNotMatch(doc.body.textContent, /caught up/i);
+    dom.window.close();
+    for (const file of ['public/routines-model.js', 'public/views/routines.js', 'public/run-detail-model.js', 'public/views/run-detail.js']) {
+      const src = fs.readFileSync(path.join(__dirname, '..', '..', file), 'utf-8');
+      assert.doesNotMatch(src, /['"`]Caught up/, `${file} still writes "Caught up"`);
+    }
   });
 
   // THE DELETE CONFIRMATION DRAWS A ROW TOO, and it makes two decisions about

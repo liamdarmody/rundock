@@ -43,11 +43,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -128,6 +128,14 @@ const SKILLS_VIEW = { src: path.join(ROOT, 'public', 'views', 'skills.js'), suit
 // The three-tone ruling is about what a reader SEES, and a dot proven against
 // a token name in a module is the mistake this project already made once.
 const SIDEBAR_CSS = { src: path.join(ROOT, 'public', 'styles', 'components', 'sidebar.css'), suite: 'test/unit/routines-view.test.js' };
+// The routine screens' text, badge and ring colors, watched by the file that
+// measures each rule against the surface it sits on, in both themes.
+const CONTRAST_SUITE = 'test/unit/routine-screens-contrast.test.js';
+const CONTRAST_SIDEBAR = { src: path.join(ROOT, 'public', 'styles', 'components', 'sidebar.css'), suite: CONTRAST_SUITE };
+const CONTRAST_ROUTINES = { src: path.join(ROOT, 'public', 'styles', 'views', 'routines.css'), suite: CONTRAST_SUITE };
+const CONTRAST_RUN_DETAIL = { src: path.join(ROOT, 'public', 'styles', 'views', 'run-detail.css'), suite: CONTRAST_SUITE };
+const CONTRAST_EDITOR = { src: path.join(ROOT, 'public', 'styles', 'views', 'routine-editor.css'), suite: CONTRAST_SUITE };
+const CONTRAST_TOKENS = { src: path.join(ROOT, 'public', 'styles', 'tokens.css'), suite: CONTRAST_SUITE };
 // The dispatch call that settles which routines empty state is shown, watched
 // by the enumeration of everything that draws this list.
 const APP_SKILLS = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/routines-view-doors.test.js' };
@@ -179,6 +187,14 @@ const EDIT_DOOR_ROW = { src: path.join(ROOT, 'public', 'views', 'routines.js'), 
 // tests establish is what the EXISTING guard does across an edit; mutating it
 // here is what proves they are watching the guard rather than restating it.
 const SCHEDULER_EDIT = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/routine-edit-duplicate-run.test.js' };
+// A MONTHLY SCHEDULE, each guard watched by the suite that asks the question it
+// answers: the period by the sweep that holds the tick and the walk to one
+// window, the grammar by the table every copy of it answers, the slot by the
+// calendar cases, and the firing by the tick driven through real runs.
+const SCHEDULER_PERIOD = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-period.test.js' };
+const SCHEDULER_GRAMMAR = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/schedule-grammar-inventory.test.js' };
+const SCHEDULER_SLOTS = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-slots-dst.test.js' };
+const SCHEDULER_MONTHLY = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/scheduler-monthly.test.js' };
 // WHERE A ROUTINE RUNS, WATCHED AT THE RENDERED SURFACE AND NOWHERE ELSE.
 //
 // The rule is that a routine in a workspace this window does not have open is
@@ -245,14 +261,13 @@ const MUTATIONS = [
   [SCHEDULER, 'the suppression reads the run state and never the slot store',
     '        const nextRun = getNextRun(routine.schedule, routineState[key]?.lastRun);',
     '        const nextRun = getNextRun(routine.schedule, routineSlots.routines[key]?.due);'],
+  // A run serves only the slot of its own period, so the row steps at most one
+  // period and there is no walk left to bound.
   [SCHEDULER, 'a period the last run already served is stepped over',
-    '  for (let step = 0; served && served >= slot && step < MAX_SLOTS_PER_WAKE; step++) {\n    slot = stepSlots(parsed, slot, 1);\n  }',
+    '  if (lastRun && periodOf(parsed, slot).served(lastRun)) slot = stepSlots(parsed, slot, 1);\n',
     ''],
-  [SCHEDULER, 'the walk is bounded rather than counting every day since the anchor',
-    'step < MAX_SLOTS_PER_WAKE; step++',
-    'step < 100000; step++'],
   [SCHEDULER, 'the slot the last run served is named',
-    '    lastSlot: started ? slotFor(parsed, started).toISOString() : null,\n',
+    '    lastSlot: started ? periodOf(parsed, started).slot.toISOString() : null,\n',
     '    lastSlot: null,\n'],
   [SCHEDULER, 'the most recent recorded miss is the one reported',
     '  const missed = entry && entry.missed.length ? entry.missed[entry.missed.length - 1].slot : null;',
@@ -282,8 +297,8 @@ const MUTATIONS = [
     "  if (typeof seconds !== 'number' || !isFinite(seconds)) return ended;\n",
     ''],
   [SCHEDULER, 'the slot a run served is the one on the day it started',
-    '    lastSlot: started ? slotFor(parsed, started).toISOString() : null,',
-    '    lastSlot: lastRunStartedAt(key) ? slotFor(parsed, new Date(routineState[key].lastRun)).toISOString() : null,'],
+    '    lastSlot: started ? periodOf(parsed, started).slot.toISOString() : null,',
+    '    lastSlot: lastRunStartedAt(key) ? periodOf(parsed, new Date(routineState[key].lastRun)).slot.toISOString() : null,'],
   [VIEW_E2E, 'the row asks the roster for the instant the run began',
     '    lastStart: r.lastStart,',
     '    lastStart: r.state ? r.state.lastRun : null,'],
@@ -296,10 +311,10 @@ const MUTATIONS = [
   // the criteria call constrained rather than chosen, failing in exactly the
   // situation the row exists for.
   [END_TO_END, 'the anchor is the period now falls in, not the last one a tick recorded',
-    '  let slot = slotFor(parsed, deps.now());',
+    '  let slot = periodOf(parsed, deps.now()).slot;',
     '  const anchored = routineSlots.routines[key];\n  if (!anchored) return null;\n  let slot = new Date(anchored.due);'],
   [SCHEDULER, 'a row can name a next run before any tick has seen the routine',
-    '  let slot = slotFor(parsed, deps.now());',
+    '  let slot = periodOf(parsed, deps.now()).slot;',
     '  const anchored = routineSlots.routines[key];\n  if (!anchored) return null;\n  let slot = new Date(anchored.due);'],
 
   // ===== UNCHANGED BYTES ARE NOT AN ANSWER =====
@@ -525,16 +540,118 @@ const MUTATIONS = [
   //
   // A routine keeps its run stamp when its schedule moves, because the state is
   // keyed by identity. Each of these breaks one half of the comparison that
-  // then decides whether it runs again, runs twice, or never runs.
-  [SCHEDULER_EDIT, 'the daily suppression compares the hour, not just the day',
-    '      if (lastRun.toDateString() === now.toDateString() && lastRun.getHours() >= parsed.hour) return null;',
-    '      if (lastRun.toDateString() === now.toDateString()) return null;'],
-  [SCHEDULER_EDIT, 'the daily suppression compares the day, not just the hour',
-    '      if (lastRun.toDateString() === now.toDateString() && lastRun.getHours() >= parsed.hour) return null;',
-    '      if (lastRun.getHours() >= parsed.hour) return null;'],
-  [SCHEDULER_EDIT, 'a weekly routine that already ran on its day is not run again',
-    '    if (daysSinceLastRun < 1 && lastRun.getDay() === parsed.day) return null;',
-    '    if (false) return null;'],
+  // then decides whether it runs again, runs twice, or never runs. The
+  // comparison is the period's own, asked by the tick and by the row, so each
+  // row here breaks it, or the one call that asks it, once.
+  [SCHEDULER_EDIT, 'the suppression compares the time, not just the day',
+    '  return { slot, closes, served: (stamp) => stamp >= slot && stamp < closes };',
+    '  return { slot, closes, served: (stamp) => stamp >= new Date(slot.getFullYear(), slot.getMonth(), slot.getDate()) && stamp < closes };'],
+  // Watched by the file that holds the row and the tick to each other, because
+  // only a run stamped on a later day can show the bound is there, and no
+  // schedule edit produces one.
+  [SCHEDULER, 'the suppression compares the day, not just the time',
+    '  return { slot, closes, served: (stamp) => stamp >= slot && stamp < closes };',
+    '  return { slot, closes, served: (stamp) => stamp >= slot };'],
+  [SCHEDULER_EDIT, 'a weekly routine that already ran at its time on its day is not run again',
+    '  if (lastRunISO && period.served(new Date(lastRunISO))) return null;',
+    "  if (lastRunISO && parsed.kind !== 'weekly' && period.served(new Date(lastRunISO))) return null;"],
+  // The comparison this guard replaced, in each of its two shapes: the stamp's
+  // hour against the scheduled hour, which held a routine moved to a later
+  // minute in the same hour, and a weekly routine held by its weekday alone,
+  // which held one moved to any later time on its own day.
+  [SCHEDULER_EDIT, 'the suppression compares the minute, not just the hour',
+    '  return { slot, closes, served: (stamp) => stamp >= slot && stamp < closes };',
+    '  return { slot, closes, served: (stamp) => stamp >= new Date(slot.getFullYear(), slot.getMonth(), slot.getDate(), slot.getHours()) && stamp < closes };'],
+  [SCHEDULER_EDIT, 'a weekly routine is held by the time it ran, not by its weekday alone',
+    '  if (lastRunISO && period.served(new Date(lastRunISO))) return null;',
+    "  if (lastRunISO && (parsed.kind === 'weekly'\n"
+    + '    ? (now - new Date(lastRunISO)) / 86400000 < 1 && new Date(lastRunISO).getDay() === parsed.day\n'
+    + '    : period.served(new Date(lastRunISO)))) return null;'],
+
+  // ===== A MONTHLY SCHEDULE =====
+  //
+  // A month-long window cut to a day records a slot as missed the morning after
+  // while the tick would still have fired it, which is the phantom gap the
+  // period exists to prevent.
+  [SCHEDULER_PERIOD, "the helper's monthly window ends on the slot's own day",
+    '    ? new Date(slot.getFullYear(), slot.getMonth() + 1, 1)\n',
+    '    ? new Date(slot.getFullYear(), slot.getMonth(), slot.getDate() + 1)\n'],
+  // "on day 15 of every month at 09:00" ends in a weekly-shaped "every month at
+  // 09:00", which the weekly branch refuses, so matched second it never fires.
+  [SCHEDULER_GRAMMAR, 'the monthly pattern is matched after the weekly one',
+    '  if (monthlyMatch) {\n',
+    '  if (monthlyMatch && !/every (\\w+) at (\\d{2}):(\\d{2})/.test(s)) {\n'],
+  [SCHEDULER_SLOTS, 'the last day is computed as day 30',
+    "  const day = parsed.day === 'last' ? new Date(year, month + 1, 0).getDate() : parsed.day;",
+    "  const day = parsed.day === 'last' ? 30 : parsed.day;"],
+  [SCHEDULER_MONTHLY, 'dueAt is dropped from the record',
+    '    dueAt: dueAt ? dueAt.toISOString() : null,\n',
+    '    dueAt: null,\n'],
+  // Whether no tick saw the slot pass: true only for a slot the previous tick
+  // came before and this one a whole interval after, and on both records.
+  [SCHEDULER_MONTHLY, 'an on-time run is not one whose slot went unseen',
+    '    const unobserved = !!observedBefore && observedBefore < nextRun && now - nextRun >= checkInterval;',
+    '    const unobserved = !!observedBefore && observedBefore < nextRun;'],
+  [SCHEDULER_MONTHLY, 'a slot a tick saw is not one that went unseen',
+    '    const unobserved = !!observedBefore && observedBefore < nextRun && now - nextRun >= checkInterval;',
+    '    const unobserved = !!observedBefore && now - nextRun >= checkInterval;'],
+  [SCHEDULER_MONTHLY, 'the run carries whether its slot went unseen',
+    '    dueUnobserved: dueUnobserved === true,\n',
+    '    dueUnobserved: false,\n'],
+  [SCHEDULER_MONTHLY, 'the opening record says its slot went unseen',
+    '    ...(run.dueUnobserved ? { dueUnobserved: true } : {}),\n    endedAt: null,',
+    '    endedAt: null,'],
+  [SCHEDULER_MONTHLY, 'the closing record says its slot went unseen',
+    '    ...(run.dueUnobserved ? { dueUnobserved: true } : {}),\n    endedAt: endedAt.toISOString(),',
+    '    endedAt: endedAt.toISOString(),'],
+  // A hand-typed day 29 to 31: the server names it, and only at a time a form
+  // reads, because the row suggests writing that time back.
+  [SCHEDULER_GRAMMAR, 'the server names a day 29 to 31 only at a time a form reads',
+    '/on day (29|30|31) of every month at (([01]\\d|2[0-3]):[0-5]\\d)/',
+    '/on day (29|30|31) of every month at ((\\d{2}):\\d{2})/'],
+  [DISCOVERY, 'the roster carries the server\'s day 29 to 31',
+    '        r.unreadableMonthDay = facts.unreadableMonthDay || null;\n',
+    ''],
+  [VIEW, 'the row hands the server\'s day 29 to 31 to the model',
+    '    unreadableMonthDay: r.unreadableMonthDay,\n',
+    ''],
+  // Which body shows is the server's answer. Read off the schedule here, it
+  // would be a second copy of the grammar, free to disagree with the tick.
+  [MODEL, 'the day 29 to 31 body is the server\'s answer, not the client\'s reading',
+    '    const fact = input.unreadableMonthDay;',
+    '    const day = /on day (29|30|31) of every month at (\\d{2}:\\d{2})/.exec(schedule.toLowerCase());\n'
+    + '    const fact = day ? { day: Number(day[1]), time: day[2] } : null;'],
+  [MODEL, 'the day 29 to 31 body names the file\'s own time',
+    ".replace('{time}', () => fact.time)",
+    ".replace('{time}', () => '09:00')"],
+  [VIEW, 'the notice is drawn as a lead and a body',
+    '      + `<span class="schedule-problem-lead">${esc(row.scheduleProblem.lead)}</span> `\n'
+    + '      + `<span class="schedule-problem-body">${esc(row.scheduleProblem.body)}</span>`',
+    '      + `${esc(row.scheduleProblem.text)}`'],
+  [STYLES, 'the notice lead takes the danger token made for a card',
+    '.schedule-problem-lead { color: var(--danger-text-card); }',
+    '.schedule-problem-lead { color: var(--danger-text); }'],
+  [STYLES, 'the notice body is quiet',
+    '.schedule-problem-body { color: var(--text-2-strong); font-weight: 400; }',
+    '.schedule-problem-body { }'],
+  // The row names a slot the tick will not fire: the approval came after it.
+  [SCHEDULER_MONTHLY, 'the owed line ignores the consent moment',
+    '  const consentAt = routine ? approvalStore.approvedAt(getWorkspace(), routine) : null;\n',
+    '  const consentAt = null;\n'],
+  // Any recorded hold waiving the slot cancels the month's run for a routine
+  // held and back before its day, and every later month's with it.
+  [SCHEDULER_MONTHLY, 'a hold waives only a slot at or before it',
+    "  if (entry && typeof entry.heldAt === 'string' && slot <= new Date(entry.heldAt)) return false;\n",
+    "  if (entry && typeof entry.heldAt === 'string') return false;\n"],
+  // The hold lives in the slot file, so it has to be written there and read
+  // back: dropped either way, a restart between a hold and its resume turns the
+  // slot it waived back into one the tick fires.
+  [SCHEDULER_MONTHLY, 'the slot file reads back when a routine was held',
+    "      if (typeof entry.heldAt === 'string') routineSlots.routines[key].heldAt = entry.heldAt;\n",
+    ''],
+  [SCHEDULER_MONTHLY, 'the tick records when it saw a monthly routine held',
+    '            routineSlots.routines[key].heldAt = now.toISOString();\n',
+    ''],
 
   // ===== THE THIRD CONTROL ON THE ROW =====
   //
@@ -568,7 +685,7 @@ const MUTATIONS = [
     '      frequency: parsed ? parsed.frequency : null,\n      time: parsed ? parsed.time : null,',
     '      frequency: null,\n      time: null,'],
   [EDIT_DOOR, 'a stored schedule is looked up rather than split apart',
-    '    const parsed = model().readSchedule(routine.schedule);',
+    '    const parsed = model().reopenSchedule(routine);',
     "    const p = /^every ([a-z]+) at (\\d{2}:\\d{2})$/.exec(String(routine.schedule).toLowerCase());\n"
     + '    const parsed = p ? { frequency: p[1], time: p[2] } : null;'],
   [EDIT_DOOR, 'the editor opens on the step an edit has, not on the picker',
@@ -577,17 +694,20 @@ const MUTATIONS = [
 
   // ===== THE THREE TONES, AS THE PAGE RESOLVES THEM =====
   [STYLES, 'a late run keeps the success colour, and no state is amber',
-    '.run-status.ok-quiet { font-weight: 500; color: var(--success); }',
+    '.run-status.ok-quiet { font-weight: 500; color: var(--success-text); }',
     '.run-status.ok-quiet { font-weight: 500; color: var(--attention); }'],
   [STYLES, 'a late run is quieter than a punctual one',
-    '.run-status.ok { font-weight: 600; color: var(--success); }',
-    '.run-status.ok { font-weight: 500; color: var(--success); }'],
+    '.run-status.ok { font-weight: 600; color: var(--success-text); }',
+    '.run-status.ok { font-weight: 500; color: var(--success-text); }'],
   [STYLES, 'a slot nobody served is not dressed as a failure',
-    '.run-status.neutral { font-weight: 500; color: var(--idle); }',
+    '.run-status.neutral { font-weight: 500; color: var(--text-2-strong); }',
     '.run-status.neutral { font-weight: 500; color: var(--danger-text); }'],
   [STYLES, 'a failure is not dressed as a success',
     '.run-status.failed { font-weight: 600; color: var(--danger-text); }',
     '.run-status.failed { font-weight: 600; color: var(--success); }'],
+  [STYLES, 'a failure is not dressed as the success text the successes wear',
+    '.run-status.failed { font-weight: 600; color: var(--danger-text); }',
+    '.run-status.failed { font-weight: 600; color: var(--success-text); }'],
 
   // ===== THE SAVE DESTINATION, AND THE SILENCE AROUND IT =====
   // The trap the criteria name. Each of these is a way for a written routine
@@ -721,8 +841,12 @@ const MUTATIONS = [
 
   // ===== THE THREE TONES =====
   [MODEL, 'each outcome carries its own leading word',
-    "    'caught-up': { tone: 'ok-quiet', lead: 'Caught up' },",
+    "    'caught-up': { tone: 'ok-quiet', lead: 'Ran late' },",
     "    'caught-up': { tone: 'ok-quiet', lead: 'Ran' },"],
+  // Every late run reads Ran late; the word it replaced must not come back.
+  [MODEL, 'a late run leads with Ran late, not Caught up',
+    "    'caught-up': { tone: 'ok-quiet', lead: 'Ran late' },",
+    "    'caught-up': { tone: 'ok-quiet', lead: 'Caught up' },"],
   [MODEL, 'a late run is told from a punctual one by more than a moment',
     '  const CATCH_UP_AFTER_MS = 5 * 60 * 1000;',
     '  const CATCH_UP_AFTER_MS = 0;'],
@@ -767,8 +891,44 @@ const MUTATIONS = [
     "      text = `Missed: Rundock was closed at ${place ? `${when}, ${place} time` : when}`;",
     '      text = `Missed: the routine did not run at ${when}`;'],
   [MODEL, 'a caught-up row names the time it was due as well as the time it ran',
-    '      text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}, due ${clockWords(input.lastSlot)}`;',
-    '      text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}`;'],
+    '      text = `Ran late: ${timeWords(input.lastStart, now, null)}. Due ${due}.`;',
+    '      text = `Ran late: ${timeWords(input.lastStart, now, null)}.`;'],
+  // A monthly row names dates, read off the server's word for the form.
+  [MODEL, 'the row reads a monthly routine off the server\'s kind',
+    "    const monthly = input.scheduleKind === 'monthly';",
+    '    const monthly = false;'],
+  [MODEL, 'a monthly late run names the date it was due',
+    '      const due = monthly ? `${dateWords(input.lastSlot)}, ${clockWords(input.lastSlot)}` : clockWords(input.lastSlot);',
+    '      const due = clockWords(input.lastSlot);'],
+  [MODEL, 'a missed monthly slot is named by its date',
+    'monthly ? dateWords(slot) : dayWords(slot, now)',
+    'dayWords(slot, now)'],
+  [MODEL, 'a missed monthly slot says the month ended first',
+    "      if (monthly) text += ', and not opened again before the month ended.';\n",
+    ''],
+  // The owed line: monthly only, only with no refusal, only for a slot that
+  // has come, and naming when it was due.
+  [MODEL, 'the owed line is monthly only',
+    "    if (input.scheduleKind === 'monthly' && !input.refusal && at && now && at <= now) {",
+    '    if (!input.refusal && at && now && at <= now) {'],
+  [MODEL, 'the owed line waits on the tick\'s own answer',
+    "    if (input.scheduleKind === 'monthly' && !input.refusal && at && now && at <= now) {",
+    "    if (input.scheduleKind === 'monthly' && at && now && at <= now) {"],
+  [MODEL, 'only a slot that has come is owed',
+    "    if (input.scheduleKind === 'monthly' && !input.refusal && at && now && at <= now) {",
+    "    if (input.scheduleKind === 'monthly' && !input.refusal && at && now) {"],
+  [MODEL, 'the owed line names when it was due',
+    '      return { text: `Next run: shortly. It was due ${dateWords(at)}, ${clockWords(at)}.`, className: \'next-run\' };',
+    "      return { text: 'Next run: shortly.', className: 'next-run' };"],
+  [END_TO_END, 'the server says which form it read',
+    '    scheduleKind: parsed.kind,\n',
+    ''],
+  [DISCOVERY, 'the roster carries the form the server read',
+    '        r.scheduleKind = facts.scheduleKind || null;\n',
+    ''],
+  [VIEW, 'the row hands the server\'s form to the model',
+    '    scheduleKind: r.scheduleKind,\n',
+    ''],
   [MODEL, 'a punctual row reads as the time, with no label in front of it',
     '      text = `Ran ${timeWords(input.lastStart, now, zone)}`;',
     '      text = `Ran on time: ${timeWords(input.lastStart, now, zone)}`;'],
@@ -788,8 +948,8 @@ const MUTATIONS = [
     "    if (input && input.paused) return { text: 'Paused', className: 'next-run paused-label' };",
     ''],
   [MODEL, 'both halves of the schedule are looked up, never formatted from the string',
-    '    if (!freq || !time) return null;\n    return `Every ${freq.label} at ${time.label}`;',
-    '    return `Every ${parts[1]} at ${parts[2]}`;'],
+    '    const words = editor.whenWords(editor.readSchedule(schedule));',
+    "    const words = typeof schedule === 'string' ? schedule.toLowerCase() : null;"],
   [MODEL, 'the execution target reads off the option rather than a string built here',
     '      runsOn: option ? `Runs on ${option.sentence}` : null,',
     "      runsOn: 'Runs on this computer',"],
@@ -1077,8 +1237,8 @@ const MUTATIONS = [
   // The forbidden act itself: a next-run time drawn against a routine no
   // scheduler is going to fire.
   [MODEL_WORKSPACE, 'a routine nothing is serving is drawn with no next run',
-    '    if (!isServed(input)) return null;\n    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);',
-    '    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);'],
+    '    if (!isServed(input)) return null;\n    // A MONTHLY SLOT THE TICK STILL OWES.',
+    '    // A MONTHLY SLOT THE TICK STILL OWES.'],
   [MODEL_WORKSPACE, 'the row says where Rundock went',
     '      workspaceNote: workspaceNote(input),\n',
     ''],
@@ -1171,6 +1331,170 @@ const MUTATIONS = [
   [SCHEDULER_LOADS, 'a complete copy left under a temporary name in runs/ is never read as a run',
     '    if (!RUN_RECORD_NAME.test(name)) continue;\n',
     ''],
+  // And it is set aside and written back at once, so a restart before the
+  // next run finds the rebuilt state rather than the same damage.
+  [SCHEDULER_LOADS, 'a routine state that does not parse is set aside and written back at once',
+    '    if (unparsed) setAsideOnceReplaced(file, unparsed, () => deps.now(), saveRoutineState);\n',
+    ''],
+
+  // ===== THE ROUTINE SCREENS' COLORS, MEASURED IN BOTH THEMES =====
+  // Each rule moved to a token that reads in light is put back to the token it
+  // had, which measured below its bar there. The suite measures every rule
+  // against its surface from the real tokens, so each of these must turn red
+  // by the rule's own name.
+  [CONTRAST_SIDEBAR, "contrast: .sidebar-label back to --text-2",
+    ".sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2-strong);",
+    ".sidebar-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2);"],
+  [CONTRAST_SIDEBAR, "contrast: .scope-item.active .scope-name back to --accent",
+    ".scope-item.active .scope-name { color: var(--accent-text);",
+    ".scope-item.active .scope-name { color: var(--accent);"],
+  [CONTRAST_SIDEBAR, "contrast: .scope-item.active .scope-count back to --accent",
+    ".scope-item.active .scope-count { color: var(--accent-text);",
+    ".scope-item.active .scope-count { color: var(--accent);"],
+  [CONTRAST_SIDEBAR, "contrast: .scope-count back to --text-3",
+    ".scope-count { font-size: var(--caption); font-weight: 600; color: var(--text-2-strong);",
+    ".scope-count { font-size: var(--caption); font-weight: 600; color: var(--text-3);"],
+  [CONTRAST_SIDEBAR, "contrast: .nav-badge back to --attention",
+    ".nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention-text);",
+    ".nav-badge { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--attention);"],
+  [CONTRAST_SIDEBAR, "contrast: .nav-badge-working back to --success",
+    ".nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success-text);",
+    ".nav-badge-working { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; background: var(--success);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-skill-link back to --accent",
+    ".rr-skill-link { font: inherit; color: var(--link-text);",
+    ".rr-skill-link { font: inherit; color: var(--accent);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-meta back to --text-2",
+    ".rr-meta { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rr-meta { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-meta .sep back to --text-3",
+    ".rr-meta .sep { color: var(--text-2-strong);",
+    ".rr-meta .sep { color: var(--text-3);"],
+  [CONTRAST_ROUTINES, "contrast: .run-status.ok back to --success",
+    ".run-status.ok { font-weight: 600; color: var(--success-text);",
+    ".run-status.ok { font-weight: 600; color: var(--success);"],
+  [CONTRAST_ROUTINES, "contrast: .run-status.ok-quiet back to --success",
+    ".run-status.ok-quiet { font-weight: 500; color: var(--success-text);",
+    ".run-status.ok-quiet { font-weight: 500; color: var(--success);"],
+  [CONTRAST_ROUTINES, "contrast: .run-status.neutral back to --idle",
+    ".run-status.neutral { font-weight: 500; color: var(--text-2-strong);",
+    ".run-status.neutral { font-weight: 500; color: var(--idle);"],
+  [CONTRAST_ROUTINES, "contrast: .run-status.live back to --working",
+    ".run-status.live { font-weight: 500; color: var(--working-text);",
+    ".run-status.live { font-weight: 500; color: var(--working);"],
+  [CONTRAST_ROUTINES, "contrast: .next-run back to --success",
+    ".next-run { font-size: var(--caption); font-weight: 600; color: var(--success-text);",
+    ".next-run { font-size: var(--caption); font-weight: 600; color: var(--success);"],
+  [CONTRAST_ROUTINES, "contrast: .next-run.paused-label back to --text-3",
+    ".next-run.paused-label { color: var(--text-2-strong);",
+    ".next-run.paused-label { color: var(--text-3);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-paused-dot back to --text-3",
+    ".rr-paused-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-2-strong);",
+    ".rr-paused-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-resume-quiet back to --accent",
+    ".rr-resume-quiet { font-size: var(--caption); font-weight: 600; color: var(--link-text);",
+    ".rr-resume-quiet { font-size: var(--caption); font-weight: 600; color: var(--accent);"],
+  [CONTRAST_ROUTINES, "contrast: .rr-view-run back to --text-2",
+    ".rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2-strong);",
+    ".rr-view-run { font-size: var(--caption); font-weight: 500; color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-context draws no color of its own again",
+    ".rd-context { color: var(--text-2-strong); margin-bottom: 18px; }",
+    ".rd-context { margin-bottom: 18px; }"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-guidance back to --text-2",
+    ".rd-guidance { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-guidance { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-when back to --text-2",
+    ".rd-when { font-size: var(--caption); font-weight: 600; color: var(--text-2-strong);",
+    ".rd-when { font-size: var(--caption); font-weight: 600; color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-took back to --text-3",
+    ".rd-took { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-took { font-size: var(--caption); color: var(--text-3);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-refused back to --text-2",
+    ".rd-refused { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-refused { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-chip.ok back to --success",
+    ".rd-chip.ok { color: var(--success-text);",
+    ".rd-chip.ok { color: var(--success);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-chip.live back to --working",
+    ".rd-chip.live { color: var(--working-text);",
+    ".rd-chip.live { color: var(--working);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-chip.unwitnessed back to --idle",
+    ".rd-chip.unwitnessed { color: var(--text-2-strong);",
+    ".rd-chip.unwitnessed { color: var(--idle);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-chip.stopped back to --idle",
+    ".rd-chip.stopped { color: var(--text-2-strong);",
+    ".rd-chip.stopped { color: var(--idle);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-files-label back to --text-2",
+    ".rd-files-label { font-size: var(--caption); font-weight: 600; color: var(--text-2-strong);",
+    ".rd-files-label { font-size: var(--caption); font-weight: 600; color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-file-path back to --text-3",
+    ".rd-file-path { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-file-path { font-size: var(--caption); color: var(--text-3);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-tag back to --text-2",
+    ".rd-tag { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-tag { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-empty back to --text-2",
+    ".rd-empty { font-size: var(--body); color: var(--text-2-strong);",
+    ".rd-empty { font-size: var(--body); color: var(--text-2);"],
+  [CONTRAST_RUN_DETAIL, "contrast: .rd-unknown-why back to --text-2",
+    ".rd-unknown-why { font-size: var(--caption); color: var(--text-2-strong);",
+    ".rd-unknown-why { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_EDITOR, "contrast: .re-meta back to --text-2",
+    ".re-meta { font-size: var(--caption); color: var(--text-2-strong);",
+    ".re-meta { font-size: var(--caption); color: var(--text-2);"],
+  [CONTRAST_SIDEBAR, 'contrast: the scope focus ring is removed',
+    '.scope-item:focus-visible { outline: 2px solid var(--accent-control); outline-offset: -2px; }\n',
+    ''],
+  [CONTRAST_SIDEBAR, 'contrast: the scope focus ring is drawn outside the row',
+    '.scope-item:focus-visible { outline: 2px solid var(--accent-control); outline-offset: -2px; }',
+    '.scope-item:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }'],
+  [CONTRAST_SIDEBAR, 'contrast: the scope focus ring takes the app accent',
+    '.scope-item:focus-visible { outline: 2px solid var(--accent-control);',
+    '.scope-item:focus-visible { outline: 2px solid var(--accent);'],
+  [CONTRAST_TOKENS, 'contrast: the light working text takes the dark value',
+    '  --working-text: #3A63B0;',
+    '  --working-text: #7AA2E8;'],
+  [CONTRAST_TOKENS, 'contrast: the link text is declared on :root alone',
+    ':root, body.light {\n  --link-text:',
+    ':root {\n  --link-text:'],
+  // A paused row keeps its text at full strength: only the avatar dims.
+  [CONTRAST_ROUTINES, 'contrast: a paused row is dimmed as a whole again',
+    '.routine-row.paused .avatar { opacity: 0.5; }',
+    '.routine-row.paused { opacity: 0.72; }'],
+  [CONTRAST_ROUTINES, 'contrast: a paused row\'s avatar dims less than half',
+    '.routine-row.paused .avatar { opacity: 0.5; }',
+    '.routine-row.paused .avatar { opacity: 0.72; }'],
+
+  // ===== A SCOPE ROW IS A REAL BUTTON =====
+  // Enter and Space press a button with no handler of its own; a div with a
+  // role and a tabindex took the focus and did nothing for either key.
+  [PANEL, 'a scope row is a div again',
+    '  return `<button type="button" class="scope-item',
+    '  return `<div role="button" tabindex="0" class="scope-item'],
+  [PANEL, 'a scope row restates a role and a tab stop a button already has',
+    '    + ` onclick="setRoutinesScope(this.dataset.scope)">`',
+    '    + ` role="button" tabindex="0" onclick="setRoutinesScope(this.dataset.scope)">`'],
+  [PANEL, 'a block is put inside a scope row\'s button',
+    '`<span class="scope-all-icon">${ALL_ICON}</span>`',
+    '`<div class="scope-all-icon">${ALL_ICON}</div>`'],
+  [PANEL, 'the focus is not put back on the pressed row after the redraw',
+    '  if (again) again.focus();\n',
+    ''],
+  [PANEL, 'a redraw nobody pressed pulls the focus into the panel',
+    '  if (kept === undefined) return;\n',
+    ''],
+  [PANEL, 'the focus goes back to the first row rather than the pressed one',
+    'rows.find((el) => el.dataset.scope === kept) ||',
+    'rows[0] ||'],
+  [STYLES_PANEL, 'a scope row loses the full width of the list',
+    'gap: 8px; width: 100%; padding: 9px 10px;',
+    'gap: 8px; padding: 9px 10px;'],
+  [STYLES_PANEL, 'a scope row centers what it holds, as a button does',
+    'font: inherit; text-align: start;',
+    'font: inherit;'],
+  [STYLES_PANEL, 'a scope row takes the browser\'s button type rather than the panel\'s',
+    'color: var(--text-1); font: inherit;',
+    'color: var(--text-1);'],
+
   // A RUN THIS PROCESS IS STILL RUNNING IS NO ORPHAN. Without the skip, the
   // cleanup a switch runs signals the run's child, on the process table's
   // answer or for want of one.
@@ -1196,13 +1520,13 @@ const MUTATIONS = [
 // varies with whether stdout is a TTY.
 const REPORTER = ['--test-reporter=spec', '--test-reporter-destination=stdout'];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, suite],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -1225,7 +1549,7 @@ function redTests(suite) {
   return names;
 }
 
-function run() {
+async function run() {
   const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: targets.map((target) => target.src) });
   const originals = new Map();
@@ -1248,9 +1572,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
-        ? { label, applied: true, unparsable: true, red: [] }
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
@@ -1263,7 +1588,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -1331,13 +1662,14 @@ if (require.main === module) {
   // source file mutated on every red run. The flag is read after the check, so
   // deleting the check still fails that test rather than passing it.
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
-      + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(exitCodeFor(failed, results));
-  }
+  run().then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+        + ' and a mutation that could break more than one place proves nothing about either.');
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run };

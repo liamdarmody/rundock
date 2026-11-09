@@ -420,7 +420,7 @@ describe('a manual run leaves the scheduler\'s own facts exactly as they were', 
 // The row's verdicts are computed from scheduled runs only
 // ---------------------------------------------------------------------------
 
-describe('the row\'s on-time, caught-up and missed verdicts ignore a manual run', () => {
+describe('the row\'s on-time, ran-late and missed verdicts ignore a manual run', () => {
   const model = require('../../public/routines-model.js');
   const ZONE = 'Europe/London';
   function statusLine(sched) {
@@ -435,7 +435,7 @@ describe('the row\'s on-time, caught-up and missed verdicts ignore a manual run'
     return { facts, status: row.status, nextRun: row.nextRun };
   }
   const HISTORIES = {
-    'on time': { state: { lastRun: new Date(2026, 7, 20, 7, 0, 15).toISOString(), status: 'completed', duration: 3 } }, 'caught up': { state: { lastRun: new Date(2026, 7, 20, 9, 14, 3).toISOString(), status: 'completed', duration: 3 } },
+    'on time': { state: { lastRun: new Date(2026, 7, 20, 7, 0, 15).toISOString(), status: 'completed', duration: 3 } }, 'ran late': { state: { lastRun: new Date(2026, 7, 20, 9, 14, 3).toISOString(), status: 'completed', duration: 3 } },
     missed: {
       state: { lastRun: new Date(2026, 7, 18, 7, 0, 3).toISOString(), status: 'completed', duration: 3 },
       slots: { due: TODAYS_SLOT.toISOString(), schedule: 'daily:7:0', missed: [{ slot: new Date(2026, 7, 19, 7, 0).toISOString() }] },
@@ -709,7 +709,7 @@ describe('the row', () => {
     assert.deepStrictEqual(w.sent.map(m => m.type), ['set_routine_paused', 'approve_routine_plan'], 'the bound actions differ');
     assert.strictEqual(w.sent[0].paused, false);
     const colour = (el) => w.getComputedStyle(el).color;
-    assert.strictEqual(colour(selfLabel), 'var(--text-3)');
+    assert.strictEqual(colour(selfLabel), 'var(--text-2-strong)');
     assert.strictEqual(colour(consentText), 'var(--attention)');
     dom.window.close();
   });

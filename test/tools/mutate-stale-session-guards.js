@@ -24,11 +24,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -58,6 +58,13 @@ const SERVER_STOPPED = { src: path.join(ROOT, 'server.js'), suite: STOPPED };
 const CODEX_STDIN = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/unit/codex-appserver-stdin.test.js' };
 const STDIN_UNIT = { src: path.join(ROOT, 'lib', 'runtime', 'child-stdin.js'), suite: 'test/unit/child-stdin.test.js' };
 const STDIN_INVENTORY = { src: path.join(ROOT, 'test', 'unit', 'child-stdin-inventory.test.js'), suite: 'test/unit/child-stdin-inventory.test.js' };
+// A catch-up held for the next message, kept with the conversation through a
+// reap or a restart, and given once.
+const HELD = 'test/integration/held-catch-up.test.js';
+const ENGINE_HELD = { src: ENGINE.src, suite: HELD };
+const SERVER_HELD = { src: SERVER.src, suite: HELD };
+const SAVE_HELD = { src: SAVE.src, suite: HELD };
+const RULES_HELD = { src: RULES.src, suite: HELD };
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. The whole
 // stale-session suite takes some twenty seconds unbroken, and a broken guard
@@ -178,6 +185,45 @@ const MUTATIONS = [
   [RULES, 'a catch-up is held for the next message',
     '  if (entry && prefix) entry.freshCatchUp = prefix;',
     ''],
+  [only(ENGINE_HELD, 'reaches the next message once after the idle reaper ends the fresh start'), 'a held catch-up is stored with the conversation',
+    '  storeHeldCatchUp(convoId, entry);\n  wireProcessHandlers(entry, convoId, null, wireOptions);',
+    '  wireProcessHandlers(entry, convoId, null, wireOptions);'],
+  [only(SAVE_HELD, 'reaches the next message once after the idle reaper ends the fresh start'), 'a save from the window keeps the stored catch-up',
+    '  if (stored && stored.freshCatchUp !== undefined) entry.freshCatchUp = stored.freshCatchUp;\n',
+    ''],
+  [only(SERVER_HELD, 'reaches the next message once after a restart'), 'a new process gives the stored catch-up to its first message',
+    '            const heldCatchUp = takeStoredCatchUp(convoId, entry.agentId);',
+    "            const heldCatchUp = '';"],
+  [only(RULES_HELD, 'reaches the next message once after the idle reaper ends the fresh start'), 'a stored catch-up is removed once a new process is given it',
+    "  storeCatchUp(convoId, null);\n  return readable ? held.text : '';",
+    "  return readable ? held.text : '';"],
+  [only(RULES_HELD, 'given by the live process, it is not given again after a reap or a restart'), 'a stored catch-up is removed once the live process gives it',
+    '  if (prefix && entry.catchUpStoredIn) storeCatchUp(entry.catchUpStoredIn, null);\n',
+    ''],
+  [only(SERVER_HELD, 'a stored catch-up the resume it was given to never read goes to the fresh start, once'), 'a catch-up given to a refused resume goes to the fresh start',
+    '                entry.freshCatchUp = heldCatchUp;\n',
+    ''],
+  [only(SAVE_HELD, 'the conversation list a window is sent leaves it out, and the store keeps it'), 'the conversation list leaves the stored catch-up out',
+    '    delete c.freshCatchUp;\n',
+    ''],
+  [only(SERVER_HELD, 'gives a stored catch-up to its first message, once'), 'the legacy chat path gives the stored catch-up to its first message',
+    '          const legacyCatchUp = takeStoredCatchUp(convoId, entry.agentId);',
+    "          const legacyCatchUp = '';"],
+  [only(SERVER_HELD, 'hands a stored catch-up on from a refused resume to the fresh start, once'), 'the legacy chat path hands a refused resume\'s catch-up to the fresh start',
+    '              entry.freshCatchUp = legacyCatchUp; // never read: it goes to the fresh start\n',
+    ''],
+  [only(ENGINE_HELD, 'with no session to resume, takes the stored catch-up in front of the handback, and it is not given again'), 'a handback start settles a stored catch-up',
+    '  const storedCatchUp = takeStoredCatchUp(convoId, orchestrator.id);',
+    "  const storedCatchUp = '';"],
+  [only(ENGINE_HELD, 'with no session to resume, takes the stored catch-up in front of the handback, and it is not given again'), 'a handback start with no session gives the catch-up with the handback',
+    '      const prompt = coldCatchUp + buildScopeReturnPrompt({',
+    '      const prompt = buildScopeReturnPrompt({'],
+  [only(ENGINE_HELD, 'resuming a session, spends the stored catch-up without repeating it'), 'a resumed handback start only spends the catch-up',
+    "  const coldCatchUp = orchestratorSession ? '' : storedCatchUp;",
+    '  const coldCatchUp = storedCatchUp;'],
+  [only(ENGINE_HELD, 'paused again by the circuit breaker, holds what it took for the message that drives it'), 'a paused handback start holds what it took for the next message',
+    '    holdFreshCatchUp(orchEntry, coldCatchUp);\n',
+    ''],
   [only(CATCHUP, 'in continue mode too, the fresh orchestrator is told the request it never saw'), 'a handback prompt honors the arrival heading it is asked for',
     '  const catchUp = catchUpPrefix(orchMissed, arriving);',
     '  const catchUp = catchUpPrefix(orchMissed);'],
@@ -204,8 +250,8 @@ const MUTATIONS = [
   [only(SERVER, 'a handback paused by the circuit breaker gives the next message the catch-up instead'), 'a message sent to a fresh start with no prompt carries the catch-up',
     '            const followUp = withFreshCatchUp(existing, msg.content);',
     '            const followUp = msg.content;'],
-  [RULES, 'nothing is kept once the session has started',
-    '  if (!entry || entry.sessionId) return;',
+  [RULES, 'nothing is kept once a turn has answered',
+    '  if (!entry || entry.answered) return;',
     '  if (!entry) return;'],
   [RULES, 'what is kept is handed over once',
     '  if (entry) entry.unstartedWrites = [];\n',
@@ -275,9 +321,9 @@ const MUTATIONS = [
   [only(SERVER, 'the legacy spawn starts a refusal that came after an init again fresh too'), 'the legacy path retries a refusal after an init too',
     '(!entry.sessionId || entry.missingSession) &&\n              (legacyStderrRef',
     '!entry.sessionId &&\n              (legacyStderrRef'],
-  [ENGINE_UNIT, 'once the session starts, nothing kept for a refused start is kept',
-    '          // this point, they could be sent a second time.\n          takeUnstartedWrites(entry);\n',
-    '          // this point, they could be sent a second time.\n'],
+  [ENGINE_UNIT, 'the kept list is cleared on the first result',
+    '          noteAnswered(entry);\n',
+    ''],
   [only(SERVER, 'forgets exactly that session: the orchestrator\'s live primary survives, and the window says why'), 'the chat path\'s own retry counts as starting again',
     '\n                entry.missingSessionRecovered = true; // started again below',
     ''],
@@ -393,7 +439,7 @@ const REPORTER = ['--test-reporter', 'spec'];
 // The exact name, as a pattern node --test can match and nothing else can.
 const exactly = (name) => `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   const [file, testName] = String(suite).split('#');
@@ -404,11 +450,13 @@ function redTests(suite) {
   delete env.NODE_TEST_CONTEXT;
   try {
     // Bounded twice over: each test by node's own timeout, and the whole
-    // suite by a kill, so a broken guard that leaves a run waiting costs
-    // minutes and reports, rather than holding the harness for hours.
-    out = execFileSync('node', ['--test', '--test-timeout=120000', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
-      { cwd: ROOT, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 280000, killSignal: 'SIGKILL' });
+    // suite by the runner's limit, so a broken guard that leaves a run
+    // waiting costs minutes and reports, rather than holding the harness for
+    // hours.
+    out = await runSuite('node', ['--test', '--test-timeout=120000', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
+      { cwd: ROOT, env });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -438,18 +486,18 @@ function redTests(suite) {
 // verdict. Returns what it read wrong, or null.
 const FIXTURE_GREEN = 'passes with nothing broken';
 const FIXTURE_RED = 'fails when broken';
-function invocationProblem(runTests = redTests) {
+async function invocationProblem(runTests = redTests) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-session-harness-'));
   const file = path.join(dir, 'invocation.test.js');
   try {
     fs.writeFileSync(file, "'use strict';\nconst { test } = require('node:test');\n"
       + `test(${JSON.stringify(FIXTURE_GREEN)}, () => {});\n`
       + `test(${JSON.stringify(FIXTURE_RED)}, () => { throw new Error('broken'); });\n`);
-    const green = runTests(`${file}#${FIXTURE_GREEN}`);
+    const green = await runTests(`${file}#${FIXTURE_GREEN}`);
     if (!Array.isArray(green) || green.length !== 0) {
       return `a run of a passing test read as ${JSON.stringify(green)}, not green`;
     }
-    const red = runTests(`${file}#${FIXTURE_RED}`);
+    const red = await runTests(`${file}#${FIXTURE_RED}`);
     if (!Array.isArray(red) || red.length !== 1 || red[0] !== FIXTURE_RED) {
       return `a run of a failing test read as ${JSON.stringify(red)}, not that test red`;
     }
@@ -459,7 +507,7 @@ function invocationProblem(runTests = redTests) {
   }
 }
 
-function run() {
+async function run() {
   const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
@@ -482,9 +530,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
-        ? { label, applied: true, unparsable: true, red: [] }
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
@@ -497,7 +546,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -551,18 +606,20 @@ function requireSaneTempRoot() {
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const problem = invocationProblem();
-  if (problem) {
-    console.error(`Refusing to start a mutation run: the run every row is read through misreads a result: ${problem}.`);
-    process.exit(NO_VERDICT);
-  }
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
-      + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(exitCodeFor(failed, results));
-  }
+  invocationProblem().then((problem) => {
+    if (problem) {
+      console.error(`Refusing to start a mutation run: the run every row is read through misreads a result: ${problem}.`);
+      process.exit(NO_VERDICT);
+    }
+    return run();
+  }).then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+        + ' and a mutation that could break more than one place proves nothing about either.');
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run, redTests, invocationProblem };
