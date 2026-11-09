@@ -191,6 +191,7 @@ const NOT_CHEAP = {
   'test/unit/routines-here-view.test.js': 'behavior: boots a document and presses the switch that turns routines off on this computer',
   'test/unit/run-detail-model.test.js': 'behaviour: reduces run events into the shape a screen renders',
   'test/unit/team-sidebar.test.js': 'behaviour: boots a document and renders the roster',
+  'test/unit/schedule-zone.test.js': 'behavior: builds workspaces, ticks the scheduler, and boots a document that renders the roster and the routine editor',
   'test/unit/style-resolve-diff.test.js': 'deliberately not wired into the gate at all, so the cheap phase '
     + 'is not where it starts running',
   'test/unit/guide-name.test.js': 'behaviour: resolves the workspace guide by type against real agent files',

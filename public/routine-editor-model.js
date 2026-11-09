@@ -575,18 +575,27 @@
     return place || null;
   }
 
+  /**
+   * Whose clock the schedule follows: the computer Rundock runs on, which on a
+   * server is the server's.
+   *
+   * THE ZONE IS THE ONE THE SERVER REPORTS, never the window's. A window
+   * reached through a tunnel can be in another zone, and the routine fires on
+   * the server's hour whatever that window says. With no zone reported the
+   * place is left out, and the caption still says whose clock it is.
+   */
   function timezoneCaption(input) {
     const words = timezoneWords(input && input.zone);
-    if (!words) return null;
     const agentName = (input && input.agentName) || null;
     const who = agentName || 'Your agents';
     const verb = agentName ? 'reads' : 'read';
-    return `Your time zone: ${words}. ${who} ${verb} this in your local time, never the Agent Computer's.`;
+    const place = words ? `, ${words} time` : '';
+    return `${who} ${verb} this on the clock of the computer Rundock runs on${place}, never the Agent Computer's.`;
   }
 
   /**
-   * The line under the finished sentence: the zone in words, then what the
-   * chosen option promises.
+   * The line under the finished sentence: the server's zone in words, then
+   * what the chosen option promises.
    *
    * Second reader of the same per-option copy. Both this and the preview
    * sentence go wrong together or not at all, which is the point of the option

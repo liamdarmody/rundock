@@ -359,6 +359,130 @@ describe('times and days in local words', () => {
   });
 });
 
+describe('a row on a server in another zone says the time the routine fires', () => {
+  // A routine fires on the server's clock. When the server reports a zone the
+  // window is not in, the window's own clock would show the right instant at
+  // an hour nobody scheduled: "Every day at 8:00am" beside "Next run: 7:00am".
+  // So the row's times are worked out in the server's zone and named as it.
+  //
+  // Every instant here is built from UTC components and every time is worked
+  // out in a zone this test names, so none of it depends on the runner's zone.
+  const NOW_UTC = new Date(Date.UTC(2026, 9, 7, 5, 0)); // 06:00 London, 18:00 Auckland
+  const LONDON_SLOT = new Date(Date.UTC(2026, 9, 8, 7, 0)); // 08:00 London tomorrow
+  const server = (input) => ({ ...input, now: NOW_UTC, zone: 'UTC', serverZone: 'Europe/London' });
+
+  test('the next run is worked out and named in the server\'s zone, not the window\'s', () => {
+    assert.strictEqual(m.nextRunLabel(server({ nextRun: LONDON_SLOT })).text,
+      'Next run: tomorrow, 8:00am, London time');
+  });
+
+  test('the row\'s sentence and its next run name the same hour', () => {
+    const row = m.row(server({
+      name: 'Morning briefing', schedule: 'every day at 08:00', agentName: 'Piper', runOn: 'local',
+      lastStart: new Date(Date.UTC(2026, 9, 6, 7, 0, 12)), lastRunStatus: 'completed',
+      lastSlot: new Date(Date.UTC(2026, 9, 6, 7, 0)), missedSlot: null, nextRun: LONDON_SLOT,
+    }));
+    assert.strictEqual(row.sentence, 'Every day at 8:00am, run: Morning briefing');
+    assert.strictEqual(row.nextRun.text, 'Next run: tomorrow, 8:00am, London time');
+    assert.strictEqual(row.status.text, 'Ran yesterday, 8:00am, London time');
+  });
+
+  // Every time on the row, not only the next run: a row that said its last
+  // run in one zone and its next in another would disagree with itself.
+  test('a missed slot and a late run are said in the server\'s zone too', () => {
+    const missed = m.runStatus(server({
+      lastStart: new Date(Date.UTC(2026, 9, 5, 7, 0)), lastRunStatus: 'completed',
+      lastSlot: new Date(Date.UTC(2026, 9, 5, 7, 0)), missedSlot: new Date(Date.UTC(2026, 9, 6, 7, 0)),
+    }));
+    assert.strictEqual(missed.text, 'Missed: Rundock was closed at 8:00am yesterday, London time');
+    const late = m.runStatus(server({
+      lastStart: new Date(Date.UTC(2026, 9, 7, 4, 40)), lastRunStatus: 'completed',
+      lastSlot: new Date(Date.UTC(2026, 9, 7, 3, 0)), missedSlot: null,
+    }));
+    assert.strictEqual(late.text, 'Ran late: today, 5:40am. Due 4:00am.');
+  });
+
+  // A monthly row reads in its own words, on the server's calendar. 09:00 on
+  // the 1st in Auckland is 20:00 on the 31st in the window, so a date taken
+  // from the window's clock names the wrong day as well as the wrong hour.
+  test('a monthly row names the server\'s date and hour', () => {
+    const slot = new Date(Date.UTC(2026, 9, 31, 20, 0)); // 09:00 on 1 November in Auckland
+    const ledger = (input) => m.row({
+      name: 'Ledger', enabled: true, prompt: 'p', schedule: 'on day 1 of every month at 09:00', scheduleKind: 'monthly',
+      now: new Date(Date.UTC(2026, 10, 14, 0, 0)), zone: 'UTC', serverZone: 'Pacific/Auckland', ...input,
+    });
+    assert.strictEqual(ledger({ nextRun: slot, refusal: null }).nextRun.text,
+      'Next run: shortly. It was due 1 November, 9:00am.');
+    assert.strictEqual(ledger({ lastStart: new Date(Date.UTC(2026, 10, 13, 20, 2)), lastRunStatus: 'completed', lastSlot: slot }).status.text,
+      'Ran late: today, 9:02am. Due 1 November, 9:00am.');
+    const before = new Date(Date.UTC(2026, 8, 30, 20, 0)); // 09:00 on 1 October in Auckland
+    assert.strictEqual(ledger({ lastStart: before, lastRunStatus: 'completed', lastSlot: before, missedSlot: slot }).status.text,
+      'Missed: Rundock was closed at 9:00am 1 November, Auckland time, and not opened again before the month ended.');
+  });
+
+  // The day is the server's as well as the hour. 19:00 UTC is still today in
+  // the window and already tomorrow on a server in Auckland.
+  test('today and tomorrow are the server\'s days, not the window\'s', () => {
+    const label = m.nextRunLabel({
+      nextRun: new Date(Date.UTC(2026, 9, 7, 19, 0)), now: NOW_UTC, zone: 'UTC', serverZone: 'Pacific/Auckland',
+    });
+    assert.strictEqual(label.text, 'Next run: tomorrow, 8:00am, Auckland time');
+  });
+
+  // A zone this window's runtime has no data for, which a server with newer
+  // zone data can report. No time on the row can be worked out in it, so each
+  // line leaves its time out: never a throw, never "null" where the time was,
+  // and never a time off this window's clock, which is an hour nobody
+  // scheduled. The outcome and its tone are still said.
+  test('a server zone this window cannot read leaves the times out, and never shows the window\'s clock', () => {
+    assert.throws(() => new Intl.DateTimeFormat('en-US', { timeZone: 'Not/AZone' }), RangeError,
+      'sanity: this runtime has no such zone');
+    const unknown = (input) => ({ ...input, now: NOW_UTC, zone: 'UTC', serverZone: 'Not/AZone' });
+    const ranAt = new Date(Date.UTC(2026, 9, 6, 7, 0, 12));
+    const slotAt = new Date(Date.UTC(2026, 9, 6, 7, 0));
+
+    assert.strictEqual(m.nextRunLabel(unknown({ nextRun: LONDON_SLOT })), null);
+    assert.strictEqual(m.nextRunLabel(unknown({ nextRun: new Date(Date.UTC(2026, 9, 1, 8, 0)), scheduleKind: 'monthly' })), null,
+      'nor a monthly slot still owed');
+
+    const said = (input) => m.runStatus(unknown({ lastStart: ranAt, lastSlot: slotAt, missedSlot: null, ...input }));
+    const statuses = [
+      [said({ lastRunStatus: 'completed' }), 'on-time', 'Ran'],
+      [said({ lastRunStatus: 'completed', lastStart: new Date(Date.UTC(2026, 9, 6, 9, 40)) }), 'caught-up', 'Ran late'],
+      [said({ lastRunStatus: 'failed' }), 'failed', 'Failed'],
+      [said({ lastRunStatus: 'cancelled' }), 'stopped', 'Stopped'],
+      [said({ lastRunStatus: 'completed', missedSlot: new Date(Date.UTC(2026, 9, 7, 3, 0)), lastStart: new Date(Date.UTC(2026, 9, 5, 7, 0)) }), 'missed', 'Missed'],
+    ];
+    for (const [status, kind, text] of statuses) {
+      assert.deepStrictEqual({ kind: status.kind, text: status.text }, { kind, text });
+    }
+    assert.strictEqual(statuses[2][0].tone, 'failed', 'a failure keeps its tone with its time left out');
+
+    const row = m.row(unknown({
+      name: 'Morning briefing', schedule: 'every day at 08:00', agentName: 'Piper', runOn: 'local',
+      lastStart: ranAt, lastRunStatus: 'completed', lastSlot: slotAt, missedSlot: null, nextRun: LONDON_SLOT,
+    }));
+    assert.strictEqual(row.status.text, 'Ran');
+    assert.strictEqual(row.nextRun, null);
+    const offer = m.enableOffer(unknown({
+      enabled: false, paused: false, nextRun: LONDON_SLOT, schedule: 'every day at 08:00', scheduleReadable: true, runOn: 'local',
+    }));
+    assert.ok(offer, 'sanity: the offer is still made');
+    for (const text of [...statuses.map(([s]) => s.text), row.status.text, offer.text]) {
+      assert.doesNotMatch(text, /null|undefined|\d:\d\d|UTC/, `a time, or nothing in its place, reached the row: ${text}`);
+    }
+  });
+
+  // The same zone on both ends, or none reported: the row reads as it did, on
+  // the window's clock, named as the server's zone when it gave one.
+  test('when the two zones agree, or the server reports none, the row is the window\'s clock as before', () => {
+    const local = { ...RAN_ON_TIME, now: NOW, zone: ZONE };
+    assert.strictEqual(m.nextRunLabel({ ...local, serverZone: ZONE }).text, m.nextRunLabel(local).text);
+    assert.strictEqual(m.runStatus({ ...local, serverZone: ZONE }).text, m.runStatus(local).text);
+    assert.strictEqual(m.nextRunLabel({ ...local, serverZone: null }).text, m.nextRunLabel(local).text);
+  });
+});
+
 describe('the rest of the row', () => {
   // AC-1 and AC-2. Two lines, and the second carries both facts.
   test('a row with a last-run fact carries two lines', () => {
