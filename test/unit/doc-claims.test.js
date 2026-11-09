@@ -843,6 +843,71 @@ describe('ROUTINES.md: a monthly routine runs once a month and catches up within
 });
 
 // ---------------------------------------------------------------------------
+// docs/ROUTINES.md: a routine on a set of days
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: a routine on a set of days', () => {
+  const { getNextRun, parseSchedule, wireSchedulerDeps } = require('../../lib/scheduler.js');
+  const editor = require('../../public/routine-editor-model.js');
+  const section = (heading) => {
+    const start = routinesDoc.indexOf(`\n## ${heading}\n`);
+    const end = routinesDoc.indexOf('\n## ', start + 1);
+    return start === -1 ? '' : routinesDoc.slice(start, end === -1 ? undefined : end);
+  };
+  const format = section('Schedule format');
+  const behaviour = section('Scheduler behaviour');
+
+  test('the format table gives the weekday form and the list form, and the examples parse', () => {
+    assert.match(format, /\| Every weekday \| `every weekday at HH:MM` \| Monday to Friday\./);
+    assert.match(format, /\| A list of days \| `every <day>, <day> and <day> at HH:MM` \| Full day names, in any order, joined by commas and a final `and`/);
+    for (const schedule of ['every weekday at 08:30', 'every monday, wednesday and friday at 18:00',
+      'every saturday and sunday at 10:00', 'every monday, wednesday and sunday at 09:00']) {
+      assert.ok(format.includes(schedule), `the format section no longer gives ${schedule}`);
+      assert.ok(parseSchedule(schedule), `${schedule} is given as working and does not parse`);
+    }
+    for (const schedule of ['every mon and fri at 18:00', 'every monday, friday at 18:00']) {
+      assert.ok(format.includes(`schedule: ${schedule}`), `the format section no longer warns about ${schedule}`);
+      assert.strictEqual(parseSchedule(schedule), null, `${schedule} is given as never firing and parses`);
+    }
+  });
+
+  // The page says the catch-up in the editor's own words, read off the model,
+  // so the two cannot say it differently.
+  test('the page says the catch-up as the editor does, and no longer as "the same day"', () => {
+    const said = editor.WORKSPACE_CAVEAT.slice(editor.WORKSPACE_CAVEAT.lastIndexOf('A missed slot'));
+    assert.strictEqual(said, 'A missed slot is caught up if Rundock is open again that day.');
+    assert.ok(behaviour.includes(said), 'the catch-up sentence is the editor\'s');
+    assert.doesNotMatch(routinesDoc, /caught up the same day/);
+  });
+
+  test('the page never mentions public holidays', () => {
+    assert.doesNotMatch(routinesDoc, /holiday/i);
+  });
+
+  // Asked at fixed instants in November 2026, built from local components.
+  // 6 November is a Friday.
+  const november = (day, hour, minute = 0) => new Date(2026, 10, day, hour, minute);
+  function askedAt(now, schedule) {
+    const previous = wireSchedulerDeps({ now: () => now });
+    try {
+      return getNextRun(schedule, null);
+    } finally {
+      wireSchedulerDeps(previous);
+    }
+  }
+
+  test('the catch-up section says what a set of days does on a day it leaves out, and it does', () => {
+    assert.match(behaviour, /A routine on a set of days catches up on each chosen day, as a weekly one does\./);
+    assert.match(behaviour, /A day the set leaves out has no slot: the routine does not run that day, catches nothing up on it, and the day is never recorded as missed\./);
+    assert.match(behaviour, /closed through Friday's slot and opened on Saturday does not run on Saturday: its row says Friday's slot was missed, and names Monday as the next run/);
+    assert.deepStrictEqual(askedAt(november(6, 14), 'every weekday at 09:00'), november(6, 9),
+      'on Friday afternoon, Friday\'s slot is still owed');
+    assert.deepStrictEqual(askedAt(november(7, 10), 'every weekday at 09:00'), november(9, 9),
+      'on Saturday, the next is Monday\'s');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // docs/ROUTINES.md: where a routine actually runs
 //
 // The page RECOMMENDS keeping Rundock on a VPS with the workspace synced. Two

@@ -23,6 +23,7 @@ const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
 const INDEX_SRC = read('public', 'index.html');
 const SCRIPTS = [
   read('public', 'readable-error.js'),
+  read('public', 'schedule-days.js'),
   read('public', 'routine-editor-model.js'),
   read('public', 'skills-model.js'),
   read('public', 'routines-model.js'),

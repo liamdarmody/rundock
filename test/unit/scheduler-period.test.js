@@ -11,7 +11,8 @@
 // its window, and fails on the first instant they disagree.
 //
 // THE WINDOW IS COMPUTED HERE, independently: the slot's calendar day for a
-// daily and a weekly routine, and the slot's calendar month for a monthly one.
+// daily and a weekly routine and a set of days, and the slot's calendar month
+// for a monthly one.
 // Taking it from the scheduler would let the two readers agree on a wrong
 // window and pass.
 //
@@ -66,6 +67,28 @@ const SCHEDULES = [
   {
     schedule: 'every sunday at 00:30',
     slots: () => [...days()].filter(d => d.getDay() === 0)
+      .map(d => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 30)),
+    closes: nextDay,
+  },
+  // A set of days has a slot on each chosen day and on no other: weekday is
+  // Monday to Friday, and a list is its days. Sunday at 01:30 is inside the
+  // hour the clocks skip on 28 March 2027 and the hour they repeat on 31
+  // October 2027.
+  {
+    schedule: 'every weekday at 00:30',
+    slots: () => [...days()].filter(d => d.getDay() >= 1 && d.getDay() <= 5)
+      .map(d => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 30)),
+    closes: nextDay,
+  },
+  {
+    schedule: 'every monday, wednesday and sunday at 01:30',
+    slots: () => [...days()].filter(d => [1, 3, 0].includes(d.getDay()))
+      .map(d => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 1, 30)),
+    closes: nextDay,
+  },
+  {
+    schedule: 'every saturday and sunday at 00:30',
+    slots: () => [...days()].filter(d => d.getDay() === 6 || d.getDay() === 0)
       .map(d => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 30)),
     closes: nextDay,
   },
@@ -167,4 +190,38 @@ test('a weekly routine that ran early on the long day is not due again late that
   assert.strictEqual(lateThatNight.getDay(), 0, 'still Sunday');
   assert.strictEqual(nextRunAt(lateThatNight, 'every sunday at 00:30', ranAt), null,
     'the run at 00:31 served the 00:30 slot, and it was due a second time the same night');
+});
+
+// A DAY NOT CHOSEN HAS NO SLOT OF ITS OWN. On every day a set leaves out, at
+// any hour, the slot getNextRun names is a later one on a chosen day, so the
+// tick never fires that day and the row never names it; and a walk across a
+// week nobody watched records the chosen days' slots and no others, so that
+// day never shows as missed.
+test('a set of days names and records no slot on a day it leaves out', () => {
+  const schedule = 'every monday, wednesday and sunday at 01:30';
+  const chosen = [1, 3, 0];
+  const wrong = [];
+  for (const d of days()) {
+    if (chosen.includes(d.getDay())) continue;
+    for (const hour of [0, 1, 9, 23]) {
+      const at = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour, 45);
+      const named = nextRunAt(at, schedule, null);
+      if (!named || !chosen.includes(named.getDay()) || named <= at) {
+        wrong.push(`at ${show(at)} getNextRun names ${show(named)}`);
+      }
+    }
+  }
+  assert.deepStrictEqual(wrong.slice(0, 5), [], 'a day the set leaves out was given a slot');
+
+  // Anchored on Monday 5 January 2026, unwatched until midday Monday the 12th.
+  const parsed = sched.parseSchedule(schedule);
+  const key = 'sweep:unchosen';
+  const anchor = new Date(2026, 0, 5, 1, 30);
+  sched.routineSlots.routines[key] = { due: anchor.toISOString(), schedule: sched.scheduleShape(parsed), missed: [] };
+  sched.recordPassedSlots(key, parsed, new Date(anchor.getTime() - MINUTE), new Date(2026, 0, 12, 12, 0), true);
+  const recorded = sched.routineSlots.routines[key].missed.map(m => m.slot);
+  delete sched.routineSlots.routines[key];
+  assert.deepStrictEqual(recorded, [
+    new Date(2026, 0, 5, 1, 30), new Date(2026, 0, 7, 1, 30), new Date(2026, 0, 11, 1, 30),
+  ].map(d => d.toISOString()), 'Monday, Wednesday and Sunday, and nothing on the four days between');
 });

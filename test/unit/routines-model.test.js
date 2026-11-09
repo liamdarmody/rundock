@@ -523,7 +523,8 @@ describe('the rest of the row', () => {
 
   test('a schedule the editor never offered assembles into no sentence', () => {
     assert.strictEqual(m.scheduleWords('0 7 * * *'), null);
-    assert.strictEqual(m.scheduleWords('every weekday at 07:00'), null);
+    assert.strictEqual(m.scheduleWords('every weekdays at 07:00'), null);
+    assert.strictEqual(m.scheduleWords('every mon and fri at 07:00'), null);
     assert.strictEqual(m.scheduleWords('every monday at 08:00'), 'Every Monday at 8:00am');
   });
 
@@ -844,6 +845,27 @@ describe('the copy this card ships', () => {
 
   test('no em dash or en dash reaches this view\'s copy', () => {
     for (const line of copyShipped()) assert.ok(!/[\u2014\u2013]/.test(line), `dash in: ${line}`);
+  });
+
+  // A routine on a set of days runs on the days ticked, holiday or not, and
+  // nothing a row says suggests otherwise: not the copy it builds, not any
+  // string the model exports, and not its source.
+  test('no copy the routines model ships mentions a holiday', () => {
+    const owed = {
+      nextRun: new Date(2026, 10, 9, 9, 0).toISOString(), now: new Date(2026, 10, 9, 10, 15).toISOString(),
+      scheduleKind: 'days', enabled: true, prompt: 'Run the digest skill.', runOn: 'local', zone: ZONE,
+    };
+    const lines = copyShipped().concat(everyString(Object.values(m)), everyString([
+      m.nextRunLabel(owed),
+      m.routineSentence({ schedule: 'every weekday at 09:00', name: 'Digest' }),
+      m.routineSentence({ schedule: 'every monday, wednesday and sunday at 09:00', name: 'Digest' }),
+      m.scheduleProblem({ schedule: 'every mon and fri at 07:00', scheduleReadable: false }),
+    ]));
+    assert.ok(lines.length > 50, `sanity: the copy was walked, found ${lines.length} strings`);
+    assert.ok(lines.includes(m.SCHEDULE_PROBLEM.body), 'sanity: the walk reaches the hint');
+    for (const line of lines) assert.ok(!/holiday/i.test(line), `a holiday in: ${line}`);
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'routines-model.js'), 'utf-8');
+    assert.ok(!/holiday/i.test(src), 'public/routines-model.js mentions a holiday');
   });
 
   test('the copy is UK spelling', () => {
@@ -1325,10 +1347,11 @@ describe('a routine whose schedule the scheduler cannot read', () => {
     const p = problem({ schedule: '0 7 * * *', scheduleReadable: false });
     assert.ok(p, 'an unreadable schedule raises nothing');
     assert.match(p.text, /cannot read this schedule/i);
-    // Both accepted shapes, by example rather than by description. A reader
+    // The accepted shapes, by example rather than by description. A reader
     // who has just been told their schedule is wrong needs one they can copy.
     assert.match(p.text, /every day at 07:00/);
-    assert.match(p.text, /every Monday at 07:00/);
+    assert.match(p.text, /every weekday at 07:00/);
+    assert.match(p.text, /every Monday and Friday at 07:00/);
   });
 
   test('a schedule the scheduler reads raises nothing', () => {
@@ -1392,11 +1415,11 @@ describe('a routine whose schedule the scheduler cannot read', () => {
 describe('the unreadable-schedule notice: a red lead and a quiet body', () => {
   const LEAD = 'Rundock cannot read this schedule, so this routine will not run.';
 
-  test('any other schedule is shown three forms that work', () => {
+  test('any other schedule is shown four forms that work', () => {
     const p = m.scheduleProblem({ schedule: 'every month at 09:00', scheduleReadable: false });
     assert.strictEqual(p.lead, LEAD);
     assert.strictEqual(p.body, 'Use Edit schedule, or change the file to say every day at 07:00, '
-      + 'every Monday at 07:00 or on day 15 of every month at 07:00.');
+      + 'every weekday at 07:00, every Monday and Friday at 07:00 or on day 15 of every month at 07:00.');
     assert.strictEqual(p.text, `${p.lead} ${p.body}`);
   });
 

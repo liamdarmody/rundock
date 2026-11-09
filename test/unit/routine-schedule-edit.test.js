@@ -85,13 +85,21 @@ const routinesIn = (content, owner) =>
 // can drift.
 describe('a schedule the writer will accept', () => {
   test('every schedule the editor can build is one the writer accepts', () => {
+    // Every set of days a week's boxes can make, Monday first.
+    const week = editorModel.weekDays().map((d) => d.value);
+    const sets = [];
+    for (let bits = 1; bits < 128; bits++) sets.push(week.filter((_, i) => bits & (1 << i)));
     for (const frequency of editorModel.FREQUENCIES) {
-      // A monthly schedule is built with a day, so every day it offers is tried.
+      // A monthly schedule is built with a day, so every day it offers is
+      // tried, and a weekly one with its days, so every set is.
       const days = frequency.value === 'month' ? editorModel.monthDays().map((d) => d.value) : [null];
+      const weekSets = frequency.value === 'week' ? sets : [null];
       for (const day of days) {
-        for (const time of editorModel.times()) {
-          const built = editorModel.buildSchedule({ frequency: frequency.value, day, time: time.value });
-          assert.strictEqual(isWritableSchedule(built), true, `${built} is one the editor offers`);
+        for (const set of weekSets) {
+          for (const time of editorModel.times()) {
+            const built = editorModel.buildSchedule({ frequency: frequency.value, day, days: set, time: time.value });
+            assert.strictEqual(isWritableSchedule(built), true, `${built} is one the editor offers`);
+          }
         }
       }
     }
@@ -99,12 +107,16 @@ describe('a schedule the writer will accept', () => {
 
   // Each of these is a real thing somebody has written in an agent file, and
   // each one reads as a schedule while firing nothing. The grammar the
-  // scheduler reads is `every day at HH:MM` or `every <weekday> at HH:MM`, and
-  // anything else parses to nothing and waits forever.
+  // scheduler reads is `every day at HH:MM`, `every <day or days> at HH:MM` or
+  // a day of the month, and anything else parses to nothing and waits forever.
   test('a schedule that would never fire is refused', () => {
     for (const stored of [
       'every fortnight at 07:00',
-      'every weekday at 18:00',
+      'every weekdays at 18:00',
+      'every mon and fri at 18:00',
+      'every monday, friday at 18:00',
+      'every monday and monday at 18:00',
+      'every monday, wednesday, and friday at 18:00',
       'every day at 9:00',
       'every day @ 05:00',
       'every day at 25:00',

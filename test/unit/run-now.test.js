@@ -601,6 +601,7 @@ describe('the row', () => {
       + '</style></head><body><nav class="nav-rail"><button class="nav-item" data-nav="routines"></button></nav>'
       + '<div id="view-routines"><div id="routines-content"></div></div></body></html>', { runScripts: 'dangerously' });
     const w = dom.window;
+    w.eval(readSrc('public', 'schedule-days.js'));
     w.eval(readSrc('public', 'routine-editor-model.js'));
     w.eval(readSrc('public', 'skills-model.js'));
     w.eval(readSrc('public', 'routines-model.js'));

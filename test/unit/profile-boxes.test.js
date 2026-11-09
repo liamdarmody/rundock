@@ -30,7 +30,7 @@ const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
 const APP_SRC = read('public', 'app.js');
 const PROFILE_SRC = read('public', 'views', 'profile.js');
-const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+const EDITOR_MODEL_SRC = read('public', 'schedule-days.js') + read('public', 'routine-editor-model.js');
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const ROUTINES_MODEL_SRC = read('public', 'routines-model.js');
 const ROUTINES_SRC = read('public', 'views', 'routines.js');

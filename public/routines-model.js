@@ -144,20 +144,21 @@
   /**
    * What a row says when the scheduler cannot read its schedule.
    *
-   * THE SILENCE THIS ENDS. `parseSchedule` accepts daily, weekly and monthly
-   * shapes and returns null for everything else, at which point the tick skips
-   * the routine with no error, no warning and no log line. A cron-scheduled
-   * routine then sits in a first-class Routines view looking exactly like a
-   * routine, and the silence has moved from a log nobody reads to a surface
-   * everybody reads. Migration never touches a schedule, so every such entry
+   * THE SILENCE THIS ENDS. `parseSchedule` accepts daily, weekly, day-set and
+   * monthly shapes and returns null for everything else, at which point the
+   * tick skips the routine with no error, no warning and no log line. A
+   * cron-scheduled routine then sits in a first-class Routines view looking
+   * exactly like a routine, and the silence has moved from a log nobody reads
+   * to a surface everybody reads. Migration never touches a schedule, so every such entry
    * survives an upgrade exactly as written, which means anyone arriving from
    * cron arrives with these.
    *
    * IT NAMES WHAT TO CHANGE, BY EXAMPLE. "Unsupported schedule" sends the
    * reader to documentation this product does not put in front of them. The
-   * editor, and three shapes that work written out, send them to a fix
+   * editor, and four shapes that work written out, send them to a fix
    * instead: a reader whose job is weekly or monthly should not have to guess
-   * that the daily example generalises.
+   * that the daily example generalises, and the list shows how a list of days
+   * is written.
    *
    * A hand-typed day 29 to 31 gets a body of its own (`monthDay`), naming the
    * last-day form at the file's own time, because that is almost always what
@@ -165,8 +166,8 @@
    */
   const SCHEDULE_PROBLEM = {
     lead: 'Rundock cannot read this schedule, so this routine will not run.',
-    body: 'Use Edit schedule, or change the file to say every day at 07:00, every Monday at 07:00 '
-      + 'or on day 15 of every month at 07:00.',
+    body: 'Use Edit schedule, or change the file to say every day at 07:00, every weekday at 07:00, '
+      + 'every Monday and Friday at 07:00 or on day 15 of every month at 07:00.',
     monthDay: 'Day {day} is not in every month, and Rundock will not pick another day for you. '
       + 'To run on the last day of every month, change it to on the last day of every month at {time}, '
       + 'or use Edit schedule.',
@@ -706,7 +707,7 @@
    * editor's preview does.
    */
   function scheduleWords(schedule) {
-    const words = editor.whenWords(editor.readSchedule(schedule));
+    const words = editor.whenWords(editor.readSchedule(schedule), true);
     return words ? words.charAt(0).toUpperCase() + words.slice(1) : null;
   }
 
@@ -1374,6 +1375,11 @@
     if (zoneUnreadable(clock.inZone)) return null;
     if (input.scheduleKind === 'monthly' && !input.refusal && at && now && at <= now) {
       return { text: `Next run: shortly. It was due ${dateWords(at, clock.inZone)}, ${clockWords(at, clock.inZone)}.`, className: 'next-run' };
+    }
+    // A SLOT A SET OF DAYS STILL OWES, which can only be today's: a chosen
+    // day's slot is caught up that day or not at all.
+    if (input.scheduleKind === 'days' && !input.refusal && at && now && at <= now) {
+      return { text: `Next run: shortly. It was due ${dayWords(at, now, clock.inZone)}, ${clockWords(at, clock.inZone)}.`, className: 'next-run' };
     }
     const words = timeWords(input && input.nextRun, input && input.now, clock.zone, clock.inZone);
     if (!words) return null;

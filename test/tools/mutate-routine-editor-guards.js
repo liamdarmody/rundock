@@ -93,6 +93,11 @@ const ROUTINES_TZ = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suit
 // in one zone to a window in another, because that is where the zone it
 // records is read back.
 const APP_ZONE = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/schedule-zone.test.js' };
+// The editor's model, watched by the suite for a routine on a set of days.
+const DAYS_MODEL = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routine-days.test.js' };
+// The page's script order, watched by the suite that pins the order the
+// editor's model depends on.
+const SCRIPT_ORDER = { src: path.join(ROOT, 'public', 'index.html'), suite: 'test/unit/routine-editor-doors.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -121,12 +126,13 @@ const MUTATIONS = [
   // option it does not have, which shows its FIRST option instead, so the
   // reader is looking at a schedule that is not theirs with nothing saying so.
   [MODEL, 'a stored schedule is looked up too, never taken from the string',
-    '    const freq = frequency(parts[1]);\n    const time = timeOption(parts[2]);\n'
-    + '    if (!freq || !time) return null;\n    return { frequency: freq.value, time: time.value };',
-    '    return { frequency: parts[1], time: parts[2] };'],
+    "    const days = parts[1] === 'day' ? ALL_DAYS : scheduleDays.readDays(parts[1]);\n"
+    + '    const time = timeOption(parts[2]);\n    if (!days || !time) return null;',
+    "    const days = parts[1] === 'day' ? ALL_DAYS : parts[1].split(/, | and /);\n"
+    + '    const time = { value: parts[2] };'],
   [MODEL, 'a stored schedule is read whole, not found inside a longer line',
-    '    const parts = /^every ([a-z]+) at (\\d{2}:\\d{2})$/.exec(schedule.toLowerCase());',
-    '    const parts = /every ([a-z]+) at (\\d{2}:\\d{2})/.exec(schedule.toLowerCase());'],
+    '  const DAILY_OR_DAYS = new RegExp(`^every (day|${scheduleDays.DAYS}) at (\\\\d{2}:\\\\d{2})$`);',
+    '  const DAILY_OR_DAYS = new RegExp(`every (day|${scheduleDays.DAYS}) at (\\\\d{2}:\\\\d{2})`);'],
   [MODEL, 'the picker is scoped to the agent it was opened from',
     '        if (agentId && agent.id !== agentId) continue;\n',
     ''],
@@ -429,11 +435,11 @@ const MUTATIONS = [
     "  ['schedule', assertWritableSchedule],\n",
     ''],
   [ROUTINES_SCHEDULE, 'the grammar is the one the scheduler actually reads',
-    "const SCHEDULE_WORDS =\n  /^(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
-    'const SCHEDULE_WORDS = /^every (\\w+) at (\\d{2}):(\\d{2})$/;'],
+    'const SCHEDULE_WORDS = new RegExp(`^(every (day|${scheduleDays.DAYS})|on day 0?([1-9]|1\\\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\\\d|2[0-3]):[0-5]\\\\d$`);',
+    'const SCHEDULE_WORDS = /^(every (\\w+)) at (\\d{2}):(\\d{2})$/;'],
   [ROUTINES_SCHEDULE, 'a schedule is read whole, not found inside a longer line',
-    "const SCHEDULE_WORDS =\n  /^(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
-    'const SCHEDULE_WORDS = /(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d/;'],
+    'const SCHEDULE_WORDS = new RegExp(`^(every (day|${scheduleDays.DAYS})|on day 0?([1-9]|1\\\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\\\d|2[0-3]):[0-5]\\\\d$`);',
+    'const SCHEDULE_WORDS = new RegExp(`(every (day|${scheduleDays.DAYS})|on day 0?([1-9]|1\\\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\\\d|2[0-3]):[0-5]\\\\d`);'],
   // A REFUSAL BELONGS TO THE SURFACE THAT ASKED, and for this one that surface
   // is the editor. The reader is looking at the sentence builder with a save in
   // flight; routine_action_error draws on the routines list they have left.
@@ -529,7 +535,7 @@ const MUTATIONS = [
     "      workspaceCaveat: input && input.frequency === 'month' ? MONTHLY_WORKSPACE_CAVEAT : WORKSPACE_CAVEAT,",
     '      workspaceCaveat: WORKSPACE_CAVEAT,'],
   [MODEL, 'leaving month drops its day',
-    "    const day = value === 'month' ? ((choice && choice.frequency === 'month' && choice.day) || '1') : null;",
+    "    const day = value === 'month' ? ((from === 'month' && choice.day) || '1') : null;",
     "    const day = (choice && choice.day) || (value === 'month' ? '1' : null);"],
   [MODEL, 'the day is looked up, never taken from the input',
     '      const day = monthDay(input.day);\n      if (!day || !time) return null;',
@@ -550,11 +556,11 @@ const MUTATIONS = [
     "        if (d.afterRule) h += '<hr>';\n",
     ''],
   [VIEW, 'a new monthly routine saves the day it shows',
-    '      frequency: state.frequency,\n      day: state.day,\n      time: state.time,\n      runOn: state.runOn,',
-    '      frequency: state.frequency,\n      time: state.time,\n      runOn: state.runOn,'],
+    '      frequency: state.frequency,\n      day: state.day,\n      days: state.days,\n      time: state.time,\n      runOn: state.runOn,',
+    '      frequency: state.frequency,\n      days: state.days,\n      time: state.time,\n      runOn: state.runOn,'],
   [VIEW, 'an edited monthly routine saves the day it shows',
-    '    const schedule = m.buildSchedule({ frequency: state.frequency, day: state.day, time: state.time });',
-    '    const schedule = m.buildSchedule({ frequency: state.frequency, time: state.time });'],
+    '    const schedule = m.buildSchedule({ frequency: state.frequency, day: state.day, days: state.days, time: state.time });',
+    '    const schedule = m.buildSchedule({ frequency: state.frequency, days: state.days, time: state.time });'],
   [VIEW, 'Edit schedule opens on the day it read',
     '      day: parsed ? parsed.day : null,',
     '      day: null,'],
@@ -562,7 +568,7 @@ const MUTATIONS = [
     '        unreadableMonthDay: routine.unreadableMonthDay || null,\n',
     ''],
   [VIEW, 'choosing a frequency follows the model\'s rule for the day',
-    "    if (field === 'frequency') Object.assign(state, model().chooseFrequency(state, value));\n"
+    "    if (field === 'frequency') Object.assign(state, model().chooseFrequency(state, value), { dayAsked: false });\n"
     + "    else if (field === 'time' || field === 'day') state[field] = value;",
     "    if (field === 'frequency' || field === 'time' || field === 'day') state[field] = value;"],
 
@@ -582,6 +588,25 @@ const MUTATIONS = [
   [APP_ZONE, 'the client records the zone the server sent beside its roster',
     ' serverZone=d.zone||null;',
     ''],
+  // ===== THE DAYS OF A WEEK =====
+  //
+  // A week with no day ticked saves nothing: Continue is pressable, and stops
+  // there. Without the block it goes on to a confirmation with nothing to save.
+  [VIEW, 'Continue with no day ticked stops on the step and says why',
+    '    if (model().needsADay(state)) {\n      state.dayAsked = true;',
+    '    if (false) {\n      state.dayAsked = true;'],
+  // The week start rule: from every day all seven, from a month none.
+  [DAYS_MODEL, 'week from a month starts with no day ticked',
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : (from === 'day' ? ALL_DAYS.slice() : []);",
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : ALL_DAYS.slice();"],
+  [DAYS_MODEL, 'week from every day starts with all seven ticked',
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : (from === 'day' ? ALL_DAYS.slice() : []);",
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : [];"],
+  // The model is built in the browser from the global the days module sets,
+  // so the module loads first. Moved after it, the model has no days to read.
+  [SCRIPT_ORDER, 'the days module loads before the editor model',
+    '<script src="/schedule-days.js"></script>\n<script src="/routine-editor-model.js"></script>\n',
+    '<script src="/routine-editor-model.js"></script>\n<script src="/schedule-days.js"></script>\n'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

@@ -40,7 +40,7 @@ const INDEX_SRC = read('public', 'index.html');
 const MODEL_SRC = read('public', 'run-detail-model.js');
 const VIEW_SRC = read('public', 'views', 'run-detail.js');
 // The list this screen is opened from, and everything it needs to draw a row.
-const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+const EDITOR_MODEL_SRC = read('public', 'schedule-days.js') + read('public', 'routine-editor-model.js');
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const ROUTINES_MODEL_SRC = read('public', 'routines-model.js');
 const ROUTINES_VIEW_SRC = read('public', 'views', 'routines.js');

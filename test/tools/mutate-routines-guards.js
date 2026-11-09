@@ -195,6 +195,11 @@ const SCHEDULER_PERIOD = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: '
 const SCHEDULER_GRAMMAR = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/schedule-grammar-inventory.test.js' };
 const SCHEDULER_SLOTS = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/scheduler-slots-dst.test.js' };
 const SCHEDULER_MONTHLY = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/scheduler-monthly.test.js' };
+// A SET OF DAYS: the grammar every reader reads days through, and the
+// scheduler's half of it, watched by the suite for a routine on a set of days;
+// the slot on a day the set leaves out by the period sweep.
+const DAYS_GRAMMAR = { src: path.join(ROOT, 'public', 'schedule-days.js'), suite: 'test/unit/routine-days.test.js' };
+const SCHEDULER_DAYS = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/unit/routine-days.test.js' };
 // WHERE A ROUTINE RUNS, WATCHED AT THE RENDERED SURFACE AND NOWHERE ELSE.
 //
 // The rule is that a routine in a workspace this window does not have open is
@@ -971,7 +976,7 @@ const MUTATIONS = [
     "    if (input && input.paused) return { text: 'Paused', className: 'next-run paused-label' };",
     ''],
   [MODEL, 'both halves of the schedule are looked up, never formatted from the string',
-    '    const words = editor.whenWords(editor.readSchedule(schedule));',
+    '    const words = editor.whenWords(editor.readSchedule(schedule), true);',
     "    const words = typeof schedule === 'string' ? schedule.toLowerCase() : null;"],
   [MODEL, 'the execution target reads off the option rather than a string built here',
     '      runsOn: option ? `Runs on ${option.sentence}` : null,',
@@ -1627,6 +1632,39 @@ const MUTATIONS = [
     + '  const next = nextRunFor(key, schedule, routine);\n'
     + '  if (zoneWas === undefined) delete process.env.TZ; else process.env.TZ = zoneWas;\n'],
 
+  // ===== A SET OF DAYS =====
+  //
+  // The grammar: a day named twice, or a list joined any way but commas and a
+  // final "and", is no set, and `weekday` is Monday to Friday.
+  [DAYS_GRAMMAR, 'a day named twice is no set',
+    '    if (new Set(named).size !== named.length) return null;\n',
+    ''],
+  [DAYS_GRAMMAR, 'a list is joined by commas and a final "and"',
+    '  const DAYS = `weekday|${NAME}(?:(?:, ${NAME})* and ${NAME})?`;',
+    '  const DAYS = `weekday|${NAME}(?:(?:, | and )${NAME})*`;'],
+  [SCHEDULER_DAYS, 'the scheduler reads every weekday as a set',
+    "    if (weeklyMatch[1] !== 'weekday') return null;",
+    '    return null;'],
+  // The one saved form per set.
+  [DAYS_GRAMMAR, 'Monday to Friday saves as every weekday',
+    "    if (chosen.join() === WEEKDAY.join()) return 'weekday';\n",
+    ''],
+  [DAYS_GRAMMAR, 'a set saves Monday first, whatever order it was ticked in',
+    '    const chosen = VALUES.filter(v => values.indexOf(v) !== -1);',
+    '    const chosen = values.slice();'],
+  // A day the set leaves out has no slot: neither the period nor the walk
+  // gives it one.
+  [SCHEDULER_PERIOD, 'a day the set leaves out has no slot of its own',
+    "  if (parsed.kind === 'days') target.setDate(target.getDate() + Math.min(...parsed.days.map(day => (day - now.getDay() + 7) % 7)));\n",
+    ''],
+  [SCHEDULER_PERIOD, 'the walk steps only to the chosen days',
+    '      if (parsed.days.includes(at.getDay())) left -= 1;',
+    '      left -= 1;'],
+  // A set reads a clock time or nothing: at 25:00 a slot rolls onto the day
+  // after a chosen one, which the set may leave out.
+  [SCHEDULER_DAYS, 'a set reads only a clock time',
+    '  if (hour > 23 || minute > 59) return null;\n',
+    ''],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

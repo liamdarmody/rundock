@@ -112,7 +112,7 @@ function roster(fn, seed = seedStores, names = NAMES) {
   }
 }
 
-const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+const EDITOR_MODEL_SRC = read('public', 'schedule-days.js') + read('public', 'routine-editor-model.js');
 // Loaded before the routines model, which reads the shared no-guide next step
 // off it, in the order index.html loads them.
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
@@ -397,8 +397,10 @@ describe('a schedule the scheduler cannot read', () => {
       // carrying the two shapes that work sends them to the editor.
       assert.match(words, /every day at 07:00/,
         'the row does not name a schedule that would work');
-      assert.match(words, /every Monday at 07:00/,
-        'the row does not name the weekly shape either');
+      assert.match(words, /every weekday at 07:00/,
+        'the row does not name the weekday shape either');
+      assert.match(words, /every Monday and Friday at 07:00/,
+        'the row does not name a list of days either');
       // And it does not promise a run, because there is no run to promise.
       assert.ok(!/Next run/.test(words), `the cron row still promises a next run: ${words}`);
     });

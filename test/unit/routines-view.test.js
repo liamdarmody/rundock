@@ -21,7 +21,7 @@ const { JSDOM } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
-const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+const EDITOR_MODEL_SRC = read('public', 'schedule-days.js') + read('public', 'routine-editor-model.js');
 const READABLE_SRC = read('public', 'readable-error.js');
 const MODEL_SRC = read('public', 'routines-model.js');
 const VIEW_SRC = read('public', 'views', 'routines.js');

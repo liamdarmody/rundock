@@ -94,7 +94,7 @@ function withIntlAnswering(options, fn) {
   try { return fn(); } finally { Intl.DateTimeFormat = real; }
 }
 
-const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+const EDITOR_MODEL_SRC = read('public', 'schedule-days.js') + read('public', 'routine-editor-model.js');
 const EDITOR_VIEW_SRC = read('public', 'views', 'routine-editor.js');
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const MODEL_SRC = read('public', 'routines-model.js');
