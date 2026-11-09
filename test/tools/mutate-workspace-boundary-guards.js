@@ -286,6 +286,10 @@ const SHELL_CODE = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suit
 // The same file, the suite that runs it as its own process: a hook that dies
 // answers nothing, and the runtime carries on as though nothing had objected.
 const HOOK_CRASH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-never-crashes.test.js' };
+// The same file, the suite that sends the real hook requests it cannot name or
+// whose input it cannot read, and the doc pin that runs it on a few of them.
+const HOOK_UNNAMED = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-unnamed-request.test.js' };
+const HOOK_UNNAMED_DOC = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/doc-claims.test.js' };
 const HOOK_BLOCK_CAPTURE = { src: path.join(ROOT, 'scripts', 'hook-block-truth', 'capture.js'), suite: 'test/unit/hook-block-capture.test.js' };
 // The same file, the suite that times it: the folder each word starts from is
 // worked out once per command, or the check grows with the square of it.
@@ -3509,6 +3513,51 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: the refusal never sees which event it is answering',
     "input += chunk; hookInput = input;",
     "input += chunk;"],
+  // ===== A REQUEST THE HOOK CANNOT NAME, OR WHOSE INPUT IT CANNOT READ =====
+  // Matched none of the checks, so with Rundock unreachable it was allowed.
+  [HOOK_UNNAMED, 'Unnamed request: a request with no tool name is judged as any other',
+    "  if (typeof name !== 'string' || !name.trim()) return true;\n",
+    ""],
+  [HOOK_UNNAMED, 'Unnamed request: an empty tool name is a name',
+    "if (typeof name !== 'string' || !name.trim()) return true;",
+    "if (typeof name !== 'string') return true;"],
+  [HOOK_UNNAMED, 'Unnamed request: a tool name of only spaces is a name',
+    "if (typeof name !== 'string' || !name.trim()) return true;",
+    "if (typeof name !== 'string' || !name) return true;"],
+  [HOOK_UNNAMED, 'Unnamed request: input that cannot be read is judged as any other',
+    "  return readsInput && (!input || typeof input !== 'object' || Array.isArray(input));",
+    "  return false;"],
+  [HOOK_UNNAMED, 'Unnamed request: a list is read as input',
+    "(!input || typeof input !== 'object' || Array.isArray(input))",
+    "(!input || typeof input !== 'object')"],
+  [HOOK_UNNAMED, "Unnamed request: a file tool's input is not checked",
+    "Object.prototype.hasOwnProperty.call(FILE_TOOL_PATH_FIELD, name) || SHELL_TOOLS.has(name)",
+    "SHELL_TOOLS.has(name)"],
+  [HOOK_UNNAMED, "Unnamed request: a shell tool's input is not checked",
+    " || SHELL_TOOLS.has(name) || /^mcp__/.test(name);",
+    " || /^mcp__/.test(name);"],
+  [HOOK_UNNAMED, "Unnamed request: a connector action's input is not checked",
+    " || /^mcp__/.test(name);",
+    ";"],
+  // Refused before Rundock is asked, so it raises no card and leaves the line
+  // left for the agent to the next answer; a finished tool is not checked.
+  [HOOK_UNNAMED, 'Unnamed request: the check is made after Rundock is asked',
+    "if (cannotJudge(finished)) { refuseUnanswered(); return; }\nfetchAgentNotice((agentNotice) => {",
+    "fetchAgentNotice((agentNotice) => {\nif (cannotJudge(finished)) { refuseUnanswered(); return; }"],
+  [HOOK_UNNAMED, 'Unnamed request: a finished tool is checked too',
+    "if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {",
+    "if (cannotJudge(finished || {})) { refuseUnanswered(); return; }\nif (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {"],
+  [HOOK_UNNAMED, 'Unnamed request: a request the hook cannot judge passes through',
+    "if (cannotJudge(finished)) { refuseUnanswered(); return; }",
+    "if (cannotJudge(finished)) { writeAnswer({}); process.exit(0); }"],
+  // The check failing fails closed: nothing carries on past it.
+  [HOOK_UNNAMED, 'Unnamed request: a failure in the check carries on to judge the request',
+    "if (cannotJudge(finished)) { refuseUnanswered(); return; }",
+    "try { if (cannotJudge(finished)) { refuseUnanswered(); return; } } catch (e) { /* carry on */ }"],
+  // The claim on the page and in the header is pinned to what the hook does.
+  [HOOK_UNNAMED_DOC, 'Unnamed request: the page says it is refused when it is not',
+    "if (cannotJudge(finished)) { refuseUnanswered(); return; }",
+    ""],
   // The capture works in a folder made new for the run, outside the
   // repository, so no link left inside the repository can lead it elsewhere.
   [HOOK_BLOCK_CAPTURE, 'Hook block capture: a run works under the repository again',
