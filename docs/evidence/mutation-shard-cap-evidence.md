@@ -1,8 +1,8 @@
 # The mutation shard cap, and the plans that call for it
 
-`MAX_SHARDS` in `scripts/mutation-scope.js` caps how many shards the full mutation set is cut into. `test/unit/mutation-scope.test.js` holds every shard of the full plan to fifteen minutes ("the full set, planned with the real costs, keeps every shard well under its limit"). This file records the plans behind raising the cap from twelve to thirteen.
+`MAX_SHARDS` in `scripts/mutation-scope.js` caps how many shards the full mutation set is cut into. `test/unit/mutation-scope.test.js` holds every shard of the full plan to fifteen minutes ("the full set, planned with the real costs, keeps every shard well under its limit"). This file records the plans behind each raise: from twelve to thirteen (2026-11-06), then from thirteen to fifteen (2026-11-09). There is no cap argument, so for each plan the cap was set by editing `MAX_SHARDS` in the export before running the command.
 
-## The plans
+## Raised to thirteen: the plans
 
 Each plan is `node scripts/mutation-scope.js --all --plan --out plan.json`, run in an export of the commit named (`git archive`), with the cap set as shown. Seconds are the planner's own inferred cost per shard, from `test/tools/mutation-costs.json`. Measured 2026-11-06.
 
@@ -15,13 +15,13 @@ Each plan is `node scripts/mutation-scope.js --all --plan --out plan.json`, run 
 
 Main's rows plan under the limit at either cap. The recursive-read change adds rows to `test/tools/mutate-workspace-boundary-guards.js`, and at twelve one shard is planned at 935 s, past the limit, so that branch's planner test fails and the pre-commit gate refuses it. At thirteen its longest shard is 749 s.
 
-## Why one shard jumps
+## Why one shard jumped, on 2026-11-06
 
-A shard is cut at the first row that takes it past its share. Two of the boundary harness's slowest rows, about 193 s and 188 s, sit three rows apart. Before the new rows, a cut fell between them. The new rows move that cut past both, so one shard takes both. A cut that lands on whichever side of the share is nearer would stop this as rows grow. That is a separate change, since it alters the planner's cutting rule.
+At the time, a shard was cut at the first row that took it past its share. Two of the boundary harness's slowest rows, about 193 s and 188 s, sit three rows apart. Before the new rows, a cut fell between them. The new rows move that cut past both, so one shard takes both. A cut that lands on whichever side of the share is nearer would stop this as rows grow. That was a separate change to the cutting rule, and it has since landed: `planShards` now cuts at whichever side of the crossing row is nearer the share. The plans for fifteen below were made with that rule.
 
 ## What else the cap touches
 
-- **The nightly sweep** reads its shard matrix from the plan, so a thirteenth shard needs no workflow change: the plan step runs `node scripts/mutation-scope.js --all --plan` (`.github/workflows/mutation-nightly.yml:87`), its output carries the matrix (`:65`), and the shard job's matrix is that output (`:107`). Each shard keeps its 30-minute timeout (`:104`).
+- **The nightly sweep** reads its shard matrix from the plan, so a raise needs no workflow change. The lines are quoted, with their current numbers, under "Both workflows read the shard count from the plan" below.
 - **A pull request's scoped plan** is the same at either cap unless it needs more shards than the cap allows. `test/unit/mutation-scope.test.js` pins that: "a plan the cap does not reach is the same whatever the cap".
 
 ## Raised to fifteen
@@ -51,6 +51,13 @@ At fourteen the change's plan clears the limit, but its longest shard is 812 s a
 
 Fifteen shards need no workflow change, in either workflow that runs the full set:
 
-- **Pull requests** (`.github/workflows/ci.yml`): the plan step runs `node scripts/mutation-scope.js --plan --out mutation-plan.json` (`:219` and `:221`), which plans the full set when a change touches what every harness depends on. Its output carries the matrix (`matrix: ${{ steps.plan.outputs.matrix }}`, `:157`), and the shard job's matrix is that output (`matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}`, `:252`). Each shard keeps its 30-minute timeout (`:249`).
-- **The nightly sweep** (`.github/workflows/mutation-nightly.yml`): `node scripts/mutation-scope.js --all --plan --out mutation-plan.json` (`:88`), the matrix output (`:65`) and the shard job's matrix (`:111`), with the same 30-minute timeout (`:108`).
+- **Pull requests** (`.github/workflows/ci.yml`): the plan step runs `node scripts/mutation-scope.js --plan --out mutation-plan.json` (`:219` and `:221`), which plans the full set when a change touches what every harness depends on. Its output carries the matrix (`matrix: ${{ steps.plan.outputs.matrix }}`, `:157`), and the shard job's matrix is that output (`matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}`, `:252`). Each shard keeps its 30-minute timeout (`timeout-minutes: 30`, `:249`).
+- **The nightly sweep** (`.github/workflows/mutation-nightly.yml`): the plan step runs `node scripts/mutation-scope.js --all --plan --out mutation-plan.json` (`:88`). Its output carries the matrix (`matrix: ${{ steps.plan.outputs.matrix }}`, `:65`), and the shard job's matrix is that output (`matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}`, `:111`). Each shard keeps its 30-minute timeout (`timeout-minutes: 30`, `:108`).
+
+Line numbers are those of both workflows on main at `36714997`, which this change doesn't touch.
+
+## The planner suite and CI, at fifteen
+
+- `node --test test/unit/mutation-scope.test.js` passes 58 of 58 at `7f84c311`, the commit that sets the cap to fifteen. That includes "the full set, planned with the real costs, keeps every shard well under its limit" (main's rows) and "a plan the cap does not reach is the same whatever the cap". The planner test can't fail on main's rows at either cap (791 s at thirteen), so what tells the caps apart is the table for tree `59b5df34` above.
+- CI run 42587697025 on `7f84c311` planned the full set, because the change touches the planner. It ran all fifteen shards, and every one passed, as did "Mutation guards" and the rest of the run.
 
