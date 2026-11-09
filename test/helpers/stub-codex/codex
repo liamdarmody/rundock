@@ -18,6 +18,9 @@
 //                                         // exists, holding the server in its start
 //       "ignoreSigterm": true,            // log a SIGTERM and carry on, so only a
 //                                         // SIGKILL ends the process (read at spawn)
+//       "outliveStdin": true,             // keep running once stdin closes, so the
+//                                         // process outlives the Rundock that
+//                                         // started it unless a signal ends it
 //       "overload": {"method": "thread/start", "times": 2},  // first N get -32001
 //       "resumeFails": true,              // thread/resume -> -32600 "no rollout found"
 //       "resumeTransientFails": 2,        // first N thread/resume PER THREAD fail with
@@ -486,5 +489,12 @@ function runAppServer() {
     }
   });
   // The real server exits cleanly on stdin EOF (RESEARCH.md, shutdown notes).
-  process.stdin.on('end', () => process.exit(0));
+  // With outliveStdin it is one that does not, as a server stuck in a turn may
+  // not, so only a signal ends it.
+  process.stdin.on('end', () => {
+    if (!loadConfig().outliveStdin) process.exit(0);
+    log({ event: 'stdin-closed' });
+    process.stdout.on('error', () => {});
+    setInterval(() => {}, 1 << 30);
+  });
 }

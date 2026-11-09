@@ -4101,6 +4101,11 @@ const MUTATIONS = [
   [SWITCH_CODEX_GLUE, "Workspace switch: the Codex app-server is shut down while a routine turn still holds it",
     "  if (_routineTurns.has(server)) _retiring.add(server);\n  else stopCodexAppServer(server);",
     "  stopCodexAppServer(server);"],
+  // Read when it exits instead, the pid file is the open workspace's, and the
+  // one it was registered in keeps a dead pid for a later launch to signal.
+  [SWITCH_CODEX_GLUE, "Workspace switch: a Codex app-server that exits after a switch is taken off the pid file it was registered in",
+    "      if (ownPid) { deps.unregisterChildPid(ownPid, ownPidFile);",
+    "      if (ownPid) { deps.unregisterChildPid(ownPid);"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

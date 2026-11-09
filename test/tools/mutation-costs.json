@@ -1184,6 +1184,7 @@
       "Stop and ask: a Codex timeout is told as a denial": 3.6,
       "Stop and ask: a Codex without turn/steer is never told": 3.6,
       "Workspace switch: the Codex app-server is shut down while a routine turn still holds it": 7.82,
+      "Workspace switch: a Codex app-server that exits after a switch is taken off the pid file it was registered in": 16.37,
       "Stop and ask: the approval event carries no way to steer": 5.5,
       "Approved: an approval on a card is never told to the agent": 10.9,
       "Approved: an allow that asked nobody is told as a card": 5.5,

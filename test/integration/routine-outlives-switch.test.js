@@ -603,6 +603,7 @@ async function startCodexRun(t, dir, at) {
 
 test('a Codex routine turn survives a switch, which interrupts only the conversation turns being left', async (t) => {
   const release = path.join(h.workspaceDir, `release-codex-${process.pid}`);
+  t.after(() => fs.writeFileSync(release, ''));
   const a = scribeWorkspace('codex routine body', {
     rule: { untilFile: release },
     rules: [{ match: { promptIncludes: 'codex conversation body' }, deltas: ['working '], holdForInterrupt: true }],
@@ -631,12 +632,23 @@ test('a Codex routine turn survives a switch, which interrupts only the conversa
   assert.ok(h.pidAlive(server), 'and so is the app-server it runs on');
   assert.deepStrictEqual(requests(a, 'turn/interrupt').map(e => e.params.threadId), [convoThread],
     'its turn was never interrupted');
+  // Where the app-server is on record while the run goes on: in A's pid file,
+  // the one it was registered in, and named by the accessor the exit handler
+  // reads, though the switch retired it.
+  assert.ok(pidsIn(a).includes(server), 'A\'s pid file holds the app-server while the run goes on');
+  assert.ok(!pidsIn(b.dir).includes(server), 'and B\'s does not');
+  assert.ok(glue.getCodexAppServerPids().includes(server),
+    'the accessor the exit handler kills from names the held, retired app-server while its routine turn goes on');
 
   fs.writeFileSync(release, '');
   await h.waitUntil(() => closedIn(a) === 1);
   assert.strictEqual(recordsIn(a)[0].status, 'succeeded', 'the run ends with the outcome its turn gave');
   assert.strictEqual(stateIn(a)[SCRIBE_KEY].status, 'completed', 'recorded in its own workspace');
   assert.ok(await h.waitForPidExit(server, 5000), 'and the app-server shut down once its last routine turn ended');
+  // Taken off the file it was registered in, with B open by then.
+  await h.waitUntil(() => !pidsIn(a).includes(server), { timeout: 2000 });
+  assert.ok(!pidsIn(a).includes(server), 'it exited with B open, and was taken off A\'s pid file');
+  assert.ok(!pidsIn(b.dir).includes(server), 'and B\'s pid file never listed it');
 });
 
 // The switch lands while the app-server is still starting, before any routine
@@ -790,5 +802,66 @@ test('a run that outlived a switch is reaped by the next launch on its workspace
     assert.deepStrictEqual(recordsIn(a.dir).map(r => r.status), ['interrupted'], 'its record closed as interrupted');
   } finally {
     await next.stop();
+  }
+});
+
+// The same, for a Codex routine. The switch retires the shared app-server, and
+// the routine's turn still holds it, so it is still running when Rundock
+// stops. The exit handler kills every app-server the accessor names, the held
+// one among them. This server outlives its stdin closing, as one stuck in a
+// turn may, so nothing but that kill ends it.
+const CODEX_RUNDOCK = `
+const fs = require('fs');
+const path = require('path');
+const [a, b] = process.argv.slice(1);
+const srv = require(${JSON.stringify(path.join(ROOT, 'server.js'))})._internal;
+const glue = require(${JSON.stringify(path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'))});
+srv.setWorkspace(a);
+const scribe = srv.discoverAgents().find(agent => agent.id === 'scribe');
+srv.executeRoutine(scribe, scribe.routines[0], ${JSON.stringify(SCRIBE_KEY)});
+const log = path.join(a, 'stub-invocations.jsonl');
+const started = setInterval(() => {
+  if (!fs.existsSync(log) || !fs.readFileSync(log, 'utf-8').includes('"turn/start"')) return;
+  clearInterval(started);
+  srv.killAllChildren();
+  srv.setWorkspace(b);
+  srv.cleanOrphanedProcesses();
+  console.log(JSON.stringify({ switched: glue.getCodexAppServerPids() }));
+}, 20);
+setInterval(() => {}, 1 << 30);
+`;
+
+test('a Codex app-server a routine turn holds past a switch does not outlive Rundock stopping', async () => {
+  const a = scribeWorkspace('codex stopped body', {
+    rule: { untilFile: path.join(h.workspaceDir, `never-released-${process.pid}`) },
+    appServer: { outliveStdin: true },
+  });
+  const b = keeperWorkspace('codex stopped elsewhere body');
+  const env = { ...process.env, RUNDOCK_DISABLE_SCHEDULER: '1' };
+  delete env.WORKSPACE;
+
+  const first = launch(['-e', CODEX_RUNDOCK, a, b.dir], { ...env, HOME: makeTempDir('codex-first-home-') });
+  let server = null;
+  try {
+    try {
+      // The line it prints once it has switched, once that line is whole.
+      const switched = () => {
+        const text = first.said.text;
+        const at = text.indexOf('{"switched":');
+        const end = at < 0 ? -1 : text.indexOf('\n', at);
+        return end < 0 ? null : JSON.parse(text.slice(at, end)).switched;
+      };
+      assert.ok(await h.waitUntil(() => switched() !== null, { timeout: 15000 }),
+        `the first Rundock started the routine's turn and switched:\n${first.said.text}`);
+      server = appServerPid(a);
+      assert.deepStrictEqual(switched(), [server],
+        'the accessor the exit handler kills from names the app-server the turn holds, though the switch retired it');
+      assert.ok(h.pidAlive(server), 'and it is still running, its turn going');
+    } finally {
+      await first.stop();
+    }
+    assert.ok(await h.waitForPidExit(server, 4000), 'Rundock stopping took the app-server with it');
+  } finally {
+    if (server && h.pidAlive(server)) process.kill(server, 'SIGKILL');
   }
 });
