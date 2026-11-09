@@ -13,11 +13,14 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const scheduler = require('../../lib/scheduler.js');
 const { isWritableSchedule } = require('../../lib/agents/routines.js');
 const editor = require('../../public/routine-editor-model.js');
 const rows = require('../../public/routines-model.js');
+const before = require('../helpers/schedule-grammar-before-days.js');
 
 const WEEK = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const GET_DAY = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
@@ -46,27 +49,10 @@ const reopenedDays = (r) => (r && r.frequency === 'day' ? WEEK.slice() : r && r.
 
 // ===== THE GRAMMAR AN EARLIER RELEASE READ, FROZEN =====
 //
-// Copied from the scheduler as it was before sets of days, so a change to any
-// form it read is seen here as a different answer. Not to be updated with the
-// scheduler: it is the record of what that release did.
-function priorParse(schedule) {
-  if (!schedule) return null;
-  const s = schedule.toLowerCase();
-  const dailyMatch = s.match(/every day at (\d{2}):(\d{2})/);
-  if (dailyMatch) return { kind: 'daily', hour: parseInt(dailyMatch[1]), minute: parseInt(dailyMatch[2]) };
-  const monthlyMatch = s.match(/on (?:day 0?([1-9]|1\d|2[0-8])|the last day) of every month at (\d{2}):(\d{2})/);
-  if (monthlyMatch) {
-    const day = monthlyMatch[1] ? parseInt(monthlyMatch[1]) : 'last';
-    return { kind: 'monthly', day, hour: parseInt(monthlyMatch[2]), minute: parseInt(monthlyMatch[3]) };
-  }
-  const weeklyMatch = s.match(/every (\w+) at (\d{2}):(\d{2})/);
-  if (weeklyMatch) {
-    const day = GET_DAY[weeklyMatch[1]];
-    if (day === undefined) return null;
-    return { kind: 'weekly', day, hour: parseInt(weeklyMatch[2]), minute: parseInt(weeklyMatch[3]) };
-  }
-  return null;
-}
+// The scheduler as it was before sets of days, copied in the helper, so a
+// change to any form it read is seen here as a different answer. Not to be
+// updated with the scheduler: it is the record of what that build did.
+const priorParse = before.parseBefore;
 
 // Every form the earlier release read, in the cases and times a file holds.
 function priorForms() {
@@ -376,5 +362,44 @@ describe('the words', () => {
       { text: 'Next run: shortly. It was due today, 9:00am.', className: 'next-run' });
     assert.deepStrictEqual(rows.nextRunLabel({ ...owed, now: new Date(2026, 10, 7, 10, 0).toISOString() }),
       { text: 'Next run: Monday, 9:00am', className: 'next-run' }, 'a slot still ahead reads as any other');
+  });
+});
+
+// ===== WHAT 0.15.7 MAKES OF A SET OF DAYS =====
+//
+// The evidence file says 0.15.7 reads neither new form, quoting its grammar.
+// Both halves are held here: the frozen 0.15.7 grammar reads each form as
+// nothing and refuses to save it, and the file quotes exactly the patterns and
+// the day table that grammar runs, with the results it gives.
+describe('what 0.15.7 makes of a set of days', () => {
+  const NEW_FORMS = [
+    'every weekday at 09:00',
+    'every monday, wednesday and sunday at 09:00',
+    'every saturday and sunday at 10:00',
+  ];
+
+  test('0.15.7 reads no set of days, and its save check refuses each one', () => {
+    for (const schedule of NEW_FORMS) {
+      assert.strictEqual(before.parse0157(schedule), null, `0.15.7 read "${schedule}"`);
+      assert.strictEqual(before.isWritable0157(schedule), false, `0.15.7 would save "${schedule}"`);
+      assert.strictEqual(before.parseBefore(schedule), null, `the scheduler before sets of days read "${schedule}"`);
+      assert.ok(scheduler.parseSchedule(schedule), `sanity: this release reads "${schedule}"`);
+    }
+    assert.deepStrictEqual(before.parse0157('every monday at 09:00'), { kind: 'weekly', day: 1, hour: 9, minute: 0 },
+      'sanity: the frozen grammar reads a day it should');
+    assert.deepStrictEqual(before.parse0157('every day at 09:00'), { kind: 'daily', hour: 9, minute: 0 });
+  });
+
+  test('the evidence file quotes the grammar this test runs, and the results it gives', () => {
+    const doc = fs.readFileSync(path.join(__dirname, '..', '..', 'docs', 'evidence', 'routine-days-older-release.md'), 'utf8');
+    const table = Object.entries(before.WEEKDAYS).map(([name, n]) => `${name}: ${n}`).join(', ');
+    assert.ok(doc.includes(`const WEEKDAYS = { ${table} };`), 'the file quotes the day table the grammar looks names up in');
+    assert.ok(doc.includes(`const weeklyMatch = s.match(${before.WEEKLY});`), `the file quotes the weekly pattern ${before.WEEKLY}`);
+    assert.ok(doc.includes(`\`${before.DAILY}\``), `the file quotes the daily pattern ${before.DAILY}`);
+    for (const schedule of NEW_FORMS.concat('every monday at 09:00', 'every day at 09:00')) {
+      const line = `${JSON.stringify(schedule)} -> ${JSON.stringify(before.parse0157(schedule))}`
+        + ` | save check: ${before.isWritable0157(schedule)}`;
+      assert.ok(doc.includes(line), `the file shows: ${line}`);
+    }
   });
 });
