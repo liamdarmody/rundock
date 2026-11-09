@@ -89,6 +89,8 @@ const DISPATCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'index.js
 // each mutation runs exactly one suite, and these guards are watched by that
 // one. Both entries read and restore the same file, one mutation at a time.
 const ROUTINES_TZ = { src: path.join(ROOT, 'lib', 'agents', 'routines.js'), suite: 'test/unit/routine-timezone.test.js' };
+// The editor's model, watched by the suite for a routine on a set of days.
+const DAYS_MODEL = { src: path.join(ROOT, 'public', 'routine-editor-model.js'), suite: 'test/unit/routine-days.test.js' };
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -552,6 +554,20 @@ const MUTATIONS = [
     + "    else if (field === 'time' || field === 'day') state[field] = value;",
     "    if (field === 'frequency' || field === 'time' || field === 'day') state[field] = value;"],
 
+  // ===== THE DAYS OF A WEEK =====
+  //
+  // A week with no day ticked saves nothing: Continue is pressable, and stops
+  // there. Without the block it goes on to a confirmation with nothing to save.
+  [VIEW, 'Continue with no day ticked stops on the step and says why',
+    '    if (model().needsADay(state)) {\n      state.dayAsked = true;',
+    '    if (false) {\n      state.dayAsked = true;'],
+  // The week start rule: from every day all seven, from a month none.
+  [DAYS_MODEL, 'week from a month starts with no day ticked',
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : (from === 'day' ? ALL_DAYS.slice() : []);",
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : ALL_DAYS.slice();"],
+  [DAYS_MODEL, 'week from every day starts with all seven ticked',
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : (from === 'day' ? ALL_DAYS.slice() : []);",
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : [];"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
