@@ -27,7 +27,7 @@ const { JSDOM } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
-const MODEL_SRC = read('public', 'routine-editor-model.js');
+const MODEL_SRC = read('public', 'schedule-days.js') + read('public', 'routine-editor-model.js');
 // Loaded before the routines model, which reads the shared no-guide next step
 // off it, in the order index.html loads them.
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
@@ -303,6 +303,15 @@ function choose(doc, w, field, value) {
 
 function editorText(doc) {
   return doc.getElementById('routine-editor-content').textContent.replace(/\s+/g, ' ').trim();
+}
+
+// Tick exactly these days in the week's row, by pressing the boxes.
+function tickOnly(doc, values) {
+  const boxes = [...doc.querySelectorAll('[data-routine-day]')];
+  assert.strictEqual(boxes.length, 7, 'no row of days on the page');
+  for (const box of boxes) {
+    if (box.checked !== values.includes(box.getAttribute('data-routine-day'))) box.click();
+  }
 }
 
 describe('the doors, pressed', () => {
@@ -700,7 +709,8 @@ describe('the whole journey, by pressing only', () => {
     press(doc, '[data-skill-key="ops-summary:piper"]');
     press(doc, '.re-actions .settings-btn-primary');
 
-    choose(doc, w, 'frequency', 'monday');
+    choose(doc, w, 'frequency', 'week');
+    tickOnly(doc, ['monday']);
     choose(doc, w, 'time', '07:00');
     press(doc, '[data-run-on="local"]');
 
@@ -743,13 +753,16 @@ describe('the whole journey, by pressing only', () => {
     pressUnscopedDoor(doc, w);
     press(doc, '[data-skill-key="ops-summary:piper"]');
     press(doc, '.re-actions .settings-btn-primary');
-    choose(doc, w, 'frequency', 'friday');
+    choose(doc, w, 'frequency', 'week');
+    tickOnly(doc, ['friday']);
     press(doc, '.re-actions .settings-btn-primary');
 
     press(doc, '.re-confirm .re-link');
     assert.ok(doc.querySelector('select[data-routine-field="frequency"]'), 'Edit returns to the step that built it');
-    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'friday',
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'week',
       'and what was already chosen is still chosen');
+    assert.deepStrictEqual([...doc.querySelectorAll('[data-routine-day]:checked')].map(b => b.getAttribute('data-routine-day')),
+      ['friday'], 'the days with it');
     dom.window.close();
   });
 

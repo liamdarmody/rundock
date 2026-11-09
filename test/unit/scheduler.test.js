@@ -141,9 +141,9 @@ describe('getNextRun: weekly grammar', () => {
     assert.notStrictEqual(next, null);
   });
 
-  test('unknown weekday word returns null silently (pinned as-is)', () => {
+  test('unknown day word returns null silently (pinned as-is)', () => {
     atTime(WED_1030);
-    assert.strictEqual(srv.getNextRun('every weekday at 08:00', null), null);
+    assert.strictEqual(srv.getNextRun('every weekdays at 08:00', null), null);
     assert.strictEqual(srv.getNextRun('every fortnight at 08:00', null), null);
   });
 

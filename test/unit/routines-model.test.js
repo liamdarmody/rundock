@@ -399,7 +399,8 @@ describe('the rest of the row', () => {
 
   test('a schedule the editor never offered assembles into no sentence', () => {
     assert.strictEqual(m.scheduleWords('0 7 * * *'), null);
-    assert.strictEqual(m.scheduleWords('every weekday at 07:00'), null);
+    assert.strictEqual(m.scheduleWords('every weekdays at 07:00'), null);
+    assert.strictEqual(m.scheduleWords('every mon and fri at 07:00'), null);
     assert.strictEqual(m.scheduleWords('every monday at 08:00'), 'Every Monday at 8:00am');
   });
 
@@ -1201,10 +1202,11 @@ describe('a routine whose schedule the scheduler cannot read', () => {
     const p = problem({ schedule: '0 7 * * *', scheduleReadable: false });
     assert.ok(p, 'an unreadable schedule raises nothing');
     assert.match(p.text, /cannot read this schedule/i);
-    // Both accepted shapes, by example rather than by description. A reader
+    // The accepted shapes, by example rather than by description. A reader
     // who has just been told their schedule is wrong needs one they can copy.
     assert.match(p.text, /every day at 07:00/);
-    assert.match(p.text, /every Monday at 07:00/);
+    assert.match(p.text, /every weekday at 07:00/);
+    assert.match(p.text, /every Monday and Friday at 07:00/);
   });
 
   test('a schedule the scheduler reads raises nothing', () => {
@@ -1268,11 +1270,11 @@ describe('a routine whose schedule the scheduler cannot read', () => {
 describe('the unreadable-schedule notice: a red lead and a quiet body', () => {
   const LEAD = 'Rundock cannot read this schedule, so this routine will not run.';
 
-  test('any other schedule is shown three forms that work', () => {
+  test('any other schedule is shown four forms that work', () => {
     const p = m.scheduleProblem({ schedule: 'every month at 09:00', scheduleReadable: false });
     assert.strictEqual(p.lead, LEAD);
     assert.strictEqual(p.body, 'Use Edit schedule, or change the file to say every day at 07:00, '
-      + 'every Monday at 07:00 or on day 15 of every month at 07:00.');
+      + 'every weekday at 07:00, every Monday and Friday at 07:00 or on day 15 of every month at 07:00.');
     assert.strictEqual(p.text, `${p.lead} ${p.body}`);
   });
 

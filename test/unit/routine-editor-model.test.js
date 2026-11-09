@@ -180,14 +180,25 @@ describe('routine editor: choosing a skill', () => {
   });
 });
 
-// Every choice the builder offers: each frequency at each time, and a monthly
-// one on each of its days.
+// Every set of days the week's boxes can make, Monday first: 127 of them.
+function everySet() {
+  const week = model.weekDays().map(d => d.value);
+  const out = [];
+  for (let bits = 1; bits < 128; bits++) out.push(week.filter((_, i) => bits & (1 << i)));
+  return out;
+}
+
+// Every choice the builder offers: each frequency at each time, a week on each
+// set of days short of all seven (which is every day, and reopens as it), and a
+// monthly one on each of its days.
 function everyChoice() {
   const out = [];
   for (const frequency of model.FREQUENCIES) {
     for (const time of model.times()) {
-      if (frequency.value !== 'month') out.push({ frequency: frequency.value, time: time.value });
-      else for (const day of model.monthDays()) out.push({ frequency: 'month', day: day.value, time: time.value });
+      if (frequency.value === 'day') out.push({ frequency: 'day', time: time.value });
+      else if (frequency.value === 'week') {
+        for (const days of everySet()) if (days.length < 7) out.push({ frequency: 'week', days, time: time.value });
+      } else for (const day of model.monthDays()) out.push({ frequency: 'month', day: day.value, time: time.value });
     }
   }
   return out;
@@ -197,7 +208,7 @@ describe('routine editor: the schedule is built, not typed', () => {
   // AC-3
   test('a schedule is assembled from the offered words', () => {
     assert.strictEqual(
-      model.buildSchedule({ frequency: 'monday', time: '07:00' }),
+      model.buildSchedule({ frequency: 'week', days: ['monday'], time: '07:00' }),
       'every monday at 07:00',
     );
     assert.strictEqual(
@@ -216,6 +227,10 @@ describe('routine editor: the schedule is built, not typed', () => {
       { frequency: 'day', time: '7:00' },
       { frequency: 'day', time: '07:15' },
       { frequency: 'Monday', time: '07:00' },
+      { frequency: 'monday', time: '07:00' },
+      { frequency: 'week', days: ['mon'], time: '07:00' },
+      { frequency: 'week', days: [], time: '07:00' },
+      { frequency: 'week', time: '07:00' },
       { frequency: 'day', time: '' },
       { frequency: '', time: '07:00' },
     ]) {
@@ -230,7 +245,8 @@ describe('routine editor: the schedule is built, not typed', () => {
   // the editor writes routines that never fire and says nothing. Pinned
   // against the format the scheduler documents rather than against itself.
   test('every offered combination matches the schedule format the scheduler reads', () => {
-    const recognised = new RegExp('^(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)'
+    const name = '(monday|tuesday|wednesday|thursday|friday|saturday|sunday)';
+    const recognised = new RegExp(`^(every (day|weekday|${name}((, ${name})* and ${name})?)`
       + '|on day ([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d$');
     for (const choice of everyChoice()) {
       const built = model.buildSchedule(choice);
@@ -268,7 +284,7 @@ describe('routine editor: the schedule is built, not typed', () => {
 describe('routine editor: a stored schedule read back into the builder', () => {
   test('a schedule the builder made comes back as the two values that made it', () => {
     assert.deepStrictEqual(model.readSchedule('every monday at 07:00'),
-      { frequency: 'monday', time: '07:00' });
+      { frequency: 'week', days: ['monday'], time: '07:00' });
     assert.deepStrictEqual(model.readSchedule('every day at 06:30'),
       { frequency: 'day', time: '06:30' });
   });
@@ -293,7 +309,9 @@ describe('routine editor: a stored schedule read back into the builder', () => {
   test('a schedule this editor could not have built reads back as nothing', () => {
     for (const stored of [
       'every fortnight at 07:00',
-      'every weekday at 18:00',
+      'every mon and fri at 18:00',
+      'every monday, friday at 18:00',
+      'every monday and monday at 18:00',
       'every day at 07:03',
       'every day at 9:00',
       'every day @ 05:00',
@@ -317,7 +335,7 @@ describe('routine editor: a stored schedule read back into the builder', () => {
   // rather than the author's capitalisation carried back out.
   test('a schedule written in capitals reads back as the values the editor offers', () => {
     assert.deepStrictEqual(model.readSchedule('Every Monday at 07:00'),
-      { frequency: 'monday', time: '07:00' });
+      { frequency: 'week', days: ['monday'], time: '07:00' });
   });
 
   // ===== WHAT IS OWED TO A ROUTINE THE PICKER CANNOT SHOW =====
@@ -409,7 +427,7 @@ describe('routine editor: where it runs', () => {
   // is not local produces different words through the same code path. A fixed
   // string cannot satisfy both halves.
   test('the run-on words come from the option rather than a fixed string', () => {
-    const args = { frequency: 'monday', time: '07:00', skillName: 'Compile the ops summary' };
+    const args = { frequency: 'week', days: ['monday'], time: '07:00', skillName: 'Compile the ops summary' };
     assert.strictEqual(
       model.previewSentence({ ...args, runOn: 'local' }),
       'Run Compile the ops summary every Monday at 7:00am, on this computer.',
@@ -513,7 +531,7 @@ describe('routine editor: what save produces', () => {
 
   test('a draft carries the schedule, the skill and where it runs', () => {
     const draft = model.routineDraft({
-      skill, agentId: 'piper', frequency: 'monday', time: '07:00', runOn: 'local',
+      skill, agentId: 'piper', frequency: 'week', days: ['monday'], time: '07:00', runOn: 'local',
     });
     assert.strictEqual(draft.agentId, 'piper');
     assert.strictEqual(draft.schedule, 'every monday at 07:00');
@@ -527,7 +545,7 @@ describe('routine editor: what save produces', () => {
   // hidden in the picker.
   test('a draft naming the reserved target is refused', () => {
     assert.strictEqual(model.routineDraft({
-      skill, agentId: 'piper', frequency: 'monday', time: '07:00', runOn: 'agent-computer',
+      skill, agentId: 'piper', frequency: 'week', days: ['monday'], time: '07:00', runOn: 'agent-computer',
     }), null);
   });
 
@@ -539,7 +557,7 @@ describe('routine editor: what save produces', () => {
 
   test('a draft with no skill is refused', () => {
     assert.strictEqual(model.routineDraft({
-      skill: null, agentId: 'piper', frequency: 'monday', time: '07:00', runOn: 'local',
+      skill: null, agentId: 'piper', frequency: 'week', days: ['monday'], time: '07:00', runOn: 'local',
     }), null);
   });
 
@@ -561,10 +579,9 @@ describe('routine editor: what save produces', () => {
 const DAY_31 = { schedule: 'on day 31 of every month at 09:00', unreadableMonthDay: { day: 31, time: '09:00' } };
 
 describe('routine editor: a monthly schedule', () => {
-  test('month is offered last, after Sunday, and nothing before it moves', () => {
-    assert.deepStrictEqual(model.FREQUENCIES.map(f => f.value),
-      ['day', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'month']);
-    assert.strictEqual(model.FREQUENCIES[8].label, 'month');
+  test('month is offered last, after week', () => {
+    assert.deepStrictEqual(model.FREQUENCIES.map(f => f.value), ['day', 'week', 'month']);
+    assert.strictEqual(model.FREQUENCIES[2].label, 'month');
   });
 
   test('the days are 1st to 28th, then the last day after a rule', () => {
@@ -582,13 +599,13 @@ describe('routine editor: a monthly schedule', () => {
 
   test('choosing month starts on the 1st and keeps the time; any other frequency drops the day', () => {
     assert.deepStrictEqual(model.chooseFrequency({ frequency: 'day', day: null, time: '07:30' }, 'month'),
-      { frequency: 'month', day: '1', time: '07:30' });
+      { frequency: 'month', day: '1', days: null, time: '07:30' });
     assert.deepStrictEqual(model.chooseFrequency({ frequency: 'month', day: '15', time: '07:30' }, 'month'),
-      { frequency: 'month', day: '15', time: '07:30' }, 'choosing month again keeps the day already chosen');
+      { frequency: 'month', day: '15', days: null, time: '07:30' }, 'choosing month again keeps the day already chosen');
     assert.deepStrictEqual(model.chooseFrequency({ frequency: 'month', day: '15', time: '07:30' }, 'day'),
-      { frequency: 'day', day: null, time: '07:30' });
-    assert.deepStrictEqual(model.chooseFrequency({ frequency: 'month', day: 'last', time: '18:00' }, 'friday'),
-      { frequency: 'friday', day: null, time: '18:00' });
+      { frequency: 'day', day: null, days: null, time: '07:30' });
+    assert.deepStrictEqual(model.chooseFrequency({ frequency: 'month', day: 'last', time: '18:00' }, 'week'),
+      { frequency: 'week', day: null, days: [], time: '18:00' });
   });
 
   test('the preview names the day, and reads its last clause off the chosen option', () => {
@@ -605,14 +622,14 @@ describe('routine editor: a monthly schedule', () => {
       'a month with no day is not a schedule, so there is no sentence to show');
   });
 
-  test('the catch-up note ends on the monthly sentence for month, and on the same-day one otherwise', () => {
+  test('the catch-up note ends on the monthly sentence for month, and on the that-day one otherwise', () => {
     const rule = 'Rundock only runs the routines of the workspace that is open, '
       + "so this one's do not run while you are elsewhere. ";
     assert.strictEqual(model.scheduleStepFields({ frequency: 'month' }).workspaceCaveat,
       rule + 'A missed slot is caught up the next time Rundock is open that month.');
-    for (const frequency of ['day', 'monday', 'sunday', undefined]) {
+    for (const frequency of ['day', 'week', undefined]) {
       assert.strictEqual(model.scheduleStepFields({ frequency }).workspaceCaveat,
-        rule + 'A missed slot is caught up the same day you return.', `the note for ${frequency}`);
+        rule + 'A missed slot is caught up if Rundock is open again that day.', `the note for ${frequency}`);
     }
     assert.strictEqual(model.scheduleStepFields().workspaceCaveat, model.WORKSPACE_CAVEAT);
   });
@@ -670,7 +687,7 @@ describe('routine editor: a monthly schedule', () => {
     assert.strictEqual(model.reopenSchedule({ schedule: 'on day 31 of every month at 09:00' }), null,
       'without the server\'s reading, the day is not read here');
     assert.deepStrictEqual(model.reopenSchedule({ schedule: 'every monday at 07:00' }),
-      { frequency: 'monday', time: '07:00' });
+      { frequency: 'week', days: ['monday'], time: '07:00' });
     assert.strictEqual(model.reopenSchedule(null), null);
     assert.strictEqual(model.storedScheduleNote({ schedule: 'every month at 09:00' }),
       "This routine's schedule, every month at 09:00, is not one this editor can build. "
@@ -699,7 +716,11 @@ describe('routine editor: the words it ships', () => {
       model.times(),
       model.skillChoices({ skills: [], agentId: null }),
       model.skillChoices({ skills: skillFixture(), agentId: null }),
-      model.previewSentence({ frequency: 'monday', time: '07:00', skillName: 'A skill', runOn: 'local' }),
+      model.previewSentence({ frequency: 'week', days: ['monday'], time: '07:00', skillName: 'A skill', runOn: 'local' }),
+      model.previewSentence({ frequency: 'week', days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+        time: '07:00', skillName: 'A skill', runOn: 'local' }),
+      model.previewSentence({ frequency: 'week', days: ['monday', 'friday'], time: '07:00', skillName: 'A skill', runOn: 'local' }),
+      model.scheduleStepFields().week,
       model.readyCaption({ zone: 'Europe/London', runOn: 'local' }),
       model.timezoneCaption({ zone: 'Europe/London', agentName: 'Piper' }),
       model.timezoneCaption({ zone: 'Europe/London', agentName: null }),

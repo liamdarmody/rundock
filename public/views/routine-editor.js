@@ -86,6 +86,11 @@
       time: (input && input.time) || '09:00',
       // A monthly routine's day, '1' to '28' or 'last'; null for any other.
       day: (input && input.day) || null,
+      // A weekly routine's days, Monday first; null for any other frequency.
+      days: (input && input.days) || null,
+      // Whether Continue was pressed with no day ticked, which turns the
+      // prompt red until a box is ticked.
+      dayAsked: false,
       // The default is the only value this release can honour. It is read from
       // the supported set rather than typed, so it cannot drift from it. An
       // edit carries the routine's own value instead, which it SHOWS and never
@@ -243,10 +248,47 @@
     </div>`;
   }
 
-  function scheduleStep(m, option) {
-    const sentence = m.previewSentence({
-      frequency: state.frequency, day: state.day, time: state.time, skillName: option && option.name, runOn: state.runOn,
+  /**
+   * THE DAYS, for a week only: one row of seven native checkboxes under the
+   * sentence, inside its card, led by the word "on". Native, so each is a Tab
+   * stop, Space ticks it, and nothing here handles a key. Each box is called by
+   * the full day and shows the short name, which that name contains.
+   */
+  function dayRow(m) {
+    const week = m.scheduleStepFields().week;
+    let h = `<div class="re-days" role="group" aria-label="${escText(week.label)}">`;
+    h += `<span class="re-word">${escText(week.lead)}</span>`;
+    for (const d of week.days) {
+      const ticked = (state.days || []).indexOf(d.value) !== -1;
+      h += `<label class="re-day"><input type="checkbox" class="re-day-box" data-routine-day="${escText(d.value)}"
+        aria-label="${escText(d.name)}"${ticked ? ' checked' : ''}
+        onchange="routineEditorToggleDay('${escText(d.value)}')"><span>${escText(d.label)}</span></label>`;
+    }
+    return h + '</div>';
+  }
+
+  /**
+   * What the line under the sentence says: the schedule in a sentence, or,
+   * for a week with no day ticked, that one is needed, in red once Continue
+   * has been pressed. One reading for the render and for a tick, which
+   * changes this line where it stands rather than redrawing the step, so
+   * focus stays on the box and the line is read out as a live region.
+   */
+  function previewLine(m, option) {
+    if (m.needsADay(state)) {
+      return state.dayAsked
+        ? { text: m.WEEK_DAYS.noneOnContinue, className: 're-preview re-preview-error' }
+        : { text: m.WEEK_DAYS.none, className: 're-preview re-preview-prompt' };
+    }
+    const text = m.previewSentence({
+      frequency: state.frequency, day: state.day, days: state.days, time: state.time,
+      skillName: option && option.name, runOn: state.runOn,
     });
+    return text ? { text, className: 're-preview' } : null;
+  }
+
+  function scheduleStep(m, option) {
+    const line = previewLine(m, option);
     const zone = m.timezoneCaption({ zone: state.zone, agentName: state.agentName });
 
     // EDITING IS NOT STEP TWO OF TWO. There is no step one behind an edit: the
@@ -303,9 +345,13 @@
     // both still end in one: those ARE finished sentences, read once and not
     // interacted with, which is where the house reading of a full stop
     // applies.
-    h += '</select></span></div>';
+    h += '</select></span>';
+    if (state.frequency === 'week') h += dayRow(m);
+    h += '</div>';
 
-    if (sentence) h += `<p class="re-preview" data-routine-editor="sentence">${escText(sentence)}</p>`;
+    if (line) {
+      h += `<p class="${line.className}" data-routine-editor="sentence" aria-live="polite">${escText(line.text)}</p>`;
+    }
     // WHEN THE ROUTINE'S OWN SCHEDULE IS NOT ONE THESE CONTROLS CAN SHOW.
     //
     // Agent files are written by hand, and the scheduler reads more than this
@@ -336,15 +382,16 @@
     const note = [zone, m.scheduleStepFields({ frequency: state.frequency }).workspaceCaveat].filter(Boolean).join(' ');
     if (note) h += `<p class="re-caveat" data-routine-editor="workspace-caveat">${escText(note)}</p>`;
     h += `<div class="re-actions">
-      <button class="settings-btn-primary" type="button" ${sentence ? '' : 'disabled'}
-        onclick="routineEditorStep('ready')">Continue</button>
+      <button class="settings-btn-primary" type="button" ${line ? '' : 'disabled'}
+        onclick="routineEditorContinue()">Continue</button>
     </div>`;
     return h;
   }
 
   function readyStep(m, option) {
     const sentence = m.previewSentence({
-      frequency: state.frequency, day: state.day, time: state.time, skillName: option && option.name, runOn: state.runOn,
+      frequency: state.frequency, day: state.day, days: state.days, time: state.time,
+      skillName: option && option.name, runOn: state.runOn,
     });
     const caption = m.readyCaption({ zone: state.zone, runOn: state.runOn });
     if (!sentence) {
@@ -609,6 +656,7 @@
       frequency: parsed ? parsed.frequency : null,
       time: parsed ? parsed.time : null,
       day: parsed ? parsed.day : null,
+      days: parsed ? parsed.days : null,
       edit: {
         agentId: agent.id, name: routine.name, occurrence, schedule: routine.schedule,
         unreadableMonthDay: routine.unreadableMonthDay || null,
@@ -630,9 +678,47 @@
 
   function routineEditorSetField(field, value) {
     if (!state) return;
-    if (field === 'frequency') Object.assign(state, model().chooseFrequency(state, value));
+    if (field === 'frequency') Object.assign(state, model().chooseFrequency(state, value), { dayAsked: false });
     else if (field === 'time' || field === 'day') state[field] = value;
     renderRoutineEditor();
+  }
+
+  // The line under the sentence, said again where it stands.
+  function showPreviewLine() {
+    const shown = document.querySelector('[data-routine-editor="sentence"]');
+    const line = previewLine(model(), subject());
+    if (!shown || !line) return;
+    shown.className = line.className;
+    shown.textContent = line.text;
+  }
+
+  /**
+   * A day box was ticked or unticked. The box keeps its own state and focus,
+   * so only the line under the sentence changes, and the red goes, since a
+   * box has been touched.
+   */
+  function routineEditorToggleDay(value) {
+    if (!state) return;
+    state.days = model().toggleDay(state.days, value);
+    state.dayAsked = false;
+    showPreviewLine();
+  }
+
+  /**
+   * Continue on the schedule step. A week with no day ticked saves nothing and
+   * goes nowhere: the line says why, in red, and focus moves to Monday, the
+   * first thing that fixes it. Anything else goes on to the confirmation.
+   */
+  function routineEditorContinue() {
+    if (!state) return;
+    if (model().needsADay(state)) {
+      state.dayAsked = true;
+      showPreviewLine();
+      const first = document.querySelector('[data-routine-day]');
+      if (first) first.focus();
+      return;
+    }
+    routineEditorStep('ready');
   }
 
   /**
@@ -794,6 +880,7 @@
       agentId: option.agentId,
       frequency: state.frequency,
       day: state.day,
+      days: state.days,
       time: state.time,
       runOn: state.runOn,
     });
@@ -833,7 +920,7 @@
    * server to store it.
    */
   function sendScheduleEdit(m) {
-    const schedule = m.buildSchedule({ frequency: state.frequency, day: state.day, time: state.time });
+    const schedule = m.buildSchedule({ frequency: state.frequency, day: state.day, days: state.days, time: state.time });
     if (!schedule) return;
     if (typeof ws === 'undefined' || !ws) return;
     state.saving = true;
@@ -874,7 +961,8 @@
     openRoutineEditor, addRoutineForAgent, addRoutineForSkill, addRoutine, editRoutineSchedule, browserTimezone,
     routinesListNav, routineEditorSaved, routineEditorFailed, routineEditorSkillsArrived,
     renderRoutineEditor, routineEditorHtml,
-    routineEditorPick, routineEditorStep, routineEditorSetField, routineEditorRunOn,
+    routineEditorPick, routineEditorStep, routineEditorSetField, routineEditorToggleDay, routineEditorContinue,
+    routineEditorRunOn,
     routineEditorBuildSkill, routineEditorLeave, saveRoutine,
   };
 }));

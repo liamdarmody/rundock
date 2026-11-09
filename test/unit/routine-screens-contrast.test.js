@@ -27,6 +27,8 @@
 // numbers, so three of them read 0.01 or 0.02 off the design's table, which
 // rounded them: the ring on the selected row (4.72 and 3.35 here, 4.70 and
 // 3.36 there) and the link text (5.06 and 5.53 here, 5.05 and 5.55 there).
+// The editor's error line reads the same way: 5.87 and 6.19 here, 5.88 and
+// 6.20 in the design's table.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -191,6 +193,14 @@ const ROWS = [
   ['the empty sentence and the file label', 'run', ['.rd-empty', '.rd-files-label'], 'color', '--text-2-strong', '--elevated', 4.5, 5.55, 5.86],
   ['the row\'s skill link and quiet Resume', 'routines', ['.rr-skill-link', '.rr-resume-quiet'], 'color', '--link-text', '--card', 4.5, 5.06, 5.53],
   ['the selected scope row\'s name and count', 'sidebar', ['.scope-item.active .scope-name', '.scope-item.active .scope-count'], 'color', '--accent-text', SELECTED, 4.5, 4.72, 4.64],
+  // The editor's row of days, in its sentence card, and the line under it.
+  ['the day names and the word before them', 'editor', ['.re-day', '.re-word'], 'color', '--text-1', '--card', 4.5, 10.82, 14.90],
+  ['an unticked day box\'s edge', 'editor', ['.re-day-box'], 'border-color', '--border-strong', '--card', 3, 3.20, 3.91],
+  ['a ticked day box\'s fill', 'editor', ['.re-day-box:checked'], 'background-color', '--accent-control', '--card', 3, 4.43, 3.28],
+  ['the tick in a day box', 'editor', ['.re-day-box:checked::after'], 'border-color', '--elevated', '--accent-control', 3, 5.24, 3.83],
+  ['the day box focus ring', 'editor', ['.re-day-box:focus-visible'], 'outline', '--accent-control', '--card', 3, 4.43, 3.28],
+  ['the ask for a day', 'editor', ['.re-preview-prompt'], 'color', '--text-2-strong', '--elevated', 4.5, 5.55, 5.86],
+  ['the ask for a day once Continue is pressed', 'editor', ['.re-preview-error'], 'color', '--danger-text-card', '--elevated', 4.5, 5.87, 6.19],
 ];
 
 const THEMES = themesOf(TOKENS_SRC);
@@ -321,5 +331,20 @@ describe('the measuring instrument', () => {
     const card = THEMES.light('--card', 'specimen');
     assert.ok(ratio(THEMES.light('--working', 'specimen'), card) < 4.5, 'the working hue on the light card is 2.20:1');
     assert.ok(ratio(THEMES.light('--text-1', 'specimen'), card) >= 4.5);
+  });
+});
+
+// The day boxes are custom-drawn native checkboxes, so the box, its ring and
+// its target are the stylesheet's to keep: the ring sits outside the box, and
+// the box and its name make one target at least 32px high.
+describe('the editor\'s day boxes', () => {
+  test('are native checkboxes drawn by the stylesheet, with the ring outside the box', () => {
+    assert.strictEqual(declared('editor', '.re-day-box', 'appearance'), 'none');
+    assert.strictEqual(declared('editor', '.re-day-box:focus-visible', 'outline-offset'), '2px');
+  });
+
+  test('share one target with their name, at least 32px high', () => {
+    assert.strictEqual(declared('editor', '.re-day', 'min-height'), '32px');
+    assert.strictEqual(declared('editor', '.re-day', 'cursor'), 'pointer');
   });
 });

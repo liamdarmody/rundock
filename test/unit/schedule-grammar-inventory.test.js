@@ -13,7 +13,8 @@
 // the row's sentence read only what the editor can build, so they answer
 // nothing for a schedule the editor cannot show: a minute off the half hour, or
 // a day the scheduler does not read. The disclosure paraphrases the daily and
-// weekly forms and quotes anything else as written.
+// single-day weekly forms and quotes anything else as written, a set of days
+// among them.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -39,11 +40,15 @@ function disclosure(schedule) {
 function read(schedule) {
   const parsed = scheduler.parseSchedule(schedule);
   if (!parsed) return null;
-  const { kind, day, hour, minute } = parsed;
+  const { kind, day, days, hour, minute } = parsed;
+  if (days !== undefined) return { kind, days, hour, minute };
   return day === undefined ? { kind, hour, minute } : { kind, day, hour, minute };
 }
 
 const monthly = (day, hour = 9, minute = 0) => ({ kind: 'monthly', day, hour, minute });
+const days = (list, hour = 9, minute = 0) => ({ kind: 'days', days: list, hour, minute });
+// What the editor reopens a set of days as.
+const week = (list, time = '09:00') => ({ frequency: 'week', days: list, time });
 // What the editor reopens a monthly schedule as, and the row's sentence for it.
 const reopen = (day, time = '09:00') => ({ frequency: 'month', day, time });
 const ordinal = (n) => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th');
@@ -81,15 +86,40 @@ ROWS.push(
   ['on day 15 of every month at 09:07', monthly(15, 9, 7), true, null, null, 'quoted'],
   ['on the last day of every month at 23:59', monthly('last', 23, 59), true, null, null, 'quoted'],
 
-  // Today's daily and weekly rows, unchanged.
+  // Today's daily and weekly rows. One day reopens as a week with that day
+  // ticked, and reads and fires as it did.
   ['every day at 07:00', { kind: 'daily', hour: 7, minute: 0 }, true,
     { frequency: 'day', time: '07:00' }, 'Every day at 7:00am', 'paraphrased'],
   ['every monday at 07:00', { kind: 'weekly', day: 1, hour: 7, minute: 0 }, true,
-    { frequency: 'monday', time: '07:00' }, 'Every Monday at 7:00am', 'paraphrased'],
+    week(['monday'], '07:00'), 'Every Monday at 7:00am', 'paraphrased'],
   ['Every Monday at 07:00', { kind: 'weekly', day: 1, hour: 7, minute: 0 }, true,
-    { frequency: 'monday', time: '07:00' }, 'Every Monday at 7:00am', 'paraphrased'],
+    week(['monday'], '07:00'), 'Every Monday at 7:00am', 'paraphrased'],
   ['every day at 07:03', { kind: 'daily', hour: 7, minute: 3 }, true, null, null, 'paraphrased'],
-  ['every weekday at 18:00', null, false, null, null, 'quoted'],
+
+  // A set of days: weekday is Monday to Friday, and a list is full day names
+  // joined by commas and a final "and", in any order and any case.
+  ['every weekday at 18:00', days([1, 2, 3, 4, 5], 18), true,
+    week(['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], '18:00'), 'Every weekday at 6:00pm', 'quoted'],
+  ['every monday, wednesday and sunday at 09:00', days([1, 3, 0]), true,
+    week(['monday', 'wednesday', 'sunday']), 'Every Mon, Wed and Sun at 9:00am', 'quoted'],
+  ['Every Sunday, Monday And Wednesday at 09:00', days([1, 3, 0]), true,
+    week(['monday', 'wednesday', 'sunday']), 'Every Mon, Wed and Sun at 9:00am', 'quoted'],
+  ['every saturday and sunday at 09:00', days([6, 0]), true,
+    week(['saturday', 'sunday']), 'Every Sat and Sun at 9:00am', 'quoted'],
+  ['every weekday at 07:03', days([1, 2, 3, 4, 5], 7, 3), true, null, null, 'quoted'],
+  // All seven named are every day, and reopen as it.
+  ['every monday, tuesday, wednesday, thursday, friday, saturday and sunday at 09:00',
+    { kind: 'daily', hour: 9, minute: 0 }, true, { frequency: 'day', time: '09:00' }, 'Every day at 9:00am', 'quoted'],
+  // A day misspelled, shortened or named twice, a list joined another way, or
+  // no day at all, is no set.
+  ['every wensday and friday at 09:00', null, false, null, null, 'quoted'],
+  ['every mon and fri at 09:00', null, false, null, null, 'quoted'],
+  ['every monday and monday at 09:00', null, false, null, null, 'quoted'],
+  ['every monday, friday at 09:00', null, false, null, null, 'quoted'],
+  ['every monday, wednesday, and friday at 09:00', null, false, null, null, 'quoted'],
+  ['every weekdays at 09:00', null, false, null, null, 'quoted'],
+  ['every  at 09:00', null, false, null, null, 'quoted'],
+  ['every and at 09:00', null, false, null, null, 'quoted'],
 );
 
 test('every copy of the grammar gives the verdict this table pins, row by row', () => {

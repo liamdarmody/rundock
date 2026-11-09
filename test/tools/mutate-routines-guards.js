@@ -939,7 +939,7 @@ const MUTATIONS = [
     "    if (input && input.paused) return { text: 'Paused', className: 'next-run paused-label' };",
     ''],
   [MODEL, 'both halves of the schedule are looked up, never formatted from the string',
-    '    const words = editor.whenWords(editor.readSchedule(schedule));',
+    '    const words = editor.whenWords(editor.readSchedule(schedule), true);',
     "    const words = typeof schedule === 'string' ? schedule.toLowerCase() : null;"],
   [MODEL, 'the execution target reads off the option rather than a string built here',
     '      runsOn: option ? `Runs on ${option.sentence}` : null,',

@@ -19,7 +19,10 @@ const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..', '..');
-const MODEL_SRC = fs.readFileSync(path.join(ROOT, 'public', 'routine-editor-model.js'), 'utf-8');
+// The editor's model reads days through this module, loaded before it as
+// index.html loads it.
+const MODEL_SRC = fs.readFileSync(path.join(ROOT, 'public', 'schedule-days.js'), 'utf-8')
+  + fs.readFileSync(path.join(ROOT, 'public', 'routine-editor-model.js'), 'utf-8');
 const VIEW_SRC = fs.readFileSync(path.join(ROOT, 'public', 'views', 'routine-editor.js'), 'utf-8');
 // The shipped page and the shipped router, read rather than restated, because
 // the claim below is about what the real shell can show.
@@ -101,6 +104,15 @@ function mount(opts = {}) {
 
 function text(doc) {
   return doc.getElementById('routine-editor-content').textContent.replace(/\s+/g, ' ').trim();
+}
+
+// Tick exactly these days in the week's row, by pressing the boxes.
+function tickOnly(w, values) {
+  const boxes = [...w.document.querySelectorAll('[data-routine-day]')];
+  assert.strictEqual(boxes.length, 7, 'no row of days on the page');
+  for (const box of boxes) {
+    if (box.checked !== values.includes(box.getAttribute('data-routine-day'))) box.click();
+  }
 }
 
 describe('routine editor view: choosing a skill', () => {
@@ -348,14 +360,15 @@ describe('routine editor view: the schedule is built, not typed', () => {
     const frequency = doc.querySelector('select[data-routine-field="frequency"]');
     const time = doc.querySelector('select[data-routine-field="time"]');
     assert.ok(frequency && time, 'both halves of the sentence are chosen, not written');
-    assert.strictEqual(frequency.querySelectorAll('option').length, 9);
+    assert.strictEqual(frequency.querySelectorAll('option').length, 3);
     assert.strictEqual(time.querySelectorAll('option').length, 48);
     dom.window.close();
   });
 
   test('the sentence reads back in plain words as the fields change', () => {
     const { doc, w, dom } = atSchedule({ agentId: 'piper', agentName: 'Piper' });
-    w.routineEditorSetField('frequency', 'monday');
+    w.routineEditorSetField('frequency', 'week');
+    tickOnly(w, ['monday']);
     w.routineEditorSetField('time', '07:00');
     assert.match(
       doc.querySelector('[data-routine-editor="sentence"]').textContent,
@@ -480,7 +493,8 @@ describe('routine editor view: saving', () => {
     const mounted = mount({ agentId: 'piper', agentName: 'Piper' });
     mounted.w.routineEditorPick('ops-summary:piper');
     mounted.w.routineEditorStep('schedule');
-    mounted.w.routineEditorSetField('frequency', 'monday');
+    mounted.w.routineEditorSetField('frequency', 'week');
+    tickOnly(mounted.w, ['monday']);
     mounted.w.routineEditorSetField('time', '07:00');
     mounted.w.routineEditorStep('ready');
     return mounted;
@@ -917,6 +931,7 @@ describe('routine editor view: editing a saved routine', () => {
       zone: 'Europe/London',
       runOn: over.runOn || 'local',
       frequency: parsed ? parsed.frequency : null,
+      days: parsed ? parsed.days : null,
       time: parsed ? parsed.time : null,
       edit: {
         agentId: 'piper',
@@ -934,7 +949,9 @@ describe('routine editor view: editing a saved routine', () => {
   // which is the failure this has to be able to see.
   test('the sentence builder opens carrying the routine\'s current times', () => {
     const { doc, dom } = openEdit({ schedule: 'every monday at 07:00' });
-    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'monday');
+    assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'week');
+    assert.deepStrictEqual([...doc.querySelectorAll('[data-routine-day]:checked')].map(b => b.getAttribute('data-routine-day')),
+      ['monday']);
     assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '07:00');
     assert.match(text(doc), /Compile the ops summary/, 'and it names the routine being changed');
     assert.match(text(doc), /every Monday at 7:00am/, 'the preview reads back what is on the controls');
@@ -1150,7 +1167,7 @@ describe('routine editor view: a monthly schedule', () => {
       ['Run', 'Compile the ops summary', 'every', '[frequency]', 'on the', '[day]', 'at', '[time]']);
     assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, '1', 'it starts on the 1st');
     assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '07:30', 'and keeps the time');
-    choose(w, 'frequency', 'friday');
+    choose(w, 'frequency', 'day');
     assert.strictEqual(doc.querySelector('select[data-routine-field="day"]'), null, 'another frequency removes it');
     assert.deepStrictEqual(sentenceParts(doc),
       ['Run', 'Compile the ops summary', 'every', '[frequency]', 'at', '[time]']);
@@ -1205,7 +1222,7 @@ describe('routine editor view: a monthly schedule', () => {
     choose(w, 'day', '15');
     choose(w, 'frequency', 'day');
     assert.strictEqual(preview(doc), 'Run Compile the ops summary every day at 7:30am, on this computer.');
-    assert.match(caveat(doc), /A missed slot is caught up the same day you return\.$/);
+    assert.match(caveat(doc), /A missed slot is caught up if Rundock is open again that day\.$/);
     choose(w, 'frequency', 'month');
     assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, '1',
       'the day chosen before is gone with the month it belonged to');
@@ -1260,5 +1277,266 @@ describe('routine editor view: a monthly schedule', () => {
     assert.strictEqual(doc.querySelector('select[data-routine-field="day"]').value, 'last');
     assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '09:00');
     dom.window.close();
+  });
+});
+
+// ===== THE DAYS OF A WEEK =====
+//
+// Week adds one row of seven native checkboxes, Monday to Sunday, under the
+// sentence and inside its card, led by the word "on". A week with no day ticked
+// saves nothing: Continue stays pressable and says why it went nowhere.
+describe('routine editor view: the days of a week', () => {
+  function atSchedule() {
+    const mounted = mount({ agentId: 'piper', agentName: 'Piper' });
+    mounted.w.routineEditorPick('ops-summary:piper');
+    mounted.w.routineEditorStep('schedule');
+    return mounted;
+  }
+  function choose(w, field, value) {
+    const select = w.document.querySelector(`select[data-routine-field="${field}"]`);
+    select.value = value;
+    assert.strictEqual(select.value, value, `the ${field} dropdown offers no ${value}`);
+    select.dispatchEvent(new w.Event('change'));
+  }
+  const boxes = (doc) => [...doc.querySelectorAll('.re-days input')];
+  const ticked = (doc) => boxes(doc).filter(b => b.checked).map(b => b.getAttribute('data-routine-day'));
+  const box = (doc, day) => doc.querySelector(`[data-routine-day="${day}"]`);
+  const line = (doc) => doc.querySelector('[data-routine-editor="sentence"]');
+  const cont = (doc) => doc.querySelector('.re-actions .settings-btn-primary');
+  const WEEKDAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+  const WEEK = [...WEEKDAYS, 'saturday', 'sunday'];
+
+  test('the dropdown offers day, week and month, and nothing else', () => {
+    const { doc, dom } = atSchedule();
+    const options = [...doc.querySelectorAll('select[data-routine-field="frequency"] option')];
+    assert.deepStrictEqual(options.map(o => o.value), ['day', 'week', 'month']);
+    assert.deepStrictEqual(options.map(o => o.textContent), ['day', 'week', 'month']);
+    dom.window.close();
+  });
+
+  test('week draws one row of seven boxes under the sentence, inside its card, led by "on"', () => {
+    const { doc, w, dom } = atSchedule();
+    assert.strictEqual(doc.querySelector('.re-days'), null, 'no row of days before week is chosen');
+    choose(w, 'frequency', 'week');
+    const rows = doc.querySelectorAll('.re-days');
+    assert.strictEqual(rows.length, 1, 'one row');
+    const row = rows[0];
+    assert.strictEqual(row.parentElement, doc.querySelector('.re-sentence'), 'inside the sentence card');
+    assert.strictEqual(row.previousElementSibling.querySelector('select').getAttribute('data-routine-field'), 'time',
+      'after the time, so under the sentence when it wraps');
+    assert.strictEqual(row.firstElementChild.textContent, 'on', 'led by the word "on"');
+    assert.deepStrictEqual(boxes(doc).map(b => b.getAttribute('data-routine-day')), WEEK, 'Monday to Sunday');
+    assert.deepStrictEqual([...row.querySelectorAll('label')].map(l => l.textContent.trim()),
+      ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
+    choose(w, 'frequency', 'month');
+    assert.strictEqual(doc.querySelector('.re-days'), null, 'and it goes with week');
+    dom.window.close();
+  });
+
+  // Native boxes, so each is a Tab stop and Space ticks it: nothing here takes
+  // a box out of the order, disables it, or handles a key. A click is what
+  // Space fires on a checkbox, so a click is what ticks it here.
+  test('each box is a native checkbox in the Tab order, named by its full day, and a press ticks it', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'frequency', 'week');
+    const group = doc.querySelector('.re-days');
+    assert.strictEqual(group.getAttribute('role'), 'group');
+    assert.strictEqual(group.getAttribute('aria-label'), 'Days this routine runs');
+    const all = boxes(doc);
+    assert.strictEqual(all.length, 7, 'seven Tab stops');
+    const names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    all.forEach((b, i) => {
+      assert.strictEqual(b.tagName, 'INPUT');
+      assert.strictEqual(b.type, 'checkbox');
+      assert.strictEqual(b.getAttribute('tabindex'), null, 'no box changes its place in the Tab order');
+      assert.strictEqual(b.disabled, false);
+      assert.strictEqual(b.getAttribute('onkeydown'), null, 'and none handles a key of its own');
+      assert.strictEqual(b.getAttribute('aria-label'), names[i]);
+      const shown = b.closest('label').textContent.trim();
+      assert.ok(names[i].startsWith(shown), `"${names[i]}" does not contain the visible "${shown}"`);
+    });
+    box(doc, 'saturday').click();
+    assert.strictEqual(box(doc, 'saturday').checked, false, 'a press unticks');
+    box(doc, 'saturday').click();
+    assert.strictEqual(box(doc, 'saturday').checked, true, 'and ticks again');
+    dom.window.close();
+  });
+
+  test('the line under the sentence is a polite live region, and follows the boxes', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'time', '09:00');
+    choose(w, 'frequency', 'week');
+    assert.strictEqual(line(doc).getAttribute('aria-live'), 'polite');
+    assert.strictEqual(line(doc).textContent, 'Run Compile the ops summary every day at 9:00am, on this computer.');
+    tickOnly(w, WEEKDAYS);
+    assert.strictEqual(line(doc).textContent,
+      'Run Compile the ops summary every weekday (Monday to Friday) at 9:00am, on this computer.');
+    tickOnly(w, ['monday', 'wednesday', 'sunday']);
+    assert.strictEqual(line(doc).textContent, 'Run Compile the ops summary every Mon, Wed and Sun at 9:00am, on this computer.');
+    // A press changes the line where it stands, so focus stays on the box.
+    const wed = box(doc, 'wednesday');
+    wed.focus();
+    wed.click();
+    assert.strictEqual(doc.activeElement, wed, 'focus stays on the box that was pressed');
+    assert.strictEqual(line(doc).textContent, 'Run Compile the ops summary every Mon and Sun at 9:00am, on this computer.');
+    dom.window.close();
+  });
+
+  test('week from day ticks all seven, and from month ticks none', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'frequency', 'week');
+    assert.deepStrictEqual(ticked(doc), WEEK, 'from day, all seven');
+    choose(w, 'frequency', 'month');
+    choose(w, 'frequency', 'week');
+    assert.deepStrictEqual(ticked(doc), [], 'from month, none');
+    dom.window.close();
+  });
+
+  // Every move here has an inverse, and the inverse puts back what was there.
+  test('a tick then an untick, and week to day and back, put back what was there', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'frequency', 'week');
+    tickOnly(w, ['monday', 'friday']);
+    const before = line(doc).textContent;
+    box(doc, 'tuesday').click();
+    assert.notStrictEqual(line(doc).textContent, before);
+    box(doc, 'tuesday').click();
+    assert.strictEqual(line(doc).textContent, before, 'untick puts the sentence back');
+    assert.deepStrictEqual(ticked(doc), ['monday', 'friday']);
+    choose(w, 'frequency', 'day');
+    assert.strictEqual(doc.querySelector('.re-days'), null);
+    choose(w, 'frequency', 'week');
+    assert.deepStrictEqual(ticked(doc), WEEK, 'back to week from day, all seven ticked');
+    dom.window.close();
+  });
+
+  test('with no day ticked the line asks for one, quietly, and nothing is red before a press', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'frequency', 'month');
+    choose(w, 'frequency', 'week');
+    assert.strictEqual(line(doc).textContent, 'Choose at least one day.');
+    assert.ok(line(doc).classList.contains('re-preview-prompt'));
+    assert.strictEqual(doc.querySelectorAll('.re-preview-error').length, 0, 'nothing is red before a press');
+    tickOnly(w, ['monday']);
+    tickOnly(w, []);
+    assert.strictEqual(line(doc).textContent, 'Choose at least one day.', 'unticking the last day asks again');
+    assert.strictEqual(doc.querySelectorAll('.re-preview-error').length, 0, 'and is still not red');
+    dom.window.close();
+  });
+
+  test('Continue with no day ticked saves nothing, says why in red, and moves focus to Monday', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'frequency', 'month');
+    choose(w, 'frequency', 'week');
+    assert.strictEqual(cont(doc).disabled, false, 'Continue stays pressable');
+    cont(doc).click();
+    assert.deepStrictEqual(w.sent, [], 'nothing is sent');
+    assert.ok(doc.querySelector('.re-days'), 'and the step stays where it is');
+    assert.strictEqual(doc.querySelector('[data-routine-editor="save"]'), null, 'it did not go on to the confirmation');
+    assert.strictEqual(line(doc).textContent, 'Choose at least one day to continue.');
+    assert.ok(line(doc).classList.contains('re-preview-error'), 'in the error color');
+    assert.ok(!line(doc).classList.contains('re-preview-prompt'));
+    assert.strictEqual(doc.activeElement, box(doc, 'monday'), 'focus moves to Monday, the first thing that fixes it');
+    box(doc, 'thursday').click();
+    assert.strictEqual(doc.querySelectorAll('.re-preview-error').length, 0, 'the red goes when any box is ticked');
+    assert.strictEqual(line(doc).textContent, 'Run Compile the ops summary every Thursday at 9:00am, on this computer.');
+    cont(doc).click();
+    doc.querySelector('[data-routine-editor="save"]').click();
+    assert.strictEqual(w.sent.length, 1);
+    assert.strictEqual(w.sent[0].routine.schedule, 'every thursday at 09:00');
+    dom.window.close();
+  });
+
+  test('ticking a box after the red, then unticking it, asks quietly again rather than in red', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'frequency', 'month');
+    choose(w, 'frequency', 'week');
+    cont(doc).click();
+    box(doc, 'monday').click();
+    box(doc, 'monday').click();
+    assert.strictEqual(line(doc).textContent, 'Choose at least one day.');
+    assert.strictEqual(doc.querySelectorAll('.re-preview-error').length, 0);
+    dom.window.close();
+  });
+
+  test('weekdays save as every weekday, and a set Monday first in full names', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'frequency', 'week');
+    tickOnly(w, WEEKDAYS);
+    cont(doc).click();
+    assert.match(text(doc), /Run Compile the ops summary every weekday \(Monday to Friday\) at 9:00am, on this computer\./);
+    doc.querySelector('[data-routine-editor="save"]').click();
+    assert.strictEqual(w.sent[0].routine.schedule, 'every weekday at 09:00');
+    dom.window.close();
+
+    const second = atSchedule();
+    choose(second.w, 'frequency', 'week');
+    tickOnly(second.w, ['sunday', 'monday', 'wednesday']);
+    cont(second.doc).click();
+    second.doc.querySelector('[data-routine-editor="save"]').click();
+    assert.strictEqual(second.w.sent[0].routine.schedule, 'every monday, wednesday and sunday at 09:00');
+    second.dom.window.close();
+  });
+
+  // Edit schedule, opened from the roster the way the routines list opens it.
+  function editFromRoster(routine) {
+    const { dom, w, doc } = mount({ agentId: 'piper', agentName: 'Piper' });
+    w.agents = [{ id: 'piper', displayName: 'Piper', routines: [{ name: 'Context review', runOn: 'local', ...routine }] }];
+    w.editRoutineSchedule('piper', 'Context review', 0);
+    return { dom, w, doc };
+  }
+
+  test('a single day, weekdays and a set reopen as week with exactly their days ticked', () => {
+    for (const [schedule, days] of [
+      ['every thursday at 07:00', ['thursday']],
+      ['every weekday at 07:00', WEEKDAYS],
+      ['every sunday, monday and wednesday at 07:00', ['monday', 'wednesday', 'sunday']],
+    ]) {
+      const { doc, dom } = editFromRoster({ schedule });
+      assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'week', schedule);
+      assert.deepStrictEqual(ticked(doc), days, schedule);
+      assert.strictEqual(doc.querySelector('select[data-routine-field="time"]').value, '07:00');
+      assert.strictEqual(doc.querySelector('[data-routine-editor="stored-schedule"]'), null,
+        `${schedule} is one the editor shows, so it is owed no note`);
+      dom.window.close();
+    }
+    const daily = editFromRoster({ schedule: 'every day at 07:00' });
+    assert.strictEqual(daily.doc.querySelector('select[data-routine-field="frequency"]').value, 'day');
+    assert.strictEqual(daily.doc.querySelector('.re-days'), null);
+    daily.dom.window.close();
+  });
+
+  // Saving the same days twice writes the same line and reopens on the same
+  // boxes, and a hand-typed list is saved in its one form.
+  test('saving the same set again sends the same schedule, and a hand-typed list goes out in its one form', () => {
+    const first = editFromRoster({ schedule: 'every Wednesday, Monday And Sunday at 07:00' });
+    assert.deepStrictEqual(ticked(first.doc), ['monday', 'wednesday', 'sunday']);
+    cont(first.doc).click();
+    first.doc.querySelector('[data-routine-editor="save"]').click();
+    assert.strictEqual(first.w.sent[0].type, 'set_routine_schedule');
+    const saved = first.w.sent[0].schedule;
+    assert.strictEqual(saved, 'every monday, wednesday and sunday at 07:00');
+    first.dom.window.close();
+
+    const again = editFromRoster({ schedule: saved });
+    assert.deepStrictEqual(ticked(again.doc), ['monday', 'wednesday', 'sunday'], 'it reopens on the same boxes');
+    cont(again.doc).click();
+    again.doc.querySelector('[data-routine-editor="save"]').click();
+    assert.strictEqual(again.w.sent[0].schedule, saved, 'and saving again sends the same line');
+    again.dom.window.close();
+  });
+
+  // An unreadable list opens as any unreadable schedule does: on the defaults,
+  // with no day ticked, naming the stored schedule and what saving does.
+  test('an unreadable list opens with nothing of its own selected, and says so', () => {
+    for (const schedule of ['every mon and fri at 07:00', 'every monday and monday at 07:00']) {
+      const { doc, w, dom } = editFromRoster({ schedule, scheduleReadable: false });
+      assert.strictEqual(doc.querySelector('select[data-routine-field="frequency"]').value, 'day', 'the default');
+      assert.strictEqual(doc.querySelector('.re-days'), null, 'no day is ticked');
+      assert.strictEqual(doc.querySelector('[data-routine-editor="stored-schedule"]').textContent,
+        `This routine's schedule, ${schedule}, is not one this editor can build. Saving replaces it with the one above.`);
+      assert.deepStrictEqual(w.sent, []);
+      dom.window.close();
+    }
   });
 });

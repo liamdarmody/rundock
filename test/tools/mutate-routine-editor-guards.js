@@ -117,12 +117,13 @@ const MUTATIONS = [
   // option it does not have, which shows its FIRST option instead, so the
   // reader is looking at a schedule that is not theirs with nothing saying so.
   [MODEL, 'a stored schedule is looked up too, never taken from the string',
-    '    const freq = frequency(parts[1]);\n    const time = timeOption(parts[2]);\n'
-    + '    if (!freq || !time) return null;\n    return { frequency: freq.value, time: time.value };',
-    '    return { frequency: parts[1], time: parts[2] };'],
+    "    const days = parts[1] === 'day' ? ALL_DAYS : scheduleDays.readDays(parts[1]);\n"
+    + '    const time = timeOption(parts[2]);\n    if (!days || !time) return null;',
+    "    const days = parts[1] === 'day' ? ALL_DAYS : parts[1].split(/, | and /);\n"
+    + '    const time = { value: parts[2] };'],
   [MODEL, 'a stored schedule is read whole, not found inside a longer line',
-    '    const parts = /^every ([a-z]+) at (\\d{2}:\\d{2})$/.exec(schedule.toLowerCase());',
-    '    const parts = /every ([a-z]+) at (\\d{2}:\\d{2})/.exec(schedule.toLowerCase());'],
+    '  const DAILY_OR_DAYS = new RegExp(`^every (day|${scheduleDays.DAYS}) at (\\\\d{2}:\\\\d{2})$`);',
+    '  const DAILY_OR_DAYS = new RegExp(`every (day|${scheduleDays.DAYS}) at (\\\\d{2}:\\\\d{2})`);'],
   [MODEL, 'the picker is scoped to the agent it was opened from',
     '        if (agentId && agent.id !== agentId) continue;\n',
     ''],
@@ -414,11 +415,11 @@ const MUTATIONS = [
     "  ['schedule', assertWritableSchedule],\n",
     ''],
   [ROUTINES_SCHEDULE, 'the grammar is the one the scheduler actually reads',
-    "const SCHEDULE_WORDS =\n  /^(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
-    'const SCHEDULE_WORDS = /^every (\\w+) at (\\d{2}):(\\d{2})$/;'],
+    'const SCHEDULE_WORDS = new RegExp(`^(every (day|${scheduleDays.DAYS})|on day 0?([1-9]|1\\\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\\\d|2[0-3]):[0-5]\\\\d$`);',
+    'const SCHEDULE_WORDS = /^(every (\\w+)) at (\\d{2}):(\\d{2})$/;'],
   [ROUTINES_SCHEDULE, 'a schedule is read whole, not found inside a longer line',
-    "const SCHEDULE_WORDS =\n  /^(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d$/;",
-    'const SCHEDULE_WORDS = /(every (day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|on day 0?([1-9]|1\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\d|2[0-3]):[0-5]\\d/;'],
+    'const SCHEDULE_WORDS = new RegExp(`^(every (day|${scheduleDays.DAYS})|on day 0?([1-9]|1\\\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\\\d|2[0-3]):[0-5]\\\\d$`);',
+    'const SCHEDULE_WORDS = new RegExp(`(every (day|${scheduleDays.DAYS})|on day 0?([1-9]|1\\\\d|2[0-8]) of every month|on the last day of every month) at ([01]\\\\d|2[0-3]):[0-5]\\\\d`);'],
   // A REFUSAL BELONGS TO THE SURFACE THAT ASKED, and for this one that surface
   // is the editor. The reader is looking at the sentence builder with a save in
   // flight; routine_action_error draws on the routines list they have left.
@@ -514,7 +515,7 @@ const MUTATIONS = [
     "      workspaceCaveat: input && input.frequency === 'month' ? MONTHLY_WORKSPACE_CAVEAT : WORKSPACE_CAVEAT,",
     '      workspaceCaveat: WORKSPACE_CAVEAT,'],
   [MODEL, 'leaving month drops its day',
-    "    const day = value === 'month' ? ((choice && choice.frequency === 'month' && choice.day) || '1') : null;",
+    "    const day = value === 'month' ? ((from === 'month' && choice.day) || '1') : null;",
     "    const day = (choice && choice.day) || (value === 'month' ? '1' : null);"],
   [MODEL, 'the day is looked up, never taken from the input',
     '      const day = monthDay(input.day);\n      if (!day || !time) return null;',
@@ -535,11 +536,11 @@ const MUTATIONS = [
     "        if (d.afterRule) h += '<hr>';\n",
     ''],
   [VIEW, 'a new monthly routine saves the day it shows',
-    '      frequency: state.frequency,\n      day: state.day,\n      time: state.time,\n      runOn: state.runOn,',
-    '      frequency: state.frequency,\n      time: state.time,\n      runOn: state.runOn,'],
+    '      frequency: state.frequency,\n      day: state.day,\n      days: state.days,\n      time: state.time,\n      runOn: state.runOn,',
+    '      frequency: state.frequency,\n      days: state.days,\n      time: state.time,\n      runOn: state.runOn,'],
   [VIEW, 'an edited monthly routine saves the day it shows',
-    '    const schedule = m.buildSchedule({ frequency: state.frequency, day: state.day, time: state.time });',
-    '    const schedule = m.buildSchedule({ frequency: state.frequency, time: state.time });'],
+    '    const schedule = m.buildSchedule({ frequency: state.frequency, day: state.day, days: state.days, time: state.time });',
+    '    const schedule = m.buildSchedule({ frequency: state.frequency, days: state.days, time: state.time });'],
   [VIEW, 'Edit schedule opens on the day it read',
     '      day: parsed ? parsed.day : null,',
     '      day: null,'],
@@ -547,9 +548,10 @@ const MUTATIONS = [
     '        unreadableMonthDay: routine.unreadableMonthDay || null,\n',
     ''],
   [VIEW, 'choosing a frequency follows the model\'s rule for the day',
-    "    if (field === 'frequency') Object.assign(state, model().chooseFrequency(state, value));\n"
+    "    if (field === 'frequency') Object.assign(state, model().chooseFrequency(state, value), { dayAsked: false });\n"
     + "    else if (field === 'time' || field === 'day') state[field] = value;",
     "    if (field === 'frequency' || field === 'time' || field === 'day') state[field] = value;"],
+
 ];
 
 // The reporter is named explicitly rather than left to the default, which

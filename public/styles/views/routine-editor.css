@@ -150,6 +150,26 @@
 .re-select:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
 .re-pill { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-pill); padding: 5px 12px; }
 .re-preview { font-size: var(--body); color: var(--text-2); line-height: 1.6; margin-bottom: 4px; }
+/* With no day ticked the line asks for one: quietly at rest, and in red,
+   semibold, once Continue has been pressed. Nothing is red before a press. */
+.re-preview-prompt { color: var(--text-2-strong); }
+.re-preview-error { color: var(--danger-text-card); font-weight: 600; }
+
+/* THE DAYS A WEEKLY ROUTINE RUNS ON: one row of seven native checkboxes under
+   the sentence, inside its card, wrapping on a narrow window. The box takes
+   the custom-appearance recipe the toggles use, so it follows both themes:
+   an edge that clears 3:1 on the card, the control accent when ticked, and a
+   tick in --elevated, because white on the dark accent does not clear 3:1.
+   Ticked and unticked differ by fill and tick together, never by color
+   alone. The box and its name are one 32px-high target. */
+.re-days { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 0 2px; margin-top: 2px; }
+.re-days .re-word { margin-right: 6px; }
+.re-day { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 8px; border-radius: var(--radius-md); font-size: var(--body); font-weight: 500; color: var(--text-1); cursor: pointer; }
+.re-day-box { appearance: none; -webkit-appearance: none; margin: 0; width: 16px; height: 16px; flex-shrink: 0; position: relative; cursor: pointer; border-radius: var(--radius-sm); border-width: 1.5px; border-style: solid; border-color: var(--border-strong); background-color: var(--elevated); }
+.re-day:hover .re-day-box:not(:checked) { border-color: var(--text-1); }
+.re-day-box:checked { background-color: var(--accent-control); border-color: var(--accent-control); }
+.re-day-box:checked::after { content: ''; position: absolute; left: 4.5px; top: 1px; width: 4px; height: 8px; border-style: solid; border-color: var(--elevated); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.re-day-box:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
 
 .re-field { margin-top: 18px; }
 .re-field-label { font-size: var(--label); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); margin-bottom: 8px; }
