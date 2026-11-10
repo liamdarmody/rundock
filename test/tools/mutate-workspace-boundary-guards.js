@@ -1078,11 +1078,25 @@ const MUTATIONS = [
   [READ_ONLY_CLIENT, 'a command that is not text is not read',
     "    if (typeof command !== 'string') return false;\n",
     ''],
+  // Only a space or a tab ends a word in bash. Read the words split on `\s`
+  // again and `sort -t<form feed> -o out in` is `-t` given `-o`: a read.
+  [READ_ONLY_CLIENT, 'sort and date: read from the segment\'s own text, never from words split on any blank',
+    "    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, segment, stripped + 1);",
+    "    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, words.slice(1).join(' '), 0);"],
+  [READ_ONLY_CLIENT, 'sort and date: a blank bash does not split on, anywhere in the segment, is not a read',
+    '      if (NOT_A_WORD_BREAK.test(text)) return false;\n',
+    ''],
+  [READ_ONLY_CLIENT, 'sort and date: a carriage return on the line is not a read',
+    "    if (str.indexOf('\\r') >= 0 && segments.some(leadsSortOrDate)) return false;\n",
+    ''],
   // The same reading, where it frees a crossing: in process, through the real
   // hook, on the card, and when the reading fails inside the real hook.
   [READ_ONLY, 'the boundary layer frees a sort crossing only on a reading sort',
     "    operandLetters: 'ktS',",
     "    operandLetters: 'ktSo',"],
+  [HOOK, 'the hook reads a sort or date segment from its own text for what writes an answer file',
+    "    if (readsPart === isReadOnlyShellCommand && (verb === 'sort' || verb === 'date')) reads = readsPart(seg);\n",
+    ''],
   [SORT_DATE_HOOK, 'the real hook: a writing sort keeps its crossing',
     "    operandLetters: 'ktS',",
     "    operandLetters: 'ktSo',"],
