@@ -348,6 +348,40 @@ describe('below the floor nothing is started', { skip: POSIX }, () => {
   });
 });
 
+// ── Where Rundock looks for Claude Code ──
+
+// The one list of folders the desktop app puts on PATH before it looks for
+// `claude`. Required where used, as the floor module is.
+const foldersLib = () => require('../../lib/runtime/claude-folders.js');
+
+describe('where Rundock looks for Claude Code', () => {
+  test('the list is the one the desktop app has always put on PATH, on each platform, with the native installer\'s folder first', () => {
+    const { claudeFolders, nativeInstallerFolder } = foldersLib();
+    assert.deepStrictEqual(claudeFolders({ platform: 'darwin', home: '/Users/someone', env: {} }),
+      ['/Users/someone/.local/bin', '/Users/someone/.claude/bin', '/usr/local/bin', '/opt/homebrew/bin']);
+    assert.deepStrictEqual(claudeFolders({ platform: 'linux', home: '/home/someone', env: {} }),
+      ['/home/someone/.local/bin', '/home/someone/.claude/bin', '/usr/local/bin', '/opt/homebrew/bin']);
+    const env = { LOCALAPPDATA: 'C:\\Users\\someone\\AppData\\Local', APPDATA: 'C:\\Users\\someone\\AppData\\Roaming' };
+    assert.deepStrictEqual(claudeFolders({ platform: 'win32', home: 'C:\\Users\\someone', env }),
+      ['C:\\Users\\someone\\.local\\bin', 'C:\\Users\\someone\\AppData\\Local\\Microsoft\\WinGet\\Links', 'C:\\Users\\someone\\AppData\\Roaming\\npm']);
+    assert.deepStrictEqual(claudeFolders({ platform: 'win32', home: 'C:\\Users\\someone', env: {} }), ['C:\\Users\\someone\\.local\\bin'],
+      'a folder whose variable is unset is left out, as before');
+    for (const [platform, home] of [['darwin', '/Users/someone'], ['linux', '/home/someone'], ['win32', 'C:\\Users\\someone']]) {
+      assert.strictEqual(claudeFolders({ platform, home, env })[0], nativeInstallerFolder(home, platform),
+        `on ${platform} the native installer's folder is searched first, so a copy it puts there is found ahead of the rest`);
+    }
+  });
+
+  test('PATH gets each folder it lacks at its front, in order, and one it holds keeps its place', () => {
+    const { withClaudeFolders } = foldersLib();
+    const folders = ['/h/.local/bin', '/h/.claude/bin', '/usr/local/bin', '/opt/homebrew/bin'];
+    assert.strictEqual(withClaudeFolders('/usr/bin:/bin', folders, ':'), '/h/.local/bin:/h/.claude/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin');
+    assert.strictEqual(withClaudeFolders('/usr/bin:/usr/local/bin:/bin', folders, ':'), '/h/.local/bin:/h/.claude/bin:/opt/homebrew/bin:/usr/bin:/usr/local/bin:/bin');
+    assert.strictEqual(withClaudeFolders(folders.join(':'), folders, ':'), folders.join(':'), 'nothing missing, nothing changed');
+    assert.strictEqual(withClaudeFolders('C:\\Windows', ['C:\\h\\.local\\bin'], ';'), 'C:\\h\\.local\\bin;C:\\Windows');
+  });
+});
+
 // ── spawnClaude at or above the floor ──
 
 // A private runtime whose spawn is watched: claude.js takes `spawn` from
