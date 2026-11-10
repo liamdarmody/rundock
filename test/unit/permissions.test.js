@@ -768,6 +768,37 @@ describe('sort and date read only in the forms that read', () => {
     }
   });
 
+  // ONLY A SPACE OR A TAB ENDS A WORD, in bash as here. JavaScript's `\s` also
+  // takes a form feed, a vertical tab, a carriage return and the Unicode
+  // spaces for one, and bash takes none of them, so each, placed next to an
+  // option, hides the option after it from a reading that splits on `\s`:
+  // `sort -t<form feed> -o out in` is `-t` handed the form feed, then `-o out`.
+  const ODD_BLANKS = [['a form feed', '\f'], ['a vertical tab', '\v'], ['a no-break space', '\u00a0'],
+    ['an em space', '\u2003'], ['an ideographic space', '\u3000']];
+  for (const [name, b] of ODD_BLANKS) {
+    test(`${name} next to an option is not a word break, so the line is not a read`, () => {
+      for (const cmd of [`sort -t${b} -o out in`, `sort -k${b} -o out in`, `sort -t${b} --compress-program=sh x`,
+        `sort -u${b} -T /tmp x`, `ls notes | sort -t${b} -o listing.txt`, `date -r${b} 010112002026`, `date -z${b} 010112002026`,
+        `date -v${b} -s 2026-01-01`, `date -u${b}+%s`, `sort${b}-u x`, `sort -u x${b}y`, `sort -t'${b}' x`, `date '+%d${b}%B'`]) {
+        assertAsks(cmd);
+      }
+    });
+  }
+
+  test('a carriage return on a sort or date line is not a read, whatever follows it', () => {
+    // The line splits there into commands of its own, and bash does not: the
+    // `-o out` below is sort's, handed to it after `-t<CR>cat`.
+    for (const cmd of ['sort -t\rcat -o out in', 'date -r\rcat 010112002026', 'ls notes | sort -t\rls -o listing.txt',
+      'sort x\rls', 'date -u\rls', 'sort x\r\ndate']) {
+      assertAsks(cmd);
+    }
+  });
+
+  test('a tab ends a word as a space does', () => {
+    for (const cmd of ['sort\t-u\tnames.txt', 'date\t+%Y-%m-%d', 'ls notes |\tsort', "sort -t'\t' -k2 x"]) assertReads(cmd);
+    for (const cmd of ['sort\t-o\tout in', 'sort -u\t-o out in', 'date\t-s\t2026-01-01']) assertAsks(cmd);
+  });
+
   test('a quote or a backslash cannot hide an option: it is judged as the word the program is given', () => {
     for (const cmd of [`sort '-o' out in`, 'sort "-o" out in', 'sort -\\o out in', `sort -u'o' out in`, `sort -"u"o out in`,
       `sort ''-o out in`, 'sort \\-o out in', `sort '--output=x' y`, `date '-s' 2026-01-01`, 'date "-s" 2026-01-01', 'date \\-s 2026-01-01',

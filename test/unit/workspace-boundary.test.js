@@ -931,9 +931,26 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
         assert.strictEqual(shell(command), null, `freed as cat and stat are: ${command}`);
       }
       for (const command of [`sort -o ${target} x`, `sort -uo ${target} x`, `sort -T ${hooks} ${target}`,
-        `sort --compress-program=sh ${target}`, `ls ${hooks} | sort -o ${target}`, `sort '-o' ${target} x`]) {
+        `sort --compress-program=sh ${target}`, `ls ${hooks} | sort -o ${target}`, `sort '-o' ${target} x`,
+        // A blank bash does not split on, next to an option, and a carriage
+        // return, which ends a segment here and nothing in bash.
+        `sort -t\f -o ${target} x`, `sort -t\v -o ${target} x`, `sort -t\u00a0 -o ${target} x`,
+        `date -z\f ${target}`, `date -r\v ${target}`, `date -z\u00a0 ${target}`,
+        `sort -t\rcat -o ${target} x`, `date -r\rcat -s 2026-01-01 ${target}`]) {
         assert.ok(writesSurface(shell(command)), `a writing form keeps its crossing as a write: ${command}`);
       }
+    }
+
+    // The workspace's own answer file is read word by word for what writes
+    // it, and a blank next to an option hides nothing there either.
+    fs.mkdirSync(path.join(ws, '.rundock'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.rundock', 'permissions.json'), '{}');
+    const answers = (r) => !!r && r.crossings.some(c => c.answerFile);
+    assert.strictEqual(shell('sort .rundock/permissions.json'), null, 'a reading sort of it is freed');
+    for (const command of ['sort -o .rundock/permissions.json x', 'sort -t\f -o .rundock/permissions.json x',
+      'sort -t\v -o .rundock/permissions.json x', 'sort -t\u00a0 -o .rundock/permissions.json x',
+      'sort -k\f --output=.rundock/permissions.json x']) {
+      assert.ok(answers(shell(command)), `a writing sort of the answer file keeps its crossing: ${JSON.stringify(command)}`);
     }
 
     // The secrets tier is not re-graded by any of this: a reading sort of the

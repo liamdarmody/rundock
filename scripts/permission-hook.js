@@ -2039,6 +2039,9 @@ function answerFileWriteWords(command, posixText = false, readsPart = isReadOnly
     const verb = bare(rest[at] || '').split('/').pop();
     const args = rest.slice(at + 1).map(bare);
     let reads = readsPart(rest.join(' ')) || READS_NAMED_FILES.has(verb);
+    // `sort` and `date` are read from the segment's own text. Rejoined from
+    // words split on any blank, a form feed after `-t` hides the `-o` after it.
+    if (readsPart === isReadOnlyShellCommand && (verb === 'sort' || verb === 'date')) reads = readsPart(seg);
     if (verb === 'git') {
       let i = 0;
       while (i < args.length && args[i].startsWith('-')) i += (args[i] === '-C' || args[i] === '-c') ? 2 : 1;

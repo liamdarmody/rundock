@@ -397,8 +397,9 @@
 
   // THE WORDS getopt IS HANDED, read from the text as the shell reads them,
   // or null when the text holds anything whose result the text alone does not
-  // show. Quotes and backslashes are taken away, so `'-o'` and `-\o` are the
-  // `-o` the program is given. Not followed at all: a `$` or a backtick
+  // show. Only a space or a tab ends a word, as in bash. Quotes and
+  // backslashes are taken away, so `'-o'` and `-\o` are the `-o` the program
+  // is given. Not followed at all: a `$` or a backtick
   // (unquoted or inside double quotes), a glob, a brace, a bracket, a
   // redirection, a quote left open, a control character, and text longer than
   // this reading follows. Each can hand the program a word the text does not
@@ -424,7 +425,7 @@
         word += c;
         continue;
       }
-      if (c === ' ') { if (inWord) words.push(word); word = ''; inWord = false; continue; }
+      if (c === ' ' || c === '\t') { if (inWord) words.push(word); word = ''; inWord = false; continue; }
       inWord = true;
       if (c === "'" || c === '"') { quote = c; continue; }
       if (c === '\\') {
@@ -445,12 +446,37 @@
   // seam; what it returns is ignored, so all it can do is fail.
   var optionReadingSeam = { beforeReading: function () {} };
 
-  // `sort` or `date` with these arguments, judged as one: the words getopt is
-  // handed, then its options against the command's lists.
-  function optionsOnlyRead(command, args) {
+  // A BLANK BASH DOES NOT SPLIT ON. JavaScript's `\s` takes a form feed, a
+  // vertical tab, a carriage return and the Unicode spaces (U+00A0, U+2000 to
+  // U+200A, U+3000 and the rest) for a space, and bash takes none of them for
+  // one. Split by `\s`, `sort -t<form feed> -o out in` reads as `-t -o out in`,
+  // `-t` given `-o`, while sort is handed `-t` with the form feed and then
+  // `-o out`, and writes `out`. So one anywhere in the segment, quoted or not,
+  // means it is not a read.
+  var NOT_A_WORD_BREAK = /[^\S \t]/;
+
+  // The text after the first `count` words, words ending at a space or a tab.
+  function textAfterWords(text, count) {
+    var i = 0;
+    var blank = function (c) { return c === ' ' || c === '\t'; };
+    while (i < text.length && blank(text[i])) i++;
+    for (var k = 0; k < count; k++) {
+      while (i < text.length && !blank(text[i])) i++;
+      while (i < text.length && blank(text[i])) i++;
+    }
+    return text.slice(i);
+  }
+
+  // `sort` or `date` judged as one from the segment's own text, never from
+  // words split some other way: the words getopt is handed after the first
+  // `skip` (any keyword before the command, and the command), then its
+  // options against the command's lists.
+  function optionsOnlyRead(command, segment, skip) {
     try {
       optionReadingSeam.beforeReading(command);
-      var words = shellWords(args.join(' '));
+      var text = String(segment);
+      if (NOT_A_WORD_BREAK.test(text)) return false;
+      var words = shellWords(textAfterWords(text, skip));
       if (!words) return false;
       var seen = optionsAndOperands(words, command === 'sort' ? SORT_OPTIONS : DATE_OPTIONS);
       if (!seen) return false;
@@ -505,7 +531,7 @@
     var first = bareWord(words[0]);
     if (NON_COMMAND_KEYWORDS.indexOf(first) >= 0) return true;
     if (first === 'find') return findOnlyReads(words.slice(1));
-    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, words.slice(1));
+    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, segment, stripped + 1);
     if (Object.prototype.hasOwnProperty.call(EXECUTING_FLAGS, first)
       && EXECUTING_FLAGS[first].test(segment)) return false;
     if (Object.prototype.hasOwnProperty.call(WRITING_FLAGS, first)
@@ -529,6 +555,14 @@
   // definition of a read has to carry the reason a read cannot be trusted.
   var HIDES_SUBCOMMAND = /\$\(|`|<\(|>\(/;
 
+  // Whether a segment runs `sort` or `date`, past any keyword before it.
+  function leadsSortOrDate(segment) {
+    var words = String(segment).split(/\s+/).filter(Boolean);
+    while (words.length && KEYWORD_PREFIXES.indexOf(bareWord(words[0])) >= 0) words.shift();
+    var first = words.length ? bareWord(words[0]) : '';
+    return first === 'sort' || first === 'date';
+  }
+
   // Only text is read. Anything else is not a command this can judge, so it
   // is not a read, and turning it into text first could throw.
   function isReadOnlyShellCommand(command) {
@@ -537,6 +571,12 @@
     if (/>>?|\btee\b/.test(str)) return false;
     if (HIDES_SUBCOMMAND.test(str)) return false;
     var segments = shellSegments(str);
+    // A CARRIAGE RETURN ENDS A SEGMENT HERE AND ENDS NOTHING IN BASH, which
+    // takes it as part of a word. So the words after one would be judged as a
+    // command of their own: `sort -t<CR>cat -o out in` is one sort, handed
+    // `-t` and then `-o out`, and it writes `out`. A line holding one, with a
+    // sort or a date on it, is not a read.
+    if (str.indexOf('\r') >= 0 && segments.some(leadsSortOrDate)) return false;
     return segments.length > 0 && segments.every(segmentReads);
   }
 

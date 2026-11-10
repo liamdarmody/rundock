@@ -1016,7 +1016,7 @@ const MUTATIONS = [
   // nobody named, take `-o` or `-T` for a reading option, let a date be set
   // without `-j`, or read the words other than as getopt is handed them.
   [READ_ONLY_CLIENT, 'sort and date: judged by their options, not read in every form',
-    "    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, words.slice(1));",
+    "    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, segment, stripped + 1);",
     "    if (first === 'sort' || first === 'date') return true;"],
   [READ_ONLY_CLIENT, 'sort and date: a short option nobody named fails closed',
     '        return null;\n      }\n    }\n    return seen;',
