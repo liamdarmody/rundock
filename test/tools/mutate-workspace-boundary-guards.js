@@ -70,6 +70,12 @@ const PS_GRADER_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite
 const PS_DISPATCH_FLOW = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/integration/powershell-read-approvals.test.js' };
 // The hook, run as its own process, against a home holding hook scripts.
 const PS_HOOK_REAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/powershell-reads-hook.test.js' };
+// The shared reading of sort and date, through the suites that drive it as a
+// person meets it: the real hook against a home holding hook scripts, the real
+// card code, and the real hook with the reading forced to fail.
+const SORT_DATE_HOOK = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/sort-date-reads-hook.test.js' };
+const SORT_DATE_CARDS = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/sort-date-read-cards.test.js' };
+const SORT_DATE_CRASH = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/hook-never-crashes.test.js' };
 // The mode-persisted-before-scaffold ordering guard lives in the protocol
 // handler, not the scaffold layer, and is reachable only through the real
 // workspace-open path (the scaffold-layer tests call scaffoldWorkspace
@@ -979,9 +985,6 @@ const MUTATIONS = [
   [READ_ONLY_CLIENT, 'structure the segmenter cannot see into is never a read',
     '    if (HIDES_SUBCOMMAND.test(str)) return false;',
     ''],
-  // The vocabulary grew by exactly one word. Put the card grader's old private
-  // list back into it and `sort -o <persistence surface> payload` is graded a
-  // read and exempted from its crossing, which is the write nobody sees.
   // `find` sat on the read-only registry with its flags unexamined. Drop the
   // allowlist and `find ~/.claude/hooks -delete` is graded a read again, its
   // crossing skipped, and in Code mode the hook scripts go with no card.
@@ -999,10 +1002,105 @@ const MUTATIONS = [
   [READ_ONLY_CLIENT, 'only a flag that always takes an operand consumes the word after it',
     '      if (FIND_READ_FLAGS_NO_OPERAND.indexOf(w) >= 0) continue;',
     '      if (FIND_READ_FLAGS_NO_OPERAND.indexOf(w) >= 0) { i++; continue; }'],
+  // The vocabulary grew by exactly one word. Put the card grader's old private
+  // list back into it and `uniq payload <persistence surface>` is graded a
+  // read and exempted from its crossing, which is the write nobody sees.
+  // (`sort` and `date` are judged by their options before the list is asked,
+  // so the rows below break those.)
   [READ_ONLY_CLIENT, 'the shared vocabulary adds only the word the reported command needs',
     "  var NO_TARGET_COMMANDS = ['cd'];",
     "  const NO_TARGET_COMMANDS = ['cd', 'pushd', 'popd', 'true', 'date', 'diff',\n"
     + "    'printenv', 'sort', 'uniq', 'which', 'whoami'];"],
+  // SORT AND DATE ARE READ BY THEIR OPTIONS, as find is. Each row undoes one
+  // thing that keeps a writing form asking: read every form, skip an option
+  // nobody named, take `-o` or `-T` for a reading option, let a date be set
+  // without `-j`, or read the words other than as getopt is handed them.
+  [READ_ONLY_CLIENT, 'sort and date: judged by their options, not read in every form',
+    "    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, words.slice(1));",
+    "    if (first === 'sort' || first === 'date') return true;"],
+  [READ_ONLY_CLIENT, 'sort and date: a short option nobody named fails closed',
+    '        return null;\n      }\n    }\n    return seen;',
+    '        continue;\n      }\n    }\n    return seen;'],
+  [READ_ONLY_CLIENT, 'sort and date: a long option nobody named fails closed',
+    '        return null;\n      }\n      for (var j = 1;',
+    '        continue;\n      }\n      for (var j = 1;'],
+  [READ_ONLY_CLIENT, 'sort: -o is never a reading option',
+    "    operandLetters: 'ktS',",
+    "    operandLetters: 'ktSo',"],
+  [READ_ONLY_CLIENT, 'sort: -T is never a reading option',
+    "    operandLetters: 'ktS',",
+    "    operandLetters: 'ktST',"],
+  [READ_ONLY_CLIENT, 'sort: --output, --temporary-directory and --compress-program are never reading options',
+    "    longValue: ['--sort=', '--key=', '--field-separator=', '--buffer-size='],",
+    "    longValue: ['--sort=', '--key=', '--field-separator=', '--buffer-size=', '--output=', '--temporary-directory=', '--compress-program='],"],
+  [READ_ONLY_CLIENT, 'date: -s is never a reading option',
+    "    operandLetters: 'rzvdf',",
+    "    operandLetters: 'rzvdfs',"],
+  [READ_ONLY_CLIENT, 'date: -f reads only with -j',
+    "      if (seen[k].option === 'f') sets = true;\n",
+    ''],
+  [READ_ONLY_CLIENT, 'date: a time operand sets the clock',
+    "      if ('operand' in seen[k] && seen[k].operand.charAt(0) !== '+') sets = true;\n",
+    ''],
+  [READ_ONLY_CLIENT, 'date: only a -j before the first operand stops the time being set',
+    "    for (var i = 0; i < seen.length && !('operand' in seen[i]); i++) {",
+    '    for (var i = 0; i < seen.length; i++) {'],
+  [READ_ONLY_CLIENT, 'sort and date: a letter whose operand must be joined never takes the next word',
+    '        if (spec.joinedLetters.indexOf(letter) >= 0) { seen.push({ option: letter }); break; }',
+    '        if (spec.joinedLetters.indexOf(letter) >= 0) { seen.push({ option: letter }); if (j === w.length - 1) i++; break; }'],
+  [READ_ONLY_CLIENT, 'sort and date: a letter given its operand in the bundle does not also take the next word',
+    '          if (j === w.length - 1) i++;',
+    '          i++;'],
+  [READ_ONLY_CLIENT, 'sort and date: quotes are taken away from a word, not kept in it',
+    `      if (c === "'" || c === '"') { quote = c; continue; }`,
+    `      if (c === "'" || c === '"') { quote = c; word += c; continue; }`],
+  [READ_ONLY_CLIENT, 'sort and date: a backslash is taken away from a word, not kept in it',
+    '        if (i + 1 >= text.length) return null;\n        word += text[++i];',
+    '        if (i + 1 >= text.length) return null;\n        word += c + text[++i];'],
+  [READ_ONLY_CLIENT, 'sort and date: an unquoted character the shell may expand is not followed',
+    '      if (!PLAIN_WORD_CHAR.test(c)) return null;\n',
+    ''],
+  [READ_ONLY_CLIENT, 'sort and date: a $ or a backtick inside double quotes is not followed',
+    "        if (c === '$' || c === '`') return null;\n",
+    ''],
+  [READ_ONLY_CLIENT, 'sort and date: a quote left open is not read',
+    '    if (quote) return null;\n',
+    ''],
+  [READ_ONLY_CLIENT, 'sort and date: options longer than the reading follows are not read',
+    '    if (text.length > OPTIONS_READ_LIMIT || UNREADABLE.test(text)) return null;',
+    '    if (UNREADABLE.test(text)) return null;'],
+  [READ_ONLY_CLIENT, 'sort and date: a control character among the options is not read',
+    '    if (text.length > OPTIONS_READ_LIMIT || UNREADABLE.test(text)) return null;',
+    '    if (text.length > OPTIONS_READ_LIMIT) return null;'],
+  [READ_ONLY_CLIENT, 'sort and date: a failure inside the reading is not a read',
+    '    } catch (failed) {\n      return false;',
+    '    } catch (failed) {\n      return true;'],
+  [READ_ONLY_CLIENT, 'a command that is not text is not read',
+    "    if (typeof command !== 'string') return false;\n",
+    ''],
+  // The same reading, where it frees a crossing: in process, through the real
+  // hook, on the card, and when the reading fails inside the real hook.
+  [READ_ONLY, 'the boundary layer frees a sort crossing only on a reading sort',
+    "    operandLetters: 'ktS',",
+    "    operandLetters: 'ktSo',"],
+  [SORT_DATE_HOOK, 'the real hook: a writing sort keeps its crossing',
+    "    operandLetters: 'ktS',",
+    "    operandLetters: 'ktSo',"],
+  [SORT_DATE_HOOK, 'the real hook: a clock-setting date keeps its crossing',
+    "      if ('operand' in seen[k] && seen[k].operand.charAt(0) !== '+') sets = true;\n",
+    ''],
+  [SORT_DATE_HOOK, 'the real hook: a failure inside the sort reading frees nothing',
+    '    } catch (failed) {\n      return false;',
+    '    } catch (failed) {\n      return true;'],
+  [SORT_DATE_CARDS, 'the card: a writing sort is carded',
+    "    operandLetters: 'ktS',",
+    "    operandLetters: 'ktSo',"],
+  [SORT_DATE_CARDS, 'the card: a failure inside the sort reading cards',
+    '    } catch (failed) {\n      return false;',
+    '    } catch (failed) {\n      return true;'],
+  [SORT_DATE_CRASH, 'when the sort reading fails inside the hook, it answers as for a writing sort',
+    '    } catch (failed) {\n      return false;',
+    '    } catch (failed) {\n      return true;'],
   // Bash has always read `dir` and `type` through the PowerShell list. Drop it
   // and Bash's reading changes, which the PowerShell reading must not do.
   [READ_ONLY, 'the read-only registry answers for PowerShell as well as the Unix shells',
