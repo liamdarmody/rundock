@@ -1813,6 +1813,7 @@
       "Shell code: a missing cd target that climbs with .. is trusted": 7.07,
       "Shell code: a bare cd target is not judged, so a link out is not reported": 7.07,
       "Shell code: the folder each word starts from is worked out again for every word": 3.17,
+      "Shell code timing: the bound on growth is loosened until quadratic growth passes": 3.17,
       "Shell code: a route-shaped literal whose first folder is not on this machine is a place": 7.07,
       "Shell code: the first-folder rule for literals applies to a Windows reading too": 6.92,
       "Shell code: the first folders looked up are kept for the life of the process": 6.92,
