@@ -1975,6 +1975,14 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       '**Nothing the earlier reading asked about reads now.**',
       'a line reads only when both readings read it',
       'it reads the paths as written too, so no path it saw before is lost',
+      'are the only two exceptions to the rule that a character outside the plain set makes the segment not a read',
+      'No quote character that opens nothing in bash hides a command either',
+      'every reading reads the line that way as well as as written',
+      'is not a read, and neither is one with a `(` or `)` outside its quotes',
+      'In Code mode the verdict reads the line both ways as well',
+      'checked against the graders at that base wherever history holds it',
+      'which it needs to name the file such a line writes once the definition no longer reads the line',
+      'it reads the line\'s view as well, so a quote that opens nothing hides no path either',
     ]) assert.ok(passage.includes(said), `the page says: ${said}`);
   });
 
@@ -1991,7 +1999,13 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'SPLIT AS WRITTEN TOO, with each quote taken as written and a backslash as text',
       'A line reads only when every piece of both splits reads',
       'A WILDCARD THAT CANNOT START WITH A DASH.',
+      'makes the only two exceptions to the plain set',
+      'EVERY READING HERE FINDS A QUOTE BY PAIRING QUOTE CHARACTERS',
+      'shellView gives the line back with each of those characters made a space',
+      'A FAILURE INSIDE THIS READING IS AN ANSWER',
     ]) assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
+    const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
+    assert.ok(hookSrc.includes('THE SHELL\'S READING IS NEEDED FOR THE HOOK TO AGREE WITH THE SHARED DEFINITION'), 'the hook says why it reads paths as the shell does');
   });
 
   test('every spelling the page names asks, and the reads beside them read', () => {
@@ -2002,19 +2016,24 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       ['more than 8,192 characters', 'rg' + ' x'.repeat(4200)], ['`\\"` and `\\\'` open no quote', 'ls \\"\ncp a b\necho \\"'],
       ['a form feed', 'tree -L\f2'], ['a vertical tab', 'rg -n\vx .'], ['a no-break space', 'file -b\u00a0x'],
       ['a carriage return on its line', 'rg -e \rcat --pre sh x .'], ['`rg "x --pre" .`', 'rg "x --pre" .'],
-      ["`find . -na'me' x`", "find . -na'me' x"], ['`grep "a\\"; rm x" f`', 'grep "a\\"; rm x" f']];
+      ["`find . -na'me' x`", "find . -na'me' x"], ['`grep "a\\"; rm x" f`', 'grep "a\\"; rm x" f'],
+      ['a quote in a comment', "ls # it's\ncp a b\nls # '"], ["one escaped inside `$'…'`", "ls $'\\''; cp a b"],
+      ["one in a here-document's body", "cat <<EOF\n'\nEOF\ncp a b\necho \"'\""], ['the quotes inside a substitution held in double quotes', 'echo "$(echo "\'")"\ncp a b\necho "$(echo "\'")"'],
+      ["zsh's glob qualifiers", "ls *(e:'cp a b':)"], ['its `=( )`', 'cat =(cp a b)'], ['a `case` pattern', 'case x in x) cp a b;; esac'],
+      ['`find . ! -name x`', 'find . !x -name y']];
     for (const [named, command] of ASKS) {
       assert.ok(passage.includes(named), `the page names ${named}`);
       assert.ok(asks(command), `${JSON.stringify(command.slice(0, 60))} asks`);
     }
-    for (const command of ["find . -name '*.md'", "rg 'two words' notes", 'tree -L 2', 'file notes.md', 'echo "a\nb"', "rg 'TODO' notes/*.md"]) {
+    for (const command of ["find . -name '*.md'", "rg 'two words' notes", 'tree -L 2', 'file notes.md', 'echo "a\nb"', "rg 'TODO' notes/*.md",
+      'find . ! -name x', "ls # it's here", "grep -rn \"it's\" notes", "echo $'a\\tb'"]) {
       assert.ok(reads(command), `${command} still reads`);
     }
   });
 
   test('the tests the page names exist', () => {
     for (const file of ['test/unit/permissions.test.js', 'test/unit/quoted-options-hook.test.js', 'test/unit/hook-never-crashes.test.js',
-      'test/unit/read-only-on-main.test.js', 'test/tools/record-read-only-on-main.js']) {
+      'test/unit/read-only-on-main.test.js', 'test/tools/record-read-only-on-main.js', 'test/unit/shell-view.test.js', 'test/unit/shell-view-hook.test.js']) {
       assert.ok(passage.includes(`\`${file}\``), `the page names ${file}`);
       assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} exists`);
     }

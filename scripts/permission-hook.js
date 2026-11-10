@@ -186,10 +186,12 @@ const fs = require('fs');
 // directory resolves on disk rather than inside the archive. The shared module
 // is named in package.json's asarUnpack for that reason, and a test binds the
 // two so a later shared module cannot be added without it.
-const { isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isDestructiveShellCommand, shellSegments, carriageReturnSplitsJudgedOptions, leadsJudgedOptions } = require('../public/read-only-shell.js');
+const { isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isDestructiveShellCommand, shellSegments, shellView, carriageReturnSplitsJudgedOptions, leadsJudgedOptions } = require('../public/read-only-shell.js');
 // shellSegments(text) splits a line as the shell does, and shellSegments(text,
 // true) as it is written, which is how every line was split before. Where the
-// hook reads a line segment by segment, it reads both splits.
+// hook reads a line segment by segment, it reads both splits. shellView(text)
+// is the line with each quote character that opens nothing in bash made a
+// space; the boundary check reads it as well as the line (shellCrossings).
 // The Code-mode verdict and the development paths live beside this file, in
 // scripts/, so they are unpacked with it (package.json asarUnpack scripts/**).
 const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
@@ -1592,6 +1594,11 @@ function shellPathTokens(command, posixEscapes = false) {
 // each quote taken as written, exactly the way every line was read before. The
 // shell's reading finds a path an escaped quote hid (below); the written one
 // keeps every word it always found, so no word that was seen stops being seen.
+// THE SHELL'S READING IS NEEDED FOR THE HOOK TO AGREE WITH THE SHARED
+// DEFINITION: once that splits `ls \"` and the copy on the next line where the
+// shell does, the line is no longer a read, and its crossing has to name the
+// file the copy writes. Read as written, that path sat inside a quoted word
+// and the card named nothing.
 function shellPathWords(command, posixEscapes = false) {
   const asShellReads = pathWordsReadBy(command, posixEscapes, false);
   const asWritten = pathWordsReadBy(command, posixEscapes, true);
@@ -1610,6 +1617,12 @@ function pathWordsReadBy(command, posixEscapes, asWritten) {
   const skip = [];
   for (const seg of shellSegments(String(command), asWritten)) skip.push(...patternArgsIn(seg), ...delimiterArgsIn(seg));
   skip.push(...echoedArgsIn(command));
+  // COUNTED, so dropping one occurrence costs the same however many words the
+  // command holds. Looked up in the list itself, the cost grew with the square
+  // of a here-document full of echoes, and this reading runs twice a line.
+  const skipped = new Map();
+  for (const s of skip) skipped.set(s, (skipped.get(s) || 0) + 1);
+  const dropOne = s => { const n = skipped.get(s); if (!n) return false; skipped.set(s, n - 1); return true; };
   // A BACKSLASH OUTSIDE SINGLE QUOTES TAKES THE NEXT CHARACTER WITH IT in bash,
   // so in bash text `\"` and `\'` start no quoted word, and inside double quotes
   // `\"` ends none. Read as quotes, they hid every path up to the next quote
@@ -1626,8 +1639,7 @@ function pathWordsReadBy(command, posixEscapes, asWritten) {
     if (!t) continue;
     // Dropped once per pattern occurrence, not everywhere the text appears, so
     // `grep '/etc/passwd' /etc/passwd` still reports the file it reads.
-    const at = skip.indexOf(t);
-    if (at !== -1) { skip.splice(at, 1); continue; }
+    if (dropOne(t)) continue;
     const unquoted = m[1] === undefined && m[2] === undefined;
     if (posixEscapes && unquoted && t.includes('\\') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t)) t = t.replace(/\\(.)/g, '$1');
     out.push({ t, at: m.index });
@@ -1640,8 +1652,7 @@ function pathWordsReadBy(command, posixEscapes, asWritten) {
     if (eq > 0 && eq < t.length - 1) {
       const value = t.slice(eq + 1);
       // An IFS=/ separator is dropped here, where its value is split off.
-      const vat = /^IFS=/.test(t) ? skip.indexOf(value) : -1;
-      if (vat !== -1) skip.splice(vat, 1); else out.push({ t: value, at: m.index });
+      if (!(/^IFS=/.test(t) && dropOne(value))) out.push({ t: value, at: m.index });
     }
   }
   return out;
@@ -3198,12 +3209,20 @@ function judgedShellText(command, reading = null, depth = 0) {
   };
 }
 
+// A BASH LINE IS READ TWICE, AS WRITTEN AND AS ITS VIEW, and every crossing
+// either reading finds is kept. The view (shellView, in the shared module) is
+// the line with each quote character that opens nothing in bash made a space:
+// one in a comment, one escaped inside `$'…'`, one in a here-document's body,
+// and the quotes of a double-quoted string holding a command, whose command is
+// read where it runs. Paired with a later quote, any of these hid the commands
+// after it, and a copy onto a persistence surface on the next line was never
+// seen. The view keeps every offset, so each reading is whole: its words, the
+// folder each starts from and the `cd`s before it, from one text. Whether the
+// line only reads is decided once, from the line, for both.
+//
+// A command code runs, or a shell is handed with `-c`, is read the same way:
+// its view is read as a command of its own, beside it (crossingsIn).
 function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), foldsCase = hostFoldsCase(), opts = {}) {
-  const found = [];
-  const seen = new Set();
-  const codeMode = !!opts.codeMode;
-  const winWorld = opts.platform === 'win32';
-  const devOpts = { home, env: opts.env || process.env, platform: winWorld ? 'win32' : process.platform, canonical: winWorld ? (x => x) : canonicalize };
   // Computed once for the whole command, not per token: whether it may read
   // a persistence surface under the runtime's OWN home free is a property of
   // the command as a whole (see isReadOnlyShellCommand), never of one target
@@ -3212,6 +3231,23 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // PowerShell runs what they hold.
   const readsPart = opts.shellTool === 'PowerShell' ? isReadOnlyPowerShellCommand : isReadOnlyShellCommand;
   const readOnly = readsPart(command);
+  const found = crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, readsPart, readOnly);
+  const view = opts.shellTool === 'PowerShell' ? command : shellView(command).text;
+  if (view === command) return found;
+  const keyOf = c => `${c.path}\u0000${c.answerFile ? 'a' : ''}`;
+  const have = new Set(found.map(keyOf));
+  for (const c of crossingsIn(view, workspaceRoot, extraDirs, home, foldsCase, opts, readsPart, readOnly)) {
+    if (!have.has(keyOf(c))) { have.add(keyOf(c)); found.push(c); }
+  }
+  return found;
+}
+
+function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, readsPart, readOnly) {
+  const found = [];
+  const seen = new Set();
+  const codeMode = !!opts.codeMode;
+  const winWorld = opts.platform === 'win32';
+  const devOpts = { home, env: opts.env || process.env, platform: winWorld ? 'win32' : process.platform, canonical: winWorld ? (x => x) : canonicalize };
   // A BACKSLASH IN A BASH WORD ON A POSIX HOST IS BASH'S, NOT WINDOWS'. It
   // escapes the next character when the word is unquoted and is an ordinary
   // character inside quotes; it never separates folders. Judged as a Windows
@@ -3230,7 +3266,11 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   //
   // A literal in code handed to an interpreter counts as written unless every
   // use of it is a read (see codeUse): `open('.mcp.json')` reads it.
-  const view = judgedShellText(command, { posixText, firstFolders: opts.firstFolders || new Map() });
+  const judged = judgedShellText(command, { posixText, firstFolders: opts.firstFolders || new Map() });
+  // Each command the line's code runs, and its view beside it when the two
+  // differ: a command of its own, from where the line starts, as it is.
+  const viewed = c => { const v = shellView(c.text).text; return v === c.text ? [c] : [c, { ...c, text: v }]; };
+  const view = opts.shellTool === 'PowerShell' ? judged : { ...judged, commands: judged.commands.flatMap(viewed) };
   const writes = { words: new Set(), into: [] };
   if (!readOnly) {
     for (const lit of view.literals) if (lit.written) writes.words.add(lit.t);

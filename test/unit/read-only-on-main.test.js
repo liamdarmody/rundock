@@ -11,8 +11,12 @@
 // is the command, whether main read it, and main's risk. A command longer
 // than a kibibyte is stored in pieces, and test/helpers/read-only-on-main.js
 // reads each one back to the command before it is graded here.
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const S = require('../../public/read-only-shell.js');
 const P = require('../../public/permissions.js');
@@ -65,4 +69,27 @@ test('the lines the shell\'s reading alone would read are in the recording, and 
   for (const cmd of ["find . -name 'a -delete'", 'rg "x --pre" .', "find . -na'me' x", 'grep "a\\"; rm x" f']) {
     assert.strictEqual(recorded.get(cmd), false, `recorded as not a read on main: ${show(cmd)}`);
   }
+});
+
+// THE RECORDING IS HELD TO THE BASE IT NAMES, wherever history holds that
+// commit: main's two graders are read from git at `recordedFrom`, as the
+// recorder reads them, and every recorded verdict and risk must be what they
+// return, so a row edited by hand fails here. A shallow checkout does not hold
+// the commit; there this says so in one line and skips.
+const ROOT = path.join(__dirname, '..', '..');
+function baseGraders() {
+  const git = (args, opts = {}) => execFileSync('git', args, { cwd: ROOT, maxBuffer: 64 * 1024 * 1024, ...opts });
+  try { git(['cat-file', '-e', `${RECORDED.recordedFrom}^{commit}`], { stdio: 'ignore' }); } catch (e) { return null; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'read-only-base-'));
+  for (const f of ['read-only-shell.js', 'permissions.js']) fs.writeFileSync(path.join(dir, f), git(['show', `${RECORDED.recordedFrom}:public/${f}`]));
+  return { dir, S: require(path.join(dir, 'read-only-shell.js')), P: require(path.join(dir, 'permissions.js')) };
+}
+const BASE = baseGraders();
+after(() => { if (BASE) fs.rmSync(BASE.dir, { recursive: true, force: true }); });
+const ABSENT = `the recording's base ${RECORDED.recordedFrom.slice(0, 12)} is not in this checkout, so its rows are not checked against it`;
+if (!BASE) process.stderr.write(`read-only-on-main: ${ABSENT}\n`);
+
+test('every recorded verdict and risk is what the graders at the recording\'s base return', { skip: BASE ? false : ABSENT }, () => {
+  const differ = LINES.filter(([cmd, reads, r]) => BASE.S.isReadOnlyShellCommand(cmd) !== reads || BASE.P.classifyRisk('Bash', { command: cmd }) !== r);
+  assert.deepStrictEqual(differ.map(([cmd]) => show(cmd)), [], 'no row differs from the base it names');
 });

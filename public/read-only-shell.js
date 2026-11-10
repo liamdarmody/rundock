@@ -178,6 +178,416 @@
   // it in bash: `x>/dev/null` is `x`, and a discard.
   var DISCARDING_REDIRECT_RE = /(?:(?<![^ \t\n])\d+)?>>?\s*(?:\/dev\/null|&\s*\d+)/g;
 
+  // ── Where the shell's quotes really are ─────────────────────────────────
+  //
+  // EVERY READING HERE FINDS A QUOTE BY PAIRING QUOTE CHARACTERS, and the
+  // hook's readings do the same. The shell has quote characters that open
+  // nothing as well, and each one, paired with a later quote, hid every
+  // command after it inside a quote the shell never opened:
+  //   - a comment runs from a `#` that starts a word to the end of its line,
+  //     and a quote in it is text (`ls # it's`);
+  //   - inside `$'…'` a backslash takes the next character with it, a quote
+  //     included, so `$'\''` is one quoted word, a lone `'`;
+  //   - in a here-document's body every quote is text, as is everything else
+  //     but a substitution in a body whose delimiter is not quoted;
+  //   - a quote after a backslash outside single quotes is text;
+  //   - inside a substitution held in double quotes, `"$(echo "x")"`, quotes
+  //     start afresh, and a reading that pairs them ran the strings together.
+  //
+  // shellView gives the line back with each of those characters made a space,
+  // one character for one, so every offset into the line still holds. A
+  // double-quoted string that holds a command is opened up as well: its own
+  // quotes, and the quote and grouping characters in its text, are made
+  // spaces, so the command inside is read where it runs. Each reading reads
+  // this view as well as the line itself and keeps everything either finds,
+  // so nothing the line's own reading found stops being found.
+  //
+  // `ok` IS FALSE WHEN THE LINE CANNOT BE READ TO ITS END THIS WAY, or when
+  // the shells an agent's command runs in (bash 3.2, which macOS ships, a
+  // later bash, and zsh, which macOS starts with) read its quotes differently:
+  // a quote, substitution or here-document never closed; a single quote
+  // inside `${…}` within double quotes; a `case` inside `$( )`; a substitution
+  // holding a here-document or a comment that bash 3.2 ends at another `)`;
+  // or nesting deeper than this reading follows. Such a line is not a read,
+  // and in Code mode it asks.
+  //
+  // `parens` is whether a `(` or `)` stands outside every quote and outside
+  // every substitution's own. Each runs a command behind a leading word that
+  // reads: zsh runs `cmd` for `ls *(e:'cmd':)`, `ls x(+cmd)` and `cat =(cmd)`,
+  // and `case x in x) cmd;; esac` runs `cmd` in either shell. A line holding
+  // one is not a read. `wordParen` is whether such a `(` is inside a word
+  // rather than starting one (a subshell), other than an array's `name=(`:
+  // the zsh forms above, which the Code-mode verdict, reading bash's grammar,
+  // does not model, so there they ask.
+  //
+  // A FAILURE INSIDE THIS READING IS AN ANSWER: the line as given and `ok`
+  // false. A test forces one through this seam.
+  var shellViewSeam = { beforeReading: function () {} };
+  var VIEW_DEPTH_LIMIT = 32;
+  // The characters that give text a structure: quotes, an escape, a
+  // substitution, a group, a here-document.
+  var STRUCTURE_CHARS = '\'"`\\$(){}<';
+  // The text characters of a double-quoted string that is opened up.
+  var OPENED_CHARS = '\'\\(){}<#';
+  function shellView(command) {
+    var text = String(command);
+    try {
+      shellViewSeam.beforeReading(text);
+      var seen = viewOf(text, 0);
+      return { text: seen.chars.join(''), ok: seen.ok, parens: seen.parens, wordParen: seen.wordParen };
+    } catch (failed) {
+      return { text: text, ok: false, parens: false, wordParen: false };
+    }
+  }
+  function viewOf(text, depth) {
+    var v = text.split('');
+    var n = text.length;
+    var st = { ok: true, parens: false, wordParen: false, pending: [], command: false, marks: 0 };
+    if (depth > VIEW_DEPTH_LIMIT) return { chars: v, ok: false, parens: false, wordParen: false, command: false };
+    var blank = function (k) { if (v[k] !== '\n') v[k] = ' '; };
+    var blankStructure = function (from, to) {
+      for (var k = from; k < to; k++) if (STRUCTURE_CHARS.indexOf(text[k]) >= 0) blank(k);
+    };
+    var escapedQuote = function (c) { return c === '\'' || c === '"' || c === '`'; };
+
+    // Commands from `p` to `limit`. In a substitution (`inParen`) they end at
+    // the `)` that closes it, whose index is returned.
+    function script(p, limit, inParen, level) {
+      if (depth + level > VIEW_DEPTH_LIMIT) { st.ok = false; return limit; }
+      var wordStart = true;
+      var wordFrom = p;
+      var groups = 0;
+      while (p < limit) {
+        var c = text[p];
+        if (wordStart) wordFrom = p;
+        if (c === '\\') {
+          if (p + 1 >= limit) return limit;
+          if (escapedQuote(text[p + 1])) blank(p + 1);
+          if (text[p + 1] !== '\n') wordStart = false;
+          p += 2;
+          continue;
+        }
+        if (c === '\'') { p = single(p, limit); wordStart = false; continue; }
+        if (c === '"') { p = double(p, limit, level); wordStart = false; continue; }
+        if (c === '`') { p = backtick(p, limit, level, false); wordStart = false; continue; }
+        if (c === '$') { p = dollar(p, limit, level, false); wordStart = false; continue; }
+        if (c === '#' && wordStart) { p = comment(p, limit); continue; }
+        if (c === '\n') { p = bodies(p, limit, level); wordStart = true; continue; }
+        if ((c === '<' || c === '>') && text[p + 1] === '(') { p = substitution(p + 1, limit, level); wordStart = false; continue; }
+        if (c === '<' && text[p + 1] === '<') {
+          p = text[p + 2] === '<' ? p + 3 : marker(p, limit);
+          wordStart = false;
+          continue;
+        }
+        if (c === '(') {
+          st.parens = true;
+          if (!wordStart && !/^[A-Za-z_][A-Za-z0-9_]*\+?=$/.test(text.slice(wordFrom, p))) st.wordParen = true;
+          groups++;
+          p++;
+          wordStart = true;
+          continue;
+        }
+        if (c === ')') {
+          if (inParen && groups === 0) return p;
+          st.parens = true;
+          if (groups > 0) groups--;
+          p++;
+          wordStart = true;
+          continue;
+        }
+        if (c === ' ' || c === '\t' || c === ';' || c === '&' || c === '|') { p++; wordStart = true; continue; }
+        // A case pattern's `)` ends a substitution early in bash 3.2 and not
+        // in a later bash or zsh.
+        if (inParen && wordStart && /^case[ \t\n;&|()<>]/.test(text.slice(p, p + 5))) st.ok = false;
+        wordStart = false;
+        p++;
+      }
+      if (inParen) st.ok = false;
+      return limit;
+    }
+    function single(p, limit) {
+      var j = text.indexOf('\'', p + 1);
+      if (j < 0 || j >= limit) { st.ok = false; return limit; }
+      return j + 1;
+    }
+    function double(p, limit, level) {
+      var start = p;
+      var held = st.command;
+      st.command = false;
+      var plain = [];
+      p++;
+      while (p < limit && text[p] !== '"') {
+        var c = text[p];
+        if (c === '\\') {
+          if (p + 1 < limit && '$`"\\\n'.indexOf(text[p + 1]) >= 0) {
+            if (escapedQuote(text[p + 1])) blank(p + 1);
+            plain.push(p);
+            p += 2;
+            continue;
+          }
+          plain.push(p);
+          p++;
+          continue;
+        }
+        if (c === '$') { p = dollar(p, limit, level, true); continue; }
+        if (c === '`') { p = backtick(p, limit, level, true); continue; }
+        plain.push(p);
+        p++;
+      }
+      var holds = st.command;
+      st.command = held || holds;
+      if (p >= limit) { st.ok = false; return limit; }
+      if (holds) {
+        blank(start);
+        blank(p);
+        for (var k = 0; k < plain.length; k++) if (OPENED_CHARS.indexOf(text[plain[k]]) >= 0) blank(plain[k]);
+      }
+      return p + 1;
+    }
+    function dollar(p, limit, level, inDouble) {
+      if (p + 1 >= limit) return p + 1;
+      var e = text[p + 1];
+      if (e === '(') return text[p + 2] === '(' ? arithmetic(p, limit, level) : substitution(p + 1, limit, level);
+      if (e === '{') return parameter(p, limit, level, inDouble);
+      if (e === '\'' && !inDouble) return ansi(p, limit);
+      return p + 1;
+    }
+    function ansi(p, limit) {
+      p += 2;
+      while (p < limit) {
+        if (text[p] === '\\') { if (text[p + 1] === '\'') blank(p + 1); p += 2; continue; }
+        if (text[p] === '\'') return p + 1;
+        p++;
+      }
+      st.ok = false;
+      return limit;
+    }
+    // `$(`, `<(` or `>(`, from its `(`.
+    function substitution(q, limit, level) {
+      st.command = true;
+      var marks = st.marks;
+      var end = script(q + 1, limit, true, level + 1);
+      if (end >= limit) { st.ok = false; return limit; }
+      if (st.marks !== marks) {
+        var old = bash32Close(q, limit);
+        if (old >= 0 && old !== end) st.ok = false;
+      }
+      return end + 1;
+    }
+    function arithmetic(p, limit, level) {
+      var q = p + 3;
+      var groups = 0;
+      while (q < limit) {
+        var c = text[q];
+        if (c === '\\') { if (escapedQuote(text[q + 1])) blank(q + 1); q += 2; continue; }
+        if (c === '\'') { q = single(q, limit); continue; }
+        if (c === '"') { q = double(q, limit, level + 1); continue; }
+        if (c === '`') { q = backtick(q, limit, level + 1, false); continue; }
+        if (c === '$') { q = dollar(q, limit, level + 1, false); continue; }
+        if (c === '(') { groups++; q++; continue; }
+        if (c === ')') {
+          if (groups > 0) { groups--; q++; continue; }
+          if (text[q + 1] === ')') return q + 2;
+          // `$((` closed by a lone `)`: a subshell inside `$( )`, read no
+          // further.
+          st.ok = false;
+          return q + 1;
+        }
+        q++;
+      }
+      st.ok = false;
+      return limit;
+    }
+    function parameter(p, limit, level, inDouble) {
+      var q = p + 2;
+      var braces = 1;
+      while (q < limit) {
+        var c = text[q];
+        if (c === '\\') { if (escapedQuote(text[q + 1])) blank(q + 1); q += 2; continue; }
+        if (c === '\'') {
+          // Bash 3.2 takes it as a quote here, a later bash and zsh as text.
+          if (inDouble) { st.ok = false; q++; continue; }
+          q = single(q, limit);
+          continue;
+        }
+        if (c === '"') { q = double(q, limit, level + 1); continue; }
+        if (c === '`') { q = backtick(q, limit, level + 1, inDouble); continue; }
+        if (c === '$') { q = dollar(q, limit, level + 1, inDouble); continue; }
+        if (c === '{') braces++;
+        else if (c === '}' && --braces === 0) return q + 1;
+        q++;
+      }
+      st.ok = false;
+      return limit;
+    }
+    // A backtick's command is the text up to the next backtick not escaped,
+    // with `\\`, `` \` ``, `\$` (and `\"` inside double quotes) made the
+    // character after the backslash, then read as commands of its own.
+    function backtick(p, limit, level, inDouble) {
+      st.command = true;
+      var q = p + 1;
+      var inner = '';
+      var at = [];
+      var unescape = inDouble ? '\\`$"' : '\\`$';
+      while (q < limit && text[q] !== '`') {
+        if (text[q] === '\\' && q + 1 < limit && unescape.indexOf(text[q + 1]) >= 0) {
+          if (escapedQuote(text[q + 1])) blank(q + 1);
+          inner += text[q + 1];
+          at.push(q + 1);
+          q += 2;
+          continue;
+        }
+        if (text[q] === '\\' && q + 1 < limit) { inner += text.slice(q, q + 2); at.push(q, q + 1); q += 2; continue; }
+        inner += text[q];
+        at.push(q);
+        q++;
+      }
+      if (q >= limit) { st.ok = false; return limit; }
+      var seen = viewOf(inner, depth + level + 1);
+      for (var k = 0; k < inner.length; k++) if (seen.chars[k] !== inner[k]) blank(at[k]);
+      if (!seen.ok) st.ok = false;
+      if (seen.parens) st.parens = true;
+      if (seen.wordParen) st.wordParen = true;
+      return q + 1;
+    }
+    function comment(p, limit) {
+      st.marks++;
+      var q = p;
+      while (q < limit && text[q] !== '\n') q++;
+      blankStructure(p, q);
+      return q;
+    }
+    // `<<` or `<<-`, then its delimiter word, from the first `<`.
+    function marker(p, limit) {
+      st.marks++;
+      var q = p + 2;
+      var tabs = false;
+      if (text[q] === '-') { tabs = true; q++; }
+      while (q < limit && (text[q] === ' ' || text[q] === '\t')) q++;
+      var start = q;
+      var delim = '';
+      var quoted = false;
+      while (q < limit) {
+        var c = text[q];
+        if (c === ' ' || c === '\t' || c === '\n' || ';&|<>()'.indexOf(c) >= 0) break;
+        if (c === '\\') { quoted = true; if (q + 1 < limit) delim += text[q + 1]; q += 2; continue; }
+        if (c === '\'' || c === '"') {
+          var j = text.indexOf(c, q + 1);
+          if (j < 0 || j >= limit) { st.ok = false; return limit; }
+          quoted = true;
+          delim += text.slice(q + 1, j);
+          q = j + 1;
+          continue;
+        }
+        delim += c;
+        q++;
+      }
+      if (q === start) { st.ok = false; return q; }
+      st.pending.push({ delim: delim, tabs: tabs, expands: !quoted });
+      return q;
+    }
+    // At a line break: the bodies of the here-documents its line opened, each
+    // up to the line that is its delimiter. Returns where reading resumes.
+    function bodies(p, limit, level) {
+      p++;
+      while (st.pending.length) {
+        var m = st.pending.shift();
+        var from = p;
+        var closed = false;
+        while (p < limit) {
+          var eol = text.indexOf('\n', p);
+          if (eol < 0 || eol > limit) eol = limit;
+          var line = text.slice(p, eol);
+          if ((m.tabs ? line.replace(/^\t+/, '') : line) === m.delim) {
+            body(from, p, m.expands, level);
+            p = Math.min(eol + 1, limit);
+            closed = true;
+            break;
+          }
+          p = eol + 1;
+        }
+        if (!closed) {
+          body(from, limit, m.expands, level);
+          st.ok = false;
+          st.pending = [];
+          return limit;
+        }
+      }
+      return p;
+    }
+    function body(from, to, expands, level) {
+      if (!expands) { blankStructure(from, to); return; }
+      var q = from;
+      while (q < to) {
+        var c = text[q];
+        if (c === '\\') {
+          if (q + 1 < to && '$`\\\n'.indexOf(text[q + 1]) >= 0) { if (text[q + 1] === '`') blank(q + 1); q += 2; continue; }
+          blank(q);
+          q++;
+          continue;
+        }
+        if (c === '$') { q = dollar(q, to, level, true); continue; }
+        if (c === '`') { q = backtick(q, to, level, true); continue; }
+        if (STRUCTURE_CHARS.indexOf(c) >= 0) blank(q);
+        q++;
+      }
+    }
+    // Where bash 3.2 ends the substitution whose `(` is at `q`: it pairs
+    // quotes and parentheses and skips a comment, and knows nothing of a
+    // here-document. -1 when it cannot end it, which is an error there.
+    function bash32Close(q, limit) {
+      var groups = 1;
+      var p = q + 1;
+      var wordStart = true;
+      while (p < limit) {
+        var c = text[p];
+        if (c === '\\') { p += 2; wordStart = false; continue; }
+        if (c === '\'') {
+          var j = text.indexOf('\'', p + 1);
+          if (j < 0 || j >= limit) return -1;
+          p = j + 1;
+          wordStart = false;
+          continue;
+        }
+        if (c === '"') { p = bash32Double(p, limit); if (p < 0) return -1; wordStart = false; continue; }
+        if (c === '`') { p = bash32Backtick(p, limit); if (p < 0) return -1; wordStart = false; continue; }
+        if (c === '$' && text[p + 1] === '\'') {
+          p += 2;
+          while (p < limit && text[p] !== '\'') p += text[p] === '\\' ? 2 : 1;
+          if (p >= limit) return -1;
+          p++;
+          wordStart = false;
+          continue;
+        }
+        if (c === '#' && wordStart) { while (p < limit && text[p] !== '\n') p++; continue; }
+        if (c === '(') groups++;
+        else if (c === ')' && --groups === 0) return p;
+        wordStart = ' \t\n;&|()'.indexOf(c) >= 0;
+        p++;
+      }
+      return -1;
+    }
+    function bash32Double(p, limit) {
+      p++;
+      while (p < limit && text[p] !== '"') {
+        if (text[p] === '\\') { p += 2; continue; }
+        if (text[p] === '$' && text[p + 1] === '(') { var j = bash32Close(p + 1, limit); if (j < 0) return -1; p = j + 1; continue; }
+        if (text[p] === '`') { p = bash32Backtick(p, limit); if (p < 0) return -1; continue; }
+        p++;
+      }
+      return p < limit ? p + 1 : -1;
+    }
+    function bash32Backtick(p, limit) {
+      p++;
+      while (p < limit && text[p] !== '`') p += text[p] === '\\' ? 2 : 1;
+      return p < limit ? p + 1 : -1;
+    }
+
+    script(0, n, false, 0);
+    if (st.pending.length) st.ok = false;
+    return { chars: v, ok: st.ok, parens: st.parens, wordParen: st.wordParen, command: st.command };
+  }
+
   // SPLIT ON OPERATORS, BUT NOT ON TEXT THAT LOOKS LIKE ONE. A regular
   // expression is full of shell operator characters, and quoting is what tells
   // them apart: `grep -oE '"(app|window_title)": ...' f | head` runs two
@@ -245,13 +655,17 @@
     segments.push(cur);
     return segments.map(function (seg) { return seg.trim(); });
   }
-  // The segments of both splits, the shell's first. They differ only after a
-  // backslash before a quote or a separator, so a line without one is split
-  // once.
+  // The segments of every split, the shell's first: as the shell splits the
+  // line, as it splits the line's view (shellView, above), and as the line is
+  // written. The first and last differ only after a backslash before a quote
+  // or a separator, and the view only where the line holds a quote character
+  // that opens nothing, so most lines are split once.
   function shellSplits(command) {
     var str = String(command);
-    var asShellReads = shellSegments(str);
-    return /\\['";|&\n\r]/.test(str) ? asShellReads.concat(shellSegments(str, true)) : asShellReads;
+    var segments = shellSegments(str);
+    var view = shellView(str).text;
+    if (view !== str) segments = segments.concat(shellSegments(view));
+    return /\\['";|&\n\r]/.test(str) ? segments.concat(shellSegments(str, true)) : segments;
   }
 
   // The command name without the directory it was reached through, so
@@ -453,9 +867,11 @@
   // segment is not a read, and it asks.
   //
   // `asWrittenToo` (true for find, rg, tree and file, whose words are judged
-  // as written as well, below) follows two more things those four always read:
-  // a `!` standing alone, and a wildcard that cannot start with a dash
-  // (globCannotStartWithDash).
+  // as written as well, below) makes the only two exceptions to the plain set,
+  // each for text those four always read: a wildcard that cannot start with a
+  // dash (globCannotStartWithDash), and a `!` that is a word of its own, which
+  // bash and zsh hand over as the text `!` after the command's name (find's
+  // negation, `find . ! -name x`). A `!` beside other text still fails closed.
   var OPTIONS_READ_LIMIT = 8192;
   // Unquoted, only these are plain text in bash and in zsh alike.
   var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\/:,=+%@~-]|[\p{L}\p{M}\p{N}])$/u;
@@ -713,6 +1129,11 @@
     var str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');
     if (/>>?|\btee\b/.test(str)) return false;
     if (HIDES_SUBCOMMAND.test(str)) return false;
+    // A line whose quotes the shells read differently, or one this reading
+    // cannot follow to its end, is not a read; nor is one holding a `(` or a
+    // `)` outside its quotes (shellView, above).
+    var view = shellView(str);
+    if (!view.ok || view.parens) return false;
     if (carriageReturnSplitsJudgedOptions(str)) return false;
     // SPLIT AS WRITTEN TOO, with each quote taken as written and a backslash
     // as text, as every line was split before, as well as the way the shell
@@ -908,8 +1329,8 @@
   // reads a command's segments one by one for what they write, so that it
   // asks the same rules rather than keeping copies.
   return {
-    DISCARDING_REDIRECT_RE, shellSegments, shellSplits, isReadOnlyShellCommand, isReadOnlyPowerShellCommand,
-    isDestructiveShellCommand, powerShellReadingSeam, optionReadingSeam, carriageReturnSplitsJudgedOptions,
+    DISCARDING_REDIRECT_RE, shellSegments, shellSplits, shellView, isReadOnlyShellCommand, isReadOnlyPowerShellCommand,
+    isDestructiveShellCommand, powerShellReadingSeam, optionReadingSeam, shellViewSeam, carriageReturnSplitsJudgedOptions,
     leadsJudgedOptions, shellWords, namedOptions,
   };
 }));

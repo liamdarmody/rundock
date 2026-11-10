@@ -1128,6 +1128,9 @@ describe('options are judged as the shell reads them', () => {
     assert.deepStrictEqual(S.shellWords(`'-o' "-o" \\-o -'o' ''-o`), ['-o', '-o', '-o', '-o', '-o'], 'and each spelling is the -o the program is given');
     assert.deepStrictEqual(S.shellWords('! -name x', true), ['!', '-name', 'x'], "find's negation standing alone is a word to find, rg, tree and file");
     assert.strictEqual(S.shellWords('! -name x'), null, 'and not read for sort or date, as it never was');
+    // The second of the two exceptions to the plain set, and only a `!` that is
+    // a word of its own: one inside or beside other text still fails closed.
+    for (const text of ['!x', 'x!', 'a!b', '!! -name x', '-name !x', '!\fx']) assert.strictEqual(S.shellWords(text, true), null, `read: ${show(text)}`);
     assert.deepStrictEqual(S.shellWords('src/*.js ./* a?c', true), ['src/*.js', './*', 'a?c'], 'a wildcard after a plain first character is a word to those four');
     for (const text of ['*.md', '?pre*', '[-]*', "'a'*", '\\a*', '-*']) assert.strictEqual(S.shellWords(text, true), null, `read: ${show(text)}`);
     assert.strictEqual(S.shellWords('src/*.js'), null, 'and no wildcard is read for sort or date, as none was');
