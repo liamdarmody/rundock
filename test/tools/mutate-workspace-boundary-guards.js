@@ -1089,6 +1089,11 @@ const MUTATIONS = [
   [READ_ONLY_CLIENT, 'sort and date: a carriage return on the line is not a read',
     '    if (carriageReturnSplitsSortOrDate(str)) return false;\n',
     ''],
+  // Take any digits before `>` as the descriptor again and `sort -t2>&1 -o out
+  // in` loses its `2`, so `-t` takes the `-o` and the line reads.
+  [READ_ONLY_CLIENT, 'a descriptor number glued to the word before a redirect stays with that word',
+    'var DISCARDING_REDIRECT_RE = /(?:(?<![^ \\t\\n])\\d+)?>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
+    'var DISCARDING_REDIRECT_RE = /\\d*>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;'],
   // The same reading, where it frees a crossing: in process, through the real
   // hook, on the card, and when the reading fails inside the real hook.
   [READ_ONLY, 'the boundary layer frees a sort crossing only on a reading sort',
@@ -1096,6 +1101,9 @@ const MUTATIONS = [
     "    operandLetters: 'ktSo',"],
   [HOOK, 'the hook reads a sort or date segment from its own text for what writes an answer file',
     "    if (readsPart === isReadOnlyShellCommand && (verb === 'sort' || verb === 'date')) reads = readsPart(seg);\n",
+    ''],
+  [HOOK, 'the hook counts every word written when a carriage return splits a sort or date line',
+    '    if (splitAtReturn) reads = false;\n',
     ''],
   [SORT_DATE_HOOK, 'the real hook: a writing sort keeps its crossing',
     "    operandLetters: 'ktS',",
