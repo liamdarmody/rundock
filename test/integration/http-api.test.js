@@ -380,12 +380,12 @@ describe('permission bridge', () => {
   test('hook request is forwarded as a control_request card; allow resolves the long-poll with {allow:true}', async () => {
     const since = client.messages.length;
     const pending = postJson('/api/permission-request', {
-      tool_name: 'Bash', tool_input: { command: 'ls -la' }, conversation_id: 'convo-perm-1',
+      tool_name: 'Bash', tool_input: { command: 'npm run build' }, conversation_id: 'convo-perm-1',
     });
     const { msg: card } = await client.waitFor(m => m.type === 'control_request', { since, label: 'permission card' });
     assert.strictEqual(card.request.subtype, 'can_use_tool');
     assert.strictEqual(card.request.tool_name, 'Bash');
-    assert.deepStrictEqual(card.request.input, { command: 'ls -la' });
+    assert.deepStrictEqual(card.request.input, { command: 'npm run build' });
     assert.strictEqual(card._conversationId, 'convo-perm-1');
 
     client.send({ type: 'permission_response', requestId: card.request_id, allow: true, conversationId: 'convo-perm-1' });
@@ -447,7 +447,7 @@ describe('permission bridge', () => {
     client.send({ type: 'chat', conversationId: convoId, agent: 'lead-designer', content: 'needs permission' });
     await client.waitForEvent('system', 'process_started', convoId);
 
-    const pending = postJson('/api/permission-request', { tool_name: 'Bash', tool_input: { command: 'ls' }, conversation_id: convoId });
+    const pending = postJson('/api/permission-request', { tool_name: 'Bash', tool_input: { command: 'npm run lint' }, conversation_id: convoId });
     await client.waitFor(m => m.type === 'control_request' && m._conversationId === convoId, { label: 'card before cancel' });
 
     client.send({ type: 'cancel', conversationId: convoId });
@@ -456,7 +456,7 @@ describe('permission bridge', () => {
   });
 
   test('reconnecting client receives pending permission cards again', async () => {
-    const pending = postJson('/api/permission-request', { tool_name: 'Bash', tool_input: { command: 'pwd' }, conversation_id: 'convo-perm-4' });
+    const pending = postJson('/api/permission-request', { tool_name: 'Bash', tool_input: { command: 'npm test' }, conversation_id: 'convo-perm-4' });
     const { msg: card } = await client.waitFor(m => m.type === 'control_request' && m._conversationId === 'convo-perm-4', { label: 'original card' });
 
     const client2 = await h.connect();

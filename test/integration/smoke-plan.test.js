@@ -137,7 +137,7 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
     const since = client.messages.length;
     const pending = fetch(`http://127.0.0.1:${h.port}/api/permission-request`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...h.hookHeaders('t6') },
-      body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo hi' }, conversation_id: 't6' }),
+      body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'npm run build' }, conversation_id: 't6' }),
     }).then(r => r.json());
     const { msg: card } = await client.waitFor(m => m.type === 'control_request', { since, label: 'consent card' });
     assert.strictEqual(card.request.subtype, 'can_use_tool');

@@ -178,23 +178,13 @@ describe('the sequences that need the real server', () => {
 
       const since = client.messages.length;
       const pending = runHook('cd ~/.claude && ls', env);
-      if (env.RUNDOCK_CODE_MODE) {
-        // Code mode runs it without asking the server at all.
-        assert.strictEqual(decisionOf(await pending), 'allow');
-        await h.delay(200);
-        assert.ok(!client.messages.slice(since).some(isCard), 'nothing was asked');
-        return;
-      }
-      // Notes mode hands every shell command to the browser, which answers a
-      // read like this one itself, without drawing a card.
-      const { msg } = await client.waitFor(isCard, { since, label: `${label}: the free read` });
-      assert.ok(!secretOf(msg.request), 'not a secret card');
-      const html = draw(msg);
-      assert.strictEqual(html, '', 'no card is drawn');
-      assert.strictEqual(sent.length, 1, 'the browser answered it');
-      assert.strictEqual(sent[0].allow, true);
-      client.send(sent[0]);
+      // Code mode runs it without asking the server at all. Notes mode hands
+      // every shell command to the server, which answers a read like this one
+      // itself, from the decision the window makes, so it never reaches the
+      // browser either.
       assert.strictEqual(decisionOf(await pending), 'allow');
+      await h.delay(200);
+      assert.ok(!client.messages.slice(since).some(isCard), 'nothing was asked');
     });
   }
 });
@@ -309,8 +299,17 @@ describe('a stored grant over a runtime folder, against a read of everything in 
 //
 //   git show origin/main:scripts/permission-hook.js > scripts/.main-hook.js
 //   RUNDOCK_RECORD_HOOK="$PWD/scripts/.main-hook.js" node --test --test-name-pattern "as a person sees it" test/integration/secret-reach-card.test.js
+//
+// The fixture was recorded while the browser still answered a low-risk read
+// itself. The server now answers one first, from the same decision, so such a
+// request never reaches the browser; asNow reads the recorded answer that way.
+// What the person sees is unchanged: no card, and the command allowed.
 const RECORD = process.env.RUNDOCK_RECORD_HOOK || '';
 const CARD_FIXTURE = path.join(__dirname, '..', 'fixtures', 'secret-reach-card-on-main.json');
+function asNow(recorded) {
+  if (!recorded || !recorded.asked || recorded.drawn || recorded.browserAnswer !== true) return recorded;
+  return { asked: false, drawn: false, secretWording: false, folderOffer: false, alwaysOffer: false, browserAnswer: null, decision: recorded.decision };
+}
 const CONTROLS = [
   'cat notes.md', 'ls dist', 'cat auth.json', 'cat sub/auth.json', 'cd sub && cat auth.json',
   'cd ~/.claude && ls', 'cd ~/.claude && ls projects', 'cd ~/.claude && cat settings.json', 'cat ~/.claude/settings.json',
@@ -361,7 +360,7 @@ describe('nothing else gains a card, as a person sees it', () => {
         const key = `${label} | ${command}`;
         if (RECORD) { seen[key] = got; return; }
         assert.ok(onMain[key], 'measured on main');
-        assert.deepStrictEqual(got, onMain[key], 'what the person sees, as on main');
+        assert.deepStrictEqual(got, asNow(onMain[key]), 'what the person sees, as on main');
       });
     }
   }
