@@ -298,6 +298,10 @@ const HOOK_BLOCK_CAPTURE = { src: path.join(ROOT, 'scripts', 'hook-block-truth',
 // The same file, the suite that times it: the folder each word starts from is
 // worked out once per command, or the check grows with the square of it.
 const SHELL_TIMING = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-timing.test.js' };
+// The same suite's own bound on growth: the row above stops at the ceiling
+// before the ratio is reached, so only the bound's tests can show it is the
+// bound that tells linear growth from quadratic.
+const SHELL_TIMING_BOUND = { src: path.join(ROOT, 'test', 'unit', 'shell-code-timing.test.js'), suite: 'test/unit/shell-code-timing.test.js' };
 
 // A connector action that sends, replies or forwards: never a read in the hook,
 // high risk in the client. The word tables are proven by the suite that grades
@@ -3738,6 +3742,9 @@ const MUTATIONS = [
   [SHELL_TIMING, "Shell code: the folder each word starts from is worked out again for every word",
     "    if (!bases.has(key)) bases.set(key, commandBases(",
     "    bases.set(key, commandBases("],
+  [SHELL_TIMING_BOUND, "Shell code timing: the bound on growth is loosened until quadratic growth passes",
+    "const BOUND = 24;",
+    "const BOUND = 1000;"],
   [SHELL_CODE, "Shell code: a route-shaped literal whose first folder is not on this machine is a place",
     "  if (reading && reading.posixText && /^\\/[^\\s/\\\\]/.test(lit) && !firstFolderExists(lit, reading.firstFolders)) return false;\n",
     ""],
