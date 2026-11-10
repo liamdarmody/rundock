@@ -31,8 +31,9 @@ describe('classifyRisk Bash', () => {
     // character on the line at all. The others cannot write, and still ask,
     // because putting them back is a widening that belongs to whatever change
     // can show the sessions that want it. `sort` and `date` have been judged
-    // since, and read in their reading forms only: see the tests below.
-    for (const cmd of ['whoami', 'which ls', 'printenv',
+    // since, and read in their reading forms only, so their writing forms
+    // stand here for them: see the tests below for the rest.
+    for (const cmd of ['whoami', 'which ls', 'printenv', 'sort -o notes.txt notes.txt', 'date -s 2026-01-01',
       'uniq a.txt', 'diff a b', 'pushd /tmp', 'popd', 'true']) {
       assert.strictEqual(risk(cmd), 'medium', cmd);
     }
@@ -525,8 +526,9 @@ describe('one definition of read-only, read by both graders', () => {
       'cd is new to the boundary layer, and a chain built from it and a read is freed');
 
     // AND NOTHING ELSE CAME WITH IT. Every other word this grader alone used
-    // to trust still produces a crossing at the boundary layer.
-    for (const word of ['whoami', 'printenv', 'uniq', 'diff', 'true', 'pushd', 'popd']) {
+    // to trust still produces a crossing at the boundary layer, and so do the
+    // writing forms of `sort` and `date`.
+    for (const word of ['whoami', 'printenv', 'sort -o', 'date -s', 'uniq', 'diff', 'true', 'pushd', 'popd']) {
       const r = hook.classifyShellAccess('Bash', { command: `${word} ${agents}` }, ws, [], home);
       assert.ok(r && r.crossings.some(c => c.persistenceSurface),
         `${word} did not join the boundary layer's vocabulary`);
