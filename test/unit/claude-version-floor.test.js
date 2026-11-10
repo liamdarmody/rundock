@@ -14,6 +14,7 @@
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { makeTempDir, cleanup } = require('../helpers/workspace.js');
 
@@ -63,16 +64,21 @@ if (args[0] === '--version') {
 `;
 }
 
-// `folder`, when given, is the name of the folder the stub sits in, inside a
-// fresh temp folder: a name a shell would read as more than a name.
-function makeStub(said, folder) {
-  let dir = makeTempDir('claude-floor-stub-');
-  if (folder) { dir = path.join(dir, folder); fs.mkdirSync(dir); }
+// The stub, written into `dir`, which is made if it is not there.
+function stubAt(dir, said) {
+  fs.mkdirSync(dir, { recursive: true });
   const bin = path.join(dir, 'claude');
   fs.writeFileSync(bin, stubSource());
   fs.chmodSync(bin, 0o755);
   fs.writeFileSync(path.join(dir, 'said'), said);
   return { dir, bin, say: (next) => fs.writeFileSync(path.join(dir, 'said'), next) };
+}
+
+// `folder`, when given, is the name of the folder the stub sits in, inside a
+// fresh temp folder: a name a shell would read as more than a name.
+function makeStub(said, folder) {
+  const dir = makeTempDir('claude-floor-stub-');
+  return stubAt(folder ? path.join(dir, folder) : dir, said);
 }
 
 function runsOf(stub) {
@@ -140,7 +146,9 @@ function leadsGroup(pid) {
 }
 
 const frozen = (version, bin) => `Rundock found Claude Code ${version} at ${bin}. Rundock needs 2.0.59 or later. `
-  + 'Update that copy with `claude update`, or remove it, then send your message again.';
+  + 'It looks for Claude Code in ~/.local/bin, ~/.claude/bin, /usr/local/bin and /opt/homebrew/bin, in that order. '
+  + 'Update that copy, or install a current one in a folder that comes before it. '
+  + 'The native installer puts it in ~/.local/bin. Then send your message again.';
 
 const POSIX = process.platform === 'win32' ? 'the stub is a POSIX script found with which' : false;
 
@@ -379,6 +387,125 @@ describe('where Rundock looks for Claude Code', () => {
     assert.strictEqual(withClaudeFolders('/usr/bin:/usr/local/bin:/bin', folders, ':'), '/h/.local/bin:/h/.claude/bin:/opt/homebrew/bin:/usr/bin:/usr/local/bin:/bin');
     assert.strictEqual(withClaudeFolders(folders.join(':'), folders, ':'), folders.join(':'), 'nothing missing, nothing changed');
     assert.strictEqual(withClaudeFolders('C:\\Windows', ['C:\\h\\.local\\bin'], ';'), 'C:\\h\\.local\\bin;C:\\Windows');
+  });
+});
+
+// ── What the notice tells a person to do ──
+
+// Removing the copy found is not a way forward on its own: the current copy
+// can sit outside every folder Rundock searches (an npm install under a Node
+// version manager, as in #401), and with the old one gone Rundock finds no
+// copy at all. So the notice names the folders Rundock searches and
+// leads to a current copy in one of them.
+
+// A folder as a person reads it in the notice: one inside the home folder
+// starts at `~`.
+const asShown = (dir) => (dir.startsWith(os.homedir() + path.sep) ? `~${dir.slice(os.homedir().length)}` : dir);
+// The folders the notice says Rundock looks in, as it lists them.
+function namedIn(said) {
+  const m = /It looks for Claude Code in (.+?), in that order\. /.exec(said);
+  return m ? m[1].split(/, | and /) : null;
+}
+// Any word that would send a person to take a copy away.
+const REMOVAL = /\b(remov|delet|uninstall|rm\b|trash)/i;
+
+describe('what the too-old notice tells a person to do', () => {
+  test('the folders it names are the list the lookup puts on PATH, in the order they are searched', () => {
+    const { tooOldError } = floorLib();
+    const { claudeFolders } = foldersLib();
+    const said = tooOldError('2.0.58', '/usr/local/bin/claude').message;
+    const folders = claudeFolders();
+    assert.ok(folders.length >= 3, `the list holds the folders (${folders.length})`);
+    assert.deepStrictEqual(namedIn(said), folders.map(asShown), 'every folder in the list, in its order, and no other');
+    if (process.platform !== 'win32') {
+      assert.strictEqual(said, frozen('2.0.58', '/usr/local/bin/claude'));
+    }
+  });
+
+  test('the list is written once: the desktop app puts it on PATH and the notice reads it, and neither spells a folder itself', () => {
+    const main = fs.readFileSync(path.join(ROOT, 'electron', 'main.js'), 'utf8');
+    const start = main.indexOf('function ensurePath()');
+    assert.ok(start >= 0, 'electron/main.js still has ensurePath');
+    const ensurePath = main.slice(start, main.indexOf('\n}\n', start));
+    assert.ok(ensurePath.includes("require('../lib/runtime/claude-folders.js')"), 'ensurePath reads the shared list');
+    assert.match(ensurePath, /withClaudeFolders\(current, claudeFolders\(\)\)/, 'and puts that list on PATH');
+    const floorSource = fs.readFileSync(path.join(ROOT, 'lib', 'runtime', 'claude-floor.js'), 'utf8');
+    assert.ok(floorSource.includes("require('./claude-folders.js')"), 'the notice reads the same list');
+    for (const [file, source] of [['ensurePath in electron/main.js', ensurePath], ['lib/runtime/claude-floor.js', floorSource]]) {
+      for (const spelled of ["'.local'", "'.claude'", "'bin'", '/usr/local/bin', '/opt/homebrew/bin', 'WinGet', 'APPDATA']) {
+        assert.ok(!source.includes(spelled), `${file} spells ${spelled} itself, a copy of the list that can drift from it`);
+      }
+    }
+  });
+
+  test('it offers two ways forward: update that copy, or install a current one in a folder searched before it, which the native installer does', () => {
+    const { tooOldError } = floorLib();
+    const { nativeInstallerFolder } = foldersLib();
+    const said = tooOldError('2.0.58', '/opt/homebrew/bin/claude').message;
+    assert.ok(said.includes('Update that copy, or install a current one in a folder that comes before it. '), said);
+    const native = asShown(nativeInstallerFolder(os.homedir()));
+    assert.strictEqual(native, path.join('~', '.local', 'bin'));
+    assert.ok(said.includes(`The native installer puts it in ${native}. `), 'the native installer, and the folder it puts claude in');
+    assert.ok(said.endsWith(' Then send your message again.'));
+  });
+
+  test('it never sends a person to remove the copy it found', () => {
+    const { tooOldError } = floorLib();
+    for (const bin of ['/usr/local/bin/claude', '/opt/homebrew/bin/claude', path.join(os.homedir(), '.claude', 'bin', 'claude')]) {
+      assert.doesNotMatch(tooOldError('2.0.58', bin).message, REMOVAL);
+    }
+  });
+
+  test('it is the whole notice as plain text: one paragraph, no markup, under 400 characters', () => {
+    const { tooOldError } = floorLib();
+    for (const bin of ['/usr/local/bin/claude', '/opt/homebrew/bin/claude', '/Users/someone/.claude/bin/claude',
+      '/Users/someone/.nvm/versions/node/v20.11.1/bin/claude', 'C:\\Users\\someone\\AppData\\Roaming\\npm\\claude.cmd']) {
+      const said = tooOldError('2.0.58', bin).message;
+      assert.ok(said.length < 400, `${said.length} characters with the copy at ${bin}`);
+      assert.doesNotMatch(said.replace(bin, ''), /[`*_#<>[\]]|\r|\n/, 'no markup and no line break');
+    }
+  });
+
+  test('with no home folder to read the list from, it still names the copy, its version and the floor, and never throws', () => {
+    const { tooOldError } = floorLib();
+    const realHomedir = os.homedir;
+    os.homedir = () => { throw Object.assign(new Error('no home directory'), { code: 'ENOENT' }); };
+    let error = null;
+    try {
+      assert.doesNotThrow(() => { error = tooOldError('2.0.58', '/usr/local/bin/claude'); });
+    } finally { os.homedir = realHomedir; }
+    assert.strictEqual(error.message, 'Rundock found Claude Code 2.0.58 at /usr/local/bin/claude. Rundock needs 2.0.59 or later. '
+      + 'Update that copy, then send your message again.');
+    assert.deepStrictEqual([error.code, error.version, error.path, error.floor], ['CLAUDE_TOO_OLD', '2.0.58', '/usr/local/bin/claude', '2.0.59']);
+    assert.doesNotMatch(error.message, REMOVAL);
+  });
+
+  test('following the native installer: a current copy in the first folder is found ahead of the old one, and starts', { skip: POSIX }, async () => {
+    const { claudeFolders, withClaudeFolders } = foldersLib();
+    const home = makeTempDir('claude-floor-home-');
+    // The folders inside this home, put on PATH as the desktop app puts
+    // them. The list's system folders are left off, so no real Claude Code
+    // can be found here.
+    const folders = claudeFolders({ home }).filter((dir) => dir.startsWith(home + path.sep));
+    assert.deepStrictEqual(folders, [path.join(home, '.local', 'bin'), path.join(home, '.claude', 'bin')]);
+    const old = stubAt(folders[1], '2.0.58 (Claude Code)');
+    const rt = freshClaudeRuntime();
+    const w = wired(rt);
+    const before = process.env.PATH;
+    process.env.PATH = withClaudeFolders(['/usr/bin', '/bin'].join(path.delimiter), folders);
+    try {
+      const refused = await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' });
+      assert.strictEqual(refused.error && refused.error.path, old.bin, 'the old copy is found, and refused');
+      const current = stubAt(folders[0], '2.1.318 (Claude Code)');
+      const after = await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' });
+      assert.strictEqual(after.error, null, 'the current copy starts');
+      assert.strictEqual(chatsOf(current).length, 1, 'and is handed the chat');
+      assert.ok(fs.existsSync(old.bin), 'with the old copy still in place');
+      assert.deepStrictEqual(chatsOf(old), [], 'which is never handed one');
+    } finally {
+      process.env.PATH = before;
+      w.restore();
+    }
   });
 });
 

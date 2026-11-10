@@ -24,7 +24,9 @@ const ROOT = path.join(__dirname, '..', '..');
 const STUB_DIR = path.join(ROOT, 'test', 'helpers', 'stub-claude');
 const PORT = Number(process.env.E2E_PORT || 34517) + 2;
 const NOTICE = `Rundock found Claude Code 2.0.58 at ${path.join(STUB_DIR, 'claude')}. Rundock needs 2.0.59 or later. `
-  + 'Update that copy with `claude update`, or remove it, then send your message again.';
+  + 'It looks for Claude Code in ~/.local/bin, ~/.claude/bin, /usr/local/bin and /opt/homebrew/bin, in that order. '
+  + 'Update that copy, or install a current one in a folder that comes before it. '
+  + 'The native installer puts it in ~/.local/bin. Then send your message again.';
 
 let fixture = null;
 let server = null;
