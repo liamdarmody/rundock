@@ -373,15 +373,25 @@ Six places in the suite gate on elapsed real time. All six are
   command for every word. The ratio is the claim: linear growth comes out
   near 8 (nearer 6 on a laptop, where a fixed cost in each check weighs on
   the smaller size) and quadratic growth near 64, so the bound of 24, three
-  times linear and under half of quadratic, is clear of both. With the
-  ceiling taken out, the mutation row that re-reads the command for every
-  word measured 65 and 50 against it. The step was a doubling first, against
-  a bound of 3, and a shared CI runner measured linear growth at 3.7 there.
-  It was then fourfold, against a bound of 8, with every run of the larger
-  size timed before the smaller one, and CI Node 22 measured linear growth at
-  8.7 and 10.9 (962ms against 110ms, 667ms against 61ms). Each of those
-  failed the test with nothing wrong. If this fails, first check whether both
-  sizes slowed alike, which is load rather than growth.
+  times linear and below half of quadratic (32), is clear of both. The
+  mutation row that re-reads the command for every word stops at the ceiling
+  before the ratio is reached, so the bound is held on its own: the decision
+  is `withinBound`, and the file's second group of tests checks it with no
+  clock. Linear growth, and the worst ratios CI measured with nothing wrong
+  scaled to the eightfold step, pass; quadratic growth, and a mildly
+  quadratic cost far under the ceiling, fail; and `linear`, given a modeled
+  clock, is shown to ask it. A mutation row that loosens the bound to 1000
+  turns those tests red. With the ceiling taken out by hand, the row that
+  re-reads the command for every word measured 65 and 50 against the bound.
+  The step was a doubling first, against a bound of 3, and a shared CI runner
+  measured linear growth at 3.7 there. It was then fourfold, against a bound
+  of 8, with every run of the larger size timed before the smaller one, and
+  CI Node 22 measured linear growth at 8.7 and 10.9 (962ms against 110ms,
+  667ms against 61ms). Each of those failed the test with nothing wrong.
+  Measured on 2026-11-10: the file takes 3.4s alone, and 20 runs in a row
+  alongside `npm test` all passed, at 10.5s to 25.9s each. If this fails,
+  first check whether both sizes slowed alike, which is load rather than
+  growth.
 
 ### Isolate
 
