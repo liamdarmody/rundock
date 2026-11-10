@@ -913,6 +913,396 @@ describe('sort and date read only in the forms that read', () => {
   });
 });
 
+// ── Options are judged as the shell reads them ──────────────────────────────
+//
+// THE SHELL TAKES QUOTES AND BACKSLASHES AWAY BEFORE THE PROGRAM SEES A WORD,
+// so `'-o'`, `"-o"`, `\-o` and `-'o'` are all the `-o` the program is handed.
+// Judged by their raw text, the options of `find`, `rg`, `tree` and `file`
+// passed as reads in those spellings: a quoted `-fprintf` wrote a file, a
+// quoted `--pre` ran a program, a quoted `tree -o` and `file -C` wrote one. The
+// shared definition now judges every option on the words the shell hands
+// over, splits commands where the shell splits them, and separates words only
+// where the shell does. A line whose words the text alone does not show asks.
+describe('options are judged as the shell reads them', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const S = require('../../public/read-only-shell.js');
+  const risk = cmd => P.classifyRisk('Bash', { command: cmd });
+  const reads = cmd => S.isReadOnlyShellCommand(cmd) === true && risk(cmd) === 'low';
+  const show = cmd => JSON.stringify(cmd.length > 80 ? cmd.slice(0, 80) + '...' : cmd);
+  function assertReads(cmd) {
+    assert.strictEqual(S.isReadOnlyShellCommand(cmd), true, `the shared definition reads: ${show(cmd)}`);
+    assert.strictEqual(risk(cmd), 'low', `and it runs with no card: ${show(cmd)}`);
+  }
+  function assertAsks(cmd) {
+    assert.strictEqual(S.isReadOnlyShellCommand(cmd), false, `the shared definition does not read: ${show(cmd)}`);
+    assert.notStrictEqual(risk(cmd), 'low', `and it asks: ${show(cmd)}`);
+  }
+
+  // ── AC: quoting never changes the verdict, generated from the module's lists
+  //
+  // Every spelling the shell reads as the same word: quoted whole in single or
+  // double quotes, escaped with a backslash before its first or second
+  // character, and split across quotes. Each gets the verdict the plain word
+  // gets, and so does each spelling of the option with its value attached.
+  function spellings(w) {
+    const out = [`'${w}'`, `"${w}"`, `\\${w}`, `${w[0]}\\${w.slice(1)}`, `${w[0]}'${w.slice(1)}'`, `''${w}`, `${w}""`];
+    if (w.length > 2) out.push(`"${w.slice(0, 2)}"${w.slice(2)}`, `${w.slice(0, -1)}'${w.slice(-1)}'`);
+    return out;
+  }
+  // Each case: the words before the option, the option as written plainly, and
+  // the words after it.
+  function assertSameVerdict(cases, expect) {
+    assert.ok(cases.length > 0, 'the module names options to ask about');
+    for (const [before, word, after] of cases) {
+      const line = (w) => [before, w, after].filter(Boolean).join(' ');
+      const plain = reads(line(word));
+      if (expect !== undefined) assert.strictEqual(plain, expect(word), `the plain line's verdict: ${line(word)}`);
+      for (const spelled of spellings(word)) {
+        assert.strictEqual(reads(line(spelled)), plain, `${line(spelled)} gets the verdict ${line(word)} gets (${plain ? 'reads' : 'asks'})`);
+      }
+    }
+  }
+  // Read through the module's own export inside each test, so a module that
+  // lacks it fails those tests one by one and every other test still runs.
+  const named = () => S.namedOptions();
+  // Main's verdict on each line, as test/tools/record-read-only-on-main.js
+  // recorded it (test/fixtures/read-only-on-main.json), read when first asked.
+  // The recorder runs this file to learn which lines it judges, before the
+  // recording exists, so a missing recording is no verdict rather than a
+  // throw, and every line is judged before any is checked. A long line is
+  // stored in pieces, which test/helpers/read-only-on-main.js reads back.
+  let mainVerdicts = null;
+  const readsOnMain = (cmd) => {
+    if (!mainVerdicts) {
+      try {
+        mainVerdicts = new Map(require('../helpers/read-only-on-main.js').recordedLines().map(([c, r]) => [c, r]));
+      } catch (notRecorded) {
+        if (notRecorded.code !== 'MODULE_NOT_FOUND') throw notRecorded;
+        mainVerdicts = new Map();
+      }
+    }
+    return mainVerdicts.get(cmd);
+  };
+  // A READING OPTION, QUOTED OR SPLIT, READS WHERE MAIN READ IT AND ASKS WHERE
+  // MAIN ASKED: `find . -na'me' x` asks, as it always has, though the shell
+  // hands find `-name`. Each plain line reads. A spelling the recording lacks
+  // fails by name.
+  function assertReadsWhereMainRead(cases) {
+    assert.ok(cases.length > 0, 'the module names options to ask about');
+    const judged = [];
+    for (const [before, word, after] of cases) {
+      const line = (w) => [before, w, after].filter(Boolean).join(' ');
+      judged.push([line(word), reads(line(word)), true]);
+      for (const spelled of spellings(word)) judged.push([line(spelled), reads(line(spelled)), false]);
+    }
+    for (const [cmd, got, plain] of judged) {
+      if (plain) { assert.strictEqual(got, true, `the plain line reads: ${cmd}`); continue; }
+      const main = readsOnMain(cmd);
+      assert.strictEqual(typeof main, 'boolean', `main's verdict on ${cmd} is recorded`);
+      assert.strictEqual(got, main, `${cmd} ${main ? 'reads, as it did' : 'asks, as it did'} on main`);
+    }
+  }
+
+  test("namedOptions is a copy: changing it changes nothing the module reads", () => {
+    const first = S.namedOptions();
+    const copy = S.namedOptions();
+    copy.rg.long.length = 0;
+    copy.find.noOperand.push('-delete');
+    assertAsks("rg --pre sh x .");
+    assertAsks('find . -delete');
+    assert.deepStrictEqual(S.namedOptions(), first, 'a fresh copy is the same as the first');
+  });
+
+  test("quoting a reading flag of find reads where main read it, and asks where main asked", () => {
+    const newer = new RegExp(named().find.newerFamily.source, named().find.newerFamily.flags);
+    const family = ['-newer'];
+    for (const x of 'aBcmt') for (const y of 'aBcmt') family.push(`-newer${x}${y}`);
+    assert.ok(family.every(f => newer.test(f)), 'every -newerXY name is one the module reads');
+    assertReadsWhereMainRead([
+      ...named().find.noOperand.map(f => ['find .', f, '']),
+      ...named().find.oneOperand.concat(family).map(f => ['find .', f, 'x']),
+    ]);
+  });
+
+  test("quoting never changes the verdict: find's writing and running actions", () => {
+    // ANY flag not on find's lists asks. These are the ones the module's
+    // comments name, each writing a file or running a program.
+    assertSameVerdict([['find .', '-fprintf', 'out x'], ['find .', '-fprint', 'out'], ['find .', '-fprint0', 'out'],
+      ['find .', '-fls', 'out'], ['find .', '-delete', ''], ['find .', '-exec', 'rm x'], ['find .', '-execdir', 'rm x'],
+      ['find .', '-ok', 'rm x']], () => false);
+  });
+
+  test('quoting never changes the verdict: rg --pre, alone and with its value attached', () => {
+    assert.deepStrictEqual(named().rg.long, ['--pre']);
+    assertSameVerdict([
+      ...named().rg.long.map(o => ['rg', o, 'sh x .']),
+      ...named().rg.long.map(o => ['rg', `${o}=sh`, 'x .']),
+    ], () => false);
+  });
+
+  test('quoting never changes the verdict: tree -o, alone, in a bundle and with its value attached', () => {
+    assert.deepStrictEqual(named().tree.letters, 'o');
+    assertSameVerdict([...named().tree.letters].flatMap(l => [['tree', `-${l}`, 'out'], ['tree', `-a${l}`, 'out'], ['tree', `-${l}out`, '']]),
+      () => false);
+  });
+
+  test('quoting never changes the verdict: file -C and --compile', () => {
+    assert.deepStrictEqual([named().file.letters, named().file.long], ['C', ['--compile']]);
+    assertSameVerdict([
+      ...[...named().file.letters].flatMap(l => [['file', `-${l}`, '-m x'], ['file', `-b${l}`, '-m x']]),
+      ...named().file.long.map(o => ['file', o, '-m x']),
+    ], () => false);
+  });
+
+  test("quoting never changes the verdict: sort's options", () => {
+    const sort = named().sort;
+    assertSameVerdict([
+      ...[...sort.letters].map(l => ['sort', `-${l}`, 'x']),
+      ...[...sort.operandLetters].flatMap(l => [['sort', `-${l}`, '2 x'], ['sort', `-${l}2`, 'x']]),
+      ...[...sort.joinedLetters].map(l => ['sort', `-${l}2`, 'x']),
+      ...sort.long.map(o => ['sort', o, 'x']),
+      ...sort.longValue.map(o => ['sort', `${o}2`, 'x']),
+    ], () => true);
+    // And the writing forms, which are not on the lists.
+    assertSameVerdict([['sort', '-o', 'out x'], ['sort', '-oout', 'x'], ['sort', '-T', '/tmp x'], ['sort', '--output=out', 'x'],
+      ['sort', '--compress-program=sh', 'x'], ['sort', '--temporary-directory=/tmp', 'x']], () => false);
+  });
+
+  test("quoting never changes the verdict: date's options", () => {
+    const date = named().date;
+    // `-f` names the format of a time to set, so without `-j` it asks.
+    assertSameVerdict([
+      ...[...date.letters].map(l => ['date', `-${l}`, '']),
+      ...[...date.operandLetters].flatMap(l => [['date', `-${l}`, 'x'], ['date', `-${l}x`, '']]),
+      ...[...date.joinedLetters].flatMap(l => [['date', `-${l}`, ''], ['date', `-${l}seconds`, '']]),
+      ...date.long.map(o => ['date', o, '']),
+      ...date.longValue.map(o => ['date', `${o}x`, '']),
+    ], w => !/^-f/.test(w));
+    assertSameVerdict([['date', '-s', '2026-01-01'], ['date', '--set=2026-01-01', '']], () => false);
+  });
+
+  // ── AC: the measured writing and running lines are not reads
+  test('each quoted or escaped writing or running line measured on main is not a read', () => {
+    for (const cmd of [
+      "rg '--pre' sh x .", 'rg \\--pre sh x .', 'rg "--pre" sh x .',
+      "find . -maxdepth 0 '-fprintf' FILE 'TEXT'", "find . -maxdepth 0 \\-fprintf FILE 'TEXT'",
+      "tree '-o' FILE", 'tree \\-o FILE',
+      "file '-C' -m x",
+      'ls \\"\ncp a b\necho \\"',
+    ]) assertAsks(cmd);
+  });
+
+  test('an option getopt_long would take cut short is the option', () => {
+    // `file --comp -m x` compiles x, as `file --compile -m x` does.
+    for (const cmd of ['file --comp -m x', 'file --co -m x', "file '--compi' -m x", 'rg --pr sh x .']) assertAsks(cmd);
+    // A longer name that only starts the same way is another option.
+    for (const cmd of ['rg --pretty x .', 'rg --passthru x .', 'file --brief x']) assertReads(cmd);
+  });
+
+  // ── AC: a word whose reading cannot be known asks where an option could be
+  test('a word the shell fills in, or cannot read cleanly, is not a read where an option could be', () => {
+    const long = (cmd) => cmd + ' x'.repeat(4200);
+    for (const cmd of [
+      // A variable, and ${...}.
+      'rg $X sh x .', 'rg "$X" sh x .', 'rg ${X} sh x .', 'find . -maxdepth 0 $X out x', 'find . -name x $X', 'tree $X out',
+      'tree "$X" out', 'file $X -m x',
+      // A backtick, unquoted and inside double quotes.
+      'rg `echo --pre` sh x .', 'tree "`echo -o`" out', 'find . `echo -delete`',
+      // ANSI-C quoting, which the shell rewrites before the program sees it.
+      "rg $'--pre' sh x .", "find . $'-fprintf' out x", "tree $'-o' out", "file $'-C' -m x",
+      // A quote left open, and a backslash with nothing after it.
+      "rg '--pre sh x .", "find . -name 'x", 'tree "-o out', "file 'x", 'tree -L 2 \\', 'find . -name x \\',
+      // A wildcard that starts the word, which can expand to any file's name,
+      // `-o` among them.
+      'tree *', 'file *', 'rg x *', 'find . -name *.md',
+      // Longer than the reading follows.
+      long('rg -n'), long('find .'), long('tree'), long('file'),
+    ]) assertAsks(cmd);
+  });
+
+  test('the word reader itself follows no $, backtick or open quote, behind the line\'s own checks', () => {
+    for (const text of ['$X', '"$X"', '`x`', '"`x`"', "$'-o'", "'x", '"x', 'x\\', 'x'.repeat(9000)]) {
+      assert.strictEqual(S.shellWords(text), null, `read: ${show(text)}`);
+    }
+    assert.deepStrictEqual(S.shellWords(`'-o' "-o" \\-o -'o' ''-o`), ['-o', '-o', '-o', '-o', '-o'], 'and each spelling is the -o the program is given');
+    assert.deepStrictEqual(S.shellWords('! -name x', true), ['!', '-name', 'x'], "find's negation standing alone is a word to find, rg, tree and file");
+    assert.strictEqual(S.shellWords('! -name x'), null, 'and not read for sort or date, as it never was');
+    // The second of the two exceptions to the plain set, and only a `!` that is
+    // a word of its own: one inside or beside other text still fails closed.
+    for (const text of ['!x', 'x!', 'a!b', '!! -name x', '-name !x', '!\fx']) assert.strictEqual(S.shellWords(text, true), null, `read: ${show(text)}`);
+    assert.deepStrictEqual(S.shellWords('src/*.js ./* a?c', true), ['src/*.js', './*', 'a?c'], 'a wildcard after a plain first character is a word to those four');
+    for (const text of ['*.md', '?pre*', '[-]*', "'a'*", '\\a*', '-*']) assert.strictEqual(S.shellWords(text, true), null, `read: ${show(text)}`);
+    assert.strictEqual(S.shellWords('src/*.js'), null, 'and no wildcard is read for sort or date, as none was');
+    // Only a space or a tab ends a word: any other blank is not read at all.
+    for (const b of ['\f', '\v', '\r', '\u00a0', '\u2000', '\u2005', '\u200a', '\u3000']) {
+      assert.strictEqual(S.shellWords(`-L${b}2`), null, `read: ${show(`-L${b}2`)}`);
+    }
+    assert.deepStrictEqual(S.shellWords('-L \t 2'), ['-L', '2'], 'a space and a tab each end a word');
+  });
+
+  // ── AC: quoted operands still read
+  test('quoted operands still read', () => {
+    for (const cmd of ["find . -name '*.md'", 'find . -name "*.md" -type f', "rg 'two words' notes", 'rg -n "x" .',
+      "grep -r 'a b' .", 'tree -L 2', 'file notes.md', "ls 'My Notes'",
+      "find . ! -name '*.md' -print0", 'find . \\( -name a -o -name b \\)', "rg -g '!*.lock' TODO", "tree -I 'node_modules|dist'",
+      'file "notes/a b.md"', 'find . -name \\*.md']) {
+      assertReads(cmd);
+    }
+  });
+
+  // ── AC: nothing that asks on main stops asking
+  test('the lines the shell\'s reading alone would read still ask, as they did on main', () => {
+    const lines = [
+      // Option-like text inside a quoted operand.
+      "find . -name 'a -delete'", 'rg "x --pre" .', "tree -P 'x -o'", "file -m 'a -C' x",
+      // An option split across quotes, or escaped inside, where main asks.
+      "find . -na'me' x", 'find . -\\depth', "find . -maxdepth'' 1",
+      // An escaped quote inside double quotes, in front of a separator.
+      'grep "a\\"; rm x" f', 'cat "a\\" | cp a b" x',
+    ];
+    const judged = lines.map(cmd => [cmd, S.isReadOnlyShellCommand(cmd), risk(cmd)]);
+    for (const [cmd, readsNow, riskNow] of judged) {
+      assert.strictEqual(readsNow, false, `the shared definition does not read: ${show(cmd)}`);
+      assert.notStrictEqual(riskNow, 'low', `and it asks: ${show(cmd)}`);
+      assert.strictEqual(readsOnMain(cmd), false, `as on main, which did not read it: ${show(cmd)}`);
+    }
+    assert.strictEqual(risk('grep "a\\"; rm x" f'), 'high', 'and a removal after the escaped quote is graded as one, as on main');
+  });
+
+  test('a -Force is looked for in both splits, so a PowerShell line keeps its high grade', () => {
+    // PowerShell takes `\` as a folder separator, so `"C:\x\"` is a whole
+    // string and the `;` after it ends the command: the `-Force` is on a
+    // Set-Content, which is graded high.
+    assert.strictEqual(P.classifyRisk('PowerShell', { command: 'Get-Item "C:\\x\\"; Set-Content y -Force' }), 'high');
+  });
+
+  // ── AC: a wildcard that cannot start with a dash still reads
+  test('a wildcard after a plain first character reads, and one that could start with a dash asks', () => {
+    for (const cmd of ['rg TODO src/*.js', 'rg x notes/*.md', 'rg TODO ./*', "find notes -name '*.md'", 'ls *.md',
+      "rg 'TODO' notes/*.md", 'tree notes/*', 'file notes/*.md', 'find notes/* -name x', 'rg x a?c', 'rg x notes/[ab].md']) {
+      assertReads(cmd);
+    }
+    for (const cmd of ['rg TODO *.md', 'find . -name *.md', 'rg x [-]*', 'rg x ?pre*', 'rg x {-a,b}', 'rg x -*',
+      "rg x 'notes'/*.md", 'rg x \\n*', 'rg x notes/$X*', 'rg x notes/`y`*', "rg x notes/*'", 'sort notes/*.txt']) {
+      assertAsks(cmd);
+    }
+  });
+
+  // ── AC: commands split where the shell splits them
+  test('an escaped quote opens no quote, so the lines after it are each judged', () => {
+    for (const cmd of ['ls \\"\ncp a b\necho \\"', "ls \\'\ncp a b\necho \\'", 'ls \\"; cp a b; echo \\"', 'ls \\" && cp a b && echo \\"',
+      'cat \\"a | cp a b', 'grep "a\\"b" x; cp a b', 'ls \\\\\\"; cp a b; echo \\"']) {
+      assertAsks(cmd);
+    }
+    assert.strictEqual(risk('grep "a\\"b" ; rm x'), 'high', 'a removal after an escaped quote inside double quotes is graded as one');
+    assert.deepStrictEqual(S.shellSegments('ls \\"\ncp a b\necho \\"'), ['ls \\"', 'cp a b', 'echo \\"']);
+    assert.deepStrictEqual(S.shellSegments("ls \\'; cp a b"), ["ls \\'", 'cp a b']);
+    assert.deepStrictEqual(S.shellSegments('grep "a\\"b" x; cp a b'), ['grep "a\\"b" x', 'cp a b']);
+  });
+
+  test('a real quoted newline still joins, and an escaped backslash before a quote still opens one', () => {
+    assert.deepStrictEqual(S.shellSegments('echo "a\nb"'), ['echo "a\nb"'], 'one command, as in bash');
+    assert.deepStrictEqual(S.shellSegments("echo 'a\nb'; ls"), ["echo 'a\nb'", 'ls']);
+    assert.deepStrictEqual(S.shellSegments('echo "a\\"\nb"'), ['echo "a\\"\nb"'], 'an escaped quote inside double quotes ends none');
+    assert.deepStrictEqual(S.shellSegments('echo \\\\"; ls"'), ['echo \\\\"; ls"'], 'after an escaped backslash the quote is real');
+    assert.deepStrictEqual(S.shellSegments("echo 'a\\'; ls"), ["echo 'a\\'", 'ls'], 'inside single quotes a backslash is text');
+    assertReads('echo "a\nb"');
+  });
+
+  test('an escaped separator still ends a segment, and the piece it ends is not read where options are judged', () => {
+    for (const cmd of ['ls \; rm x', 'cat x \\\nrm -rf y', 'tree -L 2 \\\n-o out', 'rg -e \\\n--pre sh x .', 'find . -name x \\\n-delete']) {
+      assertAsks(cmd);
+    }
+  });
+
+  // ── AC: only a space, a tab and a newline separate words
+  const ODD_BLANKS = [['a form feed', '\f'], ['a vertical tab', '\v'], ['a no-break space', '\u00a0'], ['an en quad', '\u2000'],
+    ['an em space', '\u2003'], ['a hair space', '\u200a'], ['an ideographic space', '\u3000']];
+  for (const [name, b] of ODD_BLANKS) {
+    test(`${name} beside an option of find, rg, tree or file makes the line not a read`, () => {
+      // `find . x<blank>-name -fprintf out t` is one path to the shell, then
+      // `-fprintf out t`; split on the blank, `-name` takes the `-fprintf`.
+      for (const cmd of [`find . x${b}-name -fprintf out t`, `find . -maxdepth${b}1`, `rg -n${b}x .`, `rg x${b}--pre sh .`,
+        `tree -L${b}2`, `tree x${b}-o out`, `file -b${b}x`, `file x${b}-C -m m`]) {
+        assertAsks(cmd);
+      }
+    });
+  }
+
+  test('a carriage return on a find, rg, tree or file line is not a read, whatever follows it', () => {
+    // The segmenter ends a segment at one and bash does not: each `cat` below is
+    // a word of the command before it, and the option after it is that
+    // command's.
+    for (const cmd of ['find . -name \rcat -fprintf out t', 'rg -e \rcat --pre sh x .', 'tree -P \rcat -o out', 'file -m \rcat -C',
+      'find . -name x\r\nls', 'rg x .\rls', 'tree\rls', 'ls | file -b\rcat']) {
+      assertAsks(cmd);
+    }
+  });
+
+  // ── The five sequences
+  test('the inverse action: a plain search reads, and the quoted --pre right after it asks', () => {
+    assertReads('rg -n x .');
+    assertAsks("rg '--pre' sh x .");
+    assertReads('rg -n x .');
+  });
+
+  test('the undo: after a quoted tree -o is asked about, the next tree -L 2 reads', () => {
+    assertAsks("tree '-o' out");
+    assertReads('tree -L 2');
+  });
+
+  test('the retry: the same quoted writing line sent twice asks both times', () => {
+    for (const cmd of ["tree '-o' out", "find . -maxdepth 0 '-fprintf' out x"]) {
+      assertAsks(cmd);
+      assertAsks(cmd);
+    }
+  });
+
+  test('the most common next step: a search with a quoted pattern, and a find listing, still read', () => {
+    assertReads("rg 'TODO' notes");
+    assertReads("rg 'TODO' notes/*.md");
+    assertReads("find . -name '*.md'");
+    assertReads("rg 'TODO' notes | head -20 && find . -name '*.md' | sort");
+  });
+
+  test('the control failing: a failure inside the reading, or text past its limit, is not a read, and never throws', () => {
+    const seam = S.optionReadingSeam;
+    const kept = seam.beforeReading;
+    const LINES = ['rg -n x .', "find . -name '*.md'", 'tree -L 2', 'file notes.md'];
+    seam.beforeReading = () => { throw new Error('forced failure'); };
+    try {
+      for (const cmd of LINES) {
+        let got;
+        assert.doesNotThrow(() => { got = S.isReadOnlyShellCommand(cmd); }, cmd);
+        assert.strictEqual(got, false, `read while the reading fails: ${cmd}`);
+        assert.notStrictEqual(risk(cmd), 'low', `and it asks: ${cmd}`);
+      }
+      assert.strictEqual(S.isReadOnlyShellCommand('ls notes | head'), true, 'a line with no judged command is read as before');
+    } finally {
+      seam.beforeReading = kept;
+    }
+    for (const cmd of LINES) assertReads(cmd);
+    const past = (cmd) => cmd + ' ' + 'x'.repeat(20000);
+    for (const cmd of LINES.map(past).concat([past("rg '"), past('find . -name "')])) {
+      let got;
+      assert.doesNotThrow(() => { got = S.isReadOnlyShellCommand(cmd); }, show(cmd));
+      assert.strictEqual(got, false, `read past the limit: ${show(cmd)}`);
+    }
+  });
+
+  test('the browser build of the shared definition reads them the same', () => {
+    const src = f => fs.readFileSync(path.join(__dirname, '..', '..', 'public', f), 'utf8');
+    const root = {};
+    for (const name of ['read-only-shell.js', 'permissions.js']) new Function('self', 'module', src(name)).call(root, root, undefined);
+    for (const cmd of ["rg '--pre' sh x .", "find . -name '*.md'", "tree '-o' out", 'file --comp -m x', 'ls \\"\ncp a b\necho \\"',
+      'tree -L\f2', 'rg -e \rcat --pre sh x .']) {
+      assert.strictEqual(root.RundockReadOnlyShell.isReadOnlyShellCommand(cmd), S.isReadOnlyShellCommand(cmd), show(cmd));
+      assert.strictEqual(root.RundockPermissions.classifyRisk('Bash', { command: cmd }), risk(cmd), show(cmd));
+    }
+  });
+});
+
 // ── classifyRisk: PowerShell ────────────────────────────────────────────────
 
 describe('classifyRisk PowerShell', () => {
@@ -1001,6 +1391,12 @@ describe('PowerShell: no card unless every part of the command is a listed read'
     for (const c of every) {
       assert.strictEqual(grade(c) === 'low', shell.isReadOnlyPowerShellCommand(c), `the two answer differently: ${show(c)}`);
     }
+  });
+
+  test('a backslash before a closing quote is text in PowerShell, so the removal after it is seen', () => {
+    const command = 'Get-Content "C:\\x\\"; Remove-Item y';
+    assertCards(command);
+    assert.strictEqual(grade(command), 'high');
   });
 
   test('text the reading throws on is not a read, and grades medium or high, never low', () => {

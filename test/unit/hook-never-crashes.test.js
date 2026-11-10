@@ -1198,3 +1198,87 @@ describe('the reading of sort and date, when it fails or cannot read the text', 
     assert.ok(answered(runHook(bash(`sort ${script}`), { env: homeEnv })));
   });
 });
+
+// THE READING OF find, rg, tree AND file, FAILING. The shared definition reads
+// each of their options as the shell hands it over, and a reading one frees a
+// hook script under the runtime's own home as `cat` does. A failure forced
+// inside that reading, or text past what it follows, is not a read: the hook
+// still answers, and answers as it answers the writing form, never by freeing
+// it. Run against a temporary home, never the real one.
+describe('the reading of find, rg, tree and file, when it fails or cannot read the text', () => {
+  const home = path.join(root, 'judged-options-home');
+  const hooksDir = path.join(home, '.claude', 'hooks');
+  const script = path.join(hooksDir, 'pretool.sh');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  fs.writeFileSync(script, '');
+  const homeEnv = { HOME: home, USERPROFILE: home };
+  const POSIX = { skip: process.platform === 'win32' && 'the home folder is read from HOME here' };
+  const SHARED = path.join(__dirname, '..', '..', 'public', 'read-only-shell.js');
+  const readingFails = preloadFile('judged-options-reading-fails',
+    `require(${JSON.stringify(SHARED)}).optionReadingSeam.beforeReading = () => { throw new Error('forced failure'); };\n`);
+  const READS = [`find ${hooksDir} -name '*.sh'`, `rg -n x ${hooksDir}`, `tree -L 2 ${hooksDir}`, `file ${script}`];
+  const writing = `tree '-o' ${script}`;
+  const serve = () => new Promise((resolve) => {
+    const cards = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        if (req.url.startsWith('/api/permission-request')) cards.push(JSON.parse(body));
+        res.end(JSON.stringify({ allow: false }));
+      });
+    });
+    server.listen(0, '127.0.0.1', () => resolve({ server, cards }));
+  });
+  const close = (server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+  const asksAsWrite = (card) => !!card && card.boundary === true
+    && (card.crossings || []).some(c => c && c.persistenceSurface && c.write);
+  const answered = (r) => r.status === 0 && (decision(r) === 'allow' || decision(r) === 'deny');
+
+  for (const [who, env] of [['a conversation', CONVERSATION], ['a routine', ROUTINE]]) {
+    test(`${who}: with nobody to ask, a reading search whose reading fails is answered as the writing form is`, POSIX, () => {
+      const writes = runHook(bash(writing), { env: { ...homeEnv, ...env } });
+      for (const command of READS) {
+        const forced = runHook(bash(command), { preload: readingFails, env: { ...homeEnv, ...env } });
+        assert.ok(answered(forced), forced.stderr || forced.stdout);
+        assert.strictEqual(decision(forced), decision(writes), `the same answer as the writing form: ${command}`);
+        assert.strictEqual(reasonOf(forced), reasonOf(writes), `in the same words: ${command}`);
+      }
+    });
+
+    test(`${who}: with Rundock to ask, a reading search whose reading fails is asked about as a write`, POSIX, async () => {
+      const { server, cards } = await serve();
+      try {
+        for (const command of READS) {
+          const freed = await runHookAgainst(server.address().port, bash(command), { ...homeEnv, ...env });
+          assert.ok(answered(freed));
+          assert.ok(!cards[cards.length - 1].boundary, `sanity: with nothing forced, the read is freed: ${command}`);
+          const r = await runHookAgainst(server.address().port, bash(command), { ...homeEnv, ...env }, { preload: readingFails });
+          assert.ok(answered(r), r.stdout);
+          assert.strictEqual(decision(r), 'deny', 'the answer it was given, no, is the answer');
+          assert.ok(asksAsWrite(cards[cards.length - 1]), `asked about as a write: ${JSON.stringify(cards[cards.length - 1])}`);
+        }
+      } finally { await close(server); }
+    });
+  }
+
+  // Text past what the reading follows, or that it cannot read, is answered,
+  // and never as a read.
+  const past = (command) => `${command} ${'x'.repeat(20000)}`;
+  const UNREADABLE_TEXT = [past(READS[0]), past(READS[1]), past(READS[2]), past(READS[3]), `rg '--pre sh x ${hooksDir}`,
+    `tree -L 2 ${hooksDir} 'x`, `file ${script} x\u0000y`, `find ${hooksDir} $'-fprint' x`];
+  test('text the reading cannot read is answered as the writing form is, and asked about as a write', POSIX, async () => {
+    const { server, cards } = await serve();
+    try {
+      const writes = decision(runHook(bash(writing), { env: homeEnv }));
+      for (const command of UNREADABLE_TEXT) {
+        const r = runHook(bash(command), { env: homeEnv });
+        assert.ok(answered(r), `no answer for ${JSON.stringify(command.slice(0, 60))}: ${r.stderr}`);
+        assert.strictEqual(decision(r), writes, JSON.stringify(command.slice(0, 60)));
+        const asked = await runHookAgainst(server.address().port, bash(command), homeEnv);
+        assert.strictEqual(decision(asked), 'deny', JSON.stringify(command.slice(0, 60)));
+        assert.ok(asksAsWrite(cards[cards.length - 1]), `asked about as a write: ${JSON.stringify(command.slice(0, 60))}`);
+      }
+    } finally { await close(server); }
+  });
+});
