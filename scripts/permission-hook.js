@@ -186,7 +186,7 @@ const fs = require('fs');
 // directory resolves on disk rather than inside the archive. The shared module
 // is named in package.json's asarUnpack for that reason, and a test binds the
 // two so a later shared module cannot be added without it.
-const { isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isDestructiveShellCommand, shellSegments, carriageReturnSplitsSortOrDate } = require('../public/read-only-shell.js');
+const { isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isDestructiveShellCommand, shellSegments, carriageReturnSplitsJudgedOptions, leadsJudgedOptions } = require('../public/read-only-shell.js');
 // The Code-mode verdict and the development paths live beside this file, in
 // scripts/, so they are unpacked with it (package.json asarUnpack scripts/**).
 const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
@@ -1574,6 +1574,8 @@ function echoedArgsIn(command) {
   return out;
 }
 
+const PATH_WORD = /'([^']*)'|"([^"]*)"|[^\s;|&<>()`'"]+/;
+const POSIX_PATH_WORD = /'([^']*)'|"((?:[^"\\]|\\[\s\S])*)"|(?:[^\s;|&<>()`'"\\]|\\\S)+/;
 // `posixEscapes`: an unquoted word is taken as bash reads it, each `\X` being
 // the character X, so `\/etc/hosts` is judged as the `/etc/hosts` it opens. A
 // drive letter or UNC name is left as written: it keeps its Windows reading.
@@ -1589,7 +1591,16 @@ function shellPathWords(command, posixEscapes = false) {
   const skip = [];
   for (const seg of shellSegments(String(command))) skip.push(...patternArgsIn(seg), ...delimiterArgsIn(seg));
   skip.push(...echoedArgsIn(command));
-  const re = /'([^']*)'|"([^"]*)"|[^\s;|&<>()`'"]+/g;
+  // A BACKSLASH OUTSIDE SINGLE QUOTES TAKES THE NEXT CHARACTER WITH IT in bash,
+  // so in bash text `\"` and `\'` start no quoted word, and inside double quotes
+  // `\"` ends none. Read as quotes, they hid every path up to the next quote
+  // inside one word, and a copy onto a persistence surface on the next line
+  // went unseen. A backslash before a blank or a line break still ends the
+  // word here, as it did: bash joins the line after `\` and a new line onto
+  // this one, so the word that follows is the command's next argument and is
+  // read as a path of its own. Elsewhere a backslash is a folder separator, as
+  // written.
+  const re = new RegExp((posixEscapes ? POSIX_PATH_WORD : PATH_WORD).source, 'g');
   let m;
   while ((m = re.exec(String(command))) !== null) {
     let t = m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[0]);
@@ -2019,10 +2030,11 @@ function answerFileWriteWords(command, posixText = false, readsPart = isReadOnly
     return posixText && !/^['"]/.test(w) && s.includes('\\') && !WIN_DRIVE.test(s) && !WIN_UNC.test(s) ? s.replace(/\\(.)/g, '$1') : s;
   };
   const text = String(command);
-  // A carriage return splits a segment here and not in bash, so a sort or a
-  // date on a line holding one is not read segment by segment: every word of
-  // the line counts as written. The same rule the whole-line reading asks.
-  const splitAtReturn = readsPart === isReadOnlyShellCommand && carriageReturnSplitsSortOrDate(text);
+  // A carriage return splits a segment here and not in bash, so a command
+  // whose options are judged (find, sort, date, rg, tree, file), on a line
+  // holding one, is not read segment by segment: every word of the line counts
+  // as written. The same rule the whole-line reading asks.
+  const splitAtReturn = readsPart === isReadOnlyShellCommand && carriageReturnSplitsJudgedOptions(text);
   let from = 0;
   for (const seg of shellSegments(text)) {
     const segAt = text.indexOf(seg, from);
@@ -2043,9 +2055,11 @@ function answerFileWriteWords(command, posixText = false, readsPart = isReadOnly
     const verb = bare(rest[at] || '').split('/').pop();
     const args = rest.slice(at + 1).map(bare);
     let reads = readsPart(rest.join(' ')) || READS_NAMED_FILES.has(verb);
-    // `sort` and `date` are read from the segment's own text. Rejoined from
-    // words split on any blank, a form feed after `-t` hides the `-o` after it.
-    if (readsPart === isReadOnlyShellCommand && (verb === 'sort' || verb === 'date')) reads = readsPart(seg);
+    // A command whose options are judged is read from the segment's own text,
+    // past any keyword before it, as the shell hands the words over. Rejoined
+    // from words split on any blank, a form feed after `-t` hides the `-o`
+    // after it, and a word split at a quote (`"-"o`) is no longer the `-o`.
+    if (readsPart === isReadOnlyShellCommand && leadsJudgedOptions(seg)) reads = readsPart(seg);
     if (verb === 'git') {
       let i = 0;
       while (i < args.length && args[i].startsWith('-')) i += (args[i] === '-C' || args[i] === '-c') ? 2 : 1;

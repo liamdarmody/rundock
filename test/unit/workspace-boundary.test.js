@@ -966,6 +966,63 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     }
   });
 
+  // THE SAME READING FREES THE CROSSING FOR find, rg, tree AND file. Each
+  // option is judged as the shell hands it to the program, so a quoted or
+  // escaped writing option keeps its crossing as a write, exactly as the
+  // unquoted one does, and the reading forms beside them are still freed.
+  test('a quoted or escaped writing option of find, rg, tree or file keeps its crossing as a write', () => {
+    const home = tmp('af-quoted-home-');
+    const hooks = path.join(home, '.claude', 'hooks');
+    fs.mkdirSync(hooks, { recursive: true });
+    const settings = path.join(home, '.claude', 'settings.json');
+    fs.writeFileSync(path.join(hooks, 'pretool.sh'), '');
+    fs.writeFileSync(settings, '{}');
+    const ws = tmp('af-quoted-ws-');
+    const shell = (command) => hook.classifyShellAccess('Bash', { command }, ws, [], home);
+    const codeShell = (command) => hook.classifyShellAccess('Bash', { command }, ws, [], home, undefined, { codeMode: true });
+    const writesSurface = (r) => !!r && r.crossings.some(c => c.persistenceSurface && c.write);
+
+    for (const command of [`find ${hooks} -name '*.sh'`, `find ${hooks} -name "*.sh" -type f`, `find ${hooks} ! -name x -print0`,
+      `rg 'two words' ${hooks}`, `rg -n "x" ${hooks}`, `tree -L 2 ${hooks}`, `file ${settings}`, `ls '${hooks}'`]) {
+      assert.strictEqual(shell(command), null, `a reading form is freed: ${command}`);
+    }
+    for (const command of [
+      `find . -maxdepth 0 '-fprintf' ${settings} x`, `find . -maxdepth 0 "-fprintf" ${settings} x`,
+      `find . -maxdepth 0 \\-fprintf ${settings} x`, `find . -maxdepth 0 -fpr'int'f ${settings} x`,
+      `rg '--pre' sh x ${hooks}`, `rg \\--pre sh x ${hooks}`, `rg "--pre=sh" x ${hooks}`, `rg -"-"pre sh x ${hooks}`,
+      `tree '-o' ${settings}`, `tree \\-o ${settings}`, `tree "-"o ${settings}`, `tree -a'o' ${settings}`,
+      `file '-C' -m ${settings}`, `file "--compile" -m ${settings}`, `file --comp -m ${settings}`,
+      // Text whose words the shell fills in, or a quote left open.
+      `find ${hooks} $X`, `tree $'-o' ${settings}`, `rg "$X" x ${hooks}`, `find ${hooks} -name 'x`,
+      // A blank bash does not split on, and a carriage return, which ends a
+      // segment here and nothing in bash.
+      `find ${hooks} x\f-name -fprintf ${settings} t`, `tree -L\v2 ${hooks}`, `rg -n\u00a0x ${hooks}`,
+      `find ${hooks} -name \rcat -fprintf ${settings} t`, `tree -P \rcat -o ${settings}`,
+      // An escaped quote opens no quote, so the copy on the next line is seen.
+      `ls \\"\ncp x ${settings}\necho \\"`, `ls \\'; cp x ${settings}; echo \\'`,
+      // A backslash before a new line is the line going on: the copy's target
+      // is on the next line.
+      `cp x \\\n${settings}`,
+    ]) {
+      assert.ok(writesSurface(shell(command)), `a writing form keeps its crossing as a write: ${JSON.stringify(command)}`);
+      assert.ok(writesSurface(codeShell(command)), `and in Code mode: ${JSON.stringify(command)}`);
+    }
+
+    // The workspace's own answer file, read word by word for what writes it.
+    fs.mkdirSync(path.join(ws, '.rundock'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.rundock', 'permissions.json'), '{}');
+    const answers = (r) => !!r && r.crossings.some(c => c.answerFile);
+    assert.strictEqual(shell('find .rundock -name permissions.json'), null, 'a reading find of it is freed');
+    for (const command of ['find . -maxdepth 0 -fprintf .rundock/permissions.json x',
+      "find . -maxdepth 0 '-fprintf' .rundock/permissions.json x", 'find . -maxdepth 0 \\-fprintf .rundock/permissions.json x',
+      'tree "-"o .rundock/permissions.json', "tree '-o' .rundock/permissions.json", 'file "-"C -m .rundock/permissions.json',
+      // Past a keyword, as a loop body arrives.
+      "for f in a; do tree '-o' .rundock/permissions.json; done", 'for f in a; do sort -t\f -o .rundock/permissions.json x; done',
+      'find . -name \rcat -fprintf .rundock/permissions.json t', 'cp x \\\n.rundock/permissions.json']) {
+      assert.ok(answers(shell(command)), `a writing form keeps its answer-file crossing: ${JSON.stringify(command)}`);
+    }
+  });
+
   test('a PowerShell read is a read: the registry is not Unix-only', () => {
     // MEASURED ON WINDOWS. Asked to list the global agents and skills, the
     // agent ran Get-ChildItem and was shown "this reaches more than one place

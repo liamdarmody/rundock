@@ -989,8 +989,8 @@ const MUTATIONS = [
   // allowlist and `find ~/.claude/hooks -delete` is graded a read again, its
   // crossing skipped, and in Code mode the hook scripts go with no card.
   [READ_ONLY_CLIENT, 'find is judged by its flags at all',
-    "    if (first === 'find') return findOnlyReads(words.slice(1));",
-    ''],
+    '    find: findOnlyReads,',
+    '    find: function () { return true; },'],
   // THE SHAPE, not the contents. Return true for an unrecognised flag and the
   // allowlist becomes a denylist of nothing: every write action this file does
   // not name, on every platform it does not run on, is waved through again.
@@ -1016,8 +1016,12 @@ const MUTATIONS = [
   // nobody named, take `-o` or `-T` for a reading option, let a date be set
   // without `-j`, or read the words other than as getopt is handed them.
   [READ_ONLY_CLIENT, 'sort and date: judged by their options, not read in every form',
-    "    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, segment, stripped + 1);",
-    "    if (first === 'sort' || first === 'date') return true;"],
+    '    sort: function (words) { return optionsAndOperands(words, SORT_OPTIONS) !== null; },\n'
+    + '    date: function (words) {\n'
+    + '      var seen = optionsAndOperands(words, DATE_OPTIONS);\n'
+    + '      return seen !== null && dateOnlyReads(seen);\n'
+    + '    },',
+    '    sort: function () { return true; },\n    date: function () { return true; },'],
   [READ_ONLY_CLIENT, 'sort and date: a short option nobody named fails closed',
     '        return null;\n      }\n    }\n    return seen;',
     '        continue;\n      }\n    }\n    return seen;'],
@@ -1081,13 +1085,13 @@ const MUTATIONS = [
   // Only a space or a tab ends a word in bash. Read the words split on `\s`
   // again and `sort -t<form feed> -o out in` is `-t` given `-o`: a read.
   [READ_ONLY_CLIENT, 'sort and date: read from the segment\'s own text, never from words split on any blank',
-    "    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, segment, stripped + 1);",
-    "    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, words.slice(1).join(' '), 0);"],
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (judgesOptions(first)) return optionsOnlyRead(first, words.slice(1).join(' '), 0);"],
   [READ_ONLY_CLIENT, 'sort and date: a blank bash does not split on, anywhere in the segment, is not a read',
     '      if (NOT_A_WORD_BREAK.test(text)) return false;\n',
     ''],
   [READ_ONLY_CLIENT, 'sort and date: a carriage return on the line is not a read',
-    '    if (carriageReturnSplitsSortOrDate(str)) return false;\n',
+    '    if (carriageReturnSplitsJudgedOptions(str)) return false;\n',
     ''],
   // Take any digits before `>` as the descriptor again and `sort -t2>&1 -o out
   // in` loses its `2`, so `-t` takes the `-o` and the line reads.
@@ -1100,7 +1104,7 @@ const MUTATIONS = [
     "    operandLetters: 'ktS',",
     "    operandLetters: 'ktSo',"],
   [HOOK, 'the hook reads a sort or date segment from its own text for what writes an answer file',
-    "    if (readsPart === isReadOnlyShellCommand && (verb === 'sort' || verb === 'date')) reads = readsPart(seg);\n",
+    '    if (readsPart === isReadOnlyShellCommand && leadsJudgedOptions(seg)) reads = readsPart(seg);\n',
     ''],
   [HOOK, 'the hook counts every word written when a carriage return splits a sort or date line',
     '    if (splitAtReturn) reads = false;\n',
@@ -2046,14 +2050,14 @@ const MUTATIONS = [
     '  if ((onlyIgnored || alsoIgnored) && scopes.some(p => under(rundock, p, ctx) || under(p, rundock, ctx))) {',
     '  if (false) {'],
   [ANSWER_WRITES_VOCAB, 'Read-only vocabulary: tree -o is taken as a read',
-    '  var WRITING_FLAGS = { tree: /(^|\\s)-[A-Za-z]*o/, file:',
-    '  var WRITING_FLAGS = { file:'],
+    "  var WRITING_FLAGS = { tree: { letters: 'o', long: [] }, file:",
+    "  var WRITING_FLAGS = { tree: { letters: '', long: [] }, file:"],
   [ANSWER_WRITES_VOCAB, 'Read-only vocabulary: file -C is taken as a read',
-    ', file: /(^|\\s)(-[A-Za-z]*C|--compile\\b)/ };',
-    ' };'],
+    "file: { letters: 'C', long: ['--compile'] } };",
+    "file: { letters: '', long: [] } };"],
   [ANSWER_WRITES_VOCAB, 'Read-only vocabulary: a writing flag is never looked at',
-    '      && WRITING_FLAGS[first].test(segment)) return false;',
-    '      && false) return false;'],
+    '      return !words.some(function (w) { return namesOption(w, spec); });',
+    '      return true;'],
   [ANSWER_READS_VOCAB, "Answer-file reads: od is not a read",
     "    'od', 'hexdump',",
     "    'hexdump',"],

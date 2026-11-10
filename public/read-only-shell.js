@@ -198,6 +198,18 @@
   //
   // Order does not matter to the caller: every segment must qualify for the
   // command to be a read, so which one is examined first changes nothing.
+  //
+  // A BACKSLASH OUTSIDE SINGLE QUOTES TAKES THE NEXT CHARACTER WITH IT, as in
+  // bash, so `\"` and `\'` open no quote, and inside double quotes `\"` ends
+  // none. Taken as a quote, an escaped one hid every line after it inside a
+  // quote bash never opened, and the commands on those lines were never
+  // judged. Inside single quotes a backslash is text, as it is in bash.
+  //
+  // AN ESCAPED SEPARATOR STILL ENDS A SEGMENT HERE, though bash takes `\;` as
+  // text and a backslash before a new line as the line going on. Splitting
+  // where bash does not only ever asks more: each piece must read on its own,
+  // and the piece the backslash ends is not read where options are judged,
+  // because shellWords leaves a trailing backslash unread.
   function shellSegments(command) {
     var segments = [];
     var cur = '';
@@ -205,6 +217,10 @@
     var str = String(command);
     for (var i = 0; i < str.length; i++) {
       var ch = str[i];
+      if (ch === '\\' && quote !== "'" && i + 1 < str.length && (quote || ';|&\n\r'.indexOf(str[i + 1]) < 0)) {
+        cur += ch + str[++i];
+        continue;
+      }
       if (quote) {
         cur += ch;
         if (ch === quote) quote = null;
@@ -246,6 +262,11 @@
   // An unknown flag draws a card, which is the safe direction and the whole
   // point of the shape.
   //
+  // EACH FLAG IS JUDGED AS THE SHELL HANDS IT TO find, never as it is written:
+  // `'-fprintf'`, `\-fprintf` and `-fpr'int'f` are all the `-fprintf` find is
+  // given (see optionsOnlyRead below). A line whose words the text alone does
+  // not show is not a read, so it asks.
+  //
   // ARITY IS WHAT MAKES THIS SOUND. `find /tmp -type f -mtime -1` is an
   // ordinary read whose operand begins with `-`, so a flag's operand has to be
   // consumed rather than judged, exactly as `find` itself consumes it. Where a
@@ -274,8 +295,9 @@
   // which take one operand.
   var FIND_NEWER_FAMILY = /^-newer[a-z]{0,2}$/i;
 
-  // A word that does not begin with `-` is a path, a pattern, a number or one
-  // of find's grouping tokens, and none of those is a flag to judge.
+  // A word that does not begin with `-`, once the shell has taken its quotes
+  // and backslashes away, is a path, a pattern, a number or one of find's
+  // grouping tokens, and none of those is a flag to judge.
   function findOnlyReads(words) {
     for (var i = 0; i < words.length; i++) {
       var w = words[i];
@@ -402,15 +424,18 @@
     return noSet || !sets;
   }
 
-  // THE WORDS getopt IS HANDED, read from the text as the shell reads them,
-  // or null when the text holds anything whose result the text alone does not
-  // show. Only a space or a tab ends a word, as in bash. Quotes and
-  // backslashes are taken away, so `'-o'` and `-\o` are the `-o` the program
-  // is given. Not followed at all: a `$` or a backtick
-  // (unquoted or inside double quotes), a glob, a brace, a bracket, a
-  // redirection, a quote left open, a control character, and text longer than
-  // this reading follows. Each can hand the program a word the text does not
-  // show, `-o` among them, so the segment is not a read.
+  // THE WORDS THE PROGRAM IS HANDED, read from the text as the shell reads
+  // them, or null when the text holds anything whose result the text alone
+  // does not show. Every command whose options are judged is judged on these
+  // words (optionsOnlyRead below), never on the text as it is written. Only a
+  // space or a tab ends a word, as in bash. Quotes and backslashes are taken
+  // away, so `'-o'`, `"-o"`, `\-o` and `-'o'` are all the `-o` the program is
+  // given. Not followed at all: a `$` or a backtick
+  // (unquoted or inside double quotes), `$'…'`, a glob, a brace, a bracket, a
+  // redirection, a quote left open, a backslash with nothing after it, a
+  // control character, and text longer than this reading follows. Each can
+  // hand the program a word the text does not show, `-o` among them, so the
+  // segment is not a read, and it asks.
   var OPTIONS_READ_LIMIT = 8192;
   // Unquoted, only these are plain text in bash and in zsh alike.
   var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\/:,=+%@~-]|[\p{L}\p{M}\p{N}])$/u;
@@ -440,6 +465,9 @@
         word += text[++i];
         continue;
       }
+      // A `!` standing alone as a word, find's negation, is plain text to bash
+      // and zsh anywhere after the command's own name.
+      if (c === '!' && !word && /^[ \t]?$/.test(text.charAt(i + 1))) { word += c; continue; }
       if (!PLAIN_WORD_CHAR.test(c)) return null;
       word += c;
     }
@@ -474,10 +502,11 @@
     return text.slice(i);
   }
 
-  // `sort` or `date` judged as one from the segment's own text, never from
-  // words split some other way: the words getopt is handed after the first
-  // `skip` (any keyword before the command, and the command), then its
-  // options against the command's lists.
+  // One command whose options are judged (OPTION_RULES below), judged from the
+  // segment's own text, never from words split some other way: the words the
+  // shell hands the program after the first `skip` (any keyword before the
+  // command, and the command), then the command's own rule over them. A
+  // segment whose words the text alone does not show is not a read.
   function optionsOnlyRead(command, segment, skip) {
     try {
       optionReadingSeam.beforeReading(command);
@@ -485,9 +514,7 @@
       if (NOT_A_WORD_BREAK.test(text)) return false;
       var words = shellWords(textAfterWords(text, skip));
       if (!words) return false;
-      var seen = optionsAndOperands(words, command === 'sort' ? SORT_OPTIONS : DATE_OPTIONS);
-      if (!seen) return false;
-      return command === 'sort' || dateOnlyReads(seen);
+      return OPTION_RULES[command](words) === true;
     } catch (failed) {
       return false;
     }
@@ -496,14 +523,61 @@
   // `rg --pre <command>` runs an arbitrary preprocessor over every file it
   // searches. Named rather than inverted because ripgrep's surface is small
   // and stable, and because only this one flag executes anything.
-  var EXECUTING_FLAGS = { rg: /(^|\s)--pre\b/ };
+  var EXECUTING_FLAGS = { rg: { letters: '', long: ['--pre'] } };
 
   // Two listed programs also WRITE a file they are given, with no redirect on
   // the line: `tree -o FILE` sends its listing there (alone or in a bundle such
   // as `-ao`), and `file -C` compiles a magic file. Either makes the segment
   // not a read. Named for the same reason as the flag above: each program has
   // exactly one such option.
-  var WRITING_FLAGS = { tree: /(^|\s)-[A-Za-z]*o/, file: /(^|\s)(-[A-Za-z]*C|--compile\b)/ };
+  var WRITING_FLAGS = { tree: { letters: 'o', long: [] }, file: { letters: 'C', long: ['--compile'] } };
+
+  // WHETHER A WORD IS ONE OF THESE OPTIONS, judged as the shell hands the word
+  // over (shellWords), so a quoted or escaped option is the option. A short
+  // one counts alone, with a value joined (`-oFILE`) or anywhere in a bundle
+  // of letters (`-ao`). A long one counts alone, with a value joined
+  // (`--pre=sh`), cut short as getopt_long takes any unique start of a name
+  // (`file --comp` compiles), or followed by more than a letter or a digit
+  // (`--pre-glob`, which asks as it always has).
+  function namesOption(w, spec) {
+    if (w.charAt(0) !== '-') return false;
+    if (w.charAt(1) === '-') {
+      var name = w.split('=')[0];
+      return name.length > 2 && spec.long.some(function (o) {
+        return o.indexOf(name) === 0 || (name.indexOf(o) === 0 && !/\w/.test(name.charAt(o.length)));
+      });
+    }
+    for (var j = 1; j < w.length && /[A-Za-z]/.test(w.charAt(j)); j++) {
+      if (spec.letters.indexOf(w.charAt(j)) >= 0) return true;
+    }
+    return false;
+  }
+  // Every word is judged wherever it stands, an operand's place included, as
+  // the raw text was: the program may read an option after a file.
+  function namesNoOption(spec) {
+    return function (words) {
+      return !words.some(function (w) { return namesOption(w, spec); });
+    };
+  }
+
+  // EVERY COMMAND WHOSE OPTIONS ARE JUDGED, and the rule it is judged by,
+  // given the words the shell hands it. `find`, `sort` and `date` read only
+  // with options from their lists; `rg`, `tree` and `file` read unless an
+  // option that runs or writes is among their words.
+  var OPTION_RULES = {
+    find: findOnlyReads,
+    sort: function (words) { return optionsAndOperands(words, SORT_OPTIONS) !== null; },
+    date: function (words) {
+      var seen = optionsAndOperands(words, DATE_OPTIONS);
+      return seen !== null && dateOnlyReads(seen);
+    },
+    rg: namesNoOption(EXECUTING_FLAGS.rg),
+    tree: namesNoOption(WRITING_FLAGS.tree),
+    file: namesNoOption(WRITING_FLAGS.file),
+  };
+  function judgesOptions(command) {
+    return Object.prototype.hasOwnProperty.call(OPTION_RULES, command);
+  }
 
   // Whether one segment's leading command only reads. An empty segment (a
   // trailing separator) carries nothing to disqualify it.
@@ -537,12 +611,7 @@
     if (!words.length) return stripped > 0;
     var first = bareWord(words[0]);
     if (NON_COMMAND_KEYWORDS.indexOf(first) >= 0) return true;
-    if (first === 'find') return findOnlyReads(words.slice(1));
-    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, segment, stripped + 1);
-    if (Object.prototype.hasOwnProperty.call(EXECUTING_FLAGS, first)
-      && EXECUTING_FLAGS[first].test(segment)) return false;
-    if (Object.prototype.hasOwnProperty.call(WRITING_FLAGS, first)
-      && WRITING_FLAGS[first].test(segment)) return false;
+    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);
     if (POWERSHELL_ONLY_READS.indexOf(first.toLowerCase()) >= 0) return false;
     if (READ_ONLY_SHELL_COMMANDS.indexOf(first) >= 0) return true;
     if (NO_TARGET_COMMANDS.indexOf(first) >= 0) return true;
@@ -562,23 +631,25 @@
   // definition of a read has to carry the reason a read cannot be trusted.
   var HIDES_SUBCOMMAND = /\$\(|`|<\(|>\(/;
 
-  // Whether a segment runs `sort` or `date`, past any keyword before it.
-  function leadsSortOrDate(segment) {
+  // Whether a segment runs a command whose options are judged, past any
+  // keyword before it. The hook asks this of each segment it reads for what
+  // writes an answer file, so it judges those from the segment's own text too.
+  function leadsJudgedOptions(segment) {
     var words = String(segment).split(/\s+/).filter(Boolean);
     while (words.length && KEYWORD_PREFIXES.indexOf(bareWord(words[0])) >= 0) words.shift();
-    var first = words.length ? bareWord(words[0]) : '';
-    return first === 'sort' || first === 'date';
+    return words.length > 0 && judgesOptions(bareWord(words[0]));
   }
 
   // A CARRIAGE RETURN ENDS A SEGMENT HERE AND ENDS NOTHING IN BASH, which
   // takes it as part of a word. So the words after one would be judged as a
   // command of their own: `sort -t<CR>cat -o out in` is one sort, handed `-t`
-  // and then `-o out`, and it writes `out`. Whether the text holds one and a
-  // sort or a date: such a line is not a read, here and wherever else the
+  // and then `-o out`, and it writes `out`, and `rg -e <CR>cat --pre sh x` is
+  // one rg, handed `--pre sh`. Whether the text holds one and a command whose
+  // options are judged: such a line is not a read, here and wherever else the
   // hook reads its segments one by one.
-  function carriageReturnSplitsSortOrDate(text) {
+  function carriageReturnSplitsJudgedOptions(text) {
     var str = String(text);
-    return str.indexOf('\r') >= 0 && shellSegments(str).some(leadsSortOrDate);
+    return str.indexOf('\r') >= 0 && shellSegments(str).some(leadsJudgedOptions);
   }
 
   // Only text is read. Anything else is not a command this can judge, so it
@@ -588,7 +659,7 @@
     var str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');
     if (/>>?|\btee\b/.test(str)) return false;
     if (HIDES_SUBCOMMAND.test(str)) return false;
-    if (carriageReturnSplitsSortOrDate(str)) return false;
+    if (carriageReturnSplitsJudgedOptions(str)) return false;
     var segments = shellSegments(str);
     return segments.length > 0 && segments.every(segmentReads);
   }
@@ -751,15 +822,32 @@
     return words.length === 1 || /^["'$`\\]/.test(words[1]);
   }
 
+  // A COPY OF EVERY OPTION THIS MODULE JUDGES BY NAME, for the test that asks
+  // each one the same question in every spelling the shell reads as it. A
+  // copy, so a test can read the lists and cannot change them.
+  function namedOptions() {
+    return JSON.parse(JSON.stringify({
+      find: {
+        noOperand: FIND_READ_FLAGS_NO_OPERAND, oneOperand: FIND_READ_FLAGS_ONE_OPERAND,
+        newerFamily: { source: FIND_NEWER_FAMILY.source, flags: FIND_NEWER_FAMILY.flags },
+      },
+      sort: SORT_OPTIONS, date: DATE_OPTIONS, rg: EXECUTING_FLAGS.rg, tree: WRITING_FLAGS.tree, file: WRITING_FLAGS.file,
+    }));
+  }
+
   // Only what a caller actually uses. The registries stay private: exporting
   // them invites a second place to reason about membership, which is the
-  // shape this module exists to remove. The seams are exported for the tests
+  // shape this module exists to remove, so a test that reads the named
+  // options gets a copy (namedOptions). The seams are exported for the tests
   // that force a failure inside the PowerShell reading and inside the reading
-  // of sort's and date's options. The carriage-return rule is exported for the
-  // hook, which reads a command's segments one by one for what they write, so
-  // that it asks the same rule rather than keeping a copy.
+  // of options, and the word reader for the test that asks it about text the
+  // line's own checks already refuse. The carriage-return rule, and which
+  // segments have their options judged, are exported for the hook, which
+  // reads a command's segments one by one for what they write, so that it
+  // asks the same rules rather than keeping copies.
   return {
     DISCARDING_REDIRECT_RE, shellSegments, isReadOnlyShellCommand, isReadOnlyPowerShellCommand,
-    isDestructiveShellCommand, powerShellReadingSeam, optionReadingSeam, carriageReturnSplitsSortOrDate,
+    isDestructiveShellCommand, powerShellReadingSeam, optionReadingSeam, carriageReturnSplitsJudgedOptions,
+    leadsJudgedOptions, shellWords, namedOptions,
   };
 }));
