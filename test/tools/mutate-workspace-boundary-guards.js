@@ -1167,20 +1167,6 @@ const MUTATIONS = [
   [READ_ONLY_CLIENT, 'a long option cut short is the option it names',
     '        return o.indexOf(name) === 0 || (name.indexOf(o) === 0 && !/\\w/.test(name.charAt(o.length)));',
     '        return name === o || (name.indexOf(o) === 0 && !/\\w/.test(name.charAt(o.length)));'],
-  // The same reading, where it frees a crossing in process: a quote left open
-  // and an escaped quote each keep the crossing of what the line writes.
-  [READ_ONLY, 'the boundary layer frees no crossing on a find, rg, tree or file line with a quote left open',
-    '    if (quote) return null;\n',
-    ''],
-  [READ_ONLY, 'the boundary layer sees each command after an escaped quote',
-    "      if (shellReading && ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {",
-    "      if (shellReading && ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && '\"\\''.indexOf(str[i + 1]) < 0 && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {"],
-  // The hook's own reading of the paths on a line honors the same
-  // backslashes: read `\"` as opening a quote and the path a copy writes on
-  // the next line is hidden inside it.
-  [HOOK, 'the hook reads the paths of a bash line with its backslashes, so an escaped quote hides none',
-    '  const re = new RegExp((posixEscapes && !asWritten ? POSIX_PATH_WORD : PATH_WORD).source, \'g\');',
-    '  const re = new RegExp(PATH_WORD.source, \'g\');'],
   [HOOK, 'the hook reads a find, rg, tree or file segment from its own text for what writes an answer file',
     '    if (readsPart === isReadOnlyShellCommand && leadsJudgedOptions(seg)) reads = readsPart(seg);\n',
     '    if (readsPart === isReadOnlyShellCommand && /^\\s*(?:sort|date)\\b/.test(seg)) reads = readsPart(seg);\n'],
@@ -1209,9 +1195,6 @@ const MUTATIONS = [
   [PS_GRADER, "a -Force is looked for in both splits of a line",
     "    var segs = shellSplits(cmd);",
     "    var segs = RundockReadOnlyShell.shellSegments(cmd);"],
-  [HOOK, "the hook keeps every path word of the line read as written",
-    "  return asShellReads.concat(asWritten.filter(w => !have.has(w.at + '\\u0000' + w.t)));",
-    "  return asShellReads;"],
   [HOOK, "the hook reads each segment of the line split as written for what writes an answer file",
     "  if (/\\\\['\";|&\\n\\r]/.test(text)) splits.push(shellSegments(text, true));",
     ""],

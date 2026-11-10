@@ -1579,60 +1579,32 @@ function echoedArgsIn(command) {
   return out;
 }
 
-const PATH_WORD = /'([^']*)'|"([^"]*)"|[^\s;|&<>()`'"]+/;
-const POSIX_PATH_WORD = /'([^']*)'|"((?:[^"\\]|\\[\s\S])*)"|(?:[^\s;|&<>()`'"\\]|\\\S)+/;
 // `posixEscapes`: an unquoted word is taken as bash reads it, each `\X` being
 // the character X, so `\/etc/hosts` is judged as the `/etc/hosts` it opens. A
 // drive letter or UNC name is left as written: it keeps its Windows reading.
 function shellPathTokens(command, posixEscapes = false) {
   return shellPathWords(command, posixEscapes).map(w => w.t);
 }
-// The same words, each with where it starts in the command (`at`).
-//
-// READ TWICE, AND EVERY WORD OF EITHER READING KEPT: once as the shell reads
-// the line, and once as it is written, with the segments split as written and
-// each quote taken as written, exactly the way every line was read before. The
-// shell's reading finds a path an escaped quote hid (below); the written one
-// keeps every word it always found, so no word that was seen stops being seen.
-// THE SHELL'S READING IS NEEDED FOR THE HOOK TO AGREE WITH THE SHARED
-// DEFINITION: once that splits `ls \"` and the copy on the next line where the
-// shell does, the line is no longer a read, and its crossing has to name the
-// file the copy writes. Read as written, that path sat inside a quoted word
-// and the card named nothing.
+// The same words, each with where it starts in the command (`at`), read as
+// they always were, quotes as written. A quote character that opens nothing
+// in bash (an escaped one among them) is a space in the line's view, which the
+// crossing check reads as well (shellCrossings), so none of them hides a path.
 function shellPathWords(command, posixEscapes = false) {
-  const asShellReads = pathWordsReadBy(command, posixEscapes, false);
-  const asWritten = pathWordsReadBy(command, posixEscapes, true);
-  const have = new Set(asShellReads.map(w => w.at + '\u0000' + w.t));
-  return asShellReads.concat(asWritten.filter(w => !have.has(w.at + '\u0000' + w.t)));
-}
-// One reading. `asWritten` splits the segments as written and takes every
-// quote as written. In either reading `posixEscapes` takes an unquoted word as
-// bash reads it, each `\X` being X; the shell's reading also lets a backslash
-// take a quote with it.
-function pathWordsReadBy(command, posixEscapes, asWritten) {
   const out = [];
   // Every argument sitting in a pattern position, counted per segment so the
   // same text appearing later as a real file is still seen; and the same for
   // a separator and an echoed word.
   const skip = [];
-  for (const seg of shellSegments(String(command), asWritten)) skip.push(...patternArgsIn(seg), ...delimiterArgsIn(seg));
+  for (const seg of shellSegments(String(command), true)) skip.push(...patternArgsIn(seg), ...delimiterArgsIn(seg));
   skip.push(...echoedArgsIn(command));
   // COUNTED, so dropping one occurrence costs the same however many words the
   // command holds. Looked up in the list itself, the cost grew with the square
-  // of a here-document full of echoes, and this reading runs twice a line.
+  // of a here-document full of echoes, and the crossing check reads a line
+  // twice when its view differs.
   const skipped = new Map();
   for (const s of skip) skipped.set(s, (skipped.get(s) || 0) + 1);
   const dropOne = s => { const n = skipped.get(s); if (!n) return false; skipped.set(s, n - 1); return true; };
-  // A BACKSLASH OUTSIDE SINGLE QUOTES TAKES THE NEXT CHARACTER WITH IT in bash,
-  // so in bash text `\"` and `\'` start no quoted word, and inside double quotes
-  // `\"` ends none. Read as quotes, they hid every path up to the next quote
-  // inside one word, and a copy onto a persistence surface on the next line
-  // went unseen. A backslash before a blank or a line break still ends the
-  // word here, as it did: bash joins the line after `\` and a new line onto
-  // this one, so the word that follows is the command's next argument and is
-  // read as a path of its own. Elsewhere a backslash is a folder separator, as
-  // written.
-  const re = new RegExp((posixEscapes && !asWritten ? POSIX_PATH_WORD : PATH_WORD).source, 'g');
+  const re = /'([^']*)'|"([^"]*)"|[^\s;|&<>()`'"]+/g;
   let m;
   while ((m = re.exec(String(command))) !== null) {
     let t = m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[0]);

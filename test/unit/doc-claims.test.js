@@ -1974,15 +1974,14 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'A wildcard after a plain first character other than `-` still reads for `find`, `rg`, `tree` and `file`',
       '**Nothing the earlier reading asked about reads now.**',
       'a line reads only when both readings read it',
-      'it reads the paths as written too, so no path it saw before is lost',
       'are the only two exceptions to the rule that a character outside the plain set makes the segment not a read',
       'No quote character that opens nothing in bash hides a command either',
       'every reading reads the line that way as well as as written',
       'is not a read, and neither is one with a `(` or `)` outside its quotes',
       'In Code mode the verdict reads the line both ways as well',
       'checked against the graders at that base wherever history holds it',
-      'which it needs to name the file such a line writes once the definition no longer reads the line',
-      'it reads the line\'s view as well, so a quote that opens nothing hides no path either',
+      'the hook reads the paths in a bash command as it always did and in the line\'s view as well',
+      'so none of them hides a path from its crossing check and no path it saw before is lost',
     ]) assert.ok(passage.includes(said), `the page says: ${said}`);
   });
 
@@ -2005,7 +2004,7 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'A FAILURE INSIDE THIS READING IS AN ANSWER',
     ]) assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
     const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
-    assert.ok(hookSrc.includes('THE SHELL\'S READING IS NEEDED FOR THE HOOK TO AGREE WITH THE SHARED DEFINITION'), 'the hook says why it reads paths as the shell does');
+    assert.ok(hookSrc.includes('which the crossing check reads as well (shellCrossings), so none of them hides a path'), 'the hook says where an escaped quote is read');
   });
 
   test('every spelling the page names asks, and the reads beside them read', () => {
