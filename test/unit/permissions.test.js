@@ -796,6 +796,23 @@ describe('sort and date read only in the forms that read', () => {
     }
   });
 
+  test("a descriptor number glued to an option is the option's, not the redirect's", () => {
+    // Bash takes the digits before `>` as the descriptor only when they are a
+    // word of their own: `-t2>&1` is `-t2`, then `>&1`. Taken as the
+    // redirect's, the `2` left `-t` to take the next word, and the `-o` after
+    // it went unseen.
+    for (const cmd of ['sort -t2>&1 -o out in', 'sort -k1>/dev/null -o out in', 'sort -t2>/dev/null --compress-program=sh x',
+      'date -r1>/dev/null 010112002026', 'date -v1>/dev/null 0101', 'date -z0>&2 010112002026']) {
+      assertAsks(cmd);
+    }
+    // A discard that stands as its own word, or has no number, is still
+    // taken away, so these still read.
+    for (const cmd of ['ls 2>/dev/null', 'cat x 2>&1', 'find . 2>/dev/null | sort', 'sort -t2 x 2>/dev/null',
+      'cat x>/dev/null', 'ls &>/dev/null', 'sort -k2 x>/dev/null']) {
+      assertReads(cmd);
+    }
+  });
+
   test('a tab ends a word as a space does', () => {
     for (const cmd of ['sort\t-u\tnames.txt', 'date\t+%Y-%m-%d', 'ls notes |\tsort', "sort -t'\t' -k2 x"]) assertReads(cmd);
     for (const cmd of ['sort\t-o\tout in', 'sort -u\t-o out in', 'date\t-s\t2026-01-01']) assertAsks(cmd);

@@ -968,8 +968,8 @@ const MUTATIONS = [
   // Widen the exemption to any redirect target and the fail-safe inverts:
   // `ls x > x/listing.txt` writes into the surface and would read as free.
   [READ_ONLY, 'only /dev/null and descriptor duplication are exempt, never an arbitrary redirect target',
-    'var DISCARDING_REDIRECT_RE = /\\d*>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
-    'var DISCARDING_REDIRECT_RE = /\\d*>>?\\s*\\S+/g;'],
+    'var DISCARDING_REDIRECT_RE = /(?:(?<![^ \\t\\n])\\d+)?>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
+    'var DISCARDING_REDIRECT_RE = /(?:(?<![^ \\t\\n])\\d+)?>>?\\s*\\S+/g;'],
   // A command is read-only only if every leading word is actually in the
   // registry: drop the check and any command (a bare `rm`, included) reads
   // as free against a persistence surface.

@@ -936,7 +936,9 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
         // return, which ends a segment here and nothing in bash.
         `sort -t\f -o ${target} x`, `sort -t\v -o ${target} x`, `sort -t\u00a0 -o ${target} x`,
         `date -z\f ${target}`, `date -r\v ${target}`, `date -z\u00a0 ${target}`,
-        `sort -t\rcat -o ${target} x`, `date -r\rcat -s 2026-01-01 ${target}`]) {
+        `sort -t\rcat -o ${target} x`, `date -r\rcat -s 2026-01-01 ${target}`,
+        // A descriptor number glued to an option is the option's.
+        `sort -t2>&1 -o ${target} x`, `sort -k1>/dev/null -o ${target} x`, `date -r1>/dev/null ${target}`]) {
         assert.ok(writesSurface(shell(command)), `a writing form keeps its crossing as a write: ${command}`);
       }
     }

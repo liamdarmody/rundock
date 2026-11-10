@@ -155,6 +155,13 @@ describe('through the real hook, sort and date under the runtime home are freed 
     assertAsksAbout(await bash(command), script, command);
   });
 
+  test("a descriptor number glued to an option is the option's, so the writing form keeps its crossing", async () => {
+    // `-t2>&1` is `-t2`, then `>&1`: the `-o` after it is still sort's.
+    for (const command of [`sort -t2>&1 -o ${script} x`, `sort -k1>/dev/null -o ${script} x`, `date -r1>/dev/null ${script}`]) {
+      assertAsksAbout(await bash(command), script, command);
+    }
+  });
+
   test('a reading sort of the credential file asks, as cat of it does', async () => {
     for (const command of [`cat ${credentials}`, `sort ${credentials}`, `date -r ${credentials}`]) {
       const r = await bash(command);

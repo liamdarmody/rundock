@@ -169,7 +169,14 @@
   //
   // EXHAUSTIVE BY INTENT. Only these two shapes are exempt, because only these
   // two provably reach no path. Every other target is a real file.
-  var DISCARDING_REDIRECT_RE = /\d*>>?\s*(?:\/dev\/null|&\s*\d+)/g;
+  //
+  // A DESCRIPTOR NUMBER IS THE REDIRECT'S ONLY WHEN IT STARTS A WORD, as bash
+  // reads it: `-t2>&1` is the word `-t2` and then `>&1`. Taken as the
+  // redirect's, the `2` was stripped with it, `-t` took the next word, and
+  // `sort -t2>&1 -o out in` read as a sort with no `-o`. With no number the
+  // redirect is stripped wherever it stands, because `>` ends the word before
+  // it in bash: `x>/dev/null` is `x`, and a discard.
+  var DISCARDING_REDIRECT_RE = /(?:(?<![^ \t\n])\d+)?>>?\s*(?:\/dev\/null|&\s*\d+)/g;
 
   // SPLIT ON OPERATORS, BUT NOT ON TEXT THAT LOOKS LIKE ONE. A regular
   // expression is full of shell operator characters, and quoting is what tells
