@@ -1393,10 +1393,11 @@ describe('routine editor view: the days of a week', () => {
       const shown = b.closest('label').textContent.trim();
       assert.ok(names[i].startsWith(shown), `"${names[i]}" does not contain the visible "${shown}"`);
     });
+    assert.strictEqual(box(doc, 'saturday').checked, false, 'sanity: week starts with no box ticked');
     box(doc, 'saturday').click();
-    assert.strictEqual(box(doc, 'saturday').checked, false, 'a press unticks');
+    assert.strictEqual(box(doc, 'saturday').checked, true, 'a press ticks');
     box(doc, 'saturday').click();
-    assert.strictEqual(box(doc, 'saturday').checked, true, 'and ticks again');
+    assert.strictEqual(box(doc, 'saturday').checked, false, 'and unticks again');
     dom.window.close();
   });
 
@@ -1405,6 +1406,8 @@ describe('routine editor view: the days of a week', () => {
     choose(w, 'time', '09:00');
     choose(w, 'frequency', 'week');
     assert.strictEqual(line(doc).getAttribute('aria-live'), 'polite');
+    assert.strictEqual(line(doc).textContent, 'Choose at least one day.', 'week starts with no day, and asks for one');
+    tickOnly(w, WEEK);
     assert.strictEqual(line(doc).textContent, 'Run Compile the ops summary every day at 9:00am, on your computers.');
     tickOnly(w, WEEKDAYS);
     assert.strictEqual(line(doc).textContent,
@@ -1420,19 +1423,46 @@ describe('routine editor view: the days of a week', () => {
     dom.window.close();
   });
 
-  test('week from day ticks all seven, and from month ticks none', () => {
+  // Week starts with no day ticked, from day and from month alike, for a new
+  // routine and for a daily one opened for editing. Chosen again from week, it
+  // keeps the days it has.
+  test('week from day or from month ticks no day, new or edited, and week chosen again keeps its days', () => {
     const { doc, w, dom } = atSchedule();
     choose(w, 'frequency', 'week');
-    assert.deepStrictEqual(ticked(doc), WEEK, 'from day, all seven');
+    assert.deepStrictEqual(ticked(doc), [], 'from day, none');
     choose(w, 'frequency', 'month');
     choose(w, 'frequency', 'week');
     assert.deepStrictEqual(ticked(doc), [], 'from month, none');
+    tickOnly(w, ['monday', 'thursday']);
+    choose(w, 'frequency', 'week');
+    assert.deepStrictEqual(ticked(doc), ['monday', 'thursday'], 'week chosen again keeps its days');
     dom.window.close();
+
+    const daily = editFromRoster({ schedule: 'every day at 07:00' });
+    assert.strictEqual(daily.doc.querySelector('select[data-routine-field="frequency"]').value, 'day',
+      'sanity: a daily routine opens on day');
+    choose(daily.w, 'frequency', 'week');
+    assert.deepStrictEqual(ticked(daily.doc), [], 'a daily routine opened for editing, none');
+    daily.dom.window.close();
+
+    const weekly = editFromRoster({ schedule: 'every tuesday and friday at 07:00' });
+    choose(weekly.w, 'frequency', 'week');
+    assert.deepStrictEqual(ticked(weekly.doc), ['tuesday', 'friday'], 'a weekly routine chosen as week again keeps its days');
+    weekly.dom.window.close();
   });
 
   // Every move here has an inverse, and the inverse puts back what was there.
-  test('a tick then an untick, and week to day and back, put back what was there', () => {
+  test('a tick then an untick puts back what was there, and day to week and back reads every day at the same time', () => {
     const { doc, w, dom } = atSchedule();
+    choose(w, 'time', '07:30');
+    const daily = line(doc).textContent;
+    assert.strictEqual(daily, 'Run Compile the ops summary every day at 7:30am, on your computers.', 'sanity: it starts on day');
+    choose(w, 'frequency', 'week');
+    assert.deepStrictEqual(ticked(doc), [], 'week from day, no day ticked');
+    assert.strictEqual(line(doc).textContent, 'Choose at least one day.');
+    choose(w, 'frequency', 'day');
+    assert.strictEqual(doc.querySelector('.re-days'), null);
+    assert.strictEqual(line(doc).textContent, daily, 'back to day, every day at the same time');
     choose(w, 'frequency', 'week');
     tickOnly(w, ['monday', 'friday']);
     const before = line(doc).textContent;
@@ -1442,24 +1472,28 @@ describe('routine editor view: the days of a week', () => {
     assert.strictEqual(line(doc).textContent, before, 'untick puts the sentence back');
     assert.deepStrictEqual(ticked(doc), ['monday', 'friday']);
     choose(w, 'frequency', 'day');
-    assert.strictEqual(doc.querySelector('.re-days'), null);
+    assert.strictEqual(line(doc).textContent, daily, 'day again reads every day at the same time');
     choose(w, 'frequency', 'week');
-    assert.deepStrictEqual(ticked(doc), WEEK, 'back to week from day, all seven ticked');
+    assert.deepStrictEqual(ticked(doc), [], 'back to week from day, no day ticked');
     dom.window.close();
   });
 
-  test('with no day ticked the line asks for one, quietly, and nothing is red before a press', () => {
-    const { doc, w, dom } = atSchedule();
-    choose(w, 'frequency', 'month');
-    choose(w, 'frequency', 'week');
-    assert.strictEqual(line(doc).textContent, 'Choose at least one day.');
-    assert.ok(line(doc).classList.contains('re-preview-prompt'));
-    assert.strictEqual(doc.querySelectorAll('.re-preview-error').length, 0, 'nothing is red before a press');
-    tickOnly(w, ['monday']);
-    tickOnly(w, []);
-    assert.strictEqual(line(doc).textContent, 'Choose at least one day.', 'unticking the last day asks again');
-    assert.strictEqual(doc.querySelectorAll('.re-preview-error').length, 0, 'and is still not red');
-    dom.window.close();
+  test('with no day ticked, from day or from month, the line asks for one quietly, and nothing is red before a press', () => {
+    for (const from of ['day', 'month']) {
+      const { doc, w, dom } = atSchedule();
+      choose(w, 'frequency', from);
+      choose(w, 'frequency', 'week');
+      assert.strictEqual(line(doc).textContent, 'Choose at least one day.', `from ${from}`);
+      assert.ok(line(doc).classList.contains('re-preview-prompt'), `from ${from}, in the quiet style`);
+      assert.strictEqual(doc.querySelectorAll('.re-preview-error').length, 0, `from ${from}, nothing is red before a press`);
+      box(doc, 'monday').click();
+      assert.strictEqual(line(doc).textContent, 'Run Compile the ops summary every Monday at 9:00am, on your computers.');
+      box(doc, 'monday').click();
+      assert.strictEqual(line(doc).textContent, 'Choose at least one day.', `from ${from}, unticking Monday asks again`);
+      assert.ok(line(doc).classList.contains('re-preview-prompt'), `from ${from}, quietly`);
+      assert.strictEqual(doc.querySelectorAll('.re-preview-error').length, 0, `from ${from}, and is still not red`);
+      dom.window.close();
+    }
   });
 
   test('Continue with no day ticked saves nothing, says why in red, and moves focus to Monday', () => {
@@ -1495,6 +1529,48 @@ describe('routine editor view: the days of a week', () => {
     assert.strictEqual(line(doc).textContent, 'Choose at least one day.');
     assert.strictEqual(doc.querySelectorAll('.re-preview-error').length, 0);
     dom.window.close();
+  });
+
+  // The most common next step, and the one this start is for.
+  test('a new routine on week takes one press for Monday, saves as every monday, and reopens on Monday alone', () => {
+    const { doc, w, dom } = atSchedule();
+    choose(w, 'frequency', 'week');
+    box(doc, 'monday').click();
+    assert.deepStrictEqual(ticked(doc), ['monday'], 'one press, and Monday alone is ticked');
+    assert.strictEqual(line(doc).textContent, 'Run Compile the ops summary every Monday at 9:00am, on your computers.');
+    cont(doc).click();
+    assert.match(text(doc), /Run Compile the ops summary every Monday at 9:00am, on your computers\./);
+    doc.querySelector('[data-routine-editor="save"]').click();
+    assert.strictEqual(w.sent.length, 1);
+    const saved = w.sent[0].routine.schedule;
+    assert.strictEqual(saved, 'every monday at 09:00');
+    dom.window.close();
+
+    const reopened = editFromRoster({ schedule: saved });
+    assert.strictEqual(reopened.doc.querySelector('select[data-routine-field="frequency"]').value, 'week');
+    assert.deepStrictEqual(ticked(reopened.doc), ['monday'], 'it reopens with Monday alone ticked');
+    reopened.dom.window.close();
+  });
+
+  // The control failing: a week left with no day is saved by no path, whether
+  // through Continue or past it, for a new routine or an edited one.
+  test('a week left with no day, new or edited, saves by no path', () => {
+    const fresh = atSchedule();
+    choose(fresh.w, 'frequency', 'week');
+    cont(fresh.doc).click();
+    assert.strictEqual(fresh.doc.querySelector('[data-routine-editor="save"]'), null, 'Continue stops on the step');
+    assert.strictEqual(line(fresh.doc).textContent, 'Choose at least one day to continue.');
+    fresh.w.saveRoutine();
+    assert.deepStrictEqual(fresh.w.sent, [], 'and a save called past it sends nothing');
+    fresh.dom.window.close();
+
+    const edited = editFromRoster({ schedule: 'every day at 07:00' });
+    choose(edited.w, 'frequency', 'week');
+    cont(edited.doc).click();
+    assert.strictEqual(edited.doc.querySelector('[data-routine-editor="save"]'), null, 'Continue stops on the step');
+    edited.w.saveRoutine();
+    assert.deepStrictEqual(edited.w.sent, [], 'an edit sends no schedule either');
+    edited.dom.window.close();
   });
 
   test('weekdays save as every weekday, and a set Monday first in full names', () => {

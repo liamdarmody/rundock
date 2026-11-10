@@ -458,15 +458,18 @@
    * unless a day is already chosen, any other frequency has no day, and the
    * time stays as it was.
    *
-   * WEEK STARTS FROM WHAT THE SENTENCE SAID, so the days are never a blank
-   * page and never a guess: from every day, all seven are ticked; from a
-   * month, which names no day of the week, none are.
+   * WEEK STARTS WITH NO DAY TICKED, from every day and from a month alike,
+   * unless it is already week, when it keeps the days it has. A weekly
+   * routine is most often one day, and a set ticked in advance is a guess the
+   * person has to undo: all seven took six unticks to reach one day. The line
+   * under the sentence asks for a day quietly, and Continue saves nothing
+   * until one is ticked.
    */
   function chooseFrequency(choice, value) {
     const from = choice ? choice.frequency : null;
     const day = value === 'month' ? ((from === 'month' && choice.day) || '1') : null;
     let days = null;
-    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : (from === 'day' ? ALL_DAYS.slice() : []);
+    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : [];
     return { frequency: value, day, days, time: choice ? choice.time : null };
   }
 

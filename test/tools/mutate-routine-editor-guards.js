@@ -595,18 +595,25 @@ const MUTATIONS = [
   [VIEW, 'Continue with no day ticked stops on the step and says why',
     '    if (model().needsADay(state)) {\n      state.dayAsked = true;',
     '    if (false) {\n      state.dayAsked = true;'],
-  // The week start rule: from every day all seven, from a month none.
+  // The week start rule: no day ticked, from a month and from every day alike.
+  // The second row puts back the start this rule replaced, all seven ticked
+  // from every day.
   [DAYS_MODEL, 'week from a month starts with no day ticked',
-    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : (from === 'day' ? ALL_DAYS.slice() : []);",
-    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : ALL_DAYS.slice();"],
-  [DAYS_MODEL, 'week from every day starts with all seven ticked',
-    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : (from === 'day' ? ALL_DAYS.slice() : []);",
-    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : [];"],
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : [];",
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : (from === 'month' ? ALL_DAYS.slice() : []);"],
+  [DAYS_MODEL, 'week from every day starts with no day ticked',
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : [];",
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : (from === 'day' ? ALL_DAYS.slice() : []);"],
   // The model is built in the browser from the global the days module sets,
   // so the module loads first. Moved after it, the model has no days to read.
   [SCRIPT_ORDER, 'the days module loads before the editor model',
     '<script src="/schedule-days.js"></script>\n<script src="/routine-editor-model.js"></script>\n',
     '<script src="/routine-editor-model.js"></script>\n<script src="/schedule-days.js"></script>\n'],
+  // Week chosen again from week keeps the days it has, rather than starting
+  // again with none.
+  [DAYS_MODEL, 'week chosen again keeps its days',
+    "    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : [];",
+    "    if (value === 'week') days = [];"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
