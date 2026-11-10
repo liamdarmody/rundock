@@ -76,6 +76,9 @@ const PS_HOOK_REAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), su
 const SORT_DATE_HOOK = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/sort-date-reads-hook.test.js' };
 const SORT_DATE_CARDS = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/sort-date-read-cards.test.js' };
 const SORT_DATE_CRASH = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/hook-never-crashes.test.js' };
+// The shared reading of find, rg, tree and file, through the suite that drives
+// the real hook with a quoted or escaped option, in Notes mode and Code mode.
+const QUOTED_OPTIONS_HOOK = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/quoted-options-hook.test.js' };
 // The mode-persisted-before-scaffold ordering guard lives in the protocol
 // handler, not the scaffold layer, and is reachable only through the real
 // workspace-open path (the scaffold-layer tests call scaffoldWorkspace
@@ -1109,6 +1112,82 @@ const MUTATIONS = [
   [HOOK, 'the hook counts every word written when a carriage return splits a sort or date line',
     '    if (splitAtReturn) reads = false;\n',
     ''],
+  // EVERY OPTION OF find, rg, tree AND file IS JUDGED AS THE SHELL HANDS IT
+  // OVER, as sort's and date's are. Judge one command's raw words again and its
+  // quoted or escaped writing or running option (`'-fprintf'`, `'--pre'`,
+  // `'-o'`, `'-C'`) is a read once more.
+  [READ_ONLY_CLIENT, 'find: judged on the words the shell hands it, never on the raw text',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (first === 'find') return OPTION_RULES.find(words.slice(1));\n"
+    + '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);'],
+  [READ_ONLY_CLIENT, 'rg: judged on the words the shell hands it, never on the raw text',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (first === 'rg') return OPTION_RULES.rg(words.slice(1));\n"
+    + '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);'],
+  [READ_ONLY_CLIENT, 'tree: judged on the words the shell hands it, never on the raw text',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (first === 'tree') return OPTION_RULES.tree(words.slice(1));\n"
+    + '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);'],
+  [READ_ONLY_CLIENT, 'file: judged on the words the shell hands it, never on the raw text',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (first === 'file') return OPTION_RULES.file(words.slice(1));\n"
+    + '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);'],
+  // A word whose reading the text does not show is not read. Take an unquoted
+  // `$` or a backtick for plain text and `rg $X sh x .` reads, though `$X` may
+  // be `--pre`.
+  [READ_ONLY_CLIENT, 'the word reader takes an unquoted $ for nothing it can read',
+    '  var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\\/:,=+%@~-]|[\\p{L}\\p{M}\\p{N}])$/u;',
+    '  var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\\/:,=+%@~$-]|[\\p{L}\\p{M}\\p{N}])$/u;'],
+  [READ_ONLY_CLIENT, 'the word reader takes an unquoted backtick for nothing it can read',
+    '  var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\\/:,=+%@~-]|[\\p{L}\\p{M}\\p{N}])$/u;',
+    '  var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\\/:,=+%@~`-]|[\\p{L}\\p{M}\\p{N}])$/u;'],
+  // Only a space or a tab ends a word. End one at any `\s` and a no-break
+  // space splits `-L<NBSP>2` into two words bash never sees.
+  [READ_ONLY_CLIENT, 'the word reader ends a word only at a space or a tab, never at any blank',
+    "      if (c === ' ' || c === '\\t') { if (inWord) words.push(word); word = ''; inWord = false; continue; }",
+    "      if (/\\s/.test(c)) { if (inWord) words.push(word); word = ''; inWord = false; continue; }"],
+  // COMMANDS SPLIT WHERE THE SHELL SPLITS THEM. Let a backslash before a quote
+  // open the quote again and `ls \"`, a new line, `cp a b` is one `ls`.
+  [READ_ONLY_CLIENT, 'the segmenter: a backslash before a quote opens no quote',
+    "      if (ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {",
+    "      if (ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && '\"\\''.indexOf(str[i + 1]) < 0 && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {"],
+  // A carriage return ends a segment here and nothing in bash. Look for one
+  // only on a sort or date line and `rg -e <CR>cat --pre sh x .` is two reads.
+  [READ_ONLY_CLIENT, 'a carriage return on a find, rg, tree or file line is not a read',
+    "    return str.indexOf('\\r') >= 0 && shellSegments(str).some(leadsJudgedOptions);",
+    "    return str.indexOf('\\r') >= 0 && shellSegments(str).some(function (s) { return /^(?:sort|date)\\b/.test(s); });"],
+  // getopt_long takes any unique start of a long name: `file --comp` compiles.
+  [READ_ONLY_CLIENT, 'a long option cut short is the option it names',
+    '        return o.indexOf(name) === 0 || (name.indexOf(o) === 0 && !/\\w/.test(name.charAt(o.length)));',
+    '        return name === o || (name.indexOf(o) === 0 && !/\\w/.test(name.charAt(o.length)));'],
+  // The same reading, where it frees a crossing in process: a quote left open
+  // and an escaped quote each keep the crossing of what the line writes.
+  [READ_ONLY, 'the boundary layer frees no crossing on a find, rg, tree or file line with a quote left open',
+    '    if (quote) return null;\n',
+    ''],
+  [READ_ONLY, 'the boundary layer sees each command after an escaped quote',
+    "      if (ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {",
+    "      if (ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && '\"\\''.indexOf(str[i + 1]) < 0 && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {"],
+  // The hook's own reading of the paths on a line honours the same
+  // backslashes: read `\"` as opening a quote and the path a copy writes on
+  // the next line is hidden inside it.
+  [HOOK, 'the hook reads the paths of a bash line with its backslashes, so an escaped quote hides none',
+    '  const re = new RegExp((posixEscapes ? POSIX_PATH_WORD : PATH_WORD).source, \'g\');',
+    '  const re = new RegExp(PATH_WORD.source, \'g\');'],
+  [HOOK, 'the hook reads the word after a backslash and a line break as a path of its own',
+    "const POSIX_PATH_WORD = /'([^']*)'|\"((?:[^\"\\\\]|\\\\[\\s\\S])*)\"|(?:[^\\s;|&<>()`'\"\\\\]|\\\\\\S)+/;",
+    "const POSIX_PATH_WORD = /'([^']*)'|\"((?:[^\"\\\\]|\\\\[\\s\\S])*)\"|(?:[^\\s;|&<>()`'\"\\\\]|\\\\[\\s\\S])+/;"],
+  [HOOK, 'the hook reads a find, rg, tree or file segment from its own text for what writes an answer file',
+    '    if (readsPart === isReadOnlyShellCommand && leadsJudgedOptions(seg)) reads = readsPart(seg);\n',
+    '    if (readsPart === isReadOnlyShellCommand && /^\\s*(?:sort|date)\\b/.test(seg)) reads = readsPart(seg);\n'],
+  // Through the real hook, in Notes mode and in Code mode.
+  [QUOTED_OPTIONS_HOOK, 'the real hook: a quoted find option keeps its crossing',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (first === 'find') return OPTION_RULES.find(words.slice(1));\n"
+    + '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);'],
+  [QUOTED_OPTIONS_HOOK, 'the real hook: a failure inside the reading of find, rg, tree or file frees nothing',
+    '    } catch (failed) {\n      return false;',
+    '    } catch (failed) {\n      return true;'],
   [SORT_DATE_HOOK, 'the real hook: a writing sort keeps its crossing',
     "    operandLetters: 'ktS',",
     "    operandLetters: 'ktSo',"],
