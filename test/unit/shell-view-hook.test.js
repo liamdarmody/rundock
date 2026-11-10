@@ -171,6 +171,7 @@ describe('through the real hook, a quote that opens nothing hides no copy over t
     const first = await judge(command, false);
     const again = await judge(command, false);
     assert.ok(first.payload && again.payload, 'both asked');
+    assert.ok(writesAt(first, settings).length > 0, `about the settings, as written: ${JSON.stringify(first.payload.crossings)}`);
     assert.deepStrictEqual(again.payload.crossings, first.payload.crossings, 'about the same place');
     assert.strictEqual(again.live.reason, first.live.reason, 'in the words of the first asking');
   });
