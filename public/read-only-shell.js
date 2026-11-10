@@ -563,6 +563,17 @@
     return first === 'sort' || first === 'date';
   }
 
+  // A CARRIAGE RETURN ENDS A SEGMENT HERE AND ENDS NOTHING IN BASH, which
+  // takes it as part of a word. So the words after one would be judged as a
+  // command of their own: `sort -t<CR>cat -o out in` is one sort, handed `-t`
+  // and then `-o out`, and it writes `out`. Whether the text holds one and a
+  // sort or a date: such a line is not a read, here and wherever else the
+  // hook reads its segments one by one.
+  function carriageReturnSplitsSortOrDate(text) {
+    var str = String(text);
+    return str.indexOf('\r') >= 0 && shellSegments(str).some(leadsSortOrDate);
+  }
+
   // Only text is read. Anything else is not a command this can judge, so it
   // is not a read, and turning it into text first could throw.
   function isReadOnlyShellCommand(command) {
@@ -570,13 +581,8 @@
     var str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');
     if (/>>?|\btee\b/.test(str)) return false;
     if (HIDES_SUBCOMMAND.test(str)) return false;
+    if (carriageReturnSplitsSortOrDate(str)) return false;
     var segments = shellSegments(str);
-    // A CARRIAGE RETURN ENDS A SEGMENT HERE AND ENDS NOTHING IN BASH, which
-    // takes it as part of a word. So the words after one would be judged as a
-    // command of their own: `sort -t<CR>cat -o out in` is one sort, handed
-    // `-t` and then `-o out`, and it writes `out`. A line holding one, with a
-    // sort or a date on it, is not a read.
-    if (str.indexOf('\r') >= 0 && segments.some(leadsSortOrDate)) return false;
     return segments.length > 0 && segments.every(segmentReads);
   }
 
@@ -742,9 +748,11 @@
   // them invites a second place to reason about membership, which is the
   // shape this module exists to remove. The seams are exported for the tests
   // that force a failure inside the PowerShell reading and inside the reading
-  // of sort's and date's options.
+  // of sort's and date's options. The carriage-return rule is exported for the
+  // hook, which reads a command's segments one by one for what they write, so
+  // that it asks the same rule rather than keeping a copy.
   return {
     DISCARDING_REDIRECT_RE, shellSegments, isReadOnlyShellCommand, isReadOnlyPowerShellCommand,
-    isDestructiveShellCommand, powerShellReadingSeam, optionReadingSeam,
+    isDestructiveShellCommand, powerShellReadingSeam, optionReadingSeam, carriageReturnSplitsSortOrDate,
   };
 }));

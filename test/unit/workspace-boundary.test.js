@@ -949,7 +949,10 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     assert.strictEqual(shell('sort .rundock/permissions.json'), null, 'a reading sort of it is freed');
     for (const command of ['sort -o .rundock/permissions.json x', 'sort -t\f -o .rundock/permissions.json x',
       'sort -t\v -o .rundock/permissions.json x', 'sort -t\u00a0 -o .rundock/permissions.json x',
-      'sort -k\f --output=.rundock/permissions.json x']) {
+      'sort -k\f --output=.rundock/permissions.json x',
+      // A carriage return ends a segment here and not in bash: the `cat` after
+      // it is not a command of its own, and the `-o` is sort's.
+      'sort -t\rcat -o .rundock/permissions.json x', 'date -r\rcat -s 2026-01-01 .rundock/permissions.json']) {
       assert.ok(answers(shell(command)), `a writing sort of the answer file keeps its crossing: ${JSON.stringify(command)}`);
     }
 

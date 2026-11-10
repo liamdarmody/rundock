@@ -1087,7 +1087,7 @@ const MUTATIONS = [
     '      if (NOT_A_WORD_BREAK.test(text)) return false;\n',
     ''],
   [READ_ONLY_CLIENT, 'sort and date: a carriage return on the line is not a read',
-    "    if (str.indexOf('\\r') >= 0 && segments.some(leadsSortOrDate)) return false;\n",
+    '    if (carriageReturnSplitsSortOrDate(str)) return false;\n',
     ''],
   // The same reading, where it frees a crossing: in process, through the real
   // hook, on the card, and when the reading fails inside the real hook.
