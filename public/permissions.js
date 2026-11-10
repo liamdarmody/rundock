@@ -112,11 +112,23 @@
     // command with no card at all while this grader stood ready to paint the
     // card it never drew as high risk.
     if (isDestructiveShellCommand(raw)) return 'high';
+    // A `(` INSIDE A WORD, OUTSIDE QUOTES, IS HIGH, SO NO SAVED ANSWER COVERS
+    // IT. zsh runs code written inside a file pattern as it expands the word
+    // (`ls *(e:'cmd':)`, `cat =(cmd)`, `ls x(+fn)`), and a saved answer is
+    // keyed on the leading command alone, so in Notes mode "Always allow ls"
+    // would otherwise cover that code. High risk cards ahead of every saved
+    // answer and never offers one (decidePermission, offersAlwaysAllow). The
+    // mark is the shared view's `wordParen`, the one Code mode's verdict always
+    // asks on, and a view that fails or cannot be read counts as marked.
+    if (hidesCodeInAWord(raw)) return 'high';
     // Command/process substitution used to be tested here and nowhere else,
     // which meant the hook exempted a crossing for text this grader would not
     // auto-allow. It is part of the shared definition of a read now.
     if (isReadOnlyShellCommand(raw)) return 'low';
     return 'medium';
+  }
+  function hidesCodeInAWord(raw) {
+    try { return RundockReadOnlyShell.shellView(raw).wordParen !== false; } catch (e) { return true; }
   }
 
   // A connector action that sends, replies or forwards is high risk for the

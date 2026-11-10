@@ -1690,3 +1690,120 @@ describe('a standing allow answers only what it was ever allowed to answer', () 
     assert.strictEqual(P.decidePermission('low', 'Bash:ls', new Set()).action, 'allow');
   });
 });
+
+// ── A ( inside a word: code zsh runs while it expands a file pattern ────────
+// zsh runs the code of a glob qualifier as it expands the word, so
+// `ls *(e:'cp x f':)` copies over f, whatever the word starts with. A saved
+// answer is keyed on the leading command, so in Notes mode "Always allow ls"
+// covered that code. Graded high, the line is carded ahead of every saved
+// answer and never offers one. Code mode already always asked (the shared
+// view's `wordParen`, which both modes now read).
+describe('a ( inside a word, outside quotes, is high in Notes mode, so no saved answer covers it', () => {
+  const S = require('../../public/read-only-shell.js');
+  const T = '~/.claude/settings.json';
+  const risk = (command) => P.classifyRisk('Bash', { command });
+  const keyOf = (command) => P.toolAllowKey('Bash', { command });
+  // As the window decides: the grade from classifyRisk, then the saved answers.
+  const decide = (command, saved) => P.decidePermission(risk(command), keyOf(command), new Set(saved));
+  const show = (cmd) => JSON.stringify(cmd.length > 100 ? cmd.slice(0, 100) + '...' : cmd);
+  const assertCardedUnderItsOwnKey = (command) => {
+    assert.strictEqual(risk(command), 'high', show(command));
+    assert.deepStrictEqual(decide(command, [keyOf(command)]), { action: 'card' }, `a saved ${keyOf(command)} covers ${show(command)}`);
+    assert.strictEqual(P.offersAlwaysAllow(risk(command)), false, `the card offers Always allow: ${show(command)}`);
+  };
+  // However the word starts.
+  const STARTS = [`ls *(e:'cp x ${T}':)`, `ls 'a'*(e:'cp x ${T}':)`, `ls \\a*(e:'cp x ${T}':)`, `ls "$PWD"/*(e:'cp x ${T}':)`,
+    `ls $PWD/*(e:'cp x ${T}':)`, `ls $'a'*(e:'cp x ${T}':)`];
+  // Wherever the word is.
+  const FORMS = [
+    ['inside $( )', `echo $(ls *(e:'cp x ${T}':))`],
+    ['inside $( ) in double quotes', `echo "$(ls *(e:'cp x ${T}':))"`],
+    ['inside backticks', `echo \`ls *(e:'cp x ${T}':)\``],
+    ['inside <( )', `cat <(ls *(e:'cp x ${T}':))`],
+    ['an array element', `a=(*(e:'cp x ${T}':))`],
+    ['an array element after another', `a=(x *(e:'cp x ${T}':))`],
+    ['an element added to an array', `a+=(*(e:'cp x ${T}':))`],
+    ["zsh's =( )", `cat =(cp x ${T})`],
+    ['a qualifier inside =( )', `cat =(ls *(e:'cp x ${T}':))`],
+    ['a qualifier written as +name', 'ls x(+cleanup)'],
+    ['a qualifier written as #q', `setopt extendedglob; ls *(#qe:'cp x ${T}':)`],
+    ['a qualifier in braces', `ls *(e{'cp x ${T}'})`],
+  ];
+  // What stays as it was at the merge before this change.
+  const KEPT = [
+    ['arr=(a b c)', 'medium'], ['echo "$(date)"', 'medium'], ['x=$(git rev-parse HEAD)', 'medium'],
+    ['grep -E "(a|b)" notes/a.md', 'low'], ['find . \\( -name a -o -name b \\)', 'low'], ['(cd src && ls)', 'medium'],
+    ['node -e "f()"', 'medium'], ['echo $((1+2))', 'medium'], ['diff <(ls a) <(ls b)', 'medium'],
+    ["git commit -m \"$(cat <<'EOF'\nRead the line (both readings)\n\nIt's quoted.\nEOF\n)\"", 'medium'], ['ls *.md', 'low'],
+  ];
+
+  test('a qualifier word that starts plainly, with a quote, a $ or a backslash is high, and a saved Bash:ls cards it', () => {
+    for (const command of STARTS) {
+      assert.strictEqual(keyOf(command), 'Bash:ls', show(command));
+      assertCardedUnderItsOwnKey(command);
+    }
+  });
+
+  test('so is one inside $( ), backticks or <( ), in an array element, in =( ), or written as +name or #q', () => {
+    for (const [what, command] of FORMS) {
+      assert.strictEqual(S.shellView(command).wordParen, true, `the view marks ${what}`);
+      assertCardedUnderItsOwnKey(command);
+    }
+  });
+
+  test('a line with a bracket that starts a word, or in quotes, keeps its grade, and a saved answer still covers it', () => {
+    for (const [command, grade] of KEPT) {
+      assert.strictEqual(risk(command), grade, show(command));
+      if (grade === 'medium') assert.deepStrictEqual(decide(command, [keyOf(command)]), { action: 'allow', reason: 'always-allowed' }, show(command));
+    }
+  });
+
+  test('a view that fails, nests deeper than it reads, or is missing grades the line high', () => {
+    const seam = S.shellViewSeam.beforeReading;
+    S.shellViewSeam.beforeReading = () => { throw new Error('forced failure'); };
+    try {
+      for (const command of [STARTS[1], 'ls', 'cat notes/todo.md']) assert.strictEqual(risk(command), 'high', `with the view failing: ${show(command)}`);
+    } finally {
+      S.shellViewSeam.beforeReading = seam;
+    }
+    assert.strictEqual(risk('ls'), 'low', 'with the view back, a listing reads');
+    let deep = `ls *(e:'cp x ${T}':)`;
+    for (let i = 0; i < 40; i++) deep = `echo $(${deep})`;
+    assert.strictEqual(risk(deep), 'high', 'a qualifier nested past what the view follows');
+    const ticked = 'echo ' + '$('.repeat(32) + `\`ls *(e:'cp x ${T}':)\`` + ')'.repeat(32);
+    assert.strictEqual(risk(ticked), 'high', 'a qualifier in backticks nested past what the view follows');
+    // The grader loaded beside a shared module with no view, as a page could
+    // be: nothing can be read, so the line is high.
+    const vm = require('node:vm');
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const page = { self: { RundockReadOnlyShell: { ...S, shellView: undefined } } };
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'permissions.js'), 'utf-8'), page);
+    assert.strictEqual(page.self.RundockPermissions.classifyRisk('Bash', { command: 'ls' }), 'high', 'with no view to ask');
+  });
+
+  // The sequences a person meets, as the window decides each request.
+  const LINE = STARTS[1];
+  test('with a saved Bash:ls, ls -la is still answered, and the qualifier line right after it is carded', () => {
+    assert.strictEqual(decide('ls -la', ['Bash:ls']).action, 'allow');
+    assert.deepStrictEqual(decide(LINE, ['Bash:ls']), { action: 'card' });
+  });
+
+  test('after the card is denied, the next listing still reads', () => {
+    assert.deepStrictEqual(decide(LINE, ['Bash:ls']), { action: 'card' });
+    assert.deepStrictEqual(decide('ls notes', ['Bash:ls']), { action: 'allow', reason: 'always-allowed' });
+    assert.deepStrictEqual(decide('ls notes', []), { action: 'allow', reason: 'low-risk' });
+  });
+
+  test('the same line sent twice is carded both times, with no Always allow either time', () => {
+    for (let i = 0; i < 2; i++) {
+      assert.deepStrictEqual(decide(LINE, ['Bash:ls']), { action: 'card' });
+      assert.strictEqual(P.offersAlwaysAllow(risk(LINE)), false);
+    }
+  });
+
+  test('the most common next steps: a wildcard listing and a search read, and a saved Bash:npm still covers npm test', () => {
+    for (const command of ['ls *.md', 'rg TODO notes/*.md']) assert.strictEqual(risk(command), 'low', command);
+    assert.deepStrictEqual(decide('npm test', ['Bash:npm']), { action: 'allow', reason: 'always-allowed' });
+  });
+});
