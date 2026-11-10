@@ -453,8 +453,9 @@
   // segment is not a read, and it asks.
   //
   // `asWrittenToo` (true for find, rg, tree and file, whose words are judged
-  // as written as well, below) follows one more thing those four always read:
-  // a `!` standing alone.
+  // as written as well, below) follows two more things those four always read:
+  // a `!` standing alone, and a wildcard that cannot start with a dash
+  // (globCannotStartWithDash).
   var OPTIONS_READ_LIMIT = 8192;
   // Unquoted, only these are plain text in bash and in zsh alike.
   var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\/:,=+%@~-]|[\p{L}\p{M}\p{N}])$/u;
@@ -466,6 +467,7 @@
     var words = [];
     var word = '';
     var inWord = false;
+    var first = '';
     var quote = '';
     for (var i = 0; i < text.length; i++) {
       var c = text[i];
@@ -478,6 +480,7 @@
         continue;
       }
       if (c === ' ' || c === '\t') { if (inWord) words.push(word); word = ''; inWord = false; continue; }
+      if (!inWord) first = c;
       inWord = true;
       if (c === "'" || c === '"') { quote = c; continue; }
       if (c === '\\') {
@@ -488,12 +491,27 @@
       // A `!` standing alone as a word, find's negation, is plain text to bash
       // and zsh anywhere after the command's own name.
       if (lenient && c === '!' && !word && /^[ \t]?$/.test(text.charAt(i + 1))) { word += c; continue; }
+      if (lenient && GLOB_CHAR.test(c) && globCannotStartWithDash(first)) { word += c; continue; }
       if (!PLAIN_WORD_CHAR.test(c)) return null;
       word += c;
     }
     if (quote) return null;
     if (inWord) words.push(word);
     return words;
+  }
+
+  // A WILDCARD THAT CANNOT START WITH A DASH. The shell swaps an unquoted word
+  // holding `*`, `?` or `[` for the names of the files it matches, and a name
+  // can begin with `-`, so `rg x *` may hand rg `--pre` if a file is named
+  // that. A word whose first character, as written, is a plain character
+  // other than `-` keeps that character in every name it expands to (`src/*.js`
+  // is `src/` and more, `./*` is `./` and more), so none of them is an option.
+  // Any other first character asks: a wildcard itself (`*.md`, `?pre*`), a
+  // bracket (`[-]*`), a quote or a backslash. One rule for find, rg, tree and
+  // file; a `$`, a backtick or an open quote anywhere still asks.
+  var GLOB_CHAR = /^[*?[\]]$/;
+  function globCannotStartWithDash(first) {
+    return first !== '-' && PLAIN_WORD_CHAR.test(first);
   }
 
   // A FAILURE INSIDE THIS READING IS AN ANSWER, as it is in the PowerShell

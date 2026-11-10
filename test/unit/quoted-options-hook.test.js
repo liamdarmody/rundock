@@ -166,7 +166,7 @@ describe('through the real hook, a quoted option crosses exactly as the unquoted
 
     test(`${mode}: the reading forms beside them are still freed`, async () => {
       for (const command of [`find ${hooks} -name '*.sh'`, `find ${hooks} -name "*.sh" -type f`, `rg 'two words' ${hooks}`,
-        `rg -n "x" ${hooks}`, `tree -L 2 ${hooks}`, `file ${settings}`, `ls '${hooks}'`]) {
+        `rg -n "x" ${hooks}`, `tree -L 2 ${hooks}`, `file ${settings}`, `ls '${hooks}'`, `rg 'TODO' ${hooks}/*.sh`]) {
         assertFreed(await runHook(command, { codeMode }), command);
       }
     });

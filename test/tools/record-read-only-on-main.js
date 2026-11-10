@@ -83,10 +83,13 @@ function placeholders() {
   return pairs.sort((a, b) => b[0].length - a[0].length);
 }
 // A folder made with mkdtemp ends in six random characters, and some name
-// the process that made them; both are written the same way every time.
+// the process that made them; both are written the same way every time. Every
+// folder the tests make sits under the temporary or the outside folder, so
+// each name there ending in a dash and six letters or digits is taken for one,
+// whatever case its letters happen to be.
 function steady(line) {
-  return line.replace(/(\/(?:repo|outside|temp|home\/user))((?:\/[^\s'"\\/;|&<>()`*?]+)+)/g, (all, root, rest) => root + rest
-    .split('/').map(c => c.replace(/-p\d+-[A-Za-z0-9]{6}$/, '-p0-XXXXXX').replace(/-(?=[A-Za-z0-9]{6}$)(?=[a-z]*[A-Z0-9])[A-Za-z0-9]{6}$/, '-XXXXXX')).join('/'));
+  return line.replace(/(\/(?:outside|temp))((?:\/[^\s'"\\/;|&<>()`*?]+)+)/g, (all, root, rest) => root + rest
+    .split('/').map(c => c.replace(/-p\d+-[A-Za-z0-9]{6}$/, '-p0-XXXXXX').replace(/-[A-Za-z0-9]{6}$/, '-XXXXXX')).join('/'));
 }
 function scrub(lines) {
   const pairs = placeholders();

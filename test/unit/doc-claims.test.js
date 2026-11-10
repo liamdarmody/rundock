@@ -1971,6 +1971,7 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'Commands split where the shell splits them',
       'Only a space, a tab and a newline separate words, as in bash',
       'a quoted writing option keeps its crossing as a write in Notes mode and in Code mode',
+      'A wildcard after a plain first character other than `-` still reads for `find`, `rg`, `tree` and `file`',
       '**Nothing the earlier reading asked about reads now.**',
       'a line reads only when both readings read it',
       'it reads the paths as written too, so no path it saw before is lost',
@@ -1989,13 +1990,14 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'a segment reads only when both readings say it reads',
       'SPLIT AS WRITTEN TOO, with each quote taken as written and a backslash as text',
       'A line reads only when every piece of both splits reads',
+      'A WILDCARD THAT CANNOT START WITH A DASH.',
     ]) assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
   });
 
   test('every spelling the page names asks, and the reads beside them read', () => {
     const ASKS = [["`'-fprintf'`", "find . -maxdepth 0 '-fprintf' out x"], ['`"--pre"`', 'rg "--pre" sh x .'], ['`\\-o`', 'tree \\-o out'],
       ["`-fpr'int'f`", "find . -fpr'int'f out x"], ['`file --comp` is `--compile`', 'file --comp -m x'], ['a `$`', 'rg $X x .'],
-      ['a backtick', 'tree `echo -o` out'], ["`$'…'`", "tree $'-o' out"], ['a glob', 'file *'], ['a brace', 'tree {-o,out}'],
+      ['a backtick', 'tree `echo -o` out'], ["`$'…'`", "tree $'-o' out"], ['a wildcard at the start of a word', 'file *'], ['a brace', 'tree {-o,out}'],
       ['a quote left open', "rg 'x ."], ['a backslash with nothing after it', 'tree -L 2 \\'], ['a control character', 'file x\u0001'],
       ['more than 8,192 characters', 'rg' + ' x'.repeat(4200)], ['`\\"` and `\\\'` open no quote', 'ls \\"\ncp a b\necho \\"'],
       ['a form feed', 'tree -L\f2'], ['a vertical tab', 'rg -n\vx .'], ['a no-break space', 'file -b\u00a0x'],
@@ -2005,7 +2007,7 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       assert.ok(passage.includes(named), `the page names ${named}`);
       assert.ok(asks(command), `${JSON.stringify(command.slice(0, 60))} asks`);
     }
-    for (const command of ["find . -name '*.md'", "rg 'two words' notes", 'tree -L 2', 'file notes.md', 'echo "a\nb"']) {
+    for (const command of ["find . -name '*.md'", "rg 'two words' notes", 'tree -L 2', 'file notes.md', 'echo "a\nb"', "rg 'TODO' notes/*.md"]) {
       assert.ok(reads(command), `${command} still reads`);
     }
   });

@@ -1111,7 +1111,8 @@ describe('options are judged as the shell reads them', () => {
       "rg $'--pre' sh x .", "find . $'-fprintf' out x", "tree $'-o' out", "file $'-C' -m x",
       // A quote left open, and a backslash with nothing after it.
       "rg '--pre sh x .", "find . -name 'x", 'tree "-o out', "file 'x", 'tree -L 2 \\', 'find . -name x \\',
-      // A glob, which can expand to any file's name, `-o` among them.
+      // A wildcard that starts the word, which can expand to any file's name,
+      // `-o` among them.
       'tree *', 'file *', 'rg x *', 'find . -name *.md',
       // Longer than the reading follows.
       long('rg -n'), long('find .'), long('tree'), long('file'),
@@ -1125,6 +1126,9 @@ describe('options are judged as the shell reads them', () => {
     assert.deepStrictEqual(S.shellWords(`'-o' "-o" \\-o -'o' ''-o`), ['-o', '-o', '-o', '-o', '-o'], 'and each spelling is the -o the program is given');
     assert.deepStrictEqual(S.shellWords('! -name x', true), ['!', '-name', 'x'], "find's negation standing alone is a word to find, rg, tree and file");
     assert.strictEqual(S.shellWords('! -name x'), null, 'and not read for sort or date, as it never was');
+    assert.deepStrictEqual(S.shellWords('src/*.js ./* a?c', true), ['src/*.js', './*', 'a?c'], 'a wildcard after a plain first character is a word to those four');
+    for (const text of ['*.md', '?pre*', '[-]*', "'a'*", '\\a*', '-*']) assert.strictEqual(S.shellWords(text, true), null, `read: ${show(text)}`);
+    assert.strictEqual(S.shellWords('src/*.js'), null, 'and no wildcard is read for sort or date, as none was');
     // Only a space or a tab ends a word: any other blank is not read at all.
     for (const b of ['\f', '\v', '\r', '\u00a0', '\u2000', '\u2005', '\u200a', '\u3000']) {
       assert.strictEqual(S.shellWords(`-L${b}2`), null, `read: ${show(`-L${b}2`)}`);
@@ -1166,6 +1170,18 @@ describe('options are judged as the shell reads them', () => {
     // string and the `;` after it ends the command: the `-Force` is on a
     // Set-Content, which is graded high.
     assert.strictEqual(P.classifyRisk('PowerShell', { command: 'Get-Item "C:\\x\\"; Set-Content y -Force' }), 'high');
+  });
+
+  // ── AC: a wildcard that cannot start with a dash still reads
+  test('a wildcard after a plain first character reads, and one that could start with a dash asks', () => {
+    for (const cmd of ['rg TODO src/*.js', 'rg x notes/*.md', 'rg TODO ./*', "find notes -name '*.md'", 'ls *.md',
+      "rg 'TODO' notes/*.md", 'tree notes/*', 'file notes/*.md', 'find notes/* -name x', 'rg x a?c', 'rg x notes/[ab].md']) {
+      assertReads(cmd);
+    }
+    for (const cmd of ['rg TODO *.md', 'find . -name *.md', 'rg x [-]*', 'rg x ?pre*', 'rg x {-a,b}', 'rg x -*',
+      "rg x 'notes'/*.md", 'rg x \\n*', 'rg x notes/$X*', 'rg x notes/`y`*', "rg x notes/*'", 'sort notes/*.txt']) {
+      assertAsks(cmd);
+    }
   });
 
   // ── AC: commands split where the shell splits them
@@ -1240,6 +1256,7 @@ describe('options are judged as the shell reads them', () => {
 
   test('the most common next step: a search with a quoted pattern, and a find listing, still read', () => {
     assertReads("rg 'TODO' notes");
+    assertReads("rg 'TODO' notes/*.md");
     assertReads("find . -name '*.md'");
     assertReads("rg 'TODO' notes | head -20 && find . -name '*.md' | sort");
   });
