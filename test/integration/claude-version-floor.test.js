@@ -45,10 +45,15 @@ after(async () => {
   await h.shutdown();
 });
 
-const notice = () => `Rundock found Claude Code 2.0.58 at ${stubBin}. Rundock needs 2.0.59 or later. `
-  + 'It looks for Claude Code in ~/.local/bin, ~/.claude/bin, /usr/local/bin and /opt/homebrew/bin, in that order. '
-  + 'Update that copy, or install a current one in a folder that comes before it. '
-  + 'The native installer puts it in ~/.local/bin. Then send your message again.';
+// What the floor says about the stub's copy, word for word, is held in
+// test/unit/claude-version-floor.test.js. The stub's path is in this checkout,
+// which can be long enough to be shortened in the notice, so each surface
+// here is held to the floor's own notice for that path: the notice arrives
+// whole, on every path, as the floor wrote it.
+const notice = () => require('../../lib/runtime/claude-floor.js').tooOldError('2.0.58', stubBin).message;
+const WHAT_TO_DO = 'The Rundock app looks for it in ~/.local/bin, ~/.claude/bin, /usr/local/bin and /opt/homebrew/bin first. '
+  + 'Update that copy, or install a current one with the native installer, which puts it in ~/.local/bin. '
+  + 'Then send your message again.';
 
 const isInfo = (convoId) => (m) => m.type === 'system' && m.subtype === 'info' && m._conversationId === convoId;
 const isDone = (convoId) => (m) => m.type === 'system' && m.subtype === 'done' && m._conversationId === convoId;
@@ -67,6 +72,8 @@ test('a new chat on a copy below the floor says which copy and what to do, start
   const seen = await sendAndSettle(firstConvo);
   const infos = seen.filter(isInfo(firstConvo));
   assert.deepStrictEqual(infos.map((m) => m.content), [notice()], 'the notice, once, in the conversation');
+  assert.ok(infos[0].content.startsWith('Rundock found Claude Code 2.0.58 at '), infos[0].content);
+  assert.ok(infos[0].content.endsWith(` Rundock needs 2.0.59 or later. ${WHAT_TO_DO}`), 'naming the folders and the two ways forward');
   assert.deepStrictEqual(h.readInvocations(), [], 'the stub was never handed the chat');
 });
 

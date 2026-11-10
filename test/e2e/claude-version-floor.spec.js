@@ -23,10 +23,16 @@ const { buildFixture } = require('./fixture.js');
 const ROOT = path.join(__dirname, '..', '..');
 const STUB_DIR = path.join(ROOT, 'test', 'helpers', 'stub-claude');
 const PORT = Number(process.env.E2E_PORT || 34517) + 2;
-const NOTICE = `Rundock found Claude Code 2.0.58 at ${path.join(STUB_DIR, 'claude')}. Rundock needs 2.0.59 or later. `
-  + 'It looks for Claude Code in ~/.local/bin, ~/.claude/bin, /usr/local/bin and /opt/homebrew/bin, in that order. '
-  + 'Update that copy, or install a current one in a folder that comes before it. '
-  + 'The native installer puts it in ~/.local/bin. Then send your message again.';
+// The floor's own notice for the stub's copy, as the server, with its own home
+// folder, writes it: the stub's path is in this checkout and can be long
+// enough to be shortened. Its words are held in the unit suite, and the part
+// after the path here.
+const notice = () => require('../../lib/runtime/claude-floor.js')
+  .tooOldError('2.0.58', path.join(STUB_DIR, 'claude'), { home: fixture.home }).message;
+const WHAT_TO_DO = 'Rundock needs 2.0.59 or later. '
+  + 'The Rundock app looks for it in ~/.local/bin, ~/.claude/bin, /usr/local/bin and /opt/homebrew/bin first. '
+  + 'Update that copy, or install a current one with the native installer, which puts it in ~/.local/bin. '
+  + 'Then send your message again.';
 
 let fixture = null;
 let server = null;
@@ -97,9 +103,10 @@ test.describe.serial('a Claude Code below the floor', () => {
     await page.evaluate(() => newConversation());
     await sendInOpenConversation('FLOOR-E2E-NEW hello');
 
-    const notice = page.locator('#messages .msg-system', { hasText: 'Rundock found Claude Code' });
-    await expect(notice).toHaveText(NOTICE);
-    await expect(notice).toHaveCount(1);
+    const shown = page.locator('#messages .msg-system', { hasText: 'Rundock found Claude Code' });
+    await expect(shown).toHaveText(notice());
+    await expect(shown).toContainText(WHAT_TO_DO);
+    await expect(shown).toHaveCount(1);
     await expect(page.locator('#thinking-indicator')).toHaveCount(0);
     await expect(page.locator('#send-btn')).not.toHaveClass(/\bcancel\b/);
     const chat = sent.find((m) => m.type === 'chat' && JSON.stringify(m).includes('FLOOR-E2E-NEW'));
@@ -111,9 +118,10 @@ test.describe.serial('a Claude Code below the floor', () => {
     await page.evaluate(() => openConversation('c1'));
     await sendInOpenConversation('FLOOR-E2E-RESUME hello again');
 
-    const notice = page.locator('#messages .msg-system', { hasText: 'Rundock found Claude Code' });
-    await expect(notice).toHaveText(NOTICE);
-    await expect(notice).toHaveCount(1);
+    const shown = page.locator('#messages .msg-system', { hasText: 'Rundock found Claude Code' });
+    await expect(shown).toHaveText(notice());
+    await expect(shown).toContainText(WHAT_TO_DO);
+    await expect(shown).toHaveCount(1);
     await expect(page.locator('#thinking-indicator')).toHaveCount(0);
     await expect(page.locator('#send-btn')).not.toHaveClass(/\bcancel\b/);
     const chat = sent.find((m) => m.type === 'chat' && JSON.stringify(m).includes('FLOOR-E2E-RESUME'));
