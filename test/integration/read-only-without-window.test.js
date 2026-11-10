@@ -141,6 +141,8 @@ function events() {
     .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
 }
 const readOnlyEvents = (conv) => events().filter((e) => e.e === 'permission' && e.conv === conv && e.d && e.d.reason === 'read-only');
+// A routine's request has no conversation, so its events carry none.
+const routineReadOnlyEvents = () => readOnlyEvents(undefined);
 
 // ROUTINE RUNS, started the way the scheduler starts every run.
 const runsDir = () => path.join(h.workspaceDir, '.rundock', 'runs');
@@ -196,6 +198,9 @@ describe('a low-risk read is answered by the server, with no window', () => {
 
   test('a routine run\'s reads are answered at once, through the real hook, and its record counts none of them', async () => {
     await noWindow();
+    // Tests in this file run one after another, so every routine event
+    // recorded from here to the end of the run is this run's.
+    const before = routineReadOnlyEvents().length;
     const run = startRoutine({ hooks: REPORTED_READS.map((command) => ({ tool: 'Bash', input: { command } })) });
     const record = await finished(run);
     assert.strictEqual(record.status, 'succeeded', JSON.stringify(record));
@@ -209,6 +214,13 @@ describe('a low-risk read is answered by the server, with no window', () => {
     assert.strictEqual(record.refusedCards, undefined, 'the run\'s record counts no refused card');
     assert.strictEqual(linesFor(run.name).length, REPORTED_READS.length, 'the server log names the routine for each read it answered');
     assert.ok(linesFor(run.name).every((l) => l.includes(`run=${record.id}`)), 'and the run');
+    // One permission event for each read the run made, an allow for the
+    // read-only reason, and no more once the run has ended.
+    assert.ok(await h.waitUntil(() => routineReadOnlyEvents().length - before >= REPORTED_READS.length, { timeout: 3000 }), 'the events are written');
+    await h.delay(200);
+    const recorded = routineReadOnlyEvents().slice(before);
+    assert.strictEqual(recorded.length, REPORTED_READS.length, `one event for each read: ${JSON.stringify(recorded)}`);
+    for (const e of recorded) assert.deepStrictEqual(e.d, { tool: 'Bash', decision: 'allow', reason: 'read-only' });
   });
 });
 
