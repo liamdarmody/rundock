@@ -116,6 +116,16 @@ function assertWords(r, unattended) {
     `${unattended ? 'a routine is' : 'a conversation is not'} told what to do next unattended: ${r.reason}`);
 }
 
+// A NOTES-MODE WRITE OF A NOTE IN THE WORKSPACE, as the hook has always
+// judged one, and as it judges one on main: allowed as in-workspace file
+// access, with nothing asked of Rundock.
+function assertNoteWriteAllowed(r) {
+  assert.strictEqual(r.status, 0, r.err);
+  assert.strictEqual(r.decision, 'allow', 'the Write of a note in the workspace is allowed');
+  assert.strictEqual(r.reason, 'In-workspace file access', 'as in-workspace file access');
+  assert.strictEqual(r.card, null, 'and Rundock is not asked');
+}
+
 // The writing forms, each beside the reading twin that differs from it only
 // by the option that writes, runs a program or sets the clock.
 const PAIRS = [
@@ -184,15 +194,13 @@ describe('through the real hook, sort and date under the runtime home are freed 
       const note = path.join(ws, 'notes', 'yesterday.md');
       assertFreed(await bash(listing, { env }), listing);
       assertFreed(await bash(`cat ${note}`, { env }), 'the cat of the note');
-      // The Write is judged as any Notes-mode write is: the same answer as the
-      // same Write asked with nothing before it.
-      const write = { file_path: note, content: '- one\n- two\n- three\n' };
-      const after = await runHook('Write', write, { env });
-      const alone = await runHook('Write', write, { env });
-      assert.strictEqual(after.status, 0, after.err);
-      assert.strictEqual(after.decision, alone.decision, 'the Write gets the answer it gets on its own');
-      assert.strictEqual(after.reason, alone.reason, 'in the same words');
-      assert.strictEqual(!!after.card, !!alone.card, 'and asks Rundock exactly when it would on its own');
+      // The Write is judged as any Notes-mode write of a note is.
+      assertNoteWriteAllowed(await runHook('Write', { file_path: note, content: '- one\n- two\n- three\n' }, { env }));
+    });
+
+    test(`${who}: a Write of a note on its own gets that verdict`, async () => {
+      const note = path.join(ws, 'notes', 'yesterday.md');
+      assertNoteWriteAllowed(await runHook('Write', { file_path: note, content: '- one\n- two\n- three\n' }, { env }));
     });
 
     test(`${who}: a failure forced inside the shared definition asks, and never frees`, async () => {

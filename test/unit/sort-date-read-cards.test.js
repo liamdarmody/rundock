@@ -67,6 +67,19 @@ const ranWithNoCard = (id) => !cardOf(id) && sent.some(m => m.type === 'permissi
 
 const WHERE = ['conversation', 'routine'];
 
+// A NOTES-MODE WRITE OF A NOTE, as the card code has always judged one, and as
+// it judges one on main: a card that offers Allow, Always allow and Deny, with
+// nothing answered on the person's behalf.
+const NOTE_WRITE = { file_path: 'notes/yesterday.md', content: '- one\n- two\n' };
+function assertNoteWriteCarded(id, where) {
+  const card = cardOf(id);
+  assert.ok(card, `the Write of a note is carded in a ${where}`);
+  assert.deepStrictEqual([...card.querySelectorAll('[data-perm-action]')].map(b => b.dataset.permAction), ['allow', 'always', 'deny'],
+    'with Allow, Always allow and Deny');
+  assert.match(wordsOf(id), /Create a file notes\/yesterday\.md/, 'naming the file');
+  assert.ok(!sent.some(m => m.requestId === id), 'and nothing is answered on the person\'s behalf');
+}
+
 // Each writing form beside the reading twin that differs from it only by the
 // option that writes, runs a program or sets the clock.
 const PAIRS = [
@@ -124,14 +137,12 @@ describe('what the person answers does not carry over', () => {
     test(`in a ${where}: the listing, then cat of the note it found, then a Write of the cleaned note`, () => {
       assert.ok(ranWithNoCard(bash(LISTING, where)), 'the listing runs with no card');
       assert.ok(ranWithNoCard(bash('cat notes/yesterday.md', where)), 'and so does the cat');
-      // The Write is judged as any Notes-mode write is: exactly as the same
-      // Write asked with nothing before it.
-      const input = { file_path: 'notes/yesterday.md', content: '- one\n- two\n' };
-      const after = ask('Write', input, where);
-      const alone = ask('Write', input, where);
-      assert.strictEqual(!!cardOf(after), !!cardOf(alone), 'carded exactly when it is on its own');
-      assert.strictEqual(ranWithNoCard(after), ranWithNoCard(alone), 'and allowed exactly when it is on its own');
-      if (cardOf(alone)) assert.strictEqual(wordsOf(after), wordsOf(alone), 'in the same words');
+      // The Write is judged as any Notes-mode write of a note is.
+      assertNoteWriteCarded(ask('Write', NOTE_WRITE, where), where);
+    });
+
+    test(`in a ${where}: a Write of a note on its own gets that verdict`, () => {
+      assertNoteWriteCarded(ask('Write', NOTE_WRITE, where), where);
     });
   }
 });
