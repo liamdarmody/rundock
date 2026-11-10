@@ -904,6 +904,46 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     assert.strictEqual(secretRead.crossings[0].secret, true, 'a read-only command touching the credential file still cards');
   });
 
+  // THE SAME DEFINITION FREES THE CROSSING. A word the shared definition reads
+  // frees a persistence surface under the runtime's own home exactly as `cat`
+  // does, so `sort` and `date` are freed only in the forms that read, and a
+  // writing form keeps its crossing as a write.
+  test('a reading sort or date of a persistence surface is freed as cat and stat of it are, and a writing sort is not', () => {
+    const home = tmp('af-sort-date-home-');
+    const hooks = path.join(home, '.claude', 'hooks');
+    fs.mkdirSync(hooks, { recursive: true });
+    const script = path.join(hooks, 'pretool.sh');
+    const settings = path.join(home, '.claude', 'settings.json');
+    fs.writeFileSync(script, '');
+    fs.writeFileSync(settings, '{}');
+    const credentials = path.join(home, '.claude', '.credentials.json');
+    fs.writeFileSync(credentials, '{}');
+    const ws = tmp('af-sort-date-ws-');
+    const shell = (command) => hook.classifyShellAccess('Bash', { command }, ws, [], home);
+    const writesSurface = (r) => !!r && r.crossings.some(c => c.persistenceSurface && c.write);
+
+    for (const target of [script, settings]) {
+      for (const command of [`cat ${target}`, `stat ${target}`]) {
+        assert.strictEqual(shell(command), null, `the comparison: ${command}`);
+      }
+      for (const command of [`sort ${target}`, `sort -u ${target}`, `sort -t, -k2,2n ${target}`, `cat ${target} | sort`,
+        `ls ${hooks} | sort`, `date -r ${target}`, `date -r ${target} +%s`, `stat ${target} && date`]) {
+        assert.strictEqual(shell(command), null, `freed as cat and stat are: ${command}`);
+      }
+      for (const command of [`sort -o ${target} x`, `sort -uo ${target} x`, `sort -T ${hooks} ${target}`,
+        `sort --compress-program=sh ${target}`, `ls ${hooks} | sort -o ${target}`, `sort '-o' ${target} x`]) {
+        assert.ok(writesSurface(shell(command)), `a writing form keeps its crossing as a write: ${command}`);
+      }
+    }
+
+    // The secrets tier is not re-graded by any of this: a reading sort of the
+    // credential file cards, as cat of it does.
+    for (const command of [`cat ${credentials}`, `sort ${credentials}`, `sort -u ${credentials}`, `date -r ${credentials}`]) {
+      const r = shell(command);
+      assert.ok(r && r.crossings.some(c => c.secret), `the credential file still cards: ${command}`);
+    }
+  });
+
   test('a PowerShell read is a read: the registry is not Unix-only', () => {
     // MEASURED ON WINDOWS. Asked to list the global agents and skills, the
     // agent ran Get-ChildItem and was shown "this reaches more than one place
