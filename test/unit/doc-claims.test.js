@@ -1955,7 +1955,7 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
   // saying it after the code stops doing it.
   const shell = require('../../public/read-only-shell.js');
   const P = require('../../public/permissions.js');
-  const LEAD = '**An option is judged as the shell hands it to the program, so quoting or escaping it changes nothing.**';
+  const LEAD = '**An option is judged as the shell hands it to the program, so quoting or escaping an option that writes or runs never makes it a read.**';
   const at = architecture.indexOf(LEAD);
   const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
   const sharedSrc = fs.readFileSync(path.join(ROOT, 'public', 'read-only-shell.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
@@ -1971,6 +1971,9 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'Commands split where the shell splits them',
       'Only a space, a tab and a newline separate words, as in bash',
       'a quoted writing option keeps its crossing as a write in Notes mode and in Code mode',
+      '**Nothing the earlier reading asked about reads now.**',
+      'a line reads only when both readings read it',
+      'it reads the paths as written too, so no path it saw before is lost',
     ]) assert.ok(passage.includes(said), `the page says: ${said}`);
   });
 
@@ -1982,6 +1985,10 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'A line whose words the text alone does not show is not a read, so it asks.',
       'WHETHER A WORD IS ONE OF THESE OPTIONS, judged as the shell hands the word over',
       'A BACKSLASH OUTSIDE SINGLE QUOTES TAKES THE NEXT CHARACTER WITH IT',
+      'READ BOTH WAYS. find, rg, tree and file were judged on their words as written',
+      'a segment reads only when both readings say it reads',
+      'SPLIT AS WRITTEN TOO, with each quote taken as written and a backslash as text',
+      'A line reads only when every piece of both splits reads',
     ]) assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
   });
 
@@ -1992,7 +1999,8 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       ['a quote left open', "rg 'x ."], ['a backslash with nothing after it', 'tree -L 2 \\'], ['a control character', 'file x\u0001'],
       ['more than 8,192 characters', 'rg' + ' x'.repeat(4200)], ['`\\"` and `\\\'` open no quote', 'ls \\"\ncp a b\necho \\"'],
       ['a form feed', 'tree -L\f2'], ['a vertical tab', 'rg -n\vx .'], ['a no-break space', 'file -b\u00a0x'],
-      ['a carriage return on its line', 'rg -e \rcat --pre sh x .']];
+      ['a carriage return on its line', 'rg -e \rcat --pre sh x .'], ['`rg "x --pre" .`', 'rg "x --pre" .'],
+      ["`find . -na'me' x`", "find . -na'me' x"], ['`grep "a\\"; rm x" f`', 'grep "a\\"; rm x" f']];
     for (const [named, command] of ASKS) {
       assert.ok(passage.includes(named), `the page names ${named}`);
       assert.ok(asks(command), `${JSON.stringify(command.slice(0, 60))} asks`);
@@ -2003,7 +2011,8 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
   });
 
   test('the tests the page names exist', () => {
-    for (const file of ['test/unit/permissions.test.js', 'test/unit/quoted-options-hook.test.js', 'test/unit/hook-never-crashes.test.js']) {
+    for (const file of ['test/unit/permissions.test.js', 'test/unit/quoted-options-hook.test.js', 'test/unit/hook-never-crashes.test.js',
+      'test/unit/read-only-on-main.test.js', 'test/tools/record-read-only-on-main.js']) {
       assert.ok(passage.includes(`\`${file}\``), `the page names ${file}`);
       assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} exists`);
     }

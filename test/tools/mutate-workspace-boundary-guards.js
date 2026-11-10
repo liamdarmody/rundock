@@ -1149,13 +1149,13 @@ const MUTATIONS = [
   // COMMANDS SPLIT WHERE THE SHELL SPLITS THEM. Let a backslash before a quote
   // open the quote again and `ls \"`, a new line, `cp a b` is one `ls`.
   [READ_ONLY_CLIENT, 'the segmenter: a backslash before a quote opens no quote',
-    "      if (ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {",
-    "      if (ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && '\"\\''.indexOf(str[i + 1]) < 0 && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {"],
+    "      if (shellReading && ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {",
+    "      if (shellReading && ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && '\"\\''.indexOf(str[i + 1]) < 0 && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {"],
   // A carriage return ends a segment here and nothing in bash. Look for one
   // only on a sort or date line and `rg -e <CR>cat --pre sh x .` is two reads.
   [READ_ONLY_CLIENT, 'a carriage return on a find, rg, tree or file line is not a read',
-    "    return str.indexOf('\\r') >= 0 && shellSegments(str).some(leadsJudgedOptions);",
-    "    return str.indexOf('\\r') >= 0 && shellSegments(str).some(function (s) { return /^(?:sort|date)\\b/.test(s); });"],
+    "    return str.indexOf('\\r') >= 0 && shellSplits(str).some(leadsJudgedOptions);",
+    "    return str.indexOf('\\r') >= 0 && shellSplits(str).some(function (s) { return /^(?:sort|date)\\b/.test(s); });"],
   // getopt_long takes any unique start of a long name: `file --comp` compiles.
   [READ_ONLY_CLIENT, 'a long option cut short is the option it names',
     '        return o.indexOf(name) === 0 || (name.indexOf(o) === 0 && !/\\w/.test(name.charAt(o.length)));',
@@ -1166,13 +1166,13 @@ const MUTATIONS = [
     '    if (quote) return null;\n',
     ''],
   [READ_ONLY, 'the boundary layer sees each command after an escaped quote',
-    "      if (ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {",
-    "      if (ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && '\"\\''.indexOf(str[i + 1]) < 0 && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {"],
-  // The hook's own reading of the paths on a line honours the same
+    "      if (shellReading && ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {",
+    "      if (shellReading && ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && '\"\\''.indexOf(str[i + 1]) < 0 && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {"],
+  // The hook's own reading of the paths on a line honors the same
   // backslashes: read `\"` as opening a quote and the path a copy writes on
   // the next line is hidden inside it.
   [HOOK, 'the hook reads the paths of a bash line with its backslashes, so an escaped quote hides none',
-    '  const re = new RegExp((posixEscapes ? POSIX_PATH_WORD : PATH_WORD).source, \'g\');',
+    '  const re = new RegExp((posixEscapes && !asWritten ? POSIX_PATH_WORD : PATH_WORD).source, \'g\');',
     '  const re = new RegExp(PATH_WORD.source, \'g\');'],
   [HOOK, 'the hook reads the word after a backslash and a line break as a path of its own',
     "const POSIX_PATH_WORD = /'([^']*)'|\"((?:[^\"\\\\]|\\\\[\\s\\S])*)\"|(?:[^\\s;|&<>()`'\"\\\\]|\\\\\\S)+/;",

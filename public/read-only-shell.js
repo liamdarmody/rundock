@@ -210,14 +210,21 @@
   // where bash does not only ever asks more: each piece must read on its own,
   // and the piece the backslash ends is not read where options are judged,
   // because shellWords leaves a trailing backslash unread.
-  function shellSegments(command) {
+  //
+  // `asWritten` (true) splits the line as it is written instead, every quote
+  // taken as written and a backslash as text, which is how every line was
+  // split before. Every reading here asks both splits (shellSplits): a line
+  // reads only when it reads in each, and a check that looks for a segment
+  // that writes or destroys looks in each.
+  function shellSegments(command, asWritten) {
+    var shellReading = asWritten !== true;
     var segments = [];
     var cur = '';
     var quote = null;
     var str = String(command);
     for (var i = 0; i < str.length; i++) {
       var ch = str[i];
-      if (ch === '\\' && quote !== "'" && i + 1 < str.length && (quote || ';|&\n\r'.indexOf(str[i + 1]) < 0)) {
+      if (shellReading && ch === '\\' && quote !== "'" && i + 1 < str.length && (quote || ';|&\n\r'.indexOf(str[i + 1]) < 0)) {
         cur += ch + str[++i];
         continue;
       }
@@ -237,6 +244,14 @@
     }
     segments.push(cur);
     return segments.map(function (seg) { return seg.trim(); });
+  }
+  // The segments of both splits, the shell's first. They differ only after a
+  // backslash before a quote or a separator, so a line without one is split
+  // once.
+  function shellSplits(command) {
+    var str = String(command);
+    var asShellReads = shellSegments(str);
+    return /\\['";|&\n\r]/.test(str) ? asShellReads.concat(shellSegments(str, true)) : asShellReads;
   }
 
   // The command name without the directory it was reached through, so
@@ -436,10 +451,15 @@
   // control character, and text longer than this reading follows. Each can
   // hand the program a word the text does not show, `-o` among them, so the
   // segment is not a read, and it asks.
+  //
+  // `asWrittenToo` (true for find, rg, tree and file, whose words are judged
+  // as written as well, below) follows one more thing those four always read:
+  // a `!` standing alone.
   var OPTIONS_READ_LIMIT = 8192;
   // Unquoted, only these are plain text in bash and in zsh alike.
   var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\/:,=+%@~-]|[\p{L}\p{M}\p{N}])$/u;
-  function shellWords(text) {
+  function shellWords(text, asWrittenToo) {
+    var lenient = asWrittenToo === true;
     // UNREADABLE is the PowerShell reading's test, below: a control character,
     // a replacement character, or half a surrogate pair.
     if (text.length > OPTIONS_READ_LIMIT || UNREADABLE.test(text)) return null;
@@ -467,7 +487,7 @@
       }
       // A `!` standing alone as a word, find's negation, is plain text to bash
       // and zsh anywhere after the command's own name.
-      if (c === '!' && !word && /^[ \t]?$/.test(text.charAt(i + 1))) { word += c; continue; }
+      if (lenient && c === '!' && !word && /^[ \t]?$/.test(text.charAt(i + 1))) { word += c; continue; }
       if (!PLAIN_WORD_CHAR.test(c)) return null;
       word += c;
     }
@@ -502,6 +522,20 @@
     return text.slice(i);
   }
 
+  // READ BOTH WAYS. find, rg, tree and file were judged on their words as
+  // written, split at blanks with quotes and backslashes left in, and they
+  // still are, as well as on the words the shell hands them: a segment reads
+  // only when both readings say it reads. The shell's reading finds an option
+  // the text hides (`'-o'`, `\-o`); the written one keeps asking wherever it
+  // always asked, at option-like text inside a quoted operand (`find . -name
+  // 'a -delete'`, `rg "x --pre" .`) or an option split across quotes where
+  // its list does not hold the pieces (`find . -na'me' x`). So no segment of
+  // these reads that did not read before.
+  var AS_WRITTEN_TOO = ['find', 'rg', 'tree', 'file'];
+  function wordsAsWritten(text, skip) {
+    return String(text).split(/\s+/).filter(Boolean).slice(skip);
+  }
+
   // One command whose options are judged (OPTION_RULES below), judged from the
   // segment's own text, never from words split some other way: the words the
   // shell hands the program after the first `skip` (any keyword before the
@@ -512,9 +546,11 @@
       optionReadingSeam.beforeReading(command);
       var text = String(segment);
       if (NOT_A_WORD_BREAK.test(text)) return false;
-      var words = shellWords(textAfterWords(text, skip));
+      var asWrittenToo = AS_WRITTEN_TOO.indexOf(command) >= 0;
+      var words = shellWords(textAfterWords(text, skip), asWrittenToo);
       if (!words) return false;
-      return OPTION_RULES[command](words) === true;
+      if (OPTION_RULES[command](words) !== true) return false;
+      return !asWrittenToo || OPTION_RULES[command](wordsAsWritten(text, skip)) === true;
     } catch (failed) {
       return false;
     }
@@ -649,7 +685,7 @@
   // hook reads its segments one by one.
   function carriageReturnSplitsJudgedOptions(text) {
     var str = String(text);
-    return str.indexOf('\r') >= 0 && shellSegments(str).some(leadsJudgedOptions);
+    return str.indexOf('\r') >= 0 && shellSplits(str).some(leadsJudgedOptions);
   }
 
   // Only text is read. Anything else is not a command this can judge, so it
@@ -660,7 +696,14 @@
     if (/>>?|\btee\b/.test(str)) return false;
     if (HIDES_SUBCOMMAND.test(str)) return false;
     if (carriageReturnSplitsJudgedOptions(str)) return false;
-    var segments = shellSegments(str);
+    // SPLIT AS WRITTEN TOO, with each quote taken as written and a backslash
+    // as text, as every line was split before, as well as the way the shell
+    // splits it. The two differ only after a backslash before a quote or a
+    // separator: as written, an escaped quote opens a quote, and inside double
+    // quotes `\"` closes one. A line reads only when every piece of both splits
+    // reads, so `grep "a\"; rm x" f`, split as written at its `;`, asks as it
+    // always has.
+    var segments = shellSplits(str);
     return segments.length > 0 && segments.every(segmentReads);
   }
 
@@ -805,7 +848,8 @@
     // now on inherits, Rundock included, or start one under launchd, so they
     // are graded like an irreversible act, wherever they sit in the line.
     if (/\blaunchctl\s+(setenv|unsetenv|load|bootstrap|submit|config)\b/i.test(cmd)) return true;
-    var segments = shellSegments(cmd);
+    // Both splits, so a segment that leads with a delete in either is one.
+    var segments = shellSplits(cmd);
     for (var i = 0; i < segments.length; i++) {
       if (DESTRUCTIVE_LEADING.test(segments[i].trim())) return true;
       if (launchctlUnspelled(segments[i])) return true;
@@ -846,7 +890,7 @@
   // reads a command's segments one by one for what they write, so that it
   // asks the same rules rather than keeping copies.
   return {
-    DISCARDING_REDIRECT_RE, shellSegments, isReadOnlyShellCommand, isReadOnlyPowerShellCommand,
+    DISCARDING_REDIRECT_RE, shellSegments, shellSplits, isReadOnlyShellCommand, isReadOnlyPowerShellCommand,
     isDestructiveShellCommand, powerShellReadingSeam, optionReadingSeam, carriageReturnSplitsJudgedOptions,
     leadsJudgedOptions, shellWords, namedOptions,
   };

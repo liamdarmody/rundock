@@ -1023,6 +1023,25 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     }
   });
 
+  test('a line is read both as the shell reads it and as written, so no answer-file crossing found as written is lost', () => {
+    // The two readings differ only after a backslash before a quote. Each line
+    // here leaves a quote open, so bash refuses it, and the hook still reports
+    // what the line names as written: the path after `"\"`, and the copy past
+    // the `;` that the shell's reading puts inside the quote.
+    const home = tmp('af-both-home-');
+    const ws = tmp('af-both-ws-');
+    fs.mkdirSync(path.join(ws, '.rundock'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.rundock', 'permissions.json'), '{}');
+    fs.mkdirSync(path.join(ws, 'backup'), { recursive: true });
+    fs.writeFileSync(path.join(ws, 'backup', '.mcp.json'), '{}');
+    const answerFiles = (command) => {
+      const r = hook.classifyShellAccess('Bash', { command }, ws, [], home);
+      return r ? r.crossings.filter(c => c.answerFile).map(c => path.relative(fs.realpathSync(ws), c.path)) : [];
+    };
+    assert.deepStrictEqual(answerFiles('cp x "\\".rundock/permissions.json'), [path.join('.rundock', 'permissions.json')]);
+    assert.deepStrictEqual(answerFiles('grep "a\\"; cp backup/.mcp.json .'), ['.mcp.json']);
+  });
+
   test('a PowerShell read is a read: the registry is not Unix-only', () => {
     // MEASURED ON WINDOWS. Asked to list the global agents and skills, the
     // agent ran Get-ChildItem and was shown "this reaches more than one place

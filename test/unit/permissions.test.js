@@ -966,6 +966,41 @@ describe('options are judged as the shell reads them', () => {
   // Read through the module's own export inside each test, so a module that
   // lacks it fails those tests one by one and every other test still runs.
   const named = () => S.namedOptions();
+  // Main's verdict on each line, as test/tools/record-read-only-on-main.js
+  // recorded it (test/fixtures/read-only-on-main.json), read when first asked.
+  // The recorder runs this file to learn which lines it judges, before the
+  // recording exists, so a missing recording is no verdict rather than a
+  // throw, and every line is judged before any is checked.
+  let mainVerdicts = null;
+  const readsOnMain = (cmd) => {
+    if (!mainVerdicts) {
+      try {
+        mainVerdicts = new Map(require('../fixtures/read-only-on-main.json').lines.map(([c, r]) => [c, r]));
+      } catch (notRecorded) {
+        mainVerdicts = new Map();
+      }
+    }
+    return mainVerdicts.get(cmd);
+  };
+  // A READING OPTION, QUOTED OR SPLIT, READS WHERE MAIN READ IT AND ASKS WHERE
+  // MAIN ASKED: `find . -na'me' x` asks, as it always has, though the shell
+  // hands find `-name`. Each plain line reads. A spelling the recording lacks
+  // fails by name.
+  function assertReadsWhereMainRead(cases) {
+    assert.ok(cases.length > 0, 'the module names options to ask about');
+    const judged = [];
+    for (const [before, word, after] of cases) {
+      const line = (w) => [before, w, after].filter(Boolean).join(' ');
+      judged.push([line(word), reads(line(word)), true]);
+      for (const spelled of spellings(word)) judged.push([line(spelled), reads(line(spelled)), false]);
+    }
+    for (const [cmd, got, plain] of judged) {
+      if (plain) { assert.strictEqual(got, true, `the plain line reads: ${cmd}`); continue; }
+      const main = readsOnMain(cmd);
+      assert.strictEqual(typeof main, 'boolean', `main's verdict on ${cmd} is recorded`);
+      assert.strictEqual(got, main, `${cmd} ${main ? 'reads, as it did' : 'asks, as it did'} on main`);
+    }
+  }
 
   test("namedOptions is a copy: changing it changes nothing the module reads", () => {
     const first = S.namedOptions();
@@ -977,15 +1012,15 @@ describe('options are judged as the shell reads them', () => {
     assert.deepStrictEqual(S.namedOptions(), first, 'a fresh copy is the same as the first');
   });
 
-  test("quoting never changes the verdict: find's reading flags", () => {
+  test("quoting a reading flag of find reads where main read it, and asks where main asked", () => {
     const newer = new RegExp(named().find.newerFamily.source, named().find.newerFamily.flags);
     const family = ['-newer'];
     for (const x of 'aBcmt') for (const y of 'aBcmt') family.push(`-newer${x}${y}`);
     assert.ok(family.every(f => newer.test(f)), 'every -newerXY name is one the module reads');
-    assertSameVerdict([
+    assertReadsWhereMainRead([
       ...named().find.noOperand.map(f => ['find .', f, '']),
       ...named().find.oneOperand.concat(family).map(f => ['find .', f, 'x']),
-    ], () => true);
+    ]);
   });
 
   test("quoting never changes the verdict: find's writing and running actions", () => {
@@ -1088,7 +1123,8 @@ describe('options are judged as the shell reads them', () => {
       assert.strictEqual(S.shellWords(text), null, `read: ${show(text)}`);
     }
     assert.deepStrictEqual(S.shellWords(`'-o' "-o" \\-o -'o' ''-o`), ['-o', '-o', '-o', '-o', '-o'], 'and each spelling is the -o the program is given');
-    assert.deepStrictEqual(S.shellWords('! -name x'), ['!', '-name', 'x'], "find's negation standing alone is a word");
+    assert.deepStrictEqual(S.shellWords('! -name x', true), ['!', '-name', 'x'], "find's negation standing alone is a word to find, rg, tree and file");
+    assert.strictEqual(S.shellWords('! -name x'), null, 'and not read for sort or date, as it never was');
     // Only a space or a tab ends a word: any other blank is not read at all.
     for (const b of ['\f', '\v', '\r', '\u00a0', '\u2000', '\u2005', '\u200a', '\u3000']) {
       assert.strictEqual(S.shellWords(`-L${b}2`), null, `read: ${show(`-L${b}2`)}`);
@@ -1104,6 +1140,32 @@ describe('options are judged as the shell reads them', () => {
       'file "notes/a b.md"', 'find . -name \\*.md']) {
       assertReads(cmd);
     }
+  });
+
+  // ── AC: nothing that asks on main stops asking
+  test('the lines the shell\'s reading alone would read still ask, as they did on main', () => {
+    const lines = [
+      // Option-like text inside a quoted operand.
+      "find . -name 'a -delete'", 'rg "x --pre" .', "tree -P 'x -o'", "file -m 'a -C' x",
+      // An option split across quotes, or escaped inside, where main asks.
+      "find . -na'me' x", 'find . -\\depth', "find . -maxdepth'' 1",
+      // An escaped quote inside double quotes, in front of a separator.
+      'grep "a\\"; rm x" f', 'cat "a\\" | cp a b" x',
+    ];
+    const judged = lines.map(cmd => [cmd, S.isReadOnlyShellCommand(cmd), risk(cmd)]);
+    for (const [cmd, readsNow, riskNow] of judged) {
+      assert.strictEqual(readsNow, false, `the shared definition does not read: ${show(cmd)}`);
+      assert.notStrictEqual(riskNow, 'low', `and it asks: ${show(cmd)}`);
+      assert.strictEqual(readsOnMain(cmd), false, `as on main, which did not read it: ${show(cmd)}`);
+    }
+    assert.strictEqual(risk('grep "a\\"; rm x" f'), 'high', 'and a removal after the escaped quote is graded as one, as on main');
+  });
+
+  test('a -Force is looked for in both splits, so a PowerShell line keeps its high grade', () => {
+    // PowerShell takes `\` as a folder separator, so `"C:\x\"` is a whole
+    // string and the `;` after it ends the command: the `-Force` is on a
+    // Set-Content, which is graded high.
+    assert.strictEqual(P.classifyRisk('PowerShell', { command: 'Get-Item "C:\\x\\"; Set-Content y -Force' }), 'high');
   });
 
   // ── AC: commands split where the shell splits them

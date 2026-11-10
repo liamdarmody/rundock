@@ -187,6 +187,9 @@ const fs = require('fs');
 // is named in package.json's asarUnpack for that reason, and a test binds the
 // two so a later shared module cannot be added without it.
 const { isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isDestructiveShellCommand, shellSegments, carriageReturnSplitsJudgedOptions, leadsJudgedOptions } = require('../public/read-only-shell.js');
+// shellSegments(text) splits a line as the shell does, and shellSegments(text,
+// true) as it is written, which is how every line was split before. Where the
+// hook reads a line segment by segment, it reads both splits.
 // The Code-mode verdict and the development paths live beside this file, in
 // scripts/, so they are unpacked with it (package.json asarUnpack scripts/**).
 const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
@@ -1583,13 +1586,28 @@ function shellPathTokens(command, posixEscapes = false) {
   return shellPathWords(command, posixEscapes).map(w => w.t);
 }
 // The same words, each with where it starts in the command (`at`).
+//
+// READ TWICE, AND EVERY WORD OF EITHER READING KEPT: once as the shell reads
+// the line, and once as it is written, with the segments split as written and
+// each quote taken as written, the way every line was read before. The shell's
+// reading finds a path an escaped quote hid (below); the written one keeps
+// every word it always found, so no word that was seen stops being seen.
 function shellPathWords(command, posixEscapes = false) {
+  const asShellReads = pathWordsReadBy(command, posixEscapes, false);
+  const asWritten = pathWordsReadBy(command, false, true);
+  const have = new Set(asShellReads.map(w => w.at + '\u0000' + w.t));
+  return asShellReads.concat(asWritten.filter(w => !have.has(w.at + '\u0000' + w.t)));
+}
+// One reading. `asWritten` splits the segments as written and takes every
+// quote as written; otherwise `posixEscapes` says whether a backslash takes
+// the next character with it, as bash's does.
+function pathWordsReadBy(command, posixEscapes, asWritten) {
   const out = [];
   // Every argument sitting in a pattern position, counted per segment so the
   // same text appearing later as a real file is still seen; and the same for
   // a separator and an echoed word.
   const skip = [];
-  for (const seg of shellSegments(String(command))) skip.push(...patternArgsIn(seg), ...delimiterArgsIn(seg));
+  for (const seg of shellSegments(String(command), asWritten)) skip.push(...patternArgsIn(seg), ...delimiterArgsIn(seg));
   skip.push(...echoedArgsIn(command));
   // A BACKSLASH OUTSIDE SINGLE QUOTES TAKES THE NEXT CHARACTER WITH IT in bash,
   // so in bash text `\"` and `\'` start no quoted word, and inside double quotes
@@ -1600,7 +1618,7 @@ function shellPathWords(command, posixEscapes = false) {
   // this one, so the word that follows is the command's next argument and is
   // read as a path of its own. Elsewhere a backslash is a folder separator, as
   // written.
-  const re = new RegExp((posixEscapes ? POSIX_PATH_WORD : PATH_WORD).source, 'g');
+  const re = new RegExp((posixEscapes && !asWritten ? POSIX_PATH_WORD : PATH_WORD).source, 'g');
   let m;
   while ((m = re.exec(String(command))) !== null) {
     let t = m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[0]);
@@ -2035,10 +2053,21 @@ function answerFileWriteWords(command, posixText = false, readsPart = isReadOnly
   // holding one, is not read segment by segment: every word of the line counts
   // as written. The same rule the whole-line reading asks.
   const splitAtReturn = readsPart === isReadOnlyShellCommand && carriageReturnSplitsJudgedOptions(text);
-  let from = 0;
-  for (const seg of shellSegments(text)) {
-    const segAt = text.indexOf(seg, from);
-    if (segAt >= 0) from = segAt + seg.length;
+  // Each segment of both splits, the shell's and the one as written, so a
+  // word either counts as written is written. They differ only after a
+  // backslash before a quote or a separator.
+  const splits = [shellSegments(text)];
+  if (/\\['";|&\n\r]/.test(text)) splits.push(shellSegments(text, true));
+  const pieces = [];
+  for (const segments of splits) {
+    let from = 0;
+    for (const seg of segments) {
+      const segAt = text.indexOf(seg, from);
+      if (segAt >= 0) from = segAt + seg.length;
+      pieces.push({ seg, segAt });
+    }
+  }
+  for (const { seg, segAt } of pieces) {
     const words = seg.match(/'([^']*)'|"([^"]*)"|[^\s]+/g) || [];
     const written = [];
     const rest = [];
