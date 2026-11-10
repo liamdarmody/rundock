@@ -986,10 +986,10 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     // is read. That list grew by `get-date` and `where-object` for the
     // PowerShell reading, and in Bash they are not reads, as they were not.
     const { isReadOnlyShellCommand } = require('../../public/read-only-shell.js');
-    for (const command of ['dir notes', 'type notes.md', 'DIR notes']) {
+    for (const command of require('../fixtures/bash-reads.js').POWERSHELL_NAMES_BASH_READS) {
       assert.strictEqual(isReadOnlyShellCommand(command), true, `Bash no longer reads: ${command}`);
     }
-    for (const command of ['get-date notes.md', 'where-object notes.md', 'Get-Date notes.md', 'Where-Object notes.md']) {
+    for (const command of require('../fixtures/bash-reads.js').POWERSHELL_NAMES_NOT_BASH_READS) {
       assert.strictEqual(isReadOnlyShellCommand(command), false, `Bash now reads: ${command}`);
     }
     const home = tmp('af-bash-dir-home-');
