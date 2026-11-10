@@ -156,6 +156,9 @@ const FLOOR_TABLE = { src: path.join(ROOT, 'lib', 'runtime', 'claude-floor.js'),
 const FLOOR_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-version-floor.test.js' };
 const FLOOR_PATHS = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor.test.js' };
 const FLOOR_EACCES = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor-eacces.test.js' };
+// The step the desktop app runs before it looks for `claude`, which puts the
+// folders the too-old notice names first on PATH.
+const FLOOR_FOLDERS = { src: path.join(ROOT, 'lib', 'runtime', 'claude-folders.js'), suite: 'test/unit/claude-version-floor.test.js' };
 const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
@@ -4126,6 +4129,9 @@ const MUTATIONS = [
   [FLOOR_SPAWN, "Version floor: a .cmd launcher's package version is ignored",
     "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
     "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return null;"],
+  [FLOOR_FOLDERS, "Version floor: the desktop app never puts the folders the notice names on PATH",
+    "  if (next !== current) env.PATH = next;",
+    "  // PATH is left as it was"],
   // ===== THE SHELL STARTUP FILES =====
   [STARTUP_HOOK, 'Startup files: a file-tool write to one is ordinary work',
     '  const startup = writing ? startupFileAt(resolvedPath, home, foldsCase) : null;',
