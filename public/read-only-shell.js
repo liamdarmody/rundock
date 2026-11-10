@@ -54,24 +54,24 @@
   // commands that went on to do nothing at all. `cd` reaches no file, so there
   // is nothing for it to write.
   //
-  // The card grader also recognised `date`, `diff`, `printenv`, `pushd`,
-  // `popd`, `sort`, `true`, `uniq`, `which` and `whoami`, and none of them is
-  // on this list. `uniq INPUT OUTPUT` writes a file with no redirection
-  // character anywhere on the line, so shared into the boundary layer it would
-  // grade a write into a persistence surface as a read and exempt it from its
-  // crossing. The others that are still left out cannot write, and each one
-  // restored to the grader's auto-allow set is a widening judged on its own
-  // evidence.
+  // The card grader also recognized `diff`, `printenv`, `pushd`, `popd`,
+  // `true`, `uniq`, `which` and `whoami`, and none of them is on this list.
+  // `uniq INPUT OUTPUT` writes a file with no redirection character anywhere
+  // on the line, so shared into the boundary layer it would grade a write into
+  // a persistence surface as a read and exempt it from its crossing. The
+  // others cannot write, and each one restored to the grader's auto-allow set
+  // is a widening judged on its own evidence.
   //
-  // SORT AND DATE READ ONLY IN THE FORMS THAT READ. Each is a read when every
-  // option on the line is on its own list of reading options (SORT_OPTIONS
-  // and DATE_OPTIONS below), and any other option asks. The rest of their
-  // forms ask because they do more than read: `sort -o FILE` writes FILE with
-  // no redirection on the line, `sort -T DIR` puts its temporary files where
-  // it is told, `sort --compress-program=PROG` runs PROG, and `date -s`,
-  // `date --set`, a time operand (one not starting with `+`) and `date -f`
-  // without `-j` set the system clock. Neither word is on this list, which
-  // frees a word whatever its options.
+  // SORT AND DATE READ ONLY IN THE FORMS THAT READ. The grader recognized
+  // both, and neither is on this list either, because this list frees a word
+  // whatever its options. Each is judged by its options instead: a read when
+  // every option on the line is on its own list of reading options
+  // (SORT_OPTIONS and DATE_OPTIONS below), and any other option asks. The
+  // rest of their forms ask because they do more than read: `sort -o FILE`
+  // writes FILE with no redirection on the line, `sort -T DIR` puts its
+  // temporary files where it is told, `sort --compress-program=PROG` runs
+  // PROG, and `date -s`, `date --set`, a time operand (one not starting with
+  // `+`) and `date -f` without `-j` set the system clock.
   var NO_TARGET_COMMANDS = ['cd'];
 
   // Keywords a REAL COMMAND follows. Stripped, then the rest is judged on its

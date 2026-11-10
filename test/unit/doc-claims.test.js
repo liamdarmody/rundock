@@ -1909,6 +1909,11 @@ describe('ARCHITECTURE.md: sort and date run with no card only in the forms that
     assert.ok(!sharedSrc.includes('those are NOT carried across'), 'it no longer says the grader\'s other words were not carried across');
     assert.ok(!sharedSrc.includes('Two of them are why: `sort -o FILE`'), 'nor that sort is one of the reasons');
     assert.ok(sharedSrc.includes('CHECKED AGAINST TWO MANUALS'), 'and it says which manuals the lists were checked against');
+    // The words the comment says are left out are only the words really left
+    // out: neither `sort` nor `date` is among them.
+    const leftOut = (/The card grader also recognized ([^.]*?), and none of them is on this list\./.exec(sharedSrc) || [])[1] || '';
+    assert.ok(leftOut.includes('`uniq`'), `the comment names what is left out: ${leftOut}`);
+    assert.ok(!/`sort`|`date`/.test(leftOut), `and names neither sort nor date among them: ${leftOut}`);
   });
 
   test('every form the page says reads, reads, and every one it says asks, asks', () => {
