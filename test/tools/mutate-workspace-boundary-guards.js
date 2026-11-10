@@ -64,6 +64,8 @@ const READ_ONLY_CLIENT = { src: path.join(ROOT, 'public', 'read-only-shell.js'),
 // The card grader's PowerShell branch, through the suite that asks the grader
 // and the shared reading about the same command.
 const PS_GRADER = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/permissions.test.js' };
+// The card grader's Bash branch and the decision it feeds, the same suite.
+const BASH_GRADER = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/permissions.test.js' };
 // The grader again, through the real hook, server and client permission path.
 const PS_GRADER_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/powershell-read-approvals.test.js' };
 // The app's own message dispatch, between the real server's socket and the card.
@@ -1309,6 +1311,31 @@ const MUTATIONS = [
     "      if (lenient && c === '!') { word += c; continue; }"],
   [READ_ONLY_CLIENT, "find, rg, tree and file read a ! standing alone, find's negation, as main did",
     "      if (lenient && c === '!' && !word && /^[ \\t]?$/.test(text.charAt(i + 1))) { word += c; continue; }\n",
+    ""],
+  // NOTES MODE: A ( INSIDE A WORD IS HIGH, SO NO SAVED ANSWER COVERS IT. zsh
+  // runs code written inside a file pattern as it expands the word, and a
+  // saved answer is keyed on the leading command alone. Each row must turn the
+  // grader's suite red.
+  [BASH_GRADER, "Notes mode: a ( inside a word, outside quotes, is high",
+    "    if (hidesCodeInAWord(raw)) return 'high';\n",
+    ""],
+  [READ_ONLY_CLIENT, "Notes mode: a ( inside a word is marked in nested code, not only at the top of the line",
+    "          if (!wordStart && !/^[A-Za-z_][A-Za-z0-9_]*\\+?=$/.test(text.slice(wordFrom, p))) st.wordParen = true;",
+    "          if (depth + level === 0 && !wordStart && !/^[A-Za-z_][A-Za-z0-9_]*\\+?=$/.test(text.slice(wordFrom, p))) st.wordParen = true;"],
+  [READ_ONLY_CLIENT, "Notes mode: a view that fails is marked, so its line is high",
+    "      return { text: text, ok: false, parens: false, wordParen: true };",
+    "      return { text: text, ok: false, parens: false, wordParen: false };"],
+  [READ_ONLY_CLIENT, "Notes mode: a view nested deeper than it follows is marked, so its line is high",
+    "      if (depth + level > VIEW_DEPTH_LIMIT) { st.ok = false; st.wordParen = true; return limit; }",
+    "      if (depth + level > VIEW_DEPTH_LIMIT) { st.ok = false; return limit; }"],
+  [READ_ONLY_CLIENT, "Notes mode: a backtick nested deeper than the view follows is marked, so its line is high",
+    "    if (depth > VIEW_DEPTH_LIMIT) return { chars: v, ok: false, parens: false, wordParen: true, command: false };",
+    "    if (depth > VIEW_DEPTH_LIMIT) return { chars: v, ok: false, parens: false, wordParen: false, command: false };"],
+  [BASH_GRADER, "Notes mode: a view the grader cannot ask grades its line high",
+    "catch (e) { return true; }",
+    "catch (e) { return false; }"],
+  [BASH_GRADER, "a saved answer never covers a high-risk request",
+    "    if (risk === 'high') return { action: 'card' };\n",
     ""],
   [SORT_DATE_HOOK, 'the real hook: a writing sort keeps its crossing',
     "    operandLetters: 'ktS',",
