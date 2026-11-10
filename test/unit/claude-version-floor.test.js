@@ -408,6 +408,8 @@ function namedIn(said) {
 }
 // Any word that would send a person to take a copy away.
 const REMOVAL = /\b(remov|delet|uninstall|rm\b|trash)/i;
+// The PATH a packaged app starts with on macOS, before Rundock adds to it.
+const LAUNCHD_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(path.delimiter);
 
 describe('what the too-old notice tells a person to do', () => {
   test('the folders it names are the list the lookup puts on PATH, in the order they are searched', () => {
@@ -422,13 +424,14 @@ describe('what the too-old notice tells a person to do', () => {
     }
   });
 
-  test('the list is written once: the desktop app puts it on PATH and the notice reads it, and neither spells a folder itself', () => {
+  test('neither the desktop app nor the notice spells a folder itself, and the desktop app only calls the shared step', () => {
+    // What proves the step puts the list on PATH is the test below that runs
+    // it; this holds the two readers to that one list.
     const main = fs.readFileSync(path.join(ROOT, 'electron', 'main.js'), 'utf8');
     const start = main.indexOf('function ensurePath()');
     assert.ok(start >= 0, 'electron/main.js still has ensurePath');
-    const ensurePath = main.slice(start, main.indexOf('\n}\n', start));
-    assert.ok(ensurePath.includes("require('../lib/runtime/claude-folders.js')"), 'ensurePath reads the shared list');
-    assert.match(ensurePath, /withClaudeFolders\(current, claudeFolders\(\)\)/, 'and puts that list on PATH');
+    const ensurePath = main.slice(start, main.indexOf('\n}\n', start) + 2);
+    assert.strictEqual(ensurePath, "function ensurePath() {\n  require('../lib/runtime/claude-folders.js').ensureClaudeFolders(process.env);\n}");
     const floorSource = fs.readFileSync(path.join(ROOT, 'lib', 'runtime', 'claude-floor.js'), 'utf8');
     assert.ok(floorSource.includes("require('./claude-folders.js')"), 'the notice reads the same list');
     for (const [file, source] of [['ensurePath in electron/main.js', ensurePath], ['lib/runtime/claude-floor.js', floorSource]]) {
@@ -480,25 +483,29 @@ describe('what the too-old notice tells a person to do', () => {
     assert.doesNotMatch(error.message, REMOVAL);
   });
 
-  test('following the native installer: a current copy in the first folder is found ahead of the old one, and starts', { skip: POSIX }, async () => {
-    const { claudeFolders, withClaudeFolders } = foldersLib();
+  test('the app puts the list on PATH, so following the native installer starts the current copy ahead of the old one', { skip: POSIX }, async () => {
+    const { claudeFolders, ensureClaudeFolders } = foldersLib();
     const home = makeTempDir('claude-floor-home-');
-    // The folders inside this home, put on PATH as the desktop app puts
-    // them. The list's system folders are left off, so no real Claude Code
-    // can be found here.
-    const folders = claudeFolders({ home }).filter((dir) => dir.startsWith(home + path.sep));
-    assert.deepStrictEqual(folders, [path.join(home, '.local', 'bin'), path.join(home, '.claude', 'bin')]);
+    const env = { PATH: LAUNCHD_PATH };
+    ensureClaudeFolders(env, { home });
+    const folders = claudeFolders({ home });
+    assert.deepStrictEqual(env.PATH.split(path.delimiter), [...folders, ...LAUNCHD_PATH.split(path.delimiter)],
+      'the list first, in its order, then the PATH the app started with');
+    assert.deepStrictEqual(folders.slice(0, 2), [path.join(home, '.local', 'bin'), path.join(home, '.claude', 'bin')]);
+    // Nothing is found in the system folders here: a stub sits in a folder
+    // ahead of them at every spawn below.
     const old = stubAt(folders[1], '2.0.58 (Claude Code)');
     const rt = freshClaudeRuntime();
     const w = wired(rt);
     const before = process.env.PATH;
-    process.env.PATH = withClaudeFolders(['/usr/bin', '/bin'].join(path.delimiter), folders);
+    process.env.PATH = env.PATH;
     try {
       const refused = await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' });
       assert.strictEqual(refused.error && refused.error.path, old.bin, 'the old copy is found, and refused');
       const current = stubAt(folders[0], '2.1.318 (Claude Code)');
       const after = await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' });
       assert.strictEqual(after.error, null, 'the current copy starts');
+      assert.strictEqual(rt.resolveClaudeBin(), current.bin, 'found in the native installer\'s folder');
       assert.strictEqual(chatsOf(current).length, 1, 'and is handed the chat');
       assert.ok(fs.existsSync(old.bin), 'with the old copy still in place');
       assert.deepStrictEqual(chatsOf(old), [], 'which is never handed one');

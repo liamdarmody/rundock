@@ -74,13 +74,10 @@ if (!gotLock) {
 
 // Electron packaged apps don't inherit the user's full shell PATH.
 // Ensure common Claude Code install locations are on PATH so the lookup works.
-// The folders are listed once, in lib/runtime/claude-folders.js, which the
-// too-old notice reads too.
+// The folders, and the change to PATH, live in lib/runtime/claude-folders.js,
+// which the too-old notice reads too.
 function ensurePath() {
-  const { claudeFolders, withClaudeFolders } = require('../lib/runtime/claude-folders.js');
-  const current = process.env.PATH || '';
-  const next = withClaudeFolders(current, claudeFolders());
-  if (next !== current) process.env.PATH = next;
+  require('../lib/runtime/claude-folders.js').ensureClaudeFolders(process.env);
 }
 
 // What `claude --version` said the last time findClaude found Claude Code:

@@ -1859,6 +1859,7 @@
       "Version floor: a copy that cannot be run is refused as too old": 9.03,
       "Version floor: the stand-in for a refused copy keeps an unguarded stdin": 9.03,
       "Version floor: a .cmd launcher's package version is ignored": 9.03,
+      "Version floor: the desktop app never puts the folders the notice names on PATH": 9.03,
       "Startup files: a file-tool write to one is ordinary work": 9.03,
       "Startup files: a shell write to one is ordinary work": 9.03,
       "Startup files: a literal in code that names one is ordinary work": 9.03,
