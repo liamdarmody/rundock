@@ -1589,18 +1589,19 @@ function shellPathTokens(command, posixEscapes = false) {
 //
 // READ TWICE, AND EVERY WORD OF EITHER READING KEPT: once as the shell reads
 // the line, and once as it is written, with the segments split as written and
-// each quote taken as written, the way every line was read before. The shell's
-// reading finds a path an escaped quote hid (below); the written one keeps
-// every word it always found, so no word that was seen stops being seen.
+// each quote taken as written, exactly the way every line was read before. The
+// shell's reading finds a path an escaped quote hid (below); the written one
+// keeps every word it always found, so no word that was seen stops being seen.
 function shellPathWords(command, posixEscapes = false) {
   const asShellReads = pathWordsReadBy(command, posixEscapes, false);
-  const asWritten = pathWordsReadBy(command, false, true);
+  const asWritten = pathWordsReadBy(command, posixEscapes, true);
   const have = new Set(asShellReads.map(w => w.at + '\u0000' + w.t));
   return asShellReads.concat(asWritten.filter(w => !have.has(w.at + '\u0000' + w.t)));
 }
 // One reading. `asWritten` splits the segments as written and takes every
-// quote as written; otherwise `posixEscapes` says whether a backslash takes
-// the next character with it, as bash's does.
+// quote as written. In either reading `posixEscapes` takes an unquoted word as
+// bash reads it, each `\X` being X; the shell's reading also lets a backslash
+// take a quote with it.
 function pathWordsReadBy(command, posixEscapes, asWritten) {
   const out = [];
   // Every argument sitting in a pattern position, counted per segment so the
