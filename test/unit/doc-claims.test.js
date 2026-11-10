@@ -1874,6 +1874,79 @@ describe('ARCHITECTURE.md: a PowerShell command runs with no card only when ever
   });
 });
 
+describe('ARCHITECTURE.md: sort and date run with no card only in the forms that read', () => {
+  // The claim an unattended routine relies on, and the one a person relies on
+  // that a writing form still asks. Pinned by asking the shared definition and
+  // the grader about every form the page names, and by reading the comment the
+  // module keeps beside its list, so neither can keep saying it after the code
+  // stops doing it.
+  const shell = require('../../public/read-only-shell.js');
+  const P = require('../../public/permissions.js');
+  const LEAD = '**`sort` and `date` run with no card only in the forms that read.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  // The module's comments as running text, so a sentence is found wherever
+  // its lines wrap.
+  const sharedSrc = fs.readFileSync(path.join(ROOT, 'public', 'read-only-shell.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
+  const reads = (command) => shell.isReadOnlyShellCommand(command) && P.classifyRisk('Bash', { command }) === 'low';
+
+  test('the audit section says what makes either one a read, and that any other option asks', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    for (const said of [
+      '`isReadOnlyShellCommand` in `public/read-only-shell.js` reads each of them option by option, as it reads `find`',
+      'a `sort` or `date` is a read only when every option on the line is on its list of reading options, and any other option asks',
+      'The options are read as getopt reads them, a short bundle letter by letter (`-rno out` is `-r -n -o out`)',
+      'checked against both the macOS and the GNU manuals',
+      'a reading `sort` or `date` of a file under the runtime\'s own home is freed exactly as `cat` and `stat` of it are',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+  });
+
+  test('the comment beside the list says which forms read and why the rest ask, and no longer that both are left out', () => {
+    for (const said of ['SORT AND DATE READ ONLY IN THE FORMS THAT READ.', 'any other option asks',
+      '`sort -o FILE` writes FILE with no redirection on the line', 'set the system clock']) {
+      assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
+    }
+    assert.ok(!sharedSrc.includes('those are NOT carried across'), 'it no longer says the grader\'s other words were not carried across');
+    assert.ok(!sharedSrc.includes('Two of them are why: `sort -o FILE`'), 'nor that sort is one of the reasons');
+    assert.ok(sharedSrc.includes('CHECKED AGAINST TWO MANUALS'), 'and it says which manuals the lists were checked against');
+    // The words the comment says are left out are only the words really left
+    // out: neither `sort` nor `date` is among them.
+    const leftOut = (/The card grader also recognized ([^.]*?), and none of them is on this list\./.exec(sharedSrc) || [])[1] || '';
+    assert.ok(leftOut.includes('`uniq`'), `the comment names what is left out: ${leftOut}`);
+    assert.ok(!/`sort`|`date`/.test(leftOut), `and names neither sort nor date among them: ${leftOut}`);
+  });
+
+  test('every form the page says reads, reads, and every one it says asks, asks', () => {
+    // Each entry: the words the page names, and a command spelling each one.
+    const READS = [['`sort`', 'ls notes | sort'], ['ordering', 'sort -rn x'], ['key', 'sort -k2,2n x'], ['field separator', 'sort -t, x'],
+      ['buffer size', 'sort -S 1M x'], ['check', 'sort -c x'], ['merge', 'sort -m a b'], ['unique', 'sort -u x'],
+      ['`date` reads alone', 'date'], ['a `+` format', 'date +%Y-%m-%d'], ['`-u`', 'date -u'], ['`-R`', 'date -R'], ['`-I`', 'date -I'],
+      ['`-r`', 'date -r notes.md'], ['`-z`', 'date -z UTC'], ['`-v`', 'date -v+1d'], ['`-d`', 'date -d yesterday'], ['`-j`', 'date -j 0101'],
+      ['GNU long forms', 'date --utc --date=yesterday']];
+    const ASKS = [['`sort -o`', 'sort -o x y'], ['`--output`', 'sort --output=x y'], ['`-T`', 'sort -T /tmp x'],
+      ['`--temporary-directory`', 'sort --temporary-directory=/tmp x'], ['`--compress-program`', 'sort --compress-program=sh x'],
+      ['`date -s`', 'date -s 2026-01-01'], ['`--set`', 'date --set=2026-01-01'], ['a time operand', 'date 010112002026'],
+      ['`-f` without `-j`', 'date -f %Y%m%d 20260101'], ['any other option asks', 'sort --bogus x'],
+      ['`\'-o\'` is `-o`', "sort '-o' x y"], ['a `$`', 'sort $X x'], ['a glob', 'sort *'], ['a brace', 'sort {-o,x} y'], ['a redirection', 'sort < x']];
+    for (const [named, command] of READS) {
+      assert.ok(passage.includes(named), `the page names ${named}`);
+      assert.strictEqual(reads(command), true, `${command} runs with no card`);
+    }
+    for (const [named, command] of ASKS) {
+      assert.ok(passage.includes(named), `the page names ${named}`);
+      assert.strictEqual(shell.isReadOnlyShellCommand(command), false, `${command} is not a read`);
+      assert.notStrictEqual(P.classifyRisk('Bash', { command }), 'low', `${command} asks`);
+    }
+  });
+
+  test('the tests the page names exist', () => {
+    for (const file of ['test/unit/permissions.test.js', 'test/unit/sort-date-reads-hook.test.js', 'test/unit/sort-date-read-cards.test.js']) {
+      assert.ok(passage.includes(`\`${file}\``), `the page names ${file}`);
+      assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} exists`);
+    }
+  });
+});
+
 describe('ARCHITECTURE.md and the hook header: a request the hook cannot name, or whose input it cannot read, is refused inside Rundock', () => {
   // The claim a reader of either relies on when the runtime's request changes
   // shape. Pinned by running the hook on such requests, so neither can keep

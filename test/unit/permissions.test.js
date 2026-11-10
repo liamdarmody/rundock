@@ -26,12 +26,14 @@ describe('classifyRisk Bash', () => {
     // would trust, and the answer has to be the one already trusted to exempt
     // a crossing under the runtime's own home.
     //
-    // Two of these are why the wider list could not simply be adopted:
+    // Two of these were why the wider list could not simply be adopted:
     // `sort -o FILE` and `uniq INPUT OUTPUT` write a file with no redirection
     // character on the line at all. The others cannot write, and still ask,
     // because putting them back is a widening that belongs to whatever change
-    // can show the sessions that want it.
-    for (const cmd of ['date', 'whoami', 'which ls', 'printenv', 'sort notes.txt',
+    // can show the sessions that want it. `sort` and `date` have been judged
+    // since, and read in their reading forms only, so their writing forms
+    // stand here for them: see the tests below for the rest.
+    for (const cmd of ['whoami', 'which ls', 'printenv', 'sort -o notes.txt notes.txt', 'date -s 2026-01-01',
       'uniq a.txt', 'diff a b', 'pushd /tmp', 'popd', 'true']) {
       assert.strictEqual(risk(cmd), 'medium', cmd);
     }
@@ -80,9 +82,9 @@ describe('classifyRisk Bash', () => {
     // ordinary exploration like Doc running `cd <workspace> && ls; cat ...`.
     assert.strictEqual(risk('cd "/some dir" && ls -la; cat README.md'), 'low', 'cd then reads');
     assert.strictEqual(risk('cd x && ls'), 'low', 'cd then ls');
-    // `sort` and `uniq` left the vocabulary with the rest of this grader's
-    // private list: both can write a file with no redirection character, so a
-    // pipeline ending in one asks rather than auto-approving.
+    // `uniq` left the vocabulary with the rest of this grader's private list:
+    // it can write a file with no redirection character, so a pipeline ending
+    // in it asks rather than auto-approving. A bare `sort` reads.
     assert.strictEqual(risk('grep foo x | sort | uniq'), 'medium', 'a pipe ending in a command that can write asks');
     assert.strictEqual(risk('grep foo x | head -20'), 'low', 'and an all-reading pipe does not');
     // A non-read-only step after cd is medium (carded), never auto-approved.
@@ -439,7 +441,8 @@ describe('one definition of read-only, read by both graders', () => {
     // session. Every test in this suite was green over exactly that.
     //
     // This test drives the real classifier, so it fails whichever registry
-    // either word is added back to.
+    // either word is added back to. `sort` is back in its reading forms only,
+    // judged option by option, and the writing form here still asks.
     const hook = require('../../scripts/permission-hook.js');
     const home = makeHome();
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-ws-'));
@@ -510,7 +513,9 @@ describe('one definition of read-only, read by both graders', () => {
     // now recognises whatever the shared vocabulary names, so the vocabulary
     // grew by exactly one word: `cd`, without which the reported command's
     // first segment fails and the whole line cards. This pins that it is the
-    // only one, so a later merge cannot quietly add a second.
+    // only one, so a later merge cannot quietly add a second. `sort` and
+    // `date` were judged later, on their own evidence, and read only in the
+    // forms on their lists of reading options: pinned in the describe below.
     const hook = require('../../scripts/permission-hook.js');
     const home = makeHome();
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ro-ws3-'));
@@ -521,8 +526,9 @@ describe('one definition of read-only, read by both graders', () => {
       'cd is new to the boundary layer, and a chain built from it and a read is freed');
 
     // AND NOTHING ELSE CAME WITH IT. Every other word this grader alone used
-    // to trust still produces a crossing at the boundary layer.
-    for (const word of ['whoami', 'date', 'printenv', 'sort', 'uniq', 'diff', 'true', 'pushd', 'popd']) {
+    // to trust still produces a crossing at the boundary layer, and so do the
+    // writing forms of `sort` and `date`.
+    for (const word of ['whoami', 'printenv', 'sort -o', 'date -s', 'uniq', 'diff', 'true', 'pushd', 'popd']) {
       const r = hook.classifyShellAccess('Bash', { command: `${word} ${agents}` }, ws, [], home);
       assert.ok(r && r.crossings.some(c => c.persistenceSurface),
         `${word} did not join the boundary layer's vocabulary`);
@@ -655,6 +661,254 @@ describe('one definition of read-only, read by both graders', () => {
     for (const cmd of [REPORTED, 'cd d && ls', 'npx some-tool deploy', 'find . -name "*.md"']) {
       assert.strictEqual(root.RundockPermissions.classifyRisk('Bash', { command: cmd }), risk(cmd),
         `the global-wired grader agrees with the required one: ${cmd}`);
+    }
+  });
+});
+
+// ── sort and date: read only in the forms that read ─────────────────────────
+
+describe('sort and date read only in the forms that read', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const S = require('../../public/read-only-shell.js');
+  const risk = cmd => P.classifyRisk('Bash', { command: cmd });
+  // Both answers about one command: the shared definition's, and the grade the
+  // card is drawn from.
+  function assertReads(cmd) {
+    assert.strictEqual(S.isReadOnlyShellCommand(cmd), true, `the shared definition reads: ${cmd}`);
+    assert.strictEqual(risk(cmd), 'low', `and it runs with no card: ${cmd}`);
+  }
+  function assertAsks(cmd) {
+    assert.strictEqual(S.isReadOnlyShellCommand(cmd), false, `the shared definition does not read: ${cmd}`);
+    assert.notStrictEqual(risk(cmd), 'low', `and it asks: ${cmd}`);
+  }
+
+  // MEASURED. Notes-mode routines with no window connected list their folder
+  // with a pipe into `sort` and check the date, and every one of these used to
+  // ask, so a routine waited on a card nobody could answer and was refused.
+  test('a listing piped to sort, sort of a file, and sort by a key run with no card', () => {
+    for (const cmd of ['ls notes | sort', 'sort -u names.txt', 'sort -t, -k2,2n data.csv']) assertReads(cmd);
+  });
+
+  test("date, date with a format, and BSD date converting a date run with no card", () => {
+    for (const cmd of ['date', 'date +%Y-%m-%d', 'date -j -f %Y-%m-%d 2026-11-09 +%A']) assertReads(cmd);
+  });
+
+  test("sort's reading options read, alone, bundled, and in their long forms", () => {
+    for (const cmd of [
+      'sort', 'sort notes.txt', 'sort a.txt b.txt', 'sort -', 'sort -rn counts.txt', 'sort -uf names.txt',
+      'sort -b -c -C -d -f -g -h -i -M -m -n -R -r -s -u -V -z x', 'sort -bdfgiMnRrsuVz x', 'sort -cC x',
+      'sort -k2,2n x', 'sort -k 2,2n x', 'sort -t, x', 'sort -t , x', 'sort -S 50% x', 'sort -S50% x', 'sort -rk2 x',
+      'sort --check x', 'sort --check=silent x', 'sort --check=quiet x', 'sort --merge a b', 'sort --unique x',
+      'sort --ignore-leading-blanks --dictionary-order --ignore-case x',
+      'sort --general-numeric-sort --human-numeric-sort --ignore-nonprinting x',
+      'sort --month-sort --numeric-sort --random-sort --reverse x', 'sort --version-sort --zero-terminated --debug x',
+      'sort --sort=numeric x', 'sort --key=2,2 x', 'sort --field-separator=, x', 'sort --buffer-size=1M x',
+      "sort -t'|' -k2 x", 'sort -t "," -k2 x', 'sort -t \\, x', 'sort notes/a.md 2>/dev/null',
+    ]) assertReads(cmd);
+  });
+
+  test("sort's writing and executing forms ask", () => {
+    for (const cmd of [
+      'sort -o notes.md notes.md', 'sort -onotes.md notes.md', 'sort --output=x y', 'sort --output x y',
+      'sort -uo out in', 'sort -rno out in', 'sort -T /tmp x', 'sort -T/tmp x', 'sort --temporary-directory=/tmp x',
+      'sort --compress-program=sh x', 'sort in -o out', 'ls notes | sort -o listing.txt',
+    ]) assertAsks(cmd);
+  });
+
+  test("date's reading options read", () => {
+    for (const cmd of [
+      'date -u', 'date -R', 'date -I', 'date -Iseconds', 'date -uIminutes', 'date -r notes/a.md', 'date -r 1700000000',
+      'date -z UTC', 'date -z Europe/London +%H:%M', 'date -v+1d', 'date -v -1d', 'date -v1m -v+1y -v-1d',
+      'date -j 0101', 'date -j 202611091200 +%s', 'date -jf %Y%m%d 20261109 +%A', 'date -j -f "%Y-%m-%d %H:%M" "2026-11-09 10:00" +%s',
+      'date --utc', 'date --universal', 'date --date=yesterday', 'date --date="2 days ago" +%F', 'date -d yesterday',
+      'date -d @1700000000 +%s', 'date -dtomorrow', 'date --iso-8601', 'date --iso-8601=seconds',
+      'date --rfc-3339=seconds', 'date --rfc-email', 'date --reference=notes/a.md', 'date --debug',
+      'date "+%Y-%m-%d %H:%M"', "date '+%A, %d %B'", 'date -u +%Y-%m-%dT%H:%M:%SZ',
+    ]) assertReads(cmd);
+  });
+
+  test("date's clock-setting forms ask", () => {
+    for (const cmd of [
+      'date -s 2026-01-01', 'date -s "2026-01-01"', 'date --set=2026-01-01', 'date --set 2026-01-01',
+      'date 010112002026', 'date -u 010112002026', 'date +%s 010112002026', 'date -f %Y%m%d 20260101', 'date -n',
+      'date -nu', 'date -j -n',
+    ]) assertAsks(cmd);
+  });
+
+  test('-f names the format of a time to set, so without -j it asks whatever follows it', () => {
+    // The BSD date sets the clock from `-f FMT TIME`. The rule asks about
+    // `-f` itself, not only about the time it is handed.
+    for (const cmd of ['date -f %s', 'date -f %Y +%A']) assertAsks(cmd);
+    assertReads('date -j -f %s 1700000000 +%Y');
+  });
+
+  test('only a -j before the first operand stops the time being set', () => {
+    // This Mac's getopt stops at the first operand, so the `-j` here is an
+    // operand and 0101 is set. GNU's date refuses -j wherever it stands.
+    for (const cmd of ['date 0101 -j', 'date +%s 0101 -j', 'date -f %Y 2026 -j']) assertAsks(cmd);
+  });
+
+  test('a letter takes the rest of its bundle, or the next word, and nothing more', () => {
+    // `-k2` has its key already, so `-o` after it is an option, not the key.
+    assertAsks('sort -k2 -o out in');
+    assertAsks('sort -t, -o out in');
+    // `-I` takes an operand only joined to it, so the word after it is a time
+    // to set, or an option of its own.
+    assertAsks('date -I 0101');
+    assertAsks('date -I -n');
+    // And a letter given its operand as the next word still reads the rest.
+    assertReads('sort -k 2 -u x');
+  });
+
+  test('an option nobody named asks, short or long, and so does the end of options', () => {
+    for (const cmd of ['sort --bogus x', 'sort -Q x', 'sort -uQ x', 'date --bogus', 'date -Q', 'date -uQ',
+      'sort --stable x', 'sort --files0-from=list x', 'sort --key 2 x', 'sort --sort numeric x', 'sort --out=x y', 'sort -1 x',
+      'date --set', 'date --se=2026-01-01', 'date --file=dates', 'date --date yesterday', 'date --rfc-3339 seconds',
+      'sort -- x', 'date -- +%s']) {
+      assertAsks(cmd);
+    }
+  });
+
+  // ONLY A SPACE OR A TAB ENDS A WORD, in bash as here. JavaScript's `\s` also
+  // takes a form feed, a vertical tab, a carriage return and the Unicode
+  // spaces for one, and bash takes none of them, so each, placed next to an
+  // option, hides the option after it from a reading that splits on `\s`:
+  // `sort -t<form feed> -o out in` is `-t` handed the form feed, then `-o out`.
+  const ODD_BLANKS = [['a form feed', '\f'], ['a vertical tab', '\v'], ['a no-break space', '\u00a0'],
+    ['an em space', '\u2003'], ['an ideographic space', '\u3000']];
+  for (const [name, b] of ODD_BLANKS) {
+    test(`${name} next to an option is not a word break, so the line is not a read`, () => {
+      for (const cmd of [`sort -t${b} -o out in`, `sort -k${b} -o out in`, `sort -t${b} --compress-program=sh x`,
+        `sort -u${b} -T /tmp x`, `ls notes | sort -t${b} -o listing.txt`, `date -r${b} 010112002026`, `date -z${b} 010112002026`,
+        `date -v${b} -s 2026-01-01`, `date -u${b}+%s`, `sort${b}-u x`, `sort -u x${b}y`, `sort -t'${b}' x`, `date '+%d${b}%B'`]) {
+        assertAsks(cmd);
+      }
+    });
+  }
+
+  test('a carriage return on a sort or date line is not a read, whatever follows it', () => {
+    // The line splits there into commands of its own, and bash does not: the
+    // `-o out` below is sort's, handed to it after `-t<CR>cat`.
+    for (const cmd of ['sort -t\rcat -o out in', 'date -r\rcat 010112002026', 'ls notes | sort -t\rls -o listing.txt',
+      'sort x\rls', 'date -u\rls', 'sort x\r\ndate']) {
+      assertAsks(cmd);
+    }
+  });
+
+  test("a descriptor number glued to an option is the option's, not the redirect's", () => {
+    // Bash takes the digits before `>` as the descriptor only when they are a
+    // word of their own: `-t2>&1` is `-t2`, then `>&1`. Taken as the
+    // redirect's, the `2` left `-t` to take the next word, and the `-o` after
+    // it went unseen.
+    for (const cmd of ['sort -t2>&1 -o out in', 'sort -k1>/dev/null -o out in', 'sort -t2>/dev/null --compress-program=sh x',
+      'date -r1>/dev/null 010112002026', 'date -v1>/dev/null 0101', 'date -z0>&2 010112002026']) {
+      assertAsks(cmd);
+    }
+    // A discard that stands as its own word, or has no number, is still
+    // taken away, so these still read.
+    for (const cmd of ['ls 2>/dev/null', 'cat x 2>&1', 'find . 2>/dev/null | sort', 'sort -t2 x 2>/dev/null',
+      'cat x>/dev/null', 'ls &>/dev/null', 'sort -k2 x>/dev/null']) {
+      assertReads(cmd);
+    }
+  });
+
+  test('a tab ends a word as a space does', () => {
+    for (const cmd of ['sort\t-u\tnames.txt', 'date\t+%Y-%m-%d', 'ls notes |\tsort', "sort -t'\t' -k2 x"]) assertReads(cmd);
+    for (const cmd of ['sort\t-o\tout in', 'sort -u\t-o out in', 'date\t-s\t2026-01-01']) assertAsks(cmd);
+  });
+
+  test('a quote or a backslash cannot hide an option: it is judged as the word the program is given', () => {
+    for (const cmd of [`sort '-o' out in`, 'sort "-o" out in', 'sort -\\o out in', `sort -u'o' out in`, `sort -"u"o out in`,
+      `sort ''-o out in`, 'sort \\-o out in', `sort '--output=x' y`, `date '-s' 2026-01-01`, 'date "-s" 2026-01-01', 'date \\-s 2026-01-01',
+      `date '010112002026'`, `sort -"T" /tmp x`]) {
+      assertAsks(cmd);
+    }
+  });
+
+  test('text whose words the shell fills in is not read at all', () => {
+    // A variable, a glob or a brace can each hand sort an `-o` the text does
+    // not show: `for f in -o; do sort $f x; done`, or `sort *` beside a file
+    // named `-ox`.
+    for (const cmd of ['sort $X in', 'sort "$X" in', 'sort ${X} in', "sort $'-o' out in", 'for f in -o out; do sort $f in; done',
+      'sort *', 'sort *.txt', 'sort ?x', 'sort [-]o out in', 'sort {-o,out} in', 'sort ~(x)', 'sort !x', 'sort ^x',
+      'sort # x', 'date $X', 'date -r *', 'date "+%Y $(id)"', 'sort < in', 'sort x <in']) {
+      assertAsks(cmd);
+    }
+  });
+
+  // THE COMMANDS ROUTINES REALLY RAN: every complete Notes-mode shell command
+  // recorded from routines run against a real model, with the verdict each
+  // must get.
+  const ROUTINE_COMMANDS = [
+    ["ls -la && find . -type f -not -path './.git/*' | sort", true],
+    ['ls -la && echo "---" && find . -type f -not -path "./.git/*" | sort', true],
+    ["ls -la && echo \"---\" && find . -type f -not -path './.git/*' | sort && echo \"---\" && date", true],
+    ["ls -la && find . -type f -not -path './.git/*' | head -100 && date", true],
+    ["ls -la reviews/ 2>/dev/null; echo \"---\"; find . -type f -not -path './.git/*' | sort", true],
+    ["ls -la && ls -la context briefings 2>/dev/null; find . -maxdepth 3 -not -path './.git*' | sort", true],
+    ['ls -la && ls -R context briefings prompts 2>/dev/null | head -50', true],
+    ['ls context reviews 2>&1; head -5 context/company.md 2>&1', true],
+    ['mkdir -p reviews && ls reviews', false],
+  ];
+  for (const [cmd, reads] of ROUTINE_COMMANDS) {
+    test(`a routine's command gets its verdict: ${cmd}`, () => {
+      if (reads) assertReads(cmd); else assertAsks(cmd);
+    });
+  }
+
+  test('a writing sort or date after a reading one, or redirected, or in a substitution, still asks', () => {
+    for (const cmd of ['ls notes | sort; sort -o notes.md notes.md', 'sort x && date -s 2026-01-01', 'sort x\nsort -o y x',
+      'ls | sort > listing.txt', 'ls | sort | tee listing.txt', 'sort $(rm x)', 'sort <(rm x)', 'date `rm x`']) {
+      assertAsks(cmd);
+    }
+  });
+
+  // THE CONTROL FAILING. Text the reading cannot read cleanly is not a read,
+  // and the reading never throws, whatever it is given.
+  test('text it cannot read cleanly is not a read, and the reading never throws', () => {
+    const megabyte = 'sort ' + '-u '.repeat(350000) + 'x';
+    assert.ok(megabyte.length > 1024 * 1024, 'the options run past a megabyte');
+    for (const cmd of [`sort 'x`, 'sort "x', `ls notes | sort -t'`, 'sort x\\', 'sort x\u0000y', `sort 'x\u0000' y`,
+      'date +%s\u0000', 'sort x\u007f', 'sort x\ud800', megabyte, 'date ' + '-u '.repeat(350000)]) {
+      let reads;
+      assert.doesNotThrow(() => { reads = S.isReadOnlyShellCommand(cmd); }, `threw on: ${JSON.stringify(cmd.slice(0, 40))}`);
+      assert.strictEqual(reads, false, `read: ${JSON.stringify(cmd.slice(0, 40))}`);
+      assert.notStrictEqual(risk(cmd), 'low', `and it asks: ${JSON.stringify(cmd.slice(0, 40))}`);
+    }
+    const throwing = { toString() { throw new Error('not text'); } };
+    for (const value of [null, undefined, 42, ['sort'], ['date'], { command: 'sort' }, throwing, Symbol('sort'), () => 'sort']) {
+      let reads;
+      assert.doesNotThrow(() => { reads = S.isReadOnlyShellCommand(value); }, `threw on a ${typeof value}`);
+      assert.strictEqual(reads, false, `a ${Array.isArray(value) ? 'list' : typeof value} is not a read`);
+    }
+  });
+
+  test('a failure forced inside the reading is not a read, and the reading back reads again', () => {
+    const seam = S.optionReadingSeam;
+    const kept = seam.beforeReading;
+    seam.beforeReading = () => { throw new Error('forced failure'); };
+    try {
+      for (const cmd of ['ls notes | sort', 'date', 'sort -u names.txt']) {
+        let reads;
+        assert.doesNotThrow(() => { reads = S.isReadOnlyShellCommand(cmd); }, cmd);
+        assert.strictEqual(reads, false, `read while the reading fails: ${cmd}`);
+        assert.notStrictEqual(risk(cmd), 'low', `and it asks: ${cmd}`);
+      }
+      assert.strictEqual(S.isReadOnlyShellCommand('ls notes | head'), true, 'a line with neither word is read as before');
+    } finally {
+      seam.beforeReading = kept;
+    }
+    assertReads('ls notes | sort');
+  });
+
+  test('the browser build of the shared definition reads them the same', () => {
+    const src = f => fs.readFileSync(path.join(__dirname, '..', '..', 'public', f), 'utf8');
+    const root = {};
+    for (const name of ['read-only-shell.js', 'permissions.js']) new Function('self', 'module', src(name)).call(root, root, undefined);
+    for (const [cmd] of ROUTINE_COMMANDS.concat([['sort -o notes.md notes.md'], ['date -s 2026-01-01'], ["sort '-o' x y"]])) {
+      assert.strictEqual(root.RundockReadOnlyShell.isReadOnlyShellCommand(cmd), S.isReadOnlyShellCommand(cmd), cmd);
+      assert.strictEqual(root.RundockPermissions.classifyRisk('Bash', { command: cmd }), risk(cmd), cmd);
     }
   });
 });

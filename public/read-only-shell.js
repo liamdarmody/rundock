@@ -54,15 +54,24 @@
   // commands that went on to do nothing at all. `cd` reaches no file, so there
   // is nothing for it to write.
   //
-  // The card grader also recognised `date`, `diff`, `printenv`, `pushd`,
-  // `popd`, `sort`, `true`, `uniq`, `which` and `whoami`, and those are NOT
-  // carried across. Two of them are why: `sort -o FILE` and
-  // `uniq INPUT OUTPUT` write a file with no redirection character anywhere on
-  // the line, so shared into the boundary layer unqualified they would have
-  // graded a write into a persistence surface as a read and exempted it from
-  // its crossing. The rest cannot write, and are still left out, because
-  // restoring them to the grader's auto-allow set is a widening that should be
-  // judged on its own evidence rather than ride in on a change about sharing.
+  // The card grader also recognized `diff`, `printenv`, `pushd`, `popd`,
+  // `true`, `uniq`, `which` and `whoami`, and none of them is on this list.
+  // `uniq INPUT OUTPUT` writes a file with no redirection character anywhere
+  // on the line, so shared into the boundary layer it would grade a write into
+  // a persistence surface as a read and exempt it from its crossing. The
+  // others cannot write, and each one restored to the grader's auto-allow set
+  // is a widening judged on its own evidence.
+  //
+  // SORT AND DATE READ ONLY IN THE FORMS THAT READ. The grader recognized
+  // both, and neither is on this list either, because this list frees a word
+  // whatever its options. Each is judged by its options instead: a read when
+  // every option on the line is on its own list of reading options
+  // (SORT_OPTIONS and DATE_OPTIONS below), and any other option asks. The
+  // rest of their forms ask because they do more than read: `sort -o FILE`
+  // writes FILE with no redirection on the line, `sort -T DIR` puts its
+  // temporary files where it is told, `sort --compress-program=PROG` runs
+  // PROG, and `date -s`, `date --set`, a time operand (one not starting with
+  // `+`) and `date -f` without `-j` set the system clock.
   var NO_TARGET_COMMANDS = ['cd'];
 
   // Keywords a REAL COMMAND follows. Stripped, then the rest is judged on its
@@ -160,7 +169,14 @@
   //
   // EXHAUSTIVE BY INTENT. Only these two shapes are exempt, because only these
   // two provably reach no path. Every other target is a real file.
-  var DISCARDING_REDIRECT_RE = /\d*>>?\s*(?:\/dev\/null|&\s*\d+)/g;
+  //
+  // A DESCRIPTOR NUMBER IS THE REDIRECT'S ONLY WHEN IT STARTS A WORD, as bash
+  // reads it: `-t2>&1` is the word `-t2` and then `>&1`. Taken as the
+  // redirect's, the `2` was stripped with it, `-t` took the next word, and
+  // `sort -t2>&1 -o out in` read as a sort with no `-o`. With no number the
+  // redirect is stripped wherever it stands, because `>` ends the word before
+  // it in bash: `x>/dev/null` is `x`, and a discard.
+  var DISCARDING_REDIRECT_RE = /(?:(?<![^ \t\n])\d+)?>>?\s*(?:\/dev\/null|&\s*\d+)/g;
 
   // SPLIT ON OPERATORS, BUT NOT ON TEXT THAT LOOKS LIKE ONE. A regular
   // expression is full of shell operator characters, and quoting is what tells
@@ -271,6 +287,212 @@
     return true;
   }
 
+  // ── sort and date are judged the way find is, by the options that read ──
+  //
+  // Both are everyday reads, and both have forms that are not. `sort -o FILE`
+  // writes FILE with no redirection on the line, `-T DIR` writes temporary
+  // files where it is told, and `--compress-program=PROG` runs PROG. `date`
+  // sets the system clock when given `-s`, `--set` or a time operand, and the
+  // BSD `date -f FMT TIME` sets it too unless `-j` says not to. So each has a
+  // list of the options that keep it a read, with how many operands each
+  // takes, and ANY OTHER OPTION makes the segment not a read: one these lists
+  // never heard of, one a later version adds, a typo.
+  //
+  // CHECKED AGAINST TWO MANUALS, because the same text runs under either:
+  // this Mac's (the FreeBSD sort, "2.3-Apple", and the FreeBSD date), and GNU
+  // coreutils', which Linux and Git Bash on Windows run. Each entry says which
+  // manual it comes from. An option one of them does not have is refused
+  // there before anything runs, so it only has to read in the other.
+  //
+  // OPTIONS ARE READ AS getopt READS THEM, because that is what decides what
+  // runs. A short bundle is taken letter by letter, and a letter that takes an
+  // operand takes the rest of the bundle, or the next word when the bundle
+  // ends with it: `-rno out` is `-r -n -o out`, and `-k2,2n` is `-k` given
+  // `2,2n`. Every word is judged wherever it stands, because GNU's getopt
+  // still reads an option after a file. `--` ends the options in both, and is
+  // on neither list, so it asks. A long option that takes a value reads only
+  // with the value joined by `=`; given as the next word it asks, which costs
+  // a card and claims nothing about which word getopt would hand it.
+  var SORT_OPTIONS = {
+    // No operand, in both manuals: -b -c -C -d -f -g -h -i -M -m -n -R -r -s
+    // -u -V -z. Never `o` (writes a file) or `T` (writes where it is told).
+    letters: 'bcCdfghiMmnRrsuVz',
+    // One operand, in both manuals: -k KEY, -t SEPARATOR, -S SIZE.
+    operandLetters: 'ktS',
+    // An operand only when joined to the letter: none.
+    joinedLetters: '',
+    // Both manuals. GNU's `--stable` and `--check=diagnose-first`, and both
+    // manuals' --files0-from, --random-source, --batch-size and --parallel,
+    // read too and are left off to keep the list short: they ask.
+    long: ['--check', '--check=silent', '--check=quiet', '--merge', '--unique',
+      '--ignore-leading-blanks', '--dictionary-order', '--ignore-case',
+      '--general-numeric-sort', '--human-numeric-sort', '--ignore-nonprinting',
+      '--month-sort', '--numeric-sort', '--random-sort', '--reverse',
+      '--version-sort', '--zero-terminated', '--debug'],
+    // Both manuals, the value joined by `=`.
+    longValue: ['--sort=', '--key=', '--field-separator=', '--buffer-size='],
+  };
+  var DATE_OPTIONS = {
+    // No operand: -u and -R (both manuals; GNU's -R is --rfc-email), and -j,
+    // this Mac's "do not try to set the date", which GNU's date refuses.
+    letters: 'uRj',
+    // One operand: -r FILE or SECONDS (both), -z ZONE and -v ADJUST (this
+    // Mac's), -d STRING (GNU's) and -f (both: this Mac's input format, which
+    // reads only with -j, below, and GNU's file of dates).
+    //
+    // Before macOS 12.3, this Mac's `date -d N` set the kernel's
+    // daylight-saving flag through settimeofday, which only the superuser may
+    // call; an agent runs as the person, and `sudo` is graded irreversible
+    // before this is asked. Every later release, and GNU, read `-d` as a date
+    // to show.
+    operandLetters: 'rzvdf',
+    // An operand only when joined to the letter: -I[FMT] (both). `-I seconds`
+    // hands `seconds` to date as a time to set, so -I never takes the next word.
+    joinedLetters: 'I',
+    // GNU's long forms. This Mac's date has none, and refuses every one.
+    long: ['--utc', '--universal', '--iso-8601', '--rfc-email', '--debug'],
+    longValue: ['--date=', '--iso-8601=', '--rfc-3339=', '--reference='],
+  };
+
+  // The options and operands of one command in the order getopt meets them,
+  // or null when an option is not on the command's lists. A lone `-` is
+  // standard input, an operand.
+  function optionsAndOperands(words, spec) {
+    var seen = [];
+    for (var i = 0; i < words.length; i++) {
+      var w = words[i];
+      if (w.charAt(0) !== '-' || w === '-') { seen.push({ operand: w }); continue; }
+      if (w.charAt(1) === '-') {
+        var joined = spec.longValue.some(function (prefix) { return w.indexOf(prefix) === 0; });
+        if (spec.long.indexOf(w) >= 0 || joined) { seen.push({ option: w }); continue; }
+        return null;
+      }
+      for (var j = 1; j < w.length; j++) {
+        var letter = w.charAt(j);
+        if (spec.letters.indexOf(letter) >= 0) { seen.push({ option: letter }); continue; }
+        if (spec.joinedLetters.indexOf(letter) >= 0) { seen.push({ option: letter }); break; }
+        if (spec.operandLetters.indexOf(letter) >= 0) {
+          seen.push({ option: letter });
+          if (j === w.length - 1) i++;
+          break;
+        }
+        return null;
+      }
+    }
+    return seen;
+  }
+
+  // WHETHER date SETS NOTHING. An operand starting with `+` is a format to
+  // show the date in; any other operand is a time to set. `-f` names the
+  // format of a time to set. Either one is a read only after `-j`, and only a
+  // `-j` met before the first operand counts: this Mac's getopt stops at the
+  // first operand, so in `date 0101 -j` the `-j` is an operand and 0101 is
+  // set. GNU's date refuses `-j` outright, so a line holding one sets nothing
+  // there either.
+  function dateOnlyReads(seen) {
+    var noSet = false;
+    for (var i = 0; i < seen.length && !('operand' in seen[i]); i++) {
+      if (seen[i].option === 'j') noSet = true;
+    }
+    var sets = false;
+    for (var k = 0; k < seen.length; k++) {
+      if (seen[k].option === 'f') sets = true;
+      if ('operand' in seen[k] && seen[k].operand.charAt(0) !== '+') sets = true;
+    }
+    return noSet || !sets;
+  }
+
+  // THE WORDS getopt IS HANDED, read from the text as the shell reads them,
+  // or null when the text holds anything whose result the text alone does not
+  // show. Only a space or a tab ends a word, as in bash. Quotes and
+  // backslashes are taken away, so `'-o'` and `-\o` are the `-o` the program
+  // is given. Not followed at all: a `$` or a backtick
+  // (unquoted or inside double quotes), a glob, a brace, a bracket, a
+  // redirection, a quote left open, a control character, and text longer than
+  // this reading follows. Each can hand the program a word the text does not
+  // show, `-o` among them, so the segment is not a read.
+  var OPTIONS_READ_LIMIT = 8192;
+  // Unquoted, only these are plain text in bash and in zsh alike.
+  var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\/:,=+%@~-]|[\p{L}\p{M}\p{N}])$/u;
+  function shellWords(text) {
+    // UNREADABLE is the PowerShell reading's test, below: a control character,
+    // a replacement character, or half a surrogate pair.
+    if (text.length > OPTIONS_READ_LIMIT || UNREADABLE.test(text)) return null;
+    var words = [];
+    var word = '';
+    var inWord = false;
+    var quote = '';
+    for (var i = 0; i < text.length; i++) {
+      var c = text[i];
+      if (quote === "'") { if (c === "'") quote = ''; else word += c; continue; }
+      if (quote === '"') {
+        if (c === '"') { quote = ''; continue; }
+        if (c === '$' || c === '`') return null;
+        if (c === '\\' && i + 1 < text.length && '$`"\\'.indexOf(text[i + 1]) >= 0) { word += text[++i]; continue; }
+        word += c;
+        continue;
+      }
+      if (c === ' ' || c === '\t') { if (inWord) words.push(word); word = ''; inWord = false; continue; }
+      inWord = true;
+      if (c === "'" || c === '"') { quote = c; continue; }
+      if (c === '\\') {
+        if (i + 1 >= text.length) return null;
+        word += text[++i];
+        continue;
+      }
+      if (!PLAIN_WORD_CHAR.test(c)) return null;
+      word += c;
+    }
+    if (quote) return null;
+    if (inWord) words.push(word);
+    return words;
+  }
+
+  // A FAILURE INSIDE THIS READING IS AN ANSWER, as it is in the PowerShell
+  // reading: not a read, so the command cards. A test forces one through this
+  // seam; what it returns is ignored, so all it can do is fail.
+  var optionReadingSeam = { beforeReading: function () {} };
+
+  // A BLANK BASH DOES NOT SPLIT ON. JavaScript's `\s` takes a form feed, a
+  // vertical tab, a carriage return and the Unicode spaces (U+00A0, U+2000 to
+  // U+200A, U+3000 and the rest) for a space, and bash takes none of them for
+  // one. Split by `\s`, `sort -t<form feed> -o out in` reads as `-t -o out in`,
+  // `-t` given `-o`, while sort is handed `-t` with the form feed and then
+  // `-o out`, and writes `out`. So one anywhere in the segment, quoted or not,
+  // means it is not a read.
+  var NOT_A_WORD_BREAK = /[^\S \t]/;
+
+  // The text after the first `count` words, words ending at a space or a tab.
+  function textAfterWords(text, count) {
+    var i = 0;
+    var blank = function (c) { return c === ' ' || c === '\t'; };
+    while (i < text.length && blank(text[i])) i++;
+    for (var k = 0; k < count; k++) {
+      while (i < text.length && !blank(text[i])) i++;
+      while (i < text.length && blank(text[i])) i++;
+    }
+    return text.slice(i);
+  }
+
+  // `sort` or `date` judged as one from the segment's own text, never from
+  // words split some other way: the words getopt is handed after the first
+  // `skip` (any keyword before the command, and the command), then its
+  // options against the command's lists.
+  function optionsOnlyRead(command, segment, skip) {
+    try {
+      optionReadingSeam.beforeReading(command);
+      var text = String(segment);
+      if (NOT_A_WORD_BREAK.test(text)) return false;
+      var words = shellWords(textAfterWords(text, skip));
+      if (!words) return false;
+      var seen = optionsAndOperands(words, command === 'sort' ? SORT_OPTIONS : DATE_OPTIONS);
+      if (!seen) return false;
+      return command === 'sort' || dateOnlyReads(seen);
+    } catch (failed) {
+      return false;
+    }
+  }
+
   // `rg --pre <command>` runs an arbitrary preprocessor over every file it
   // searches. Named rather than inverted because ripgrep's surface is small
   // and stable, and because only this one flag executes anything.
@@ -316,6 +538,7 @@
     var first = bareWord(words[0]);
     if (NON_COMMAND_KEYWORDS.indexOf(first) >= 0) return true;
     if (first === 'find') return findOnlyReads(words.slice(1));
+    if (first === 'sort' || first === 'date') return optionsOnlyRead(first, segment, stripped + 1);
     if (Object.prototype.hasOwnProperty.call(EXECUTING_FLAGS, first)
       && EXECUTING_FLAGS[first].test(segment)) return false;
     if (Object.prototype.hasOwnProperty.call(WRITING_FLAGS, first)
@@ -339,10 +562,33 @@
   // definition of a read has to carry the reason a read cannot be trusted.
   var HIDES_SUBCOMMAND = /\$\(|`|<\(|>\(/;
 
+  // Whether a segment runs `sort` or `date`, past any keyword before it.
+  function leadsSortOrDate(segment) {
+    var words = String(segment).split(/\s+/).filter(Boolean);
+    while (words.length && KEYWORD_PREFIXES.indexOf(bareWord(words[0])) >= 0) words.shift();
+    var first = words.length ? bareWord(words[0]) : '';
+    return first === 'sort' || first === 'date';
+  }
+
+  // A CARRIAGE RETURN ENDS A SEGMENT HERE AND ENDS NOTHING IN BASH, which
+  // takes it as part of a word. So the words after one would be judged as a
+  // command of their own: `sort -t<CR>cat -o out in` is one sort, handed `-t`
+  // and then `-o out`, and it writes `out`. Whether the text holds one and a
+  // sort or a date: such a line is not a read, here and wherever else the
+  // hook reads its segments one by one.
+  function carriageReturnSplitsSortOrDate(text) {
+    var str = String(text);
+    return str.indexOf('\r') >= 0 && shellSegments(str).some(leadsSortOrDate);
+  }
+
+  // Only text is read. Anything else is not a command this can judge, so it
+  // is not a read, and turning it into text first could throw.
   function isReadOnlyShellCommand(command) {
+    if (typeof command !== 'string') return false;
     var str = String(command).replace(DISCARDING_REDIRECT_RE, ' ');
     if (/>>?|\btee\b/.test(str)) return false;
     if (HIDES_SUBCOMMAND.test(str)) return false;
+    if (carriageReturnSplitsSortOrDate(str)) return false;
     var segments = shellSegments(str);
     return segments.length > 0 && segments.every(segmentReads);
   }
@@ -507,10 +753,13 @@
 
   // Only what a caller actually uses. The registries stay private: exporting
   // them invites a second place to reason about membership, which is the
-  // shape this module exists to remove. The seam is exported for the tests
-  // that force a failure inside the PowerShell reading.
+  // shape this module exists to remove. The seams are exported for the tests
+  // that force a failure inside the PowerShell reading and inside the reading
+  // of sort's and date's options. The carriage-return rule is exported for the
+  // hook, which reads a command's segments one by one for what they write, so
+  // that it asks the same rule rather than keeping a copy.
   return {
     DISCARDING_REDIRECT_RE, shellSegments, isReadOnlyShellCommand, isReadOnlyPowerShellCommand,
-    isDestructiveShellCommand, powerShellReadingSeam,
+    isDestructiveShellCommand, powerShellReadingSeam, optionReadingSeam, carriageReturnSplitsSortOrDate,
   };
 }));

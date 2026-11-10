@@ -186,7 +186,7 @@ const fs = require('fs');
 // directory resolves on disk rather than inside the archive. The shared module
 // is named in package.json's asarUnpack for that reason, and a test binds the
 // two so a later shared module cannot be added without it.
-const { isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isDestructiveShellCommand, shellSegments } = require('../public/read-only-shell.js');
+const { isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isDestructiveShellCommand, shellSegments, carriageReturnSplitsSortOrDate } = require('../public/read-only-shell.js');
 // The Code-mode verdict and the development paths live beside this file, in
 // scripts/, so they are unpacked with it (package.json asarUnpack scripts/**).
 const { codeModeVerdict, keychainVerdict } = require('./code-mode-verdict.js');
@@ -2019,6 +2019,10 @@ function answerFileWriteWords(command, posixText = false, readsPart = isReadOnly
     return posixText && !/^['"]/.test(w) && s.includes('\\') && !WIN_DRIVE.test(s) && !WIN_UNC.test(s) ? s.replace(/\\(.)/g, '$1') : s;
   };
   const text = String(command);
+  // A carriage return splits a segment here and not in bash, so a sort or a
+  // date on a line holding one is not read segment by segment: every word of
+  // the line counts as written. The same rule the whole-line reading asks.
+  const splitAtReturn = readsPart === isReadOnlyShellCommand && carriageReturnSplitsSortOrDate(text);
   let from = 0;
   for (const seg of shellSegments(text)) {
     const segAt = text.indexOf(seg, from);
@@ -2039,6 +2043,9 @@ function answerFileWriteWords(command, posixText = false, readsPart = isReadOnly
     const verb = bare(rest[at] || '').split('/').pop();
     const args = rest.slice(at + 1).map(bare);
     let reads = readsPart(rest.join(' ')) || READS_NAMED_FILES.has(verb);
+    // `sort` and `date` are read from the segment's own text. Rejoined from
+    // words split on any blank, a form feed after `-t` hides the `-o` after it.
+    if (readsPart === isReadOnlyShellCommand && (verb === 'sort' || verb === 'date')) reads = readsPart(seg);
     if (verb === 'git') {
       let i = 0;
       while (i < args.length && args[i].startsWith('-')) i += (args[i] === '-C' || args[i] === '-c') ? 2 : 1;
@@ -2058,6 +2065,7 @@ function answerFileWriteWords(command, posixText = false, readsPart = isReadOnly
     // mode and owner of one already there, so every word it names is written.
     const makesFolders = verb === 'install' && args.some(a => /^-[a-zA-Z]*d/.test(a) || a === '--directory');
     if (makesFolders) reads = false;
+    if (splitAtReturn) reads = false;
     if (PLACES_INTO.has(verb) && !makesFolders) {
       const t = args.indexOf('-t');
       const named = t >= 0 ? args[t + 1] : (args.find(a => a.startsWith('--target-directory=')) || '').slice('--target-directory='.length);
