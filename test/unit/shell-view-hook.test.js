@@ -102,6 +102,8 @@ const hidden = () => [
   ['a copy inside a substitution in double quotes', `echo "$(cp x ${settings})"`],
   ['an escaped quote inside $\'…\' in a shell\'s -c', `bash -c "ls $'\\\\''; cp x ${settings}; ls $'\\\\''"`],
   ['a copy after a case pattern', `case x in x) cp x ${settings};; esac`],
+  ['a copy in a zsh glob qualifier', `ls *(e:'cp x ${settings}':)`],
+  ['a copy in a zsh glob qualifier in brackets, after another', `ls *(.e[cp x ${settings}])`],
 ];
 
 describe('through the real hook, a quote that opens nothing hides no copy over the settings', { skip: SKIP }, () => {
@@ -149,6 +151,20 @@ describe('through the real hook, a quote that opens nothing hides no copy over t
       assert.strictEqual((await judge(command, true)).cls, 'runs', show(command));
     }
   });
+
+  // A READ BESIDE THE COPY MASKS NO WRITE: a crossing both readings find
+  // takes its write flag from the line's one decision.
+  for (const [mode, codeMode] of MODES) {
+    test(`${mode}: a cat of the settings before a hidden copy over them crosses as a write, as the plain line does`, async () => {
+      const plain = await judge(`cat ${settings}; cp x ${settings}`, codeMode);
+      const r = await judge(`cat ${settings} # it's\ncp x ${settings}\nls # '`, codeMode);
+      for (const [what, j] of [['the plain line', plain], ['the hidden copy', r]]) {
+        const c = ((j.payload && j.payload.crossings) || []).find((x) => x.path === fs.realpathSync(settings));
+        assert.ok(c && c.write === true, `${what}: the settings are not a write: ${JSON.stringify(j.payload && j.payload.crossings)}`);
+      }
+      assert.strictEqual(r.cls, plain.cls, 'asked as the plain line is');
+    });
+  }
 
   // THE INVERSE: a read of the same folder is freed, the hidden copy is not.
   test('a listing of the runtime\'s folder is freed, and the hidden copy after it asks', async () => {

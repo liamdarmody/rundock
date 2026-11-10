@@ -3136,7 +3136,19 @@ function inlineCode(text, reading = null, depth = 0) {
     const at = text.indexOf(seg.text, from);
     if (at < 0) break;
     from = at + seg.text.length;
-    const words = lexWords(seg.text).map(w => w.text);
+    const lexed = lexWords(seg.text);
+    const words = lexed.map(w => w.text);
+    // zsh RUNS THE CODE OF AN `e` GLOB QUALIFIER from inside the word: `ls
+    // *(e:'cp x f':)` copies over f. After a `(` outside every quote, each `e`
+    // and its delimiter starts code read as a command of its own, with each
+    // closing delimiter a blank.
+    for (const w of lexed) {
+      const open = /^[^'"`$\\]+\(/.test(w.raw) ? w.raw.indexOf('(') : -1;
+      for (const m of open > 0 ? w.text.slice(open).matchAll(/e([^\w\s])/g) : []) {
+        const close = { '(': ')', '[': ']', '{': '}', '<': '>' }[m[1]] || m[1];
+        commands.push({ text: w.text.slice(open + m.index + 2).split(close).join(' '), at });
+      }
+    }
     const shellCommand = shellDashC(words);
     if (shellCommand) {
       // What the shell runs is read as any command is, its here-documents, its
@@ -3206,6 +3218,7 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   const found = crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, readsPart, readOnly);
   const view = opts.shellTool === 'PowerShell' ? command : shellView(command).text;
   if (view === command) return found;
+  // No write flag in the key: both readings take it from the one readOnly above.
   const keyOf = c => `${c.path}\u0000${c.answerFile ? 'a' : ''}`;
   const have = new Set(found.map(keyOf));
   for (const c of crossingsIn(view, workspaceRoot, extraDirs, home, foldsCase, opts, readsPart, readOnly)) {

@@ -1393,6 +1393,12 @@ describe('PowerShell: no card unless every part of the command is a listed read'
     }
   });
 
+  test('a backslash before a closing quote is text in PowerShell, so the removal after it is seen', () => {
+    const command = 'Get-Content "C:\\x\\"; Remove-Item y';
+    assertCards(command);
+    assert.strictEqual(grade(command), 'high');
+  });
+
   test('text the reading throws on is not a read, and grades medium or high, never low', () => {
     for (const [what, command] of F.THROWS) {
       assert.strictEqual(shell.isReadOnlyPowerShellCommand(command), false, what);
