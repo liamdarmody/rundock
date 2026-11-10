@@ -261,17 +261,54 @@ describe('the editor: day, week and month', () => {
     for (const d of week.days) assert.ok(d.name.startsWith(d.label), `${d.name} does not contain ${d.label}`);
   });
 
-  // THE WEEK START RULE. From every day, the week starts with every day ticked,
-  // which is the same schedule; from a month, which names no day of the week,
-  // it starts with none, and asks.
-  test('choosing week from day ticks all seven, from month ticks none, and from week keeps its days', () => {
-    assert.deepStrictEqual(editor.chooseFrequency({ frequency: 'day', time: '09:00' }, 'week').days, WEEK);
-    assert.deepStrictEqual(editor.chooseFrequency({ frequency: 'month', day: '15', time: '09:00' }, 'week').days, []);
+  // THE WEEK START RULE. Week starts with no day ticked, from every day and
+  // from a month alike, and asks for one. A weekly routine is most often one
+  // day, so a set ticked in advance is a guess to undo. Chosen again from
+  // week, it keeps the days it has.
+  test('choosing week from day or from month ticks no day, and from week keeps its days', () => {
+    assert.deepStrictEqual(editor.chooseFrequency({ frequency: 'day', time: '09:00' }, 'week').days, [],
+      'a new routine, from day');
+    const daily = editor.reopenSchedule({ schedule: 'every day at 07:00' });
+    assert.deepStrictEqual(daily, { frequency: 'day', time: '07:00' }, 'sanity: a daily routine reopens as day');
+    assert.deepStrictEqual(editor.chooseFrequency(daily, 'week').days, [], 'a daily routine opened for editing');
+    assert.deepStrictEqual(editor.chooseFrequency({ frequency: 'month', day: '15', time: '09:00' }, 'week').days, [],
+      'from month');
     assert.deepStrictEqual(
       editor.chooseFrequency({ frequency: 'week', days: ['tuesday'], time: '09:00' }, 'week').days, ['tuesday']);
+    assert.deepStrictEqual(
+      editor.chooseFrequency({ frequency: 'week', days: WEEKDAYS, time: '09:00' }, 'week').days, WEEKDAYS,
+      'week chosen again keeps every day it has');
     assert.strictEqual(editor.chooseFrequency({ frequency: 'week', days: ['tuesday'], time: '09:00' }, 'day').days, null);
     assert.strictEqual(editor.chooseFrequency({ frequency: 'day', time: '07:30' }, 'week').time, '07:30',
       'and the time stays as it was');
+  });
+
+  // The control failing: a week that starts with no day is one that saves
+  // nothing, by the builder, the draft or the check that blocks Continue.
+  test('a week chosen from day or from month has no day, and saves nothing until one is ticked', () => {
+    for (const from of [{ frequency: 'day', time: '09:00' }, { frequency: 'month', day: '15', time: '09:00' }]) {
+      const week = { skillName: 'Digest', runOn: 'local', ...from, ...editor.chooseFrequency(from, 'week') };
+      assert.strictEqual(editor.needsADay(week), true, `from ${from.frequency}, it asks for a day`);
+      assert.strictEqual(editor.buildSchedule(week), null, `from ${from.frequency}, it builds no schedule`);
+      assert.strictEqual(editor.previewSentence(week), null, `from ${from.frequency}, it has no sentence`);
+      assert.strictEqual(editor.routineDraft({ skill: { slug: 'digest', name: 'Digest' }, agentId: 'piper', ...week }),
+        null, `from ${from.frequency}, it drafts no routine`);
+    }
+  });
+
+  // The most common next step: a new routine, week, Monday, Continue.
+  test('a new routine on week with Monday ticked reads every Monday, saves as every monday, and reopens on Monday alone', () => {
+    const local = editor.runOnOptions().filter(o => o.value === 'local')[0];
+    const start = { frequency: 'day', time: '09:00', skillName: 'Digest', runOn: 'local' };
+    const week = { ...start, ...editor.chooseFrequency(start, 'week') };
+    const monday = { ...week, days: editor.toggleDay(week.days, 'monday') };
+    assert.deepStrictEqual(monday.days, ['monday'], 'one press ticks Monday alone');
+    assert.strictEqual(editor.needsADay(monday), false);
+    assert.strictEqual(editor.previewSentence(monday), `Run Digest every Monday at 9:00am, on ${local.sentence}.`);
+    const draft = editor.routineDraft({ skill: { slug: 'digest', name: 'Digest' }, agentId: 'piper', ...monday });
+    assert.strictEqual(draft.schedule, 'every monday at 09:00');
+    assert.deepStrictEqual(editor.reopenSchedule({ schedule: draft.schedule }),
+      { frequency: 'week', days: ['monday'], time: '09:00' });
   });
 
   test('a single day, weekdays or any set reopens as week with exactly its days; every day as day; a month as month', () => {
@@ -288,14 +325,21 @@ describe('the editor: day, week and month', () => {
   });
 
   // The inverse of each move puts back what was there.
-  test('ticking then unticking a day, and week to day and back, put back what was there', () => {
+  test('ticking then unticking a day puts back what was there, and day to week and back is every day at the same time', () => {
     const start = ['monday', 'friday'];
     assert.deepStrictEqual(editor.toggleDay(editor.toggleDay(start, 'wednesday'), 'wednesday'), start);
     assert.deepStrictEqual(editor.toggleDay(editor.toggleDay(start, 'friday'), 'friday'), start);
     assert.deepStrictEqual(editor.toggleDay(['sunday'], 'monday'), ['monday', 'sunday'], 'always in week order');
+    assert.deepStrictEqual(editor.toggleDay(editor.toggleDay([], 'monday'), 'monday'), [],
+      'Monday ticked then unticked leaves no day');
+    const daily = { frequency: 'day', time: '07:30' };
+    const week = editor.chooseFrequency(daily, 'week');
+    assert.deepStrictEqual(week.days, [], 'week from day, no day ticked');
+    const back = editor.chooseFrequency(week, 'day');
+    assert.strictEqual(editor.buildSchedule(back), 'every day at 07:30', 'back to day, every day at the same time');
     const day = editor.chooseFrequency({ frequency: 'week', days: start, time: '09:00' }, 'day');
     assert.strictEqual(editor.buildSchedule(day), 'every day at 09:00');
-    assert.deepStrictEqual(editor.chooseFrequency(day, 'week').days, WEEK, 'back to week, all seven ticked');
+    assert.deepStrictEqual(editor.chooseFrequency(day, 'week').days, [], 'back to week, no day ticked');
   });
 
   test('a week with no day ticked saves nothing, and says so', () => {
