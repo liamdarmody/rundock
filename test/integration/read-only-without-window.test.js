@@ -601,3 +601,138 @@ describe('the branch fails closed', () => {
     return () => { require.cache[permissionsKey] = was; };
   }));
 });
+
+// ---------------------------------------------------------------------------
+// The window's own branch, kept as the fallback
+// ---------------------------------------------------------------------------
+
+// The server answers a low-risk read before any window sees it, so the
+// window's branch now meets one only when the server could not answer. That
+// is forced here, as above, by the decision module failing to load for the
+// server, while a real window is connected: the chat view the browser runs,
+// under jsdom, handed each request the server sends it as app.js hands it on,
+// and answering over the same socket. It answers the read itself, with no
+// card, for a conversation and for a routine run.
+describe('the window still answers a low-risk read the server did not answer', () => {
+  const { JSDOM } = require('jsdom');
+  const permissionsKey = require.resolve('../../public/permissions.js');
+  const GLOBALS = ['window', 'document', 'pendingPermissions', 'pendingPermissionsByConvo', 'ws', 'userScrolledUp', 'esc', 'escAttr',
+    'RundockPermissions', 'RundockChatMarkup', 'serverPlatform', 'workspaceMode', 'activeConversation', 'unread', 'updateUnreadBadge',
+    'renderConvoList', 'WebSocket'];
+  const saved = {};
+  let dom;
+  let chat;
+  let win;
+  const answered = [];
+
+  before(async () => {
+    for (const g of GLOBALS) saved[g] = Object.getOwnPropertyDescriptor(global, g);
+    dom = new JSDOM('<!doctype html><div id="messages"></div>'
+      + '<div id="approvals-dock" hidden><span class="approvals-dock-count"></span><div class="approvals-dock-list"></div></div>');
+    global.window = dom.window;
+    global.document = dom.window.document;
+    global.pendingPermissions = new Map();
+    global.pendingPermissionsByConvo = new Map();
+    global.userScrolledUp = false;
+    global.esc = (t) => { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; };
+    global.escAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // The module the window loads, held as the window holds it: loaded once,
+    // before the server's copy is made to fail.
+    global.RundockPermissions = P;
+    global.RundockChatMarkup = require('../../public/chat-markup.js');
+    global.serverPlatform = process.platform;
+    global.workspaceMode = 'knowledge';
+    global.activeConversation = { id: 'ro-window-elsewhere' };
+    global.unread = { markPermission() {}, resolvePermission() {} };
+    global.updateUnreadBadge = () => {};
+    global.renderConvoList = () => {};
+    global.WebSocket = { OPEN: 1 };
+    chat = require('../../public/views/chat.js');
+    chat.setStandingToolAllows([]);
+    await noWindow();
+    win = await h.connect();
+    // What the window sends goes to the server over the window's own socket.
+    global.ws = { readyState: 1, send: (text) => { const m = JSON.parse(text); answered.push(m); win.send(m); } };
+  });
+  after(() => {
+    if (win) win.close();
+    for (const g of GLOBALS) {
+      if (saved[g]) Object.defineProperty(global, g, saved[g]); else delete global[g];
+    }
+    if (dom) dom.window.close();
+  });
+
+  // The server cannot grade, for as long as `body` runs.
+  async function withoutTheServersAnswer(body) {
+    const was = require.cache[permissionsKey];
+    const broken = { id: permissionsKey, filename: permissionsKey, loaded: true, children: [], paths: [] };
+    Object.defineProperty(broken, 'exports', { get() { throw new Error('forced: the decision module failed to load'); } });
+    require.cache[permissionsKey] = broken;
+    try { return await body(); } finally { require.cache[permissionsKey] = was; }
+  }
+  // Each request the server sends the window, handed on as app.js hands it:
+  // one for a conversation to that conversation's handler, one with none to
+  // the approvals dock's.
+  function handOn(since, command) {
+    const seen = new Set();
+    return () => {
+      for (const m of win.messages.slice(since)) {
+        if (m.type !== 'control_request' || seen.has(m.request_id) || commandOf(m.request && m.request.input) !== command) continue;
+        seen.add(m.request_id);
+        if (m._conversationId) chat.handlePermissionRequest(m, m._conversationId);
+        else chat.handleOwnerlessPermissionRequest(m);
+      }
+      return seen;
+    };
+  }
+  const drawn = () => document.querySelectorAll('[id^="perm-"]').length;
+
+  test('a conversation\'s read: the window allows it with no card', async () => {
+    const convo = 'ro-window-convo';
+    const command = 'cat notes.md';
+    // On screen, so a card the window chose would be drawn here, not queued.
+    global.activeConversation = { id: convo };
+    const since = win.messages.length;
+    const sentBefore = answered.length;
+    const cardsBefore = drawn();
+    const hand = handOn(since, command);
+    const r = await withoutTheServersAnswer(async () => {
+      const { reply } = ask(bash(command, convo), { convo });
+      let got = null;
+      reply.then((x) => { got = x; });
+      assert.ok(await h.waitUntil(() => { hand(); return got; }, { timeout: 5000, interval: 5 }), 'the hook is answered');
+      return got;
+    });
+    const [requestId] = [...hand()];
+    assert.ok(requestId, 'the server sent the read to the window, having no answer of its own');
+    assert.deepStrictEqual(r.body, { allow: true }, 'the window\'s answer, not the server\'s');
+    assert.deepStrictEqual(answered.slice(sentBefore), [{ type: 'permission_response', requestId, conversationId: convo, allow: true }],
+      'allowed once, by the window, with no card');
+    assert.strictEqual(drawn(), cardsBefore, 'no card was drawn');
+    assert.strictEqual(pendingPermissionsByConvo.has(convo), false, 'or kept for later');
+    assert.deepStrictEqual(readOnlyEvents(convo), [], 'and the server recorded no answer of its own');
+  });
+
+  test('a routine run\'s read: the window allows it from the approvals dock\'s branch, with no card', async () => {
+    const command = 'head -5 notes.md';
+    const since = win.messages.length;
+    const sentBefore = answered.length;
+    const cardsBefore = drawn();
+    const hand = handOn(since, command);
+    const record = await withoutTheServersAnswer(async () => {
+      const run = startRoutine({ hooks: [{ tool: 'Bash', input: { command } }] });
+      assert.ok(await h.waitUntil(() => { hand(); const rec = run.record(); return rec && rec.status !== 'running'; }, { timeout: 15000, interval: 5 }),
+        `${run.name} finished`);
+      return run.record();
+    });
+    const [requestId] = [...hand()];
+    assert.ok(requestId, 'the server sent the run\'s read to the window, having no answer of its own');
+    assert.strictEqual(record.status, 'succeeded', JSON.stringify(record));
+    assert.deepStrictEqual(answersOf(record).map((a) => a && a.permissionDecision), ['allow'], 'the hook was told to allow it');
+    assert.deepStrictEqual(answered.slice(sentBefore), [{ type: 'permission_response', requestId, conversationId: '', allow: true }],
+      'allowed once, by the window, with no card');
+    assert.strictEqual(drawn(), cardsBefore, 'no card was drawn');
+    assert.strictEqual(document.querySelector('#approvals-dock').hidden, true, 'and the dock stayed hidden');
+    assert.strictEqual(record.refusedCards, undefined, 'the run counts no refused card');
+  });
+});
