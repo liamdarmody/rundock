@@ -18,13 +18,17 @@
 //   2. Put this machine's own folders back as placeholders, so the file is the
 //      same on every machine and names nobody's home, and rename a fixture's
 //      own folder called home or Users, so no path reads as a person's home.
-//      The repository's personal-data check is then run over what would be
-//      written, and any finding stops the recording. A line longer than
-//      LONGEST is left out: each is a test of the reading's own length limit,
-//      pinned there, and three are a megabyte each.
 //   3. Grade each line with public/read-only-shell.js and public/permissions.js
 //      as they stood at BASE, read from git, and write each line with main's
-//      verdict: whether it reads, and its risk.
+//      verdict: whether it reads, and its risk. A line longer than a kibibyte
+//      is a test of the reading's own length limit, a short text repeated
+//      thousands of times (three are a megabyte each), so it is written in
+//      pieces (test/helpers/read-only-on-main.js reads them): each piece is a
+//      text and how many times it repeats. Every line written in pieces is
+//      read back before anything is written, and one that does not read back
+//      as exactly the line stops the recording. The repository's personal-data
+//      check is then run over the file that would be written and over every
+//      line as it reads back, and any finding stops the recording too.
 //
 // Needs a folder outside every temp folder and git working tree, as the tests
 // do: set RUNDOCK_TEST_OUTSIDE_TEMP_ROOT if /var/tmp is not writable.
@@ -33,6 +37,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync, execFileSync } = require('node:child_process');
 const { scanPersonal, PLACEHOLDER_NAMES } = require('../../scripts/personal-data.js');
+const { decodeCommand, LONGEST_AS_WRITTEN } = require('../helpers/read-only-on-main.js');
 
 // The merge base the options reading was built on.
 const BASE = '7a23656a22306859b540d5ff321d0ed9cb3805cc';
@@ -40,7 +45,10 @@ const REPO = path.join(__dirname, '..', '..');
 const OUT = path.join(REPO, 'test', 'fixtures', 'read-only-on-main.json');
 const PRELOAD = path.join(__dirname, 'record-read-only-on-main-preload.js');
 const JUDGES_COMMANDS = /isReadOnlyShellCommand|read-only-shell\.js|classifyRisk\(/;
-const LONGEST = 64 * 1024;
+// A repeat is written as one piece when its text is at most LONGEST_UNIT
+// characters and the repeats cover at least SHORTEST_RUN of them.
+const LONGEST_UNIT = 256;
+const SHORTEST_RUN = 64;
 
 const git = (args) => execFileSync('git', args, { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
@@ -94,9 +102,7 @@ function steady(line) {
 function scrub(lines) {
   const pairs = placeholders();
   const out = new Set();
-  let long = 0;
   for (const line of lines) {
-    if (line.length > LONGEST) { long++; continue; }
     let s = line;
     for (const [real, name] of pairs) s = s.split(real).join(name);
     // A fixture world keeps its own folder called home, holding the fixture's
@@ -106,8 +112,40 @@ function scrub(lines) {
   const user = os.userInfo().username;
   const named = [...out].filter(l => pairs.some(([real]) => l.includes(real)) || (user.length > 2 && l.includes(user)));
   if (named.length) throw new Error(`${named.length} lines still name this machine, the first: ${JSON.stringify(named[0].slice(0, 200))}`);
-  console.log(`left out ${long} lines longer than ${LONGEST} characters`);
   return [...out].sort();
+}
+
+// A line as pieces: from each point, the text that repeats over the most of
+// what follows is one piece, with its count, and what repeats too little is
+// gathered into a piece that appears once. Any split would read back, and
+// the caller checks that this one does.
+function inPieces(line) {
+  const pieces = [];
+  let once = '';
+  let i = 0;
+  while (i < line.length) {
+    let best = null;
+    for (let unit = 1; unit <= LONGEST_UNIT && i + 2 * unit <= line.length; unit++) {
+      const text = line.slice(i, i + unit);
+      let times = 1;
+      while (line.startsWith(text, i + times * unit)) times++;
+      if (times >= 2 && unit * times >= SHORTEST_RUN && (!best || unit * times > best.unit * best.times)) best = { unit, times, text };
+      if (best && i + best.unit * best.times === line.length) break;
+    }
+    if (!best) { once += line[i]; i++; continue; }
+    if (once) pieces.push([once, 1]);
+    once = '';
+    pieces.push([best.text, best.times]);
+    i += best.unit * best.times;
+  }
+  if (once) pieces.push([once, 1]);
+  return { pieces };
+}
+function asStored(line) {
+  if (line.length <= LONGEST_AS_WRITTEN) return line;
+  const stored = inPieces(line);
+  if (decodeCommand(stored) !== line) throw new Error(`a line written in pieces does not read back as itself, so nothing was written: ${JSON.stringify(line.slice(0, 200))}`);
+  return stored;
 }
 
 function mainGraders(dir) {
@@ -125,13 +163,16 @@ function main() {
     const corpus = scrub(recordLines(testFiles(), linesDir));
     const { S, P } = mainGraders(mainDir);
     const rows = corpus.map(cmd => [cmd, S.isReadOnlyShellCommand(cmd) === true, P.classifyRisk('Bash', { command: cmd })]);
-    const body = rows.map(r => '    ' + JSON.stringify(r)).join(',\n');
+    const stored = rows.map(([cmd, reads, risk]) => [asStored(cmd), reads, risk]);
+    const body = stored.map(r => '    ' + JSON.stringify(r)).join(',\n');
     const text = `{\n  "recordedFrom": ${JSON.stringify(BASE)},\n  "row": ["command", "reads on main", "risk on main"],\n  "lines": [\n${body}\n  ]\n}\n`;
-    const findings = scanPersonal(path.relative(REPO, OUT), text);
+    const label = path.relative(REPO, OUT);
+    const findings = [...scanPersonal(label, text), ...scanPersonal(label, corpus.join('\n'))];
     if (findings.length) throw new Error(`the recording would carry personal data (${findings.length} findings, the first: ${findings[0].label} on line ${findings[0].line}); nothing was written`);
     fs.writeFileSync(OUT, text);
     const asks = rows.filter(r => !r[1]).length;
-    console.log(`recorded ${rows.length} lines, ${asks} of them not a read on main, to ${path.relative(process.cwd(), OUT)}`);
+    const inPiecesCount = stored.filter(r => typeof r[0] !== 'string').length;
+    console.log(`recorded ${rows.length} lines, ${asks} of them not a read on main, ${inPiecesCount} written in pieces, ${text.length} characters, to ${path.relative(process.cwd(), OUT)}`);
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }

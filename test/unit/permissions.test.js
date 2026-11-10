@@ -970,13 +970,15 @@ describe('options are judged as the shell reads them', () => {
   // recorded it (test/fixtures/read-only-on-main.json), read when first asked.
   // The recorder runs this file to learn which lines it judges, before the
   // recording exists, so a missing recording is no verdict rather than a
-  // throw, and every line is judged before any is checked.
+  // throw, and every line is judged before any is checked. A long line is
+  // stored in pieces, which test/helpers/read-only-on-main.js reads back.
   let mainVerdicts = null;
   const readsOnMain = (cmd) => {
     if (!mainVerdicts) {
       try {
-        mainVerdicts = new Map(require('../fixtures/read-only-on-main.json').lines.map(([c, r]) => [c, r]));
+        mainVerdicts = new Map(require('../helpers/read-only-on-main.js').recordedLines().map(([c, r]) => [c, r]));
       } catch (notRecorded) {
+        if (notRecorded.code !== 'MODULE_NOT_FOUND') throw notRecorded;
         mainVerdicts = new Map();
       }
     }
