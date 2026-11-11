@@ -287,6 +287,30 @@ describe('everything graded, and everything not low risk, still cards with no wi
       assert.ok(cardsFor(command).some((m) => m._conversationId === convo), `${field}: a card was raised`);
     });
   }
+
+  // THE SERVER FOLLOWS THE SHARED DEFINITION AS IT STANDS. A quoted option is
+  // judged as the program gets it, so `'--pre'` is rg's --pre, which runs a
+  // program on every file it searches, and a line with a parenthesis outside
+  // its quotes, as a zsh glob qualifier that runs code has, is never a read.
+  // Both lines read before the definition judged them that way; now both
+  // card. The plain forms beside them still read, and are answered at once.
+  test('a quoted option and a zsh glob qualifier\'s code wait for a card: the server follows the shared definition', async () => {
+    await noWindow();
+    const convo = 'ro-shell-reading';
+    const CARDED = ["rg '--pre' sh x .", "ls *(e:'echo x':)"];
+    const READS = ['rg sh x .', 'ls *.md'];
+    const waiting = CARDED.map((command) => ask(bash(command, convo), { convo }).reply);
+    for (const command of READS) {
+      const r = await ask(bash(command, convo), { convo }).reply;
+      assert.deepStrictEqual(r.body, READ_ONLY, `the plain form is answered by the server: ${command}`);
+    }
+    const answers = await Promise.all(waiting);
+    CARDED.forEach((command, i) => {
+      assert.deepStrictEqual(answers[i].body, TIMED_OUT, `not answered by the server: ${command}`);
+      assert.strictEqual(filedFor(command).filter((f) => f.convo === convo).length, 1, `stored to wait on a card: ${command}`);
+      assert.strictEqual(cardsFor(command).filter((m) => m._conversationId === convo).length, 1, `a card was raised: ${command}`);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
