@@ -2354,11 +2354,29 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
   });
 
   test('and the server does it: a router with no window applies a saved key while a turn is guarded, and nothing once none is', async () => {
+    // A turn's guard watches the home folder's shell startup files, and the
+    // test preload fails the run if any of them is the account's own
+    // (test/helpers/account-home-refused.js). So the guard is given a made-up
+    // home for this test only, as made-up-home.js gives a whole file one:
+    // HOME, the desktop layout that puts Rundock's record there too, and no
+    // ZDOTDIR or XDG_CONFIG_HOME. Put back once the turn is released.
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-home-')));
+    const ENV = ['HOME', 'RUNDOCK_ELECTRON', 'ZDOTDIR', 'XDG_CONFIG_HOME'];
+    const was = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+    process.env.HOME = home;
+    process.env.RUNDOCK_ELECTRON = '1';
+    delete process.env.ZDOTDIR;
+    delete process.env.XDG_CONFIG_HOME;
+    const restore = () => {
+      for (const k of ENV) { if (was[k] === undefined) delete process.env[k]; else process.env[k] = was[k]; }
+      fs.rmSync(home, { recursive: true, force: true });
+    };
     useWorkspace({});
     const ws = config.getWorkspace();
     const command = { tool_name: 'Bash', tool_input: { command: 'python3 tools/report.py' } };
     const { put, pending, sent, done } = routerWithNoWindow();
-    const turn = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000 });
+    let turn;
+    try { turn = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000 }); } catch (e) { restore(); throw e; }
     let released = false;
     try {
       assert.strictEqual(await put(command), null, 'with nothing saved, it waits for a card');
@@ -2374,6 +2392,7 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
       if (!released) turn.release();
       boundary.removeToolAllow('Bash:python3');
       done();
+      restore();
     }
   });
 });
