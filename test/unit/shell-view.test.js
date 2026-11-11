@@ -136,6 +136,11 @@ describe('where the shells read a quote differently, or the reading cannot finis
     assert.strictEqual(S.shellView(nested(8)).ok, true, 'eight deep is followed');
     assert.strictEqual(S.shellView(nested(40)).ok, false, 'forty deep is not');
     assert.strictEqual(S.shellView(nested(20000)).ok, false, 'and twenty thousand deep is an answer, not a crash');
+    assert.strictEqual(S.shellView(nested(8)).wordParen, false, 'what it follows holds no ( inside a word');
+    for (const n of [40, 20000]) assert.strictEqual(S.shellView(nested(n)).wordParen, true, `what it never read may hold one: ${n} deep`);
+    const ticked = (n) => 'echo ' + '$('.repeat(n) + '`ls`' + ')'.repeat(n);
+    assert.strictEqual(S.shellView(ticked(31)).wordParen, false, 'a backtick it follows holds none');
+    assert.strictEqual(S.shellView(ticked(32)).wordParen, true, 'one it never read may hold one');
   });
 
   test('a case inside $( ), whose pattern\'s ) bash 3.2 takes as its end', () => {
@@ -185,11 +190,11 @@ describe('the most common reads beside these lines still read', () => {
 });
 
 describe('a failure inside the view is an answer', () => {
-  test('the line as given, not readable, so nothing reads and the risk is not low', () => {
+  test('the line as given, not readable and marked, so nothing reads and the risk is not low', () => {
     const seam = S.shellViewSeam.beforeReading;
     S.shellViewSeam.beforeReading = () => { throw new Error('forced failure'); };
     try {
-      assert.deepStrictEqual(S.shellView("ls # it's"), { text: "ls # it's", ok: false, parens: false, wordParen: false });
+      assert.deepStrictEqual(S.shellView("ls # it's"), { text: "ls # it's", ok: false, parens: false, wordParen: true });
       for (const line of ['ls', 'cat notes/todo.md', "rg -n 'TODO' notes"]) assertAsks(line);
     } finally {
       S.shellViewSeam.beforeReading = seam;

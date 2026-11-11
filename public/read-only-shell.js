@@ -221,7 +221,9 @@
   // does not model, so there they ask.
   //
   // A FAILURE INSIDE THIS READING IS AN ANSWER: the line as given and `ok`
-  // false. A test forces one through this seam.
+  // false. A test forces one through this seam. A failure, or nesting deeper
+  // than this reading follows, also sets `wordParen`: text it never read can
+  // hold a `(` inside a word, and Notes mode grades a line so marked high.
   var shellViewSeam = { beforeReading: function () {} };
   var VIEW_DEPTH_LIMIT = 32;
   // The characters that give text a structure: quotes, an escape, a
@@ -236,14 +238,14 @@
       var seen = viewOf(text, 0);
       return { text: seen.chars.join(''), ok: seen.ok, parens: seen.parens, wordParen: seen.wordParen };
     } catch (failed) {
-      return { text: text, ok: false, parens: false, wordParen: false };
+      return { text: text, ok: false, parens: false, wordParen: true };
     }
   }
   function viewOf(text, depth) {
     var v = text.split('');
     var n = text.length;
     var st = { ok: true, parens: false, wordParen: false, pending: [], command: false, marks: 0 };
-    if (depth > VIEW_DEPTH_LIMIT) return { chars: v, ok: false, parens: false, wordParen: false, command: false };
+    if (depth > VIEW_DEPTH_LIMIT) return { chars: v, ok: false, parens: false, wordParen: true, command: false };
     var blank = function (k) { if (v[k] !== '\n') v[k] = ' '; };
     var blankStructure = function (from, to) {
       for (var k = from; k < to; k++) if (STRUCTURE_CHARS.indexOf(text[k]) >= 0) blank(k);
@@ -253,7 +255,7 @@
     // Commands from `p` to `limit`. In a substitution (`inParen`) they end at
     // the `)` that closes it, whose index is returned.
     function script(p, limit, inParen, level) {
-      if (depth + level > VIEW_DEPTH_LIMIT) { st.ok = false; return limit; }
+      if (depth + level > VIEW_DEPTH_LIMIT) { st.ok = false; st.wordParen = true; return limit; }
       var wordStart = true;
       var wordFrom = p;
       var groups = 0;
