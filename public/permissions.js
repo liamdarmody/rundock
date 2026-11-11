@@ -39,7 +39,7 @@
   // command the hook read as harmless was carded here anyway. See
   // public/read-only-shell.js.
   var DISCARDING_REDIRECT_RE = RundockReadOnlyShell.DISCARDING_REDIRECT_RE;
-  var shellSegments = RundockReadOnlyShell.shellSegments;
+  var shellSplits = RundockReadOnlyShell.shellSplits;
   var isReadOnlyShellCommand = RundockReadOnlyShell.isReadOnlyShellCommand;
   var isReadOnlyPowerShellCommand = RundockReadOnlyShell.isReadOnlyPowerShellCommand;
   var isDestructiveShellCommand = RundockReadOnlyShell.isDestructiveShellCommand;
@@ -84,8 +84,9 @@
   function forceIsDestructive(cmd) {
     if (!/-Force\b/i.test(cmd)) return false;
     // Judged per segment: a read with -Force must not shield a removal with
-    // -Force later on the same line.
-    var segs = shellSegments(cmd);
+    // -Force later on the same line. Each segment of both splits is judged
+    // (shellSplits), so one that is a removal in either is one.
+    var segs = shellSplits(cmd);
     for (var i = 0; i < segs.length; i++) {
       if (/-Force\b/i.test(segs[i]) && !FORCE_SAFE_READ_CMDLETS.test(segs[i])) return true;
     }

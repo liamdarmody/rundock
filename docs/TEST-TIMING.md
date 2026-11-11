@@ -361,18 +361,37 @@ Six places in the suite gate on elapsed real time. All six are
   tolerance for timer coarseness.
 - **`test/unit/shell-code-timing.test.js`**: the permission hook's shell
   check must grow linearly with the command. Making a chain of commands after
-  a `cd` four times longer (500 to 2,000) and a here-document fed to a shell
-  four times longer (1,000 to 4,000 lines) may take at most eight times as
-  long, the best of three runs at each size, with 50ms of slack for timer
-  coarseness; the larger size must also finish under 5s, checked after its
-  first run so that a check gone quadratic fails in seconds. Measured at about
-  110ms and 140ms for the larger sizes, against 6s and 3s when the check
-  re-read the command for every word. The ratio is the claim: linear growth
-  comes out near 4 and quadratic growth near 16, so the bound of 8 is clear
-  of both. The step was a doubling first, against a bound of 3, and a shared
-  CI runner measured linear growth at 3.7 there, failing the test with
-  nothing wrong. If this fails, first check whether both sizes slowed alike,
-  which is load rather than growth.
+  a `cd` eight times longer (250 to 2,000) and a here-document fed to a shell
+  eight times longer (500 to 4,000 lines) may take at most 24 times as long,
+  with 50ms of slack for timer coarseness. Each size is run once to warm it
+  up and then timed five times, the two sizes taking turns, and the best of
+  each is kept, so a busy stretch slows both sizes alike rather than only the
+  one being timed. The larger size must also finish under 5s, checked after
+  its first run so that a check gone quadratic fails in seconds. Measured on
+  a laptop at about 150ms and 185ms for the larger sizes, against 24s and 32s
+  on the same laptop, busy with other work, when the check re-read the
+  command for every word. The ratio is the claim: linear growth comes out
+  near 8 (nearer 6 on a laptop, where a fixed cost in each check weighs on
+  the smaller size) and quadratic growth near 64, so the bound of 24, three
+  times linear and below half of quadratic (32), is clear of both. The
+  mutation row that re-reads the command for every word stops at the ceiling
+  before the ratio is reached, so the bound is held on its own: the decision
+  is `withinBound`, and the file's second group of tests checks it with no
+  clock. Linear growth, and the worst ratios CI measured with nothing wrong
+  scaled to the eightfold step, pass; quadratic growth, and a mildly
+  quadratic cost far under the ceiling, fail; and `linear`, given a modeled
+  clock, is shown to ask it. A mutation row that loosens the bound to 1000
+  turns those tests red. With the ceiling taken out by hand, the row that
+  re-reads the command for every word measured 65 and 50 against the bound.
+  The step was a doubling first, against a bound of 3, and a shared CI runner
+  measured linear growth at 3.7 there. It was then fourfold, against a bound
+  of 8, with every run of the larger size timed before the smaller one, and
+  CI Node 22 measured linear growth at 8.7 and 10.9 (962ms against 110ms,
+  667ms against 61ms). Each of those failed the test with nothing wrong.
+  Measured on 2026-11-10: the file takes 3.4s alone, and 20 runs in a row
+  alongside `npm test` all passed, at 10.5s to 25.9s each. If this fails,
+  first check whether both sizes slowed alike, which is load rather than
+  growth.
 
 ### Isolate
 

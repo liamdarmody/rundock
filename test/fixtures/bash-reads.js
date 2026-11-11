@@ -18,8 +18,9 @@ const path = require('node:path');
 const LOW = ['ls -la', 'cat notes.md', 'grep -r foo .', 'pwd'];
 
 // Words the card grader alone used to trust, which ask until each is judged
-// on its own: graded medium.
-const NARROWED = ['date', 'whoami', 'which ls', 'printenv', 'sort notes.txt',
+// on its own: graded medium. `sort` and `date` have been judged since and read
+// in their reading forms only, so their writing forms stand here for them.
+const NARROWED = ['whoami', 'which ls', 'printenv', 'sort -o notes.txt notes.txt', 'date -s 2026-01-01',
   'uniq a.txt', 'diff a b', 'pushd /tmp', 'popd', 'true'];
 
 // Inline code execution: never low.

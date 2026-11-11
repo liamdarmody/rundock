@@ -14,6 +14,7 @@
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { makeTempDir, cleanup } = require('../helpers/workspace.js');
 
@@ -63,16 +64,21 @@ if (args[0] === '--version') {
 `;
 }
 
-// `folder`, when given, is the name of the folder the stub sits in, inside a
-// fresh temp folder: a name a shell would read as more than a name.
-function makeStub(said, folder) {
-  let dir = makeTempDir('claude-floor-stub-');
-  if (folder) { dir = path.join(dir, folder); fs.mkdirSync(dir); }
+// The stub, written into `dir`, which is made if it is not there.
+function stubAt(dir, said) {
+  fs.mkdirSync(dir, { recursive: true });
   const bin = path.join(dir, 'claude');
   fs.writeFileSync(bin, stubSource());
   fs.chmodSync(bin, 0o755);
   fs.writeFileSync(path.join(dir, 'said'), said);
   return { dir, bin, say: (next) => fs.writeFileSync(path.join(dir, 'said'), next) };
+}
+
+// `folder`, when given, is the name of the folder the stub sits in, inside a
+// fresh temp folder: a name a shell would read as more than a name.
+function makeStub(said, folder) {
+  const dir = makeTempDir('claude-floor-stub-');
+  return stubAt(folder ? path.join(dir, folder) : dir, said);
 }
 
 function runsOf(stub) {
@@ -139,8 +145,18 @@ function leadsGroup(pid) {
   try { process.kill(-pid, 0); return true; } catch (e) { return e.code === 'ESRCH' ? false : `unknown (${e.code})`; }
 }
 
+// The notice, word for word, for a copy at a path short enough to be shown
+// whole and outside the home folder. The tests below that hold a notice to
+// this text name such a path.
 const frozen = (version, bin) => `Rundock found Claude Code ${version} at ${bin}. Rundock needs 2.0.59 or later. `
-  + 'Update that copy with `claude update`, or remove it, then send your message again.';
+  + 'The Rundock app looks for it in ~/.local/bin, ~/.claude/bin, /usr/local/bin and /opt/homebrew/bin first. '
+  + 'Update that copy, or install a current one with the native installer, which puts it in ~/.local/bin. '
+  + 'Then send your message again.';
+// The notice spawnClaude should hand back for a stub's copy. A stub sits in a
+// temp folder, whose path on some machines is long enough to be shortened in
+// the notice, so these compare with the floor's own notice for that path and
+// leave its words to the tests that name a fixed one.
+const noticeFor = (version, bin) => floorLib().tooOldError(version, bin).message;
 
 const POSIX = process.platform === 'win32' ? 'the stub is a POSIX script found with which' : false;
 
@@ -242,7 +258,7 @@ describe('below the floor nothing is started', { skip: POSIX }, () => {
       assert.strictEqual(error.version, '2.0.58');
       assert.strictEqual(error.path, stub.bin);
       assert.strictEqual(error.floor, '2.0.59');
-      assert.strictEqual(error.message, frozen('2.0.58', stub.bin));
+      assert.strictEqual(error.message, noticeFor('2.0.58', stub.bin));
       assert.strictEqual(closed, true, 'and it closes after the error, as a spawn that failed does');
       assert.strictEqual(proc.pid, undefined, 'no process');
       assert.deepStrictEqual(chatsOf(stub), [], 'the binary was asked its version and never handed the chat');
@@ -348,6 +364,249 @@ describe('below the floor nothing is started', { skip: POSIX }, () => {
   });
 });
 
+// ── Where Rundock looks for Claude Code ──
+
+// The one list of folders the desktop app puts on PATH before it looks for
+// `claude`. Required where used, as the floor module is.
+const foldersLib = () => require('../../lib/runtime/claude-folders.js');
+
+describe('where Rundock looks for Claude Code', () => {
+  test('the list is the one the desktop app has always put on PATH, on each platform, with the native installer\'s folder first', () => {
+    const { claudeFolders, nativeInstallerFolder } = foldersLib();
+    assert.deepStrictEqual(claudeFolders({ platform: 'darwin', home: '/Users/someone', env: {} }),
+      ['/Users/someone/.local/bin', '/Users/someone/.claude/bin', '/usr/local/bin', '/opt/homebrew/bin']);
+    assert.deepStrictEqual(claudeFolders({ platform: 'linux', home: '/home/someone', env: {} }),
+      ['/home/someone/.local/bin', '/home/someone/.claude/bin', '/usr/local/bin', '/opt/homebrew/bin']);
+    const env = { LOCALAPPDATA: 'C:\\Users\\someone\\AppData\\Local', APPDATA: 'C:\\Users\\someone\\AppData\\Roaming' };
+    assert.deepStrictEqual(claudeFolders({ platform: 'win32', home: 'C:\\Users\\someone', env }),
+      ['C:\\Users\\someone\\.local\\bin', 'C:\\Users\\someone\\AppData\\Local\\Microsoft\\WinGet\\Links', 'C:\\Users\\someone\\AppData\\Roaming\\npm']);
+    assert.deepStrictEqual(claudeFolders({ platform: 'win32', home: 'C:\\Users\\someone', env: {} }), ['C:\\Users\\someone\\.local\\bin'],
+      'a folder whose variable is unset is left out, as before');
+    for (const [platform, home] of [['darwin', '/Users/someone'], ['linux', '/home/someone'], ['win32', 'C:\\Users\\someone']]) {
+      assert.strictEqual(claudeFolders({ platform, home, env })[0], nativeInstallerFolder(home, platform),
+        `on ${platform} the native installer's folder is searched first, so a copy it puts there is found ahead of the rest`);
+    }
+  });
+
+  test('PATH gets each folder it lacks at its front, in order, and one it holds keeps its place', () => {
+    const { withClaudeFolders } = foldersLib();
+    const folders = ['/h/.local/bin', '/h/.claude/bin', '/usr/local/bin', '/opt/homebrew/bin'];
+    assert.strictEqual(withClaudeFolders('/usr/bin:/bin', folders, ':'), '/h/.local/bin:/h/.claude/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin');
+    assert.strictEqual(withClaudeFolders('/usr/bin:/usr/local/bin:/bin', folders, ':'), '/h/.local/bin:/h/.claude/bin:/opt/homebrew/bin:/usr/bin:/usr/local/bin:/bin');
+    assert.strictEqual(withClaudeFolders(folders.join(':'), folders, ':'), folders.join(':'), 'nothing missing, nothing changed');
+    assert.strictEqual(withClaudeFolders('C:\\Windows', ['C:\\h\\.local\\bin'], ';'), 'C:\\h\\.local\\bin;C:\\Windows');
+  });
+});
+
+// ── What the notice tells a person to do ──
+
+// Removing the copy found is not a way forward on its own: the current copy
+// can sit outside every folder Rundock searches (an npm install under a Node
+// version manager, as in #401), and with the old one gone Rundock finds no
+// copy at all. So the notice names the folders Rundock searches and leads to
+// a current copy in one of them.
+
+// A folder as a person reads it in the notice: one inside the home folder
+// starts at `~`.
+const asShown = (dir) => (dir.startsWith(os.homedir() + path.sep) ? `~${dir.slice(os.homedir().length)}` : dir);
+// The folders the notice says the app looks in, as it lists them.
+function namedIn(said) {
+  const m = /The Rundock app looks for it in (.+?) first\. /.exec(said);
+  return m ? m[1].split(/, | and /) : null;
+}
+// Any word that would send a person to take a copy away.
+const REMOVAL = /\b(remov|delet|uninstall|rm\b|trash)/i;
+// The PATH a packaged app starts with on macOS, before Rundock adds to it.
+const LAUNCHD_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(path.delimiter);
+
+describe('what the too-old notice tells a person to do', () => {
+  test('the folders it names are the list the app puts first on PATH, in the order they are searched', () => {
+    const { tooOldError } = floorLib();
+    const { claudeFolders } = foldersLib();
+    const said = tooOldError('2.0.58', '/usr/local/bin/claude').message;
+    const folders = claudeFolders();
+    assert.ok(folders.length >= 3, `the list holds the folders (${folders.length})`);
+    assert.deepStrictEqual(namedIn(said), folders.map(asShown), 'every folder in the list, in its order, and no other');
+    if (process.platform !== 'win32') {
+      assert.strictEqual(said, frozen('2.0.58', '/usr/local/bin/claude'));
+    }
+    const win = tooOldError('2.0.58', 'C:\\Program Files\\claude.exe', { platform: 'win32', home: 'C:\\Users\\someone',
+      env: { LOCALAPPDATA: 'C:\\Users\\someone\\AppData\\Local', APPDATA: 'C:\\Users\\someone\\AppData\\Roaming' } }).message;
+    assert.deepStrictEqual(namedIn(win), ['~\\.local\\bin', '~\\AppData\\Local\\Microsoft\\WinGet\\Links', '~\\AppData\\Roaming\\npm'],
+      'on Windows, the Windows list');
+  });
+
+  test('neither the desktop app nor the notice spells a folder itself, and the desktop app only calls the shared step', () => {
+    // What proves the step puts the list on PATH is the test below that runs
+    // it; this holds the two readers to that one list.
+    const main = fs.readFileSync(path.join(ROOT, 'electron', 'main.js'), 'utf8');
+    const start = main.indexOf('function ensurePath()');
+    assert.ok(start >= 0, 'electron/main.js still has ensurePath');
+    const ensurePath = main.slice(start, main.indexOf('\n}\n', start) + 2);
+    assert.strictEqual(ensurePath, "function ensurePath() {\n  require('../lib/runtime/claude-folders.js').ensureClaudeFolders(process.env);\n}");
+    const floorSource = fs.readFileSync(path.join(ROOT, 'lib', 'runtime', 'claude-floor.js'), 'utf8');
+    assert.ok(floorSource.includes("require('./claude-folders.js')"), 'the notice reads the same list');
+    for (const [file, source] of [['ensurePath in electron/main.js', ensurePath], ['lib/runtime/claude-floor.js', floorSource]]) {
+      for (const spelled of ["'.local'", "'.claude'", "'bin'", '/usr/local/bin', '/opt/homebrew/bin', 'WinGet', 'APPDATA']) {
+        assert.ok(!source.includes(spelled), `${file} spells ${spelled} itself, a copy of the list that can drift from it`);
+      }
+    }
+  });
+
+  test('it offers two ways forward: update that copy, or install a current one with the native installer, whose folder is first', () => {
+    const { tooOldError } = floorLib();
+    const { nativeInstallerFolder } = foldersLib();
+    const said = tooOldError('2.0.58', '/opt/homebrew/bin/claude').message;
+    const native = asShown(nativeInstallerFolder(os.homedir()));
+    assert.strictEqual(native, path.join('~', '.local', 'bin'));
+    assert.ok(said.includes(`Update that copy, or install a current one with the native installer, which puts it in ${native}. `), said);
+    assert.doesNotMatch(said, /before it/, 'and asks for no folder that may not exist');
+    assert.ok(said.endsWith(' Then send your message again.'));
+  });
+
+  test('it never sends a person to remove the copy it found', () => {
+    const { tooOldError } = floorLib();
+    for (const bin of ['/usr/local/bin/claude', '/opt/homebrew/bin/claude', path.join(os.homedir(), '.claude', 'bin', 'claude')]) {
+      assert.doesNotMatch(tooOldError('2.0.58', bin).message, REMOVAL);
+    }
+  });
+
+  test('the old advice is gone from the app and its docs', () => {
+    const OLD = 'or remove it, then send your message again';
+    const found = [];
+    const walk = (rel) => {
+      const full = path.join(ROOT, rel);
+      for (const entry of fs.readdirSync(full, { withFileTypes: true })) {
+        const child = path.join(rel, entry.name);
+        if (entry.isDirectory()) { if (entry.name !== 'node_modules') walk(child); } else if (fs.readFileSync(path.join(ROOT, child), 'utf8').includes(OLD)) found.push(child);
+      }
+    };
+    for (const dir of ['docs', 'electron', 'lib', 'public']) walk(dir);
+    const top = fs.readdirSync(ROOT).filter((name) => name.endsWith('.md') || name === 'server.js');
+    assert.ok(top.includes('README.md') && top.includes('ARCHITECTURE.md') && top.includes('server.js'), 'the top-level files are read');
+    for (const name of top) if (fs.readFileSync(path.join(ROOT, name), 'utf8').includes(OLD)) found.push(name);
+    assert.deepStrictEqual(found, []);
+  });
+
+  test('it is the whole notice as plain text, under 400 characters however long the path, with the path\'s start and end kept', () => {
+    const { tooOldError } = floorLib();
+    const winEnv = (home) => ({ LOCALAPPDATA: `${home}\\AppData\\Local`, APPDATA: `${home}\\AppData\\Roaming` });
+    // `whole` is the path as the notice shows it whole; a case without one
+    // is cut.
+    const cases = [
+      { bin: '/usr/local/bin/claude', where: { platform: 'darwin', home: '/Users/someone', env: {} }, whole: '/usr/local/bin/claude' },
+      { bin: '/Users/someone-else/.nvm/versions/node/v22.12.0/bin/claude', where: { platform: 'darwin', home: '/Users/someone-else', env: {} },
+        whole: '~/.nvm/versions/node/v22.12.0/bin/claude' },
+      { bin: '/Users/someone/Library/Application Support/Claude/claude-code/2.0.58/claude.app/Contents/MacOS/claude',
+        where: { platform: 'darwin', home: '/Users/someone', env: {} },
+        whole: '~/Library/Application Support/Claude/claude-code/2.0.58/claude.app/Contents/MacOS/claude' },
+      { bin: '/Users/someone/Library/Application Support/Claude/claude-code/2.0.58/claude.app/Contents/MacOS/claude',
+        where: { platform: 'darwin', home: '/Users/another', env: {} }, start: '/Users/someone/Library/Application Support/Claude', end: '/claude' },
+      { bin: `/opt/${'a'.repeat(280)}/bin/claude`, where: { platform: 'linux', home: '/home/someone', env: {} }, start: '/opt/aaaaaaaaaa', end: '/claude' },
+      { bin: 'C:\\Users\\firstname.lastname\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe',
+        where: { platform: 'win32', home: 'C:\\Users\\firstname.lastname', env: winEnv('C:\\Users\\firstname.lastname') },
+        whole: '~\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe' },
+      { bin: 'C:\\Users\\firstname.lastname\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe\\claude.exe',
+        where: { platform: 'win32', home: 'C:\\Users\\firstname.lastname', env: winEnv('C:\\Users\\firstname.lastname') },
+        start: '~\\AppData\\Local\\Microsoft\\WinGet\\Packages', end: '\\claude.exe' },
+      // Nothing under the home folder, so the folders take more of the room.
+      { bin: 'D:\\Profiles\\firstname.lastname\\AppData\\Local\\Microsoft\\WinGet\\Links\\claude.exe',
+        where: { platform: 'win32', home: 'C:\\Users\\firstname.lastname', env: winEnv('D:\\Profiles\\firstname.lastname') },
+        start: 'D:\\Profile', end: '\\claude.exe' },
+    ];
+    for (const { bin, where, whole, start, end } of cases) {
+      const error = tooOldError('2.0.58', bin, where);
+      const said = error.message;
+      assert.ok(said.length < 400, `${said.length} characters with the copy at ${bin}`);
+      const m = /^Rundock found Claude Code 2\.0\.58 at (.+)\. Rundock needs 2\.0\.59 or later\. The Rundock app looks for it in .+ first\. /.exec(said);
+      assert.ok(m, `the version, the floor and the folders, in ${said}`);
+      if (whole) assert.strictEqual(m[1], whole, 'shown whole, with the home folder as ~');
+      else {
+        assert.ok(m[1].startsWith(start), `cut, it keeps the start: ${m[1]}`);
+        assert.ok(m[1].endsWith(end), `and the file name: ${m[1]}`);
+        assert.ok(m[1].includes('...') && m[1].length < bin.length, `and loses the middle: ${m[1]}`);
+      }
+      assert.strictEqual(error.path, bin, 'the error itself keeps the whole path');
+      assert.doesNotMatch(said.replace(m[1], ''), /[`*_#<>[\]]|\r|\n/, 'no markup and no line break');
+    }
+  });
+
+  test('with no home folder to read the list from, it still names the copy, its version and the floor, and never throws', () => {
+    const { tooOldError } = floorLib();
+    const realHomedir = os.homedir;
+    os.homedir = () => { throw Object.assign(new Error('no home directory'), { code: 'ENOENT' }); };
+    let error = null;
+    try {
+      assert.doesNotThrow(() => { error = tooOldError('2.0.58', '/usr/local/bin/claude'); });
+    } finally { os.homedir = realHomedir; }
+    assert.strictEqual(error.message, 'Rundock found Claude Code 2.0.58 at /usr/local/bin/claude. Rundock needs 2.0.59 or later. '
+      + 'Update that copy, then send your message again.');
+    assert.deepStrictEqual([error.code, error.version, error.path, error.floor], ['CLAUDE_TOO_OLD', '2.0.58', '/usr/local/bin/claude', '2.0.59']);
+    assert.doesNotMatch(error.message, REMOVAL);
+  });
+
+  test('the app puts the list on PATH, so following the native installer starts the current copy ahead of the old one', { skip: POSIX }, async () => {
+    const { claudeFolders, ensureClaudeFolders } = foldersLib();
+    const home = makeTempDir('claude-floor-home-');
+    const env = { PATH: LAUNCHD_PATH };
+    ensureClaudeFolders(env, { home });
+    const folders = claudeFolders({ home });
+    assert.deepStrictEqual(env.PATH.split(path.delimiter), [...folders, ...LAUNCHD_PATH.split(path.delimiter)],
+      'the list first, in its order, then the PATH the app started with');
+    assert.deepStrictEqual(folders.slice(0, 2), [path.join(home, '.local', 'bin'), path.join(home, '.claude', 'bin')]);
+    // Nothing is found in the system folders here: a stub sits in a folder
+    // ahead of them at every spawn below.
+    const old = stubAt(folders[1], '2.0.58 (Claude Code)');
+    const rt = freshClaudeRuntime();
+    const w = wired(rt);
+    const before = process.env.PATH;
+    process.env.PATH = env.PATH;
+    try {
+      const refused = await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' });
+      assert.strictEqual(refused.error && refused.error.path, old.bin, 'the old copy is found, and refused');
+      const current = stubAt(folders[0], '2.1.318 (Claude Code)');
+      const after = await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' });
+      assert.strictEqual(after.error, null, 'the current copy starts');
+      assert.strictEqual(rt.resolveClaudeBin(), current.bin, 'found in the native installer\'s folder');
+      assert.strictEqual(chatsOf(current).length, 1, 'and is handed the chat');
+      assert.ok(fs.existsSync(old.bin), 'with the old copy still in place');
+      assert.deepStrictEqual(chatsOf(old), [], 'which is never handed one');
+    } finally {
+      process.env.PATH = before;
+      w.restore();
+    }
+  });
+
+  test('a copy already in the native installer\'s folder: the notice says so, and the installer\'s copy in its place starts', { skip: POSIX }, async () => {
+    const { tooOldError } = floorLib();
+    const { ensureClaudeFolders, nativeInstallerFolder } = foldersLib();
+    const home = makeTempDir('claude-floor-home-');
+    const env = { PATH: LAUNCHD_PATH };
+    ensureClaudeFolders(env, { home });
+    const old = stubAt(nativeInstallerFolder(home), '2.0.58 (Claude Code)');
+    const said = tooOldError('2.0.58', old.bin, { home }).message;
+    assert.ok(said.includes(`at ${path.join('~', '.local', 'bin', 'claude')}. `), said);
+    assert.ok(said.includes(`with the native installer, which puts it in ${path.join('~', '.local', 'bin')}. `), 'the same folder');
+    assert.doesNotMatch(said, /before it/, 'and no folder ahead of the first is asked for');
+    const rt = freshClaudeRuntime();
+    const w = wired(rt);
+    const before = process.env.PATH;
+    process.env.PATH = env.PATH;
+    try {
+      const refused = await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' });
+      assert.strictEqual(refused.error && refused.error.path, old.bin, 'the old copy is found first, and refused');
+      // The installer writes its claude over the one there.
+      const current = stubAt(nativeInstallerFolder(home), '2.1.318 (Claude Code)');
+      const after = await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' });
+      assert.strictEqual(after.error, null, 'the copy in its place starts');
+      assert.strictEqual(chatsOf(current).length, 1);
+    } finally {
+      process.env.PATH = before;
+      w.restore();
+    }
+  });
+});
+
 // ── spawnClaude at or above the floor ──
 
 // A private runtime whose spawn is watched: claude.js takes `spawn` from
@@ -444,7 +703,7 @@ describe('the version probe', { skip: POSIX }, () => {
       const { error } = await withPath([stub.dir], () => spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' }));
       assert.strictEqual(error && error.code, 'CLAUDE_TOO_OLD', 'refused, as at an ordinary path');
       assert.strictEqual(error.path, stub.bin);
-      assert.strictEqual(error.message, frozen('2.0.58', stub.bin));
+      assert.strictEqual(error.message, noticeFor('2.0.58', stub.bin));
       assert.strictEqual(probesOf(stub).length, 1, 'the probe ran this copy');
       assert.deepStrictEqual(chatsOf(stub), []);
     } finally { w.restore(); }
@@ -540,7 +799,7 @@ describe('a Windows npm launcher is never run: its version is read from the pack
       assert.strictEqual(error && error.code, 'CLAUDE_TOO_OLD');
       assert.strictEqual(error.version, '2.0.58');
       assert.strictEqual(error.path, npm.bin);
-      assert.strictEqual(error.message, frozen('2.0.58', npm.bin));
+      assert.strictEqual(error.message, noticeFor('2.0.58', npm.bin));
       assert.deepStrictEqual(runsOf(npm), [], 'the launcher was never run, for its version or for the chat');
     } finally { w.restore(); }
   });
