@@ -499,6 +499,32 @@ describe('ROUTINES.md: the child\'s output is discarded, and its stderr kept onl
     assert.ok(UNATTENDED_RUN.endsWith(FAILED_LINE), 'and both lines end on the same failure line, as it says');
     assert.match(paragraph, /doc-claims\.test\.js/, 'the paragraph names the test that pins it');
   });
+
+  // The claim: a Claude Code routine is also told to change workspace files
+  // with its file tools, word for word as the page quotes it, and a Codex
+  // routine is not. The page quotes the sentence, so a rewording on either
+  // side fails here. The Codex half is read through the real spawn path in
+  // test/integration/routine-unattended-line.test.js.
+  test('a Claude Code routine is told to use its file tools, and a Codex routine is not, as the page says', () => {
+    const { UNATTENDED_RUN, UNATTENDED_RUN_CODEX, FAILED_LINE } = require('../../scripts/refusal-notice.js');
+    const FILE_TOOLS = 'To create, change or copy a file in the workspace, use your file tools (Write and Edit) rather than the shell: a shell command that changes files can need an approval that nobody here can give.';
+    const { args } = whatTheSpawnIsAskedFor();
+    const line = args[args.indexOf('--append-system-prompt') + 1];
+    assert.ok(line.includes(`Save the work in the workspace as you go. ${FILE_TOOLS} End your final message`),
+      'the Claude Code line carries the sentence, straight after saving the work');
+    assert.ok(!UNATTENDED_RUN_CODEX.includes(FILE_TOOLS), 'the Codex line does not');
+
+    const paragraph = routinesDoc.split('\n').find(l => l.startsWith('**Every routine run is told that nobody is watching.**'));
+    assert.ok(paragraph, 'ROUTINES.md says what every routine run is told');
+    assert.ok(paragraph.includes(`A Claude Code routine's line also says, straight after the part about saving its work: "${FILE_TOOLS}"`),
+      'the page quotes the sentence word for word, and says where it sits');
+    assert.match(paragraph, /In Notes mode a shell command that changes files asks for approval/, 'and why it is said');
+    assert.match(paragraph, /A Codex routine is not told this: its thread runs with approvals set to never, so nothing it runs asks, and its tools are not called Write and Edit\./,
+      'and that Codex is not told it, and why');
+    assert.ok(UNATTENDED_RUN.endsWith(FAILED_LINE) && UNATTENDED_RUN_CODEX.endsWith(FAILED_LINE),
+      'both routine lines end on the same failure line');
+    assert.match(paragraph, /both routine lines end on the same failure line it does\./, 'as it says');
+  });
 });
 
 // ---------------------------------------------------------------------------
