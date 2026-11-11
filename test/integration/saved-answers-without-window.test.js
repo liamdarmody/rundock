@@ -393,6 +393,71 @@ describe('only a saved answer Rundock wrote is applied', () => {
       await revoke('Bash:python3');
     }
   });
+
+  // BETWEEN TURNS. Once the last turn ends, the guard still holds the file and
+  // its baseline, with no turn watching and no check to run. A key planted then
+  // must still be left out of the person's next save or revoke: a writer that
+  // built on the disk would write it back as Rundock's own, and the next
+  // turn's first check would take it into the baseline as that.
+  const plantedEvents = (convo) => fs.readdirSync(path.join(workspace(), '.rundock', 'state'))
+    .filter((n) => /^events-.*\.jsonl$/.test(n))
+    .flatMap((n) => h.readAppendedLog(path.join(workspace(), '.rundock', 'state', n)))
+    .filter((e) => e.e === 'permission' && e.conv === convo && e.d && e.d.reason === 'always-allowed');
+  async function idleGuard(convo, before) {
+    const turn = await holdTurn(convo);
+    try { await before(); } finally { turn.release(); }
+    assert.strictEqual(guard.answerFilesWatched(workspace()), false, 'no turn watches the workspace');
+    assert.ok(guard.answerFileBaseline(workspace(), permissionsFile()) !== null, 'the guard still holds the file');
+  }
+  async function nextTurnCardsThePlant(convo, label, kept) {
+    const turn = await holdTurn(convo);
+    try {
+      await cardsAndTimesOut('node scripts/build.js', convo, label);
+      assert.deepStrictEqual(plantedEvents(convo), [], 'nothing was allowed under the planted key');
+      assert.ok(!readToolAllows().includes('Bash:node'), 'the file on disk holds no planted key');
+      assert.ok(!baselineKeys().includes('Bash:node'), 'nor does the baseline');
+      assert.deepStrictEqual(baselineKeys(), kept, 'the baseline holds what Rundock wrote');
+      // The inverse: the person's own saved key is answered on the same turn,
+      // so the card above is the planted key refused, not every answer.
+      assert.deepStrictEqual((await ask(bash('python3 tools/report.py', convo), { convo }).reply).body, ALWAYS, `${label}: the person's saved key answers`);
+      assert.ok(await h.waitUntil(() => plantedEvents(convo).length === 1, { timeout: 3000 }), 'and it is recorded as answered by the saved key');
+    } finally {
+      turn.release();
+    }
+  }
+
+  test('a key planted while no turn runs is never carried into the person\'s save: on the next turn its command cards and times out, and the saved key answers', async () => {
+    await noWindow();
+    try {
+      await idleGuard('saved-idle-save-first', async () => { await save('Bash:echo'); });
+      plant('Bash:node');
+      assert.ok(readToolAllows().includes('Bash:node'), 'the key is on disk');
+      // The person's unrelated save, through the window's add_tool_allow,
+      // with no turn watching.
+      await save('Bash:python3');
+      assert.ok(!readToolAllows().includes('Bash:node'), 'the save wrote the file without the planted key');
+      await nextTurnCardsThePlant('saved-idle-save', 'after a save between turns', ['Bash:echo', 'Bash:python3']);
+    } finally {
+      await revoke('Bash:python3');
+      await revoke('Bash:echo');
+    }
+  });
+
+  test('a key planted while no turn runs is never carried into the person\'s revoke: on the next turn its command cards and times out, and the kept key answers', async () => {
+    await noWindow();
+    try {
+      await idleGuard('saved-idle-revoke-first', async () => { await save('Bash:python3'); await save('Bash:echo'); });
+      plant('Bash:node');
+      assert.ok(readToolAllows().includes('Bash:node'), 'the key is on disk');
+      // The person's unrelated revoke, through the window's remove_tool_allow,
+      // with no turn watching.
+      await revoke('Bash:echo');
+      assert.ok(!readToolAllows().includes('Bash:node'), 'the revoke wrote the file without the planted key');
+      await nextTurnCardsThePlant('saved-idle-revoke', 'after a revoke between turns', ['Bash:python3']);
+    } finally {
+      await revoke('Bash:python3');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

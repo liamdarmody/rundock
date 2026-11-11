@@ -4632,6 +4632,10 @@ const MUTATIONS = [
   [SAVED_RULE, 'Saved answer: a binary key answers an Asks-once',
     '        return (ruleKey && alwaysAllowedSet && alwaysAllowedSet.has(ruleKey))',
     "        return (ruleKey && alwaysAllowedSet && (alwaysAllowedSet.has(ruleKey) || [...alwaysAllowedSet].some(k => ruleKey.startsWith(k + '-'))))"],
+  // With no turn watching, a save or revoke builds on the disk as it stands.
+  [SAVED_BUILD, 'Saved answer: a save or revoke between turns builds on the file as it stands on disk',
+    '  const now = read(f);\n  const ours = now === null',
+    '  const now = read(f);\n  if (!g.listeners.size) return { bytes: isPlain(now) ? now.bytes : null };\n  const ours = now === null'],
   [SAVED_BUILD, 'Saved answer: a save or revoke builds on the file without the guard\'s check first',
     '  if (g.listeners.size) checkAnswerFilesNow(workspace);\n  const was = g.snapshot.get(f);',
     '  const was = g.snapshot.get(f);'],
