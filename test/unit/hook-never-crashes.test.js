@@ -1282,3 +1282,57 @@ describe('the reading of find, rg, tree and file, when it fails or cannot read t
     } finally { await close(server); }
   });
 });
+
+// THE VIEW OF A LINE, FAILING, on a line that hides code in a zsh file
+// pattern. Notes mode grades such a line high, and a view that fails as
+// marked, so the window cards it. The hook reads the same view: with a failure
+// forced inside it, the hook still answers each line in both modes, as it
+// answers the line with nothing forced, and asks Rundock about it.
+describe('the view of a line, when it fails, on a line that hides code in a zsh file pattern', () => {
+  const SHARED = path.join(__dirname, '..', '..', 'public', 'read-only-shell.js');
+  const viewFails = preloadFile('shell-view-fails',
+    `require(${JSON.stringify(SHARED)}).shellViewSeam.beforeReading = () => { throw new Error('forced failure'); };\n`);
+  const LINES = ["ls *(e:'cp x f':)", "ls 'a'*(e:'cp x f':)", "ls \\a*(e:'cp x f':)", "ls \"$PWD\"/*(e:'cp x f':)"];
+  const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
+  const answered = (r) => r.status === 0 && (decision(r) === 'allow' || decision(r) === 'deny');
+  const serve = () => new Promise((resolve) => {
+    const cards = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        if (req.url.startsWith('/api/permission-request')) cards.push(JSON.parse(body));
+        res.end(JSON.stringify({ allow: false }));
+      });
+    });
+    server.listen(0, '127.0.0.1', () => resolve({ server, cards }));
+  });
+  const close = (server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
+
+  for (const [mode, modeEnv] of MODES) {
+    for (const [who, env] of [['a conversation', CONVERSATION], ['a routine', ROUTINE]]) {
+      test(`${mode}, ${who}: with nobody to ask, each line is answered as it is with nothing forced`, () => {
+        for (const command of LINES) {
+          const r = runHook(bash(command), { preload: viewFails, env: { ...modeEnv, ...env } });
+          const plain = runHook(bash(command), { env: { ...modeEnv, ...env } });
+          assert.ok(answered(r), `no answer for ${JSON.stringify(command)}: ${r.stderr}`);
+          assert.strictEqual(decision(r), decision(plain), JSON.stringify(command));
+          assert.strictEqual(reasonOf(r), reasonOf(plain), `in the same words: ${JSON.stringify(command)}`);
+        }
+      });
+    }
+
+    test(`${mode}: with Rundock to ask, each line is asked about, and the answer it is given is the answer`, async () => {
+      const { server, cards } = await serve();
+      try {
+        for (const command of LINES) {
+          const r = await runHookAgainst(server.address().port, bash(command), { ...modeEnv, ...CONVERSATION }, { preload: viewFails });
+          assert.ok(answered(r), `no answer for ${JSON.stringify(command)}: ${r.stdout}`);
+          assert.strictEqual(decision(r), 'deny', JSON.stringify(command));
+          const card = cards[cards.length - 1];
+          assert.strictEqual(card && card.tool_input && card.tool_input.command, command, `asked about: ${JSON.stringify(command)}`);
+        }
+      } finally { await close(server); }
+    });
+  }
+});

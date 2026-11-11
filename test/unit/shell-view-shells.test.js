@@ -15,6 +15,11 @@
 // zsh skips its half with a notice, under CI too, naming what ran. Windows
 // skips with a notice: an agent's bash there is Git Bash, the GNU bash this
 // runs on Linux, and this harness (a third pipe, POSIX paths) is POSIX only.
+//
+// A CODE IN A WORD THAT ZSH RUNS IS HIGH IN NOTES MODE. Each line in
+// IN_A_WORD that zsh runs the marker in grades high, so no saved answer for
+// its leading command covers it. They are judged by the grader alone: the
+// hook's reading of a qualifier's code is not what this holds to.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -29,6 +34,15 @@ const MARKER = `echo ${MARK} >&3`;
 const SLOT = '{H}';
 const inCi = (v => typeof v === 'string' && v !== '' && v !== '0' && v.toLowerCase() !== 'false')(process.env.CI);
 
+// zsh's glob qualifiers and =( ). The scratch folder holds one file, g1.
+const QUALIFIERS = [
+  ['a glob qualifier that runs code', "ls *(e:'{H}':)", 'some'],
+  ['a glob qualifier with other delimiters', "ls *(e+'{H}'+)", 'some'],
+  ['a glob qualifier in braces', "ls *(e{'{H}'})", 'some'],
+  ['a glob qualifier that calls a function', 'RDF() { {H}; }; ls g1(+RDF)', 'some'],
+  ['=( )', 'cat =({H})', 'some'],
+  ['two =( )', 'diff =({H}) =(ls)', 'some'],
+];
 // SLOT is the hidden command. `every`: every bash runs it; the rest run in
 // one shell or version, and are judged where one does.
 const LINES = [
@@ -64,18 +78,34 @@ const LINES = [
   ['a case pattern that is an escaped quote', "case \"'\" in \\') {H};; esac", 'every'],
   ['a case pattern that matches anything', 'case x in *) {H};; esac', 'every'],
   ['a case inside a substitution in double quotes', 'echo "$(case x in x) {H};; esac)"', 'some'],
-  // zsh's glob qualifiers and =( ). The scratch folder holds one file, g1.
-  ['a glob qualifier that runs code', "ls *(e:'{H}':)", 'some'],
-  ['a glob qualifier with other delimiters', "ls *(e+'{H}'+)", 'some'],
-  ['a glob qualifier in braces', "ls *(e{'{H}'})", 'some'],
-  ['a glob qualifier that calls a function', 'RDF() { {H}; }; ls g1(+RDF)', 'some'],
-  ['=( )', 'cat =({H})', 'some'],
-  ['two =( )', 'diff =({H}) =(ls)', 'some'],
+  ...QUALIFIERS,
   // Here-documents inside a substitution, which bash 3.2 ends at a ) in the body.
   ['a quoted here-document in a substitution, a ) in its body', "echo \"$(cat <<'EOF'\n)$({H})\nEOF\n)\"", 'some'],
   ['a here-document in a substitution, a ) in its body', "echo \"$(cat <<EOF\n)$({H})\nEOF\n)\"", 'some'],
   // A single quote inside ${…} within double quotes: bash 3.2 takes it as a quote, zsh as text.
   ['a single quote inside ${…} within double quotes', "echo \"${x:-'}\"\n{H}\necho \"${x:-'}\"", 'some'],
+];
+// Code zsh runs from inside a word, however the word starts and wherever it
+// is. `#q` is a qualifier only with extendedglob set, which a person's own
+// zsh settings can set.
+const IN_A_WORD = [
+  ...QUALIFIERS,
+  ['a qualifier word that starts with a quote', "ls 'g'*(e:'{H}':)"],
+  ['a qualifier word that starts with a backslash', "ls \\g*(e:'{H}':)"],
+  ['a qualifier word that starts with a quoted $', "ls \"$PWD\"/*(e:'{H}':)"],
+  ['a qualifier word that starts with a $', "ls $PWD/*(e:'{H}':)"],
+  ['a qualifier word that starts with $\'…\'', "ls $'g'*(e:'{H}':)"],
+  ['a qualifier inside $( )', "echo $(ls *(e:'{H}':))"],
+  ['a qualifier inside $( ) in double quotes', "echo \"$(ls *(e:'{H}':))\""],
+  ['a qualifier inside backticks', "echo `ls *(e:'{H}':)`"],
+  ['a qualifier inside <( )', "cat <(ls *(e:'{H}':))"],
+  ['a qualifier in an array element', "a=(*(e:'{H}':))"],
+  ['a qualifier in an array element after another', "a=(x *(e:'{H}':))"],
+  ['a qualifier in an element added to an array', "a+=(*(e:'{H}':))"],
+  ['a qualifier inside =( )', "cat =(ls *(e:'{H}':))"],
+  ['a qualifier written as +name', 'RDF() { {H}; }; ls *(+RDF)'],
+  ['a qualifier written as #q', "setopt extendedglob; ls *(#qe:'{H}':)"],
+  ['a qualifier written as #q after a pattern', "setopt extendedglob; ls g*(#qe:'{H}':)"],
 ];
 // A quote that does open: the hidden line is text, and keeps the marker honest.
 const TEXT_ONLY = [
@@ -137,7 +167,7 @@ before(async () => {
     if (!shell.bin) { told.push(`${shell.name} not installed, its half skipped`); continue; }
     const v = spawnSync(shell.bin, [...shell.args, shell.version], { env: { PATH: '/usr/bin:/bin', HOME: world.home }, timeout: 5000 });
     const runs = new Set();
-    for (const [, tmpl] of [['control', CONTROL], ...LINES, ...TEXT_ONLY]) if (run(shell, fill(tmpl, MARKER))) runs.add(tmpl);
+    for (const [, tmpl] of [['control', CONTROL], ...LINES, ...IN_A_WORD, ...TEXT_ONLY]) if (run(shell, fill(tmpl, MARKER))) runs.add(tmpl);
     ran.set(shell.name, runs);
     told.push(`${shell.name} ${String(v.stdout || '').trim() || 'of unknown version'} ran the marker in ${[...LINES].filter(([, t]) => runs.has(t)).length} of ${LINES.length} lines`);
   }
@@ -176,6 +206,20 @@ describe('against the real shells, a line that runs the hidden command is never 
       assert.notStrictEqual(P.classifyRisk('Bash', { command: line }), 'low', `graded low: ${what}: ${show(line)}`);
     }
     assert.ok(judged > 0, 'no line was judged');
+  });
+
+  test('each line zsh runs code in from inside a word grades high in Notes mode, so a saved answer for it cards', { skip: !SHELLS[1].bin && 'zsh is not installed' }, () => {
+    const runs = ran.get('zsh');
+    const judged = IN_A_WORD.filter(([, tmpl]) => runs.has(tmpl));
+    assert.ok(judged.length === IN_A_WORD.length, `zsh ran the marker in ${judged.length} of ${IN_A_WORD.length}: missing ${IN_A_WORD.filter(([, t]) => !runs.has(t)).map(([w]) => w).join(', ')}`);
+    for (const [what, tmpl] of judged) {
+      const line = fill(tmpl, `cp x ${settings}`);
+      const risk = P.classifyRisk('Bash', { command: line });
+      assert.strictEqual(risk, 'high', `${what}: ${show(line)}`);
+      const key = P.toolAllowKey('Bash', { command: line });
+      assert.deepStrictEqual(P.decidePermission(risk, key, new Set([key])), { action: 'card' }, `${what}: a saved ${key} covers it`);
+      assert.strictEqual(P.offersAlwaysAllow(risk), false, `${what}: the card offers Always allow`);
+    }
   });
 
   for (const [mode, codeMode, cls] of [['Notes mode', false, 'boundary'], ['Code mode', true, 'always-asks']]) {

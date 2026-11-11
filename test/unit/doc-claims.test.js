@@ -2030,9 +2030,64 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
     }
   });
 
+  // A ( INSIDE A WORD IS HIGH IN NOTES MODE, SO NO SAVED ANSWER COVERS IT.
+  // Pinned by asking the grader and the decision path about lines the page
+  // names, with a saved answer for their leading command, and by reading the
+  // comment the grader keeps beside the rule.
+  test('the page and the grader say a ( inside a word is high in Notes mode, so no saved answer covers it, and it is', () => {
+    for (const said of [
+      'In Notes mode a line with a `(` inside a word, outside its quotes, is graded high risk by `classifyBashRisk` in `public/permissions.js`',
+      'however the word starts and wherever it sits',
+      'and so is a line whose view fails or nests deeper than the view follows',
+      'Such a line is carded every time and never offers "Always allow", so no saved answer covers it',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+    const graderSrc = fs.readFileSync(path.join(ROOT, 'public', 'permissions.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
+    assert.ok(graderSrc.includes('A `(` INSIDE A WORD, OUTSIDE QUOTES, IS HIGH, SO NO SAVED ANSWER COVERS IT.'), 'the grader says it beside the rule');
+    assert.ok(graderSrc.includes('a view that fails or cannot be read counts as marked'), 'and that a view that fails counts');
+    for (const [named, command] of [["`ls 'a'*(e:'cmd':)`", "ls 'a'*(e:'cp a b':)"], ['`cat =(cmd)`', 'cat =(cp a b)'], ["`echo $(ls *(e:'cmd':))`", "echo $(ls *(e:'cp a b':))"]]) {
+      assert.ok(passage.includes(named), `the page names ${named}`);
+      const risk = P.classifyRisk('Bash', { command });
+      const key = P.toolAllowKey('Bash', { command });
+      assert.strictEqual(risk, 'high', command);
+      assert.deepStrictEqual(P.decidePermission(risk, key, new Set([key])), { action: 'card' }, `a saved ${key} covers ${command}`);
+      assert.strictEqual(P.offersAlwaysAllow(risk), false, command);
+      const { summary, context } = P.describeToolRequest('Bash', { command });
+      assert.doesNotMatch(`${summary} ${context}`, /delet|destructi/i, `the card never calls ${command} a delete or destructive`);
+    }
+  });
+
+  // THE CARD SAYS WHY. Pinned by reading the sentences off the page and
+  // asking describeToolRequest for the context of lines that carry each one,
+  // so the page and the card cannot drift apart.
+  test('the page quotes the sentence the card gives for each reason, and the card gives it', () => {
+    const quoted = (lead) => {
+      const at = passage.indexOf(lead);
+      assert.ok(at >= 0, `the page says: ${lead}`);
+      const m = passage.slice(at + lead.length).match(/^"([^"]+)"/);
+      assert.ok(m, `the page quotes a sentence after: ${lead}`);
+      return m[1];
+    };
+    const pattern = quoted('The card says why it asks, in the context sentence `describeToolRequest` gives: ');
+    const unread = quoted('or, for a line whose view failed or stopped short, ');
+    assert.ok(passage.includes('A line graded high as destructive first keeps the sentence its leading command gives.'), 'the page names the exception');
+    const contextOf = (command) => P.describeToolRequest('Bash', { command }).context;
+    for (const command of ["ls 'a'*(e:'cp a b':)", 'cat =(cp a b)', 'f() { echo hi; }; f']) assert.strictEqual(contextOf(command), pattern, command);
+    assert.strictEqual(contextOf(`echo ${'$('.repeat(40)}x${')'.repeat(40)}`), unread, 'a line nested past what the view follows');
+    assert.strictEqual(contextOf("rm *(e:'cp a b':)"), 'This will permanently delete files', 'a destructive line keeps its own');
+    for (const sentence of [pattern, unread]) assert.doesNotMatch(sentence, /delet|destructi/i, sentence);
+  });
+
+  test('the page says a function definition is graded high with them, and it is', () => {
+    assert.ok(passage.includes('A function definition (`f() { echo hi; }; f`) puts a `(` inside a word too, and is graded high with them; Code mode already asks about it.'),
+      'the page says it');
+    assert.strictEqual(P.classifyRisk('Bash', { command: 'f() { echo hi; }; f' }), 'high');
+  });
+
   test('the tests the page names exist', () => {
     for (const file of ['test/unit/permissions.test.js', 'test/unit/quoted-options-hook.test.js', 'test/unit/hook-never-crashes.test.js',
-      'test/unit/read-only-on-main.test.js', 'test/tools/record-read-only-on-main.js', 'test/unit/shell-view.test.js', 'test/unit/shell-view-hook.test.js']) {
+      'test/unit/read-only-on-main.test.js', 'test/tools/record-read-only-on-main.js', 'test/unit/shell-view.test.js', 'test/unit/shell-view-hook.test.js',
+      'test/unit/zsh-pattern-cards.test.js', 'test/integration/zsh-pattern-saved-answer.test.js', 'test/unit/shell-view-shells.test.js',
+      'test/tools/zsh-pattern-grade-moves.js']) {
       assert.ok(passage.includes(`\`${file}\``), `the page names ${file}`);
       assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} exists`);
     }

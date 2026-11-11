@@ -115,11 +115,44 @@
     // command with no card at all while this grader stood ready to paint the
     // card it never drew as high risk.
     if (isDestructiveShellCommand(raw)) return 'high';
+    // A `(` INSIDE A WORD, OUTSIDE QUOTES, IS HIGH, SO NO SAVED ANSWER COVERS
+    // IT. zsh runs code written inside a file pattern as it expands the word
+    // (`ls *(e:'cmd':)`, `cat =(cmd)`, `ls x(+fn)`), and a saved answer is
+    // keyed on the leading command alone, so in Notes mode "Always allow ls"
+    // would otherwise cover that code. High risk cards ahead of every saved
+    // answer and never offers one (decidePermission, offersAlwaysAllow). The
+    // mark is the shared view's `wordParen`, the one Code mode's verdict always
+    // asks on, and a view that fails or cannot be read counts as marked.
+    if (hidesCodeInAWord(raw)) return 'high';
     // Command/process substitution used to be tested here and nowhere else,
     // which meant the hook exempted a crossing for text this grader would not
     // auto-allow. It is part of the shared definition of a read now.
     if (isReadOnlyShellCommand(raw)) return 'low';
     return 'medium';
+  }
+  function hidesCodeInAWord(raw) {
+    return hiddenCodeReason(raw) !== null;
+  }
+  // Why the view marks a line: 'pattern' for a `(` inside a word it read,
+  // 'unread' for a view that failed or stopped short, null for no mark.
+  function hiddenCodeReason(raw) {
+    var view;
+    try { view = RundockReadOnlyShell.shellView(raw); } catch (e) { return 'unread'; }
+    if (view.wordParen === false) return null;
+    return view.ok === false ? 'unread' : 'pattern';
+  }
+  // THE CARD SAYS WHY A LINE THE BRACKET RULE GRADES HIGH ASKS, in the
+  // context sentence the Bash branch of describeToolRequest gives. Only for a
+  // line graded high by that rule: one the destructive test grades high first
+  // keeps the sentence its leading command gives.
+  const HIDDEN_CODE_COPY = {
+    pattern: 'This line has a parenthesis inside a word, which the shell can use to run hidden code, so Rundock asks every time and there is no Always allow.',
+    unread: 'Rundock could not read this line all the way through, so it asks every time and there is no Always allow.',
+  };
+  function hiddenCodeCopy(raw) {
+    if (isDestructiveShellCommand(raw)) return null;
+    var reason = hiddenCodeReason(raw);
+    return reason ? HIDDEN_CODE_COPY[reason] : null;
   }
 
   // A connector action that sends, replies or forwards is high risk for the
@@ -210,7 +243,9 @@
       detail = cmd;
       const bin = bashBin(cmd);
       summary = input.description || BASH_DESCRIPTIONS[bin] || `Run ${bin}`;
-      if (bin === 'rm') context = 'This will permanently delete files';
+      const hidden = hiddenCodeCopy(cmd);
+      if (hidden) context = hidden;
+      else if (bin === 'rm') context = 'This will permanently delete files';
       else if (bin === 'sudo') context = 'This runs with elevated privileges';
       else if (/git\s+push/.test(cmd)) context = 'This will push changes to a remote repository';
       else if (/git\s+reset\s+--hard/.test(cmd)) context = 'This will discard uncommitted changes';
