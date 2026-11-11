@@ -5,10 +5,11 @@ Every claim below is re-measured by the named tests on every run of the
 suite, by the mutation harness whenever it runs, and by `scripts/red-first.js`
 whenever it is run. If this file and those ever disagree, they are right.
 
-Taken on 2026-11-11 on macOS (Darwin 25.4.0, arm64) with Node 24.12.0, at
-`d644d28d`, the last commit to change code or tests; the commit after it adds
-only this file. The merge base with `origin/main` is `3017ad72`. Each mutation
-command ran with the Code-mode fixture folder set:
+Taken on 2026-11-11 on macOS (Darwin 25.4.0, arm64) with Node 24.12.0. The
+last commit to change code is `d644d28d`. The last commit to change tests is
+`5ff93210`, which changes only `test/unit/doc-claims.test.js` (below); the
+commit after it changes only this file. The merge base with `origin/main` is
+`3017ad72`. Each mutation command ran with the Code-mode fixture folder set:
 `RUNDOCK_TEST_OUTSIDE_TEMP_ROOT=<a folder outside every temp folder and git tree>`.
 
 ---
@@ -70,12 +71,27 @@ a Keychain line as a read.
 The row numbers are those of the harness at `d644d28d`. Rows main adds to the
 harness ahead of these move them.
 
+### At the fix commit
+
+`5ff93210` changes only `test/unit/doc-claims.test.js`, which none of the
+fifteen rows above runs, so their results stand at `d644d28d`. Five rows
+elsewhere in the harnesses do run that file, so each was run again on its own
+at `5ff93210`, and each was caught:
+
+| Harness | Row | Label | Tests red |
+|---|---|---|---|
+| `mutate-routines-guards.js` | 328 | the tick never reads a routine's declared zone | 1 |
+| `mutate-routines-guards.js` | 329 | a row's next run never reads a routine's declared zone | 1 |
+| `mutate-stale-session-guards.js` | 93 | the page's claim of one line per failed write holds for the Codex start path with no log of its own | 1 |
+| `mutate-workspace-boundary-guards.js` | 958 | Unnamed request: the page says it is refused when it is not | 1 |
+| `mutate-workspace-boundary-guards.js` | 1060 | On failure: the value the doc quotes is not the value written | 1 |
+
 ## Red-first
 
     node scripts/red-first.js --repo <worktree> --tests "node --test --test-timeout=120000 <files>"
 
-Run against `origin/main` at `3017ad72`, over the test files this change adds
-or changes that run as tests:
+Run against `origin/main` at `3017ad72`, first at `d644d28d` and again at
+`5ff93210`, over the test files this change adds or changes that run as tests:
 
 - `test/integration/read-only-without-window.test.js`
 - `test/integration/saved-answers-without-window.test.js`
@@ -86,11 +102,37 @@ The change also adds `test/helpers/permission-route.js` and changes the stub
 the source is put back, and neither is a test file `node --test` can run: the
 stub is the runtime binary the suites spawn.
 
-Outcome: **proven**. With the change, all 169 tests pass. With the 7 changed
-source files put back to `origin/main` and the tests kept, 19 fail, all in
-`saved-answers-without-window.test.js` and the two doc-claims pins on the
-server's answers. None fails in `read-only-without-window.test.js`, whose
+Outcome: **proven** at both commits, with the same counts. With the change, all
+169 tests pass. With the changed source files put back to `origin/main` and the
+tests kept (7 at `d644d28d`; 8 at `5ff93210`, this file among them), 19 fail,
+all in `saved-answers-without-window.test.js` and the two doc-claims pins on
+the server's answers. None fails in `read-only-without-window.test.js`, whose
 behavior this change keeps: run on the old router, it passes.
+
+## The doc-claims fix: a home of its own for the pin's guard
+
+At `7144647e` the doc-claims file failed in CI under `npm test` and
+`npm run test:coverage` though every test in it passed. The pin "and the
+server does it: a router with no window applies a saved key while a turn is
+guarded, and nothing once none is" holds a turn on the answer-file guard, and a
+turn's guard watches the home folder's shell startup files and Rundock's record
+beside them. The pin ran with the test process's own home, so it pointed the
+guard at the account's startup files and at the record in the checkout. The
+test preload `test/helpers/account-home-refused.js`, which every npm test
+script loads, refused each of them, so none was watched, and set the exit code,
+so the file failed. Run on its own without that preload, as it had been here,
+the file passed.
+
+`5ff93210` gives the guard a made-up home for that test only, as
+`test/helpers/made-up-home.js` gives a whole file one: `HOME` in a temp
+folder, `RUNDOCK_ELECTRON=1` so the record lies under it too, and no `ZDOTDIR`
+or `XDG_CONFIG_HOME`, all four put back once the turn is released. Run at
+`5ff93210` the way CI loads it:
+
+    node --test --require ./test/helpers/account-home-refused.js test/unit/doc-claims.test.js
+
+114 tests, 114 pass, no path refused, exit 0. The same command at `7144647e`
+exited 1, naming the account's startup files.
 
 ## The hook's grades for the requests the suite sends
 
