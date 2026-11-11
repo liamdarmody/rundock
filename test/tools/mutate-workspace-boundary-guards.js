@@ -469,6 +469,9 @@ const SAVED_BUILD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guar
 const SAVED_BOUND = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/saved-answers-workspace.test.js' };
 const SAVED_RUN_FOLDER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/saved-answers-workspace.test.js' };
 const SAVED_TURN = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/doc-claims.test.js' };
+// A saved Code-mode rule through the real hook: the push to the default
+// branch Asks once, and only its own rule key answers it, never Bash:git.
+const SAVED_RULE = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/saved-answers-code-mode.test.js' };
 
 // The shell startup files and Rundock's record of them: the hook's match and
 // its card's words, the stored-grant check, Codex grading, the sandbox block,
@@ -4624,6 +4627,11 @@ const MUTATIONS = [
   [SAVED_TURN, 'Saved answer: a conversation is bound by any turn in the workspace, not its own',
     '  for (const g of guards.values()) if ([...g.listeners].some(l => l.convoId === convoId)) roots.push(g.root);',
     '  for (const g of guards.values()) if (g.listeners.size) roots.push(g.root);'],
+  // A legacy binary key, the leading command, answers an Asks-once rule
+  // that starts with it.
+  [SAVED_RULE, 'Saved answer: a binary key answers an Asks-once',
+    '        return (ruleKey && alwaysAllowedSet && alwaysAllowedSet.has(ruleKey))',
+    "        return (ruleKey && alwaysAllowedSet && (alwaysAllowedSet.has(ruleKey) || [...alwaysAllowedSet].some(k => ruleKey.startsWith(k + '-'))))"],
   [SAVED_BUILD, 'Saved answer: a save or revoke builds on the file without the guard\'s check first',
     '  if (g.listeners.size) checkAnswerFilesNow(workspace);\n  const was = g.snapshot.get(f);',
     '  const was = g.snapshot.get(f);'],
