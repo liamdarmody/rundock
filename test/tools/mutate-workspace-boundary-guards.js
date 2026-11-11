@@ -454,6 +454,24 @@ const SECRET_FOLDER_CARD = { src: path.join(ROOT, 'scripts', 'permission-hook.js
 // The server's own answer to a low-risk read, which needs no window: proven
 // through the real router with none connected, against the real hook.
 const READ_ONLY_ANSWER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/read-only-without-window.test.js' };
+// The server's own answer from a saved "Always allow": proven through the real
+// router with no window, a turn held on the answer-file guard, and the hook.
+const SAVED_ANSWER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
+// What a Rundock writer of the permissions file builds on, proven by the same
+// suite: a key planted before a person's save or revoke is never carried into
+// it, so the router never answers it.
+const SAVED_WRITER = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
+const SAVED_BUILD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
+// Whose saved answers apply: the request's own workspace, never the open one.
+// A routine started in one workspace and still running after a switch, and
+// the inverse, prove the router's binding and the run's recorded folder; the
+// doc pin proves a conversation is bound only by its own guarded turn.
+const SAVED_BOUND = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/saved-answers-workspace.test.js' };
+const SAVED_RUN_FOLDER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/saved-answers-workspace.test.js' };
+const SAVED_TURN = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/doc-claims.test.js' };
+// A saved Code-mode rule through the real hook: the push to the default
+// branch Asks once, and only its own rule key answers it, never Bash:git.
+const SAVED_RULE = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/saved-answers-code-mode.test.js' };
 
 // The shell startup files and Rundock's record of them: the hook's match and
 // its card's words, the stored-grant check, Codex grading, the sandbox block,
@@ -4535,35 +4553,92 @@ const MUTATIONS = [
   // Each field the hook grades keeps its request on the card path, however
   // its command reads.
   [READ_ONLY_ANSWER, 'Read-only answer: a crossing out of the workspace is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'code_mode_verdict'];",
-    "const HOOK_GRADES = ['answer_file', 'startup_file', 'code_mode_verdict'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
+    "const HOOK_GRADES = ['answer_file', 'startup_file'];"],
   [READ_ONLY_ANSWER, 'Read-only answer: an answer-file write is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'code_mode_verdict'];",
-    "const HOOK_GRADES = ['boundary', 'startup_file', 'code_mode_verdict'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
+    "const HOOK_GRADES = ['boundary', 'startup_file'];"],
   [READ_ONLY_ANSWER, 'Read-only answer: a shell startup file is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'code_mode_verdict'];",
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'code_mode_verdict'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
+    "const HOOK_GRADES = ['boundary', 'answer_file'];"],
+  // The verdict decides once it reaches decidePermission, so dropping it from
+  // the call is what answers a Keychain line as a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a Keychain line or any other verdict is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'code_mode_verdict'];",
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];"],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace));'],
   // Only the low-risk answer: a medium command is not a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a medium command is answered as a read',
-    '    const answer = decision.decidePermission(risk, decision.toolAllowKey(data.tool_name, input), new Set());',
-    "    const answer = decision.decidePermission(risk === 'medium' ? 'low' : risk, decision.toolAllowKey(data.tool_name, input), new Set());"],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    "    const answer = decision.decidePermission(risk === 'medium' ? 'low' : risk, key, savedAnswers(workspace), verdict);"],
   // Fails closed: an error is the card path, never an allow.
   [READ_ONLY_ANSWER, 'Read-only answer: a request that cannot be graded is allowed',
-    "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return false;",
-    "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return true;"],
+    "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return null;",
+    "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return 'read-only';"],
   // After every token check: each of the three, with the answer moved above it.
   [READ_ONLY_ANSWER, 'Read-only answer: a read with no token, or one Rundock never issued, is answered',
     "    if (scope === undefined) {\n      res.writeHead(401, { 'Content-Type': 'application/json' });\n      res.end(JSON.stringify({ error: 'Not a request from an agent Rundock started' }));\n      return;\n    }",
-    "    if (scope === undefined) {\n      let early = '';\n      req.on('data', c => { early += c; });\n      req.on('end', () => {\n        let read = false;\n        try { read = readOnlyAnswer(JSON.parse(early)); } catch (e) { /* not a read */ }\n        res.writeHead(read ? 200 : 401, { 'Content-Type': 'application/json' });\n        res.end(JSON.stringify(read ? { allow: true, reason: 'read-only' } : { error: 'Not a request from an agent Rundock started' }));\n      });\n      return;\n    }"],
+    "    if (scope === undefined) {\n      let early = '';\n      req.on('data', c => { early += c; });\n      req.on('end', () => {\n        let read = false;\n        try { read = !!serverAnswer(JSON.parse(early)); } catch (e) { /* not a read */ }\n        res.writeHead(read ? 200 : 401, { 'Content-Type': 'application/json' });\n        res.end(JSON.stringify(read ? { allow: true, reason: 'read-only' } : { error: 'Not a request from an agent Rundock started' }));\n      });\n      return;\n    }"],
   [READ_ONLY_ANSWER, 'Read-only answer: a read whose token names no run going is answered',
     "    if (scope === null && !run) {\n      res.writeHead(401, { 'Content-Type': 'application/json' });\n      res.end(JSON.stringify({ error: 'Not a request from a run Rundock has going' }));\n      return;\n    }",
-    "    if (scope === null && !run) {\n      let early = '';\n      req.on('data', c => { early += c; });\n      req.on('end', () => {\n        let read = false;\n        try { read = readOnlyAnswer(JSON.parse(early)); } catch (e) { /* not a read */ }\n        res.writeHead(read ? 200 : 401, { 'Content-Type': 'application/json' });\n        res.end(JSON.stringify(read ? { allow: true, reason: 'read-only' } : { error: 'Not a request from a run Rundock has going' }));\n      });\n      return;\n    }"],
+    "    if (scope === null && !run) {\n      let early = '';\n      req.on('data', c => { early += c; });\n      req.on('end', () => {\n        let read = false;\n        try { read = !!serverAnswer(JSON.parse(early)); } catch (e) { /* not a read */ }\n        res.writeHead(read ? 200 : 401, { 'Content-Type': 'application/json' });\n        res.end(JSON.stringify(read ? { allow: true, reason: 'read-only' } : { error: 'Not a request from a run Rundock has going' }));\n      });\n      return;\n    }"],
   [READ_ONLY_ANSWER, 'Read-only answer: a read whose run ended before its body arrived is answered',
     '      const still = run && routineRunOf(req);\n',
-    "      try {\n        if (readOnlyAnswer(JSON.parse(body))) {\n          res.writeHead(200, { 'Content-Type': 'application/json' });\n          res.end(JSON.stringify({ allow: true, reason: 'read-only' }));\n          return;\n        }\n      } catch (e) { /* not a read */ }\n      const still = run && routineRunOf(req);\n"],
+    "      try {\n        if (serverAnswer(JSON.parse(body))) {\n          res.writeHead(200, { 'Content-Type': 'application/json' });\n          res.end(JSON.stringify({ allow: true, reason: 'read-only' }));\n          return;\n        }\n      } catch (e) { /* not a read */ }\n      const still = run && routineRunOf(req);\n"],
+  // ===== A SAVED ANSWER IS APPLIED BY THE SERVER, AND ONLY AS RUNDOCK WROTE IT =====
+  // The guard's check runs before the saved set is read.
+  [SAVED_ANSWER, 'Saved answer: the saved set is read without the guard\'s check',
+    '    guard.checkAnswerFilesNow(workspace);\n',
+    ''],
+  // What is read is the guard's baseline, never the file as it stands.
+  [SAVED_ANSWER, 'Saved answer: the saved set is read from the file as it stands after the check',
+    '    return new Set(toolAllowsIn(guard.answerFileBaseline(workspace, permissionsPathIn(workspace))));',
+    "    return new Set(require('./workspace/boundary.js').readToolAllows());"],
+  // No turn's guard watching: nothing checked, so nothing applied.
+  [SAVED_ANSWER, 'Saved answer: saved answers apply on a workspace no turn\'s guard watches',
+    '    if (!workspace || !guard.answerFilesWatched(workspace)) return new Set();',
+    '    if (!workspace) return new Set();'],
+  // The check or the read throwing: the empty set, never the file.
+  [SAVED_ANSWER, 'Saved answer: a saved answer is applied when the check or the read throws',
+    "    console.warn(`[Permission] Could not read the saved answers, so none is applied: ${e && e.message ? e.message : e}`);\n    return new Set();",
+    "    console.warn(`[Permission] Could not read the saved answers, so none is applied: ${e && e.message ? e.message : e}`);\n    return new Set(require('./workspace/boundary.js').readToolAllows());"],
+  // High risk cards ahead of every saved answer.
+  [SAVED_ANSWER, 'Saved answer: a saved key answers a high-risk request',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    "    const answer = decision.decidePermission(risk === 'high' ? 'medium' : risk, key, savedAnswers(workspace), verdict);"],
+  // The verdict reaches the decision as the window passes it.
+  [SAVED_ANSWER, 'Saved answer: the verdict is dropped from the decision',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace));'],
+  // A save or revoke builds on what the guard accepted, never the disk.
+  [SAVED_WRITER, 'Saved answer: a save or revoke merges the permissions file as it stands on disk',
+    '    const accepted = answerFileToBuildOn(getWorkspace(), file);',
+    '    const accepted = null;'],
+  // The guard's check runs first, so the planted change is put back and
+  // handed to the turn rather than written over unseen.
+  // The request's workspace is dropped, and the open one's answers apply.
+  [SAVED_BOUND, 'Saved answer: the workspace check is dropped, so the open workspace answers every request',
+    '        const answered = serverAnswer(data, requestWorkspace(run, convoId));',
+    '        const answered = serverAnswer(data, getWorkspace());'],
+  // A live run no longer names the folder it started in.
+  [SAVED_RUN_FOLDER, 'Saved answer: a live run does not name the folder it started in',
+    '  return run ? { id: run.id, routine: run.routine, agent: run.agent, workspace: run.workspace } : null;',
+    '  return run ? { id: run.id, routine: run.routine, agent: run.agent } : null;'],
+  // Any guarded turn binds every conversation to its workspace.
+  [SAVED_TURN, 'Saved answer: a conversation is bound by any turn in the workspace, not its own',
+    '  for (const g of guards.values()) if ([...g.listeners].some(l => l.convoId === convoId)) roots.push(g.root);',
+    '  for (const g of guards.values()) if (g.listeners.size) roots.push(g.root);'],
+  // A legacy binary key, the leading command, answers an Asks-once rule
+  // that starts with it.
+  [SAVED_RULE, 'Saved answer: a binary key answers an Asks-once',
+    '        return (ruleKey && alwaysAllowedSet && alwaysAllowedSet.has(ruleKey))',
+    "        return (ruleKey && alwaysAllowedSet && (alwaysAllowedSet.has(ruleKey) || [...alwaysAllowedSet].some(k => ruleKey.startsWith(k + '-'))))"],
+  // With no turn watching, a save or revoke builds on the disk as it stands.
+  [SAVED_BUILD, 'Saved answer: a save or revoke between turns builds on the file as it stands on disk',
+    '  const now = read(f);\n  const ours = now === null',
+    '  const now = read(f);\n  if (!g.listeners.size) return { bytes: isPlain(now) ? now.bytes : null };\n  const ours = now === null'],
+  [SAVED_BUILD, 'Saved answer: a save or revoke builds on the file without the guard\'s check first',
+    '  if (g.listeners.size) checkAnswerFilesNow(workspace);\n  const was = g.snapshot.get(f);',
+    '  const was = g.snapshot.get(f);'],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

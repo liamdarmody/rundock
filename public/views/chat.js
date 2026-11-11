@@ -692,10 +692,11 @@ function handlePermissionRequest(d, convoId) {
   // The auto-allow decision path is a named, unit-tested function in
   // permissions.js: standing "Always allow" grants and the low-risk
   // (read-only) auto-approve policy skip the card; everything else asks.
-  // The server asks decidePermission the same question before it sends a
-  // card (readOnlyAnswer in lib/http-router.js) and answers a low-risk read
-  // itself, so a low-risk read reaches this branch only when the server did
-  // not answer it; the branch stays, as the fallback it now is.
+  // The server asks decidePermission the same question, with the same saved
+  // answers and verdict, before it sends a card (serverAnswer in
+  // lib/http-router.js), and answers a low-risk read and a saved "Always
+  // allow" itself, so either reaches this branch only when the server did not
+  // answer it; the branch stays, as the fallback it now is.
   // Auto-allows answer regardless of which conversation is on screen (a
   // standing grant is session-wide); card-worthy requests render only in
   // the active conversation and QUEUE for background ones, where they used
@@ -1546,9 +1547,10 @@ function updateApprovalsDock() {
 
 // A request that names no conversation. Never placed in the conversation on
 // screen: that fallback is the misattribution this replaces. A routine's
-// low-risk read is answered by the server before it gets here, with or
-// without a window, so what arrives is what the server did not answer; the
-// same decision is asked again below, as in handlePermissionRequest.
+// low-risk read, and a request a saved "Always allow" covers, are answered by
+// the server before they get here, with or without a window, so what arrives
+// is what the server did not answer; the same decision is asked again below,
+// as in handlePermissionRequest.
 function handleOwnerlessPermissionRequest(d) {
   const req = d.request || {};
   const requestId = d.request_id || '';

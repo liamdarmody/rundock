@@ -2191,13 +2191,45 @@ describe('RUNDOCK-UI.md: the danger rule says the same thing in both places', ()
   });
 });
 
+// The server's own answers, read and saved, pinned by putting requests to a
+// router with no window wired to it.
+const auth = require('../../lib/auth/index.js');
+const { EventEmitter } = require('node:events');
+// A router with nothing connected to it, as Rundock on a server runs: what
+// it answers, what it sends toward a window, and what it leaves waiting.
+function routerWithNoWindow() {
+  const key = require.resolve('../../lib/http-router.js');
+  const shared = require.cache[key];
+  delete require.cache[key];
+  const router = require(key);
+  delete require.cache[key];
+  if (shared) require.cache[key] = shared;
+  const pending = new Map();
+  const sent = [];
+  router.wireHttpRouterDeps({
+    pendingPermissionRequests: () => pending, safeSend: (s) => sent.push(JSON.parse(s)),
+    getPermissionTimeoutMs: () => 60000, routineRun: () => null, noteRefusedCard: () => false,
+  });
+  const token = auth.issueHookToken('doc-claims-read');
+  const put = (body) => new Promise((resolve) => {
+    const req = Object.assign(new EventEmitter(), { method: 'POST', url: '/api/permission-request', headers: { [auth.HOOK_HEADER]: token } });
+    const res = Object.assign(new EventEmitter(), {
+      writeHead() {}, writableEnded: false,
+      end(payload) { this.writableEnded = true; resolve(JSON.parse(payload)); },
+    });
+    router.handleHttpRequest(req, res);
+    req.emit('data', JSON.stringify(body));
+    req.emit('end');
+    if (!res.writableEnded) resolve(null);
+  });
+  return { put, pending, sent, done: () => { for (const p of pending.values()) clearTimeout(p.timer); } };
+}
+
 describe('ARCHITECTURE.md: the server answers a low-risk read itself, with or without a window', () => {
   // The claim a person running Rundock with no window open relies on: a
   // routine's read gets the answer a conversation's does. Pinned by putting a
   // request to a router with no window wired to it, so the page cannot keep
   // saying it after the server stops doing it.
-  const auth = require('../../lib/auth/index.js');
-  const { EventEmitter } = require('node:events');
   const LEAD = '**The server answers a low-risk read itself, with or without a window.**';
   const at = architecture.indexOf(LEAD);
   const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
@@ -2220,42 +2252,13 @@ describe('ARCHITECTURE.md: the server answers a low-risk read itself, with or wi
     + '(and a write to a folder that holds one) and Rundock\'s console folder, and it never answers a shell command.';
   const STILL_CARDS_SENTENCE = 'Every other place outside the workspace the hook graded (any a shell command reaches, and any a file tool '
     + 'reaches that no such grant covers), an answer file, a shell startup file, a Keychain line, a secrets-tier path, '
-    + 'and anything not low risk still raises a card, as below.';
-  // A router with nothing connected to it, as Rundock on a server runs: what
-  // it answers, what it sends toward a window, and what it leaves waiting.
-  function routerWithNoWindow() {
-    const key = require.resolve('../../lib/http-router.js');
-    const shared = require.cache[key];
-    delete require.cache[key];
-    const router = require(key);
-    delete require.cache[key];
-    if (shared) require.cache[key] = shared;
-    const pending = new Map();
-    const sent = [];
-    router.wireHttpRouterDeps({
-      pendingPermissionRequests: () => pending, safeSend: (s) => sent.push(JSON.parse(s)),
-      getPermissionTimeoutMs: () => 60000, routineRun: () => null, noteRefusedCard: () => false,
-    });
-    const token = auth.issueHookToken('doc-claims-read');
-    const put = (body) => new Promise((resolve) => {
-      const req = Object.assign(new EventEmitter(), { method: 'POST', url: '/api/permission-request', headers: { [auth.HOOK_HEADER]: token } });
-      const res = Object.assign(new EventEmitter(), {
-        writeHead() {}, writableEnded: false,
-        end(payload) { this.writableEnded = true; resolve(JSON.parse(payload)); },
-      });
-      router.handleHttpRequest(req, res);
-      req.emit('data', JSON.stringify(body));
-      req.emit('end');
-      if (!res.writableEnded) resolve(null);
-    });
-    return { put, pending, sent, done: () => { for (const p of pending.values()) clearTimeout(p.timer); } };
-  }
+    + 'and anything not low risk that no saved answer covers still raises a card, as below.';
 
   test('the audit section, the routines page and the comments say it', () => {
     assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
-    assert.ok(passage.includes('`readOnlyAnswer` in `lib/http-router.js` requires that same module'), 'it names where the server answers');
+    assert.ok(passage.includes('`serverAnswer` in `lib/http-router.js` requires that same module'), 'it names where the server answers');
     assert.ok(passage.includes('whether or not a window is connected'), 'it says a window is not needed');
-    assert.ok(passage.includes('is never answered this way, nor is anything not low risk, and any error falls through to the card'), 'it says what still cards');
+    assert.ok(passage.includes('is never answered this way, nor is one whose `code_mode_verdict` decides otherwise (a Keychain line carries one that always asks), nor anything not low risk that no saved answer covers, and any error falls through to the card'), 'it says what still cards');
     assert.ok(passage.includes('The window\'s own branch now sees only what the server did not answer.'), 'it says what the window still sees');
     assert.ok(routinesDoc.includes('the server answers it itself, from the decision the window makes, whether or not a Rundock window is open'),
       'the routines page says a read raises no card with no window');
@@ -2264,8 +2267,8 @@ describe('ARCHITECTURE.md: the server answers a low-risk read itself, with or wi
     assert.ok(!routinesDoc.includes('Anything the hook graded (a place outside the workspace'),
       'and no longer says every place outside the workspace raises a card, which a standing folder grant answers without one');
     assert.ok(!graderSrc.includes('client-side, and nowhere else'), 'the module no longer says the policy runs only in the browser');
-    assert.ok(flat(graderSrc).includes('two layers read it: the window, and the server bridge (readOnlyAnswer in lib/http-router.js)'), 'it says who reads it');
-    assert.ok(flat(chatSrc).includes('so a low-risk read reaches this branch only when the server did not answer it'), 'the window says what reaches it');
+    assert.ok(flat(graderSrc).includes('two layers read it: the window, and the server bridge (serverAnswer in lib/http-router.js)'), 'it says who reads it');
+    assert.ok(flat(chatSrc).includes('answers a low-risk read and a saved "Always allow" itself, so either reaches this branch only when the server did not answer it'), 'the window says what reaches it');
     assert.ok(routerSrc.includes("require('../public/permissions.js')"), 'the server requires the module the window loads');
   });
 
@@ -2334,6 +2337,112 @@ describe('ARCHITECTURE.md: the server answers a low-risk read itself, with or wi
     } finally {
       done();
       fs.rmSync(granted, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, with or without a window', () => {
+  // The claim a person who saved an answer relies on: a routine with no
+  // window open is not left waiting on a card they already answered, and
+  // nothing but what Rundock saved is applied. Pinned by a router with no
+  // window wired to it, a turn held on the answer-file guard, and a key saved
+  // through the store's own writer.
+  const guard = require('../../lib/workspace/answer-file-guard.js');
+  const boundary = require('../../lib/workspace/boundary.js');
+  const config = require('../../lib/config.js');
+  const LEAD = '**The server applies a saved "Always allow" itself, with or without a window, and only as Rundock wrote it.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const routerSrc = fs.readFileSync(path.join(ROOT, 'lib', 'http-router.js'), 'utf-8');
+  const graderSrc = fs.readFileSync(path.join(ROOT, 'public', 'permissions.js'), 'utf-8');
+  const chatSrc = fs.readFileSync(path.join(ROOT, 'public', 'views', 'chat.js'), 'utf-8');
+  const flat = (src) => src.replace(/\n\s*\/\/ ?/g, ' ').replace(/\s+/g, ' ');
+
+  test('the audit section, the routines page and the comments say it', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    assert.ok(passage.includes('`serverAnswer` gives `decidePermission` those saved answers and the request\'s `code_mode_verdict` exactly as the window gives them'),
+      'it says the server makes the window\'s decision');
+    assert.ok(passage.includes("answered `{ allow: true, reason: 'always-allowed' }` at once, whether or not a window is connected"), 'it says a window is not needed');
+    assert.ok(passage.includes('a high-risk command still cards, ahead of every saved answer in `decidePermission`'), 'it says high risk still cards');
+    assert.ok(passage.includes('an Asks-once verdict is answered only by its own saved rule key, never by a binary key such as `Bash:git`'), 'it says what answers an Asks once');
+    assert.ok(passage.includes('So `savedAnswers` applies none while no turn\'s guard watches the workspace, runs `checkAnswerFilesNow` first'), 'it says the check comes first');
+    assert.ok(passage.includes('and then reads that baseline (`answerFileBaseline` in `lib/workspace/answer-file-guard.js`) rather than the file'), 'it says what is read');
+    assert.ok(passage.includes("Rundock's own writes of the file build on what the guard has accepted, never on the file as it stands (`answerFileToBuildOn`"), 'it says what a writer builds on');
+    assert.ok(passage.includes("The saved answers are those of the request's own workspace, never the open one's: a routine run's is the folder it started in"), 'it says whose answers apply');
+    assert.ok(routinesDoc.includes('the server applies that answer itself, whether or not a Rundock window is open, so a routine never waits on a card for something you already allowed'),
+      'the routines page says a saved answer holds with no window');
+    assert.ok(flat(graderSrc).includes('auto-allow POLICY for low-risk read-only commands and saved "Always allow" answers lives here and only here'), 'the module says the policy covers saved answers');
+    assert.ok(flat(chatSrc).includes('and a request a saved "Always allow" covers, are answered by the server before they get here, with or without a window'),
+      'the approvals dock\'s branch says what reaches it');
+    // The order the paragraph states is the order the code keeps.
+    const body = routerSrc.slice(routerSrc.indexOf('function savedAnswers('), routerSrc.indexOf('function requestWorkspace('));
+    const order = ['guard.answerFilesWatched(workspace)', 'guard.checkAnswerFilesNow(workspace)', 'guard.answerFileBaseline('].map((n) => body.indexOf(n));
+    assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], `watched, then checked, then the baseline read: ${order}`);
+    assert.ok(!body.includes('readToolAllows'), 'and never the file as it stands');
+  });
+
+  test('and the server does it: a router with no window applies a saved key while a turn is guarded, never a key planted before a save, and nothing once no turn is guarded', async () => {
+    // A turn's guard watches the home folder's shell startup files, and the
+    // test preload fails the run if any of them is the account's own
+    // (test/helpers/account-home-refused.js). So the guard is given a made-up
+    // home for this test only, as made-up-home.js gives a whole file one:
+    // HOME, the desktop layout that puts Rundock's record there too, and no
+    // ZDOTDIR or XDG_CONFIG_HOME. Put back once the turn is released.
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-home-')));
+    const ENV = ['HOME', 'RUNDOCK_ELECTRON', 'ZDOTDIR', 'XDG_CONFIG_HOME'];
+    const was = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+    process.env.HOME = home;
+    process.env.RUNDOCK_ELECTRON = '1';
+    delete process.env.ZDOTDIR;
+    delete process.env.XDG_CONFIG_HOME;
+    const restore = () => {
+      for (const k of ENV) { if (was[k] === undefined) delete process.env[k]; else process.env[k] = was[k]; }
+      fs.rmSync(home, { recursive: true, force: true });
+    };
+    useWorkspace({});
+    const ws = config.getWorkspace();
+    const command = { tool_name: 'Bash', tool_input: { command: 'python3 tools/report.py' } };
+    const { put, pending, sent, done } = routerWithNoWindow();
+    let turn;
+    // Guarded for the conversation the router's token names, as every Claude
+    // turn is: the server applies a conversation's saved answers only from
+    // the workspace whose guard holds that conversation's turn.
+    try { turn = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000, convoId: 'doc-claims-read' }); } catch (e) { restore(); throw e; }
+    let released = false;
+    try {
+      assert.strictEqual(await put(command), null, 'with nothing saved, it waits for a card');
+      boundary.addToolAllow('Bash:python3');
+      assert.deepStrictEqual(await put(command), { allow: true, reason: 'always-allowed' }, 'once saved, it is answered');
+      // A turn guarded for another conversation does not bind this one.
+      const other = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000, convoId: 'doc-claims-other' });
+      turn.release();
+      try {
+        assert.strictEqual(await put(command), null, 'with only another conversation\'s turn guarded, it waits for a card');
+      } finally {
+        turn = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000, convoId: 'doc-claims-read' });
+        other.release();
+      }
+      assert.deepStrictEqual(await put({ tool_name: 'Bash', tool_input: { command: 'python3 tools/report.py && rm -rf build' } }), null, 'a high-risk line under the same key waits');
+      // A key written straight to the file, as a script would, and then a
+      // save of another key through the store's own writer: the save never
+      // carries the planted key, so the router never answers it.
+      const file = boundary.boundaryPermissionsPath();
+      const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      fs.writeFileSync(file, JSON.stringify({ ...data, allowedTools: [...data.allowedTools, 'Bash:node'] }, null, 2));
+      boundary.addToolAllow('Bash:echo');
+      assert.strictEqual(await put({ tool_name: 'Bash', tool_input: { command: 'node scripts/build.js' } }), null, 'a command under the planted key waits');
+      assert.ok(!boundary.readToolAllows().includes('Bash:node') && boundary.readToolAllows().includes('Bash:echo'), 'the save wrote the file without the planted key');
+      turn.release();
+      released = true;
+      assert.strictEqual(await put(command), null, 'with no turn guarded, the saved key answers nothing');
+      assert.strictEqual(pending.size, 5, 'each one it did not answer waits on a card');
+      assert.deepStrictEqual(sent.map((m) => m.type), ['control_request', 'control_request', 'control_request', 'control_request', 'control_request']);
+    } finally {
+      if (!released) turn.release();
+      boundary.removeToolAllow('Bash:python3');
+      boundary.removeToolAllow('Bash:echo');
+      done();
+      restore();
     }
   });
 });

@@ -60,9 +60,9 @@
 // deny rules refuse it (see THE TOOL FLAGS below). `writes` entries are held
 // to the same deny rules, and a `writes` entry may give "content", the exact
 // text the write carries.
-// Any rule may give "hooks": [{ "event", "tool", "input", "error", "extra" }] to
-// run Rundock's real permission hook for each call, in order, before its turn:
-// see runHookCalls below.
+// Any rule may give "hooks": [{ "event", "tool", "input", "error", "extra",
+// "untilFile" }] to run Rundock's real permission hook for each call, in
+// order, before its turn: see runHookCalls below.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -723,7 +723,8 @@ function handleUserMessage(content) {
 // call's error, for PostToolUseFailure; `extra` sets fields of the payload, as
 // the runtime adds `agent_id` and `agent_type` for a call a subagent makes, or
 // a nested `claude` sends a session of its own, and a field set to null is
-// left out, as a call that names no session would.
+// left out, as a call that names no session would. `untilFile` holds the call
+// until that file exists, so a test decides what happens between two calls.
 const HOOK_LOG = path.join(process.cwd(), 'stub-hook-answers.jsonl');
 const PERMISSION_HOOK = path.join(__dirname, '..', '..', '..', 'scripts', 'permission-hook.js');
 function runHookCalls(calls, then) {
@@ -731,6 +732,7 @@ function runHookCalls(calls, then) {
   const next = () => {
     if (at >= calls.length) { then(); return; }
     const call = calls[at++] || {};
+    if (call.untilFile && !fs.existsSync(call.untilFile)) { at--; setTimeout(next, 20); return; }
     const event = call.event || 'PreToolUse';
     const input = {
       session_id: SESSION_ID, hook_event_name: event, tool_name: call.tool || 'Bash', tool_input: call.input || {}, cwd: process.cwd(),

@@ -21,11 +21,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const http = require('node:http');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
 const WebSocket = require('ws');
 
 const h = require('../helpers/harness.js');
 const { agentFile, makeTempDir } = require('../helpers/workspace.js');
+const route = require('../helpers/permission-route.js');
 const ROUTER = require('../../lib/http-router.js');
 const P = require('../../public/permissions.js');
 const auth = require('../../lib/auth/index.js');
@@ -34,7 +34,6 @@ const { refusalNotice } = require('../../scripts/refusal-notice.js');
 const PS = require('../fixtures/powershell-reads.js');
 const BASH_TABLES = require('../fixtures/bash-reads.js');
 
-const HOOK = path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
 const AGENT = 'runner';
 const TIMEOUT_MS = 1500;
 const READ_ONLY = { allow: true, reason: 'read-only' };
@@ -43,10 +42,8 @@ const TIMED_OUT = { allow: false, reason: 'timeout' };
 let outside;
 // What the router did, seen from outside it: every message it sent toward a
 // window, every request it stored to wait on a card, and every log line.
-const broadcasts = [];
-const filed = [];
-const logged = [];
-const undo = [];
+const recorder = route.routerRecorder();
+const { broadcasts, filed, logged } = recorder;
 
 before(async () => {
   await h.boot({
@@ -60,20 +57,10 @@ before(async () => {
   fs.mkdirSync(path.join(os.homedir(), '.claude'), { recursive: true });
   fs.writeFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), '{}');
   fs.writeFileSync(path.join(h.workspaceDir, 'notes.md'), '# notes\n');
-
-  const prev = ROUTER.wireHttpRouterDeps({});
-  ROUTER.wireHttpRouterDeps({ safeSend: (text) => { try { broadcasts.push(JSON.parse(text)); } catch (e) { /* not JSON */ } return prev.safeSend(text); } });
-  undo.push(() => ROUTER.wireHttpRouterDeps({ safeSend: prev.safeSend }));
-  const pending = h.internal.pendingPermissionRequests;
-  const set = pending.set;
-  pending.set = function (id, entry) { filed.push({ id, tool: entry.toolName, input: entry.toolInput, convo: entry.conversationId, run: entry.run }); return set.call(this, id, entry); };
-  undo.push(() => { delete pending.set; });
-  const log = console.log;
-  console.log = (...args) => { logged.push(args.map(String).join(' ')); log.apply(console, args); };
-  undo.push(() => { console.log = log; });
+  recorder.install();
 });
 after(async () => {
-  for (const fn of undo.reverse()) fn();
+  recorder.uninstall();
   await h.shutdown();
 });
 
@@ -81,90 +68,17 @@ after(async () => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// A window a test opened is gone before the next test starts, whether or not
-// that test passed.
-async function noWindow() {
-  assert.ok(await h.waitUntil(() => h.internal.wss.clients.size === 0, { timeout: 3000 }), 'no window is connected');
-}
+// Shared with the suite on saved answers (test/helpers/permission-route.js).
+const { noWindow, ask, bash, bashInput, runHook, commandOf, events, finished, answersOf } = route;
+const startRoutine = (rule) => route.startRoutine(AGENT, rule, 'read-routine');
 
-// A request to the permission route exactly as the hook makes it, with the
-// token the hook is handed. Resolves the status and the parsed answer;
-// `abort` drops the connection, as an asker that went away does.
-function ask(body, { convo = null, headers, url = '/api/permission-request' } = {}) {
-  const text = typeof body === 'string' ? body : JSON.stringify(body);
-  let req;
-  const reply = new Promise((resolve) => {
-    req = http.request({
-      host: '127.0.0.1', port: h.port, method: 'POST', path: url,
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text), ...(headers || h.hookHeaders(convo)) },
-    }, (res) => {
-      let b = '';
-      res.on('data', (c) => { b += c; });
-      res.on('end', () => { let json = null; try { json = JSON.parse(b); } catch (e) { /* not JSON */ } resolve({ status: res.statusCode, body: json }); });
-    });
-    req.on('error', (e) => resolve({ error: e.code || e.message }));
-    req.end(text);
-  });
-  return { reply, abort: () => req.destroy() };
-}
-const bashInput = (command) => ({ tool: 'Bash', input: { command } });
-const bash = (command, convo, extra = {}) => ({ tool_name: 'Bash', tool_input: { command }, conversation_id: convo || '', ...extra });
-
-// The real hook binary, spawned as the runtime spawns it, for a conversation.
-function runHook(toolName, toolInput, { convo, env = {} } = {}) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, [HOOK], {
-      cwd: h.workspaceDir,
-      env: {
-        ...process.env, RUNDOCK: '1', RUNDOCK_PORT: String(h.port), RUNDOCK_WORKSPACE: h.workspaceDir,
-        RUNDOCK_CODE_MODE: '', RUNDOCK_CONVO_ID: convo, RUNDOCK_HOOK_TOKEN: h.hookToken(convo), ...env,
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    let out = '';
-    proc.stdout.on('data', (d) => { out += d; });
-    proc.on('close', () => { try { resolve(JSON.parse(out).hookSpecificOutput || {}); } catch (e) { reject(new Error(`hook output unparseable: ${out}`)); } });
-    proc.stdin.end(JSON.stringify({ tool_name: toolName, tool_input: toolInput, session_id: `s-${convo}`, cwd: h.workspaceDir }));
-  });
-}
-
-const commandOf = (input) => (input && typeof input === 'object' ? input.command : undefined);
 const cardsFor = (command) => broadcasts.filter((m) => m.type === 'control_request' && commandOf(m.request && m.request.input) === command);
 const filedFor = (command) => filed.filter((f) => commandOf(f.input) === command);
 const timedOut = (requestId) => broadcasts.some((m) => m.type === 'permission_timeout' && m.requestId === requestId);
 
-function events() {
-  const dir = path.join(h.workspaceDir, '.rundock', 'state');
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((n) => /^events-.*\.jsonl$/.test(n))
-    .flatMap((n) => fs.readFileSync(path.join(dir, n), 'utf-8').split('\n').filter(Boolean))
-    .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
-}
 const readOnlyEvents = (conv) => events().filter((e) => e.e === 'permission' && e.conv === conv && e.d && e.d.reason === 'read-only');
 // A routine's request has no conversation, so its events carry none.
 const routineReadOnlyEvents = () => readOnlyEvents(undefined);
-
-// ROUTINE RUNS, started the way the scheduler starts every run.
-const runsDir = () => path.join(h.workspaceDir, '.rundock', 'runs');
-const records = () => (fs.existsSync(runsDir()) ? fs.readdirSync(runsDir()) : [])
-  .filter((n) => n.endsWith('.json'))
-  .map((n) => JSON.parse(fs.readFileSync(path.join(runsDir(), n), 'utf-8')));
-let seq = 0;
-function startRoutine(rule) {
-  const name = `read-routine-${++seq}`;
-  const prompt = `routine body number ${seq}`;
-  const key = `${AGENT}:${name}`;
-  h.writeScenario([{ match: { agent: AGENT, promptIncludes: prompt }, turn: [{ text: 'done' }], ...rule }]);
-  const agent = h.internal.discoverAgents().find((a) => a.id === AGENT);
-  assert.ok(agent, 'the fixture agent is there');
-  h.internal.executeRoutine(agent, { name, schedule: 'every day at 09:00', prompt }, key);
-  return { name, key, record: () => records().find((r) => r.routine === name) };
-}
-async function finished(run, timeout = 15000) {
-  assert.ok(await h.waitUntil(() => { const r = run.record(); return r && r.status !== 'running'; }, { timeout }), `${run.name} finished`);
-  return run.record();
-}
-const answersOf = (record) => h.readHookAnswers().filter((a) => a.sessionId === record.sessionId).map((a) => a.answer && a.answer.hookSpecificOutput);
 const linesFor = (routine) => logged.filter((l) => l.includes('Read-only, answered without a card') && l.includes(`routine "${routine}"`));
 
 // The two reads the routine comparison saw refused for no reason but the
