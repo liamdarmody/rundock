@@ -82,3 +82,22 @@ would reach a Codex routine.
   developer instructions, and its turn input is unchanged; and a Claude Code
   routine is told to use its file tools, and a Codex routine is not, as the
   page says.
+
+## The spawn paths that did not change still pass
+
+Run at `33173ae2`, whose code and tests are those of `c32ffffa`, with the preload
+CI uses:
+
+```
+node --test --require ./test/helpers/account-home-refused.js <file>
+```
+
+- `test/integration/spawn-argv-freeze.test.js`: 7 of 7 pass. It pins a Claude
+  Code routine's `--append-system-prompt` to `UNATTENDED_RUN`, and the rest of
+  each spawn's argv as it was, so a routine prompt still reaches the model as
+  it was approved.
+- `test/integration/routine-unattended-line.test.js`: 7 of 7 pass, including
+  that a conversation, on either runtime, gets neither line.
+
+Neither file needed an assertion removed: the argv-freeze test reads the
+constant, and the Claude Code spawn still passes `UNATTENDED_RUN`.
