@@ -421,6 +421,37 @@ describe('5. the control failing: the saved set fails closed', () => {
     }
   });
 
+  // A routine run's workspace comes from its record, not from a guarded
+  // turn, so the run path is where the guard's watch is checked on its own.
+  // The run is a live one as the scheduler names it, in this workspace, with
+  // its own token; the lookup is put back once the test ends.
+  test('a routine run in a workspace no turn\'s guard watches gets no saved answer, though its record names the workspace', async () => {
+    await noWindow();
+    const auth = require('../../lib/auth/index.js');
+    const ROUTER = require('../../lib/http-router.js');
+    const runId = 'saved-unwatched-run';
+    const live = { id: runId, routine: 'unwatched', agent: AGENT, workspace: workspace() };
+    const prev = ROUTER.wireHttpRouterDeps({});
+    ROUTER.wireHttpRouterDeps({ routineRun: (id) => (id === runId ? live : prev.routineRun(id)) });
+    const headers = { [auth.HOOK_HEADER]: auth.issueRunHookToken(runId) };
+    await save('Bash:python3');
+    try {
+      const turn = await holdTurn('saved-unwatched-other');
+      try {
+        assert.deepStrictEqual((await ask(bash(command), { headers }).reply).body, ALWAYS, 'answered while a turn runs in the run\'s workspace');
+      } finally {
+        turn.release();
+      }
+      assert.strictEqual(guard.answerFilesWatched(workspace()), false, 'no turn runs now');
+      assert.ok(readToolAllows().includes('Bash:python3'), 'the answer is still saved');
+      const r = await ask(bash(command), { headers }).reply;
+      assert.deepStrictEqual(r.body, TIMED_OUT, 'the run\'s request waited on a card');
+    } finally {
+      ROUTER.wireHttpRouterDeps({ routineRun: prev.routineRun });
+      await revoke('Bash:python3');
+    }
+  });
+
   // A request sent while `force` holds, then put back. The hook still gets
   // the card path's reply: stored, broadcast, timed out. Never an allow, and
   // never a dropped connection.
