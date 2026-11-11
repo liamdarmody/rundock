@@ -129,6 +129,10 @@ So seventeen leaves 5 s on both trees, and eighteen leaves 22 s. At either cap t
 
 Each shard beyond sixteen is another CI job on every run of the full set: the nightly sweep, and every pull request that touches what every harness depends on. The planner's ten-minute target (`SECONDS_PER_SHARD`) would want about twenty-four shards for this set (14,068 s over 600 s), so the cap is what holds the count, as before.
 
+## The planner suite passes at seventeen
+
+At `313d4d32`, the commit that sets the cap to seventeen, `node --test test/unit/mutation-scope.test.js` passes 61 of 61 tests with none skipped, unchanged from main. That includes "the full set, planned with the real costs, keeps every shard well under its limit" and "a plan the cap does not reach is the same whatever the cap". Run 2026-11-11. CI's test jobs on Node 22 and 24 run every `test/**/*.test.js` file, this suite included, and both passed at the same commit (run 42925690030).
+
 ## Both workflows still read the shard count from the plan, at seventeen
 
 Seventeen shards need no workflow change. Both workflows that run the full set read their shard matrix from the plan, at the same line numbers on main at `b2c87dfc` as above:
