@@ -462,6 +462,13 @@ const SAVED_ANSWER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'te
 // it, so the router never answers it.
 const SAVED_WRITER = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
 const SAVED_BUILD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
+// Whose saved answers apply: the request's own workspace, never the open one.
+// A routine started in one workspace and still running after a switch, and
+// the inverse, prove the router's binding and the run's recorded folder; the
+// doc pin proves a conversation is bound only by its own guarded turn.
+const SAVED_BOUND = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/saved-answers-workspace.test.js' };
+const SAVED_RUN_FOLDER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/saved-answers-workspace.test.js' };
+const SAVED_TURN = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/doc-claims.test.js' };
 
 // The shell startup files and Rundock's record of them: the hook's match and
 // its card's words, the stored-grant check, Codex grading, the sandbox block,
@@ -4554,12 +4561,12 @@ const MUTATIONS = [
   // The verdict decides once it reaches decidePermission, so dropping it from
   // the call is what answers a Keychain line as a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a Keychain line or any other verdict is answered with no card',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(), verdict);',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers());'],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace));'],
   // Only the low-risk answer: a medium command is not a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a medium command is answered as a read',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(), verdict);',
-    "    const answer = decision.decidePermission(risk === 'medium' ? 'low' : risk, key, savedAnswers(), verdict);"],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    "    const answer = decision.decidePermission(risk === 'medium' ? 'low' : risk, key, savedAnswers(workspace), verdict);"],
   // Fails closed: an error is the card path, never an allow.
   [READ_ONLY_ANSWER, 'Read-only answer: a request that cannot be graded is allowed',
     "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return null;",
@@ -4581,7 +4588,7 @@ const MUTATIONS = [
     ''],
   // What is read is the guard's baseline, never the file as it stands.
   [SAVED_ANSWER, 'Saved answer: the saved set is read from the file as it stands after the check',
-    '    return new Set(toolAllowsIn(guard.answerFileBaseline(workspace, boundaryPermissionsPath())));',
+    '    return new Set(toolAllowsIn(guard.answerFileBaseline(workspace, permissionsPathIn(workspace))));',
     "    return new Set(require('./workspace/boundary.js').readToolAllows());"],
   // No turn's guard watching: nothing checked, so nothing applied.
   [SAVED_ANSWER, 'Saved answer: saved answers apply on a workspace no turn\'s guard watches',
@@ -4593,18 +4600,30 @@ const MUTATIONS = [
     "    console.warn(`[Permission] Could not read the saved answers, so none is applied: ${e && e.message ? e.message : e}`);\n    return new Set(require('./workspace/boundary.js').readToolAllows());"],
   // High risk cards ahead of every saved answer.
   [SAVED_ANSWER, 'Saved answer: a saved key answers a high-risk request',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(), verdict);',
-    "    const answer = decision.decidePermission(risk === 'high' ? 'medium' : risk, key, savedAnswers(), verdict);"],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    "    const answer = decision.decidePermission(risk === 'high' ? 'medium' : risk, key, savedAnswers(workspace), verdict);"],
   // The verdict reaches the decision as the window passes it.
   [SAVED_ANSWER, 'Saved answer: the verdict is dropped from the decision',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(), verdict);',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers());'],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace));'],
   // A save or revoke builds on what the guard accepted, never the disk.
   [SAVED_WRITER, 'Saved answer: a save or revoke merges the permissions file as it stands on disk',
     '    const accepted = answerFileToBuildOn(getWorkspace(), file);',
     '    const accepted = null;'],
   // The guard's check runs first, so the planted change is put back and
   // handed to the turn rather than written over unseen.
+  // The request's workspace is dropped, and the open one's answers apply.
+  [SAVED_BOUND, 'Saved answer: the workspace check is dropped, so the open workspace answers every request',
+    '        const answered = serverAnswer(data, requestWorkspace(run, convoId));',
+    '        const answered = serverAnswer(data, getWorkspace());'],
+  // A live run no longer names the folder it started in.
+  [SAVED_RUN_FOLDER, 'Saved answer: a live run does not name the folder it started in',
+    '  return run ? { id: run.id, routine: run.routine, agent: run.agent, workspace: run.workspace } : null;',
+    '  return run ? { id: run.id, routine: run.routine, agent: run.agent } : null;'],
+  // Any guarded turn binds every conversation to its workspace.
+  [SAVED_TURN, 'Saved answer: a conversation is bound by any turn in the workspace, not its own',
+    '  for (const g of guards.values()) if ([...g.listeners].some(l => l.convoId === convoId)) roots.push(g.root);',
+    '  for (const g of guards.values()) if (g.listeners.size) roots.push(g.root);'],
   [SAVED_BUILD, 'Saved answer: a save or revoke builds on the file without the guard\'s check first',
     '  if (g.listeners.size) checkAnswerFilesNow(workspace);\n  const was = g.snapshot.get(f);',
     '  const was = g.snapshot.get(f);'],

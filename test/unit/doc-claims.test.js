@@ -2368,13 +2368,14 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
     assert.ok(passage.includes('So `savedAnswers` applies none while no turn\'s guard watches the workspace, runs `checkAnswerFilesNow` first'), 'it says the check comes first');
     assert.ok(passage.includes('and then reads that baseline (`answerFileBaseline` in `lib/workspace/answer-file-guard.js`) rather than the file'), 'it says what is read');
     assert.ok(passage.includes("Rundock's own writes of the file build on what the guard has accepted, never on the file as it stands (`answerFileToBuildOn`"), 'it says what a writer builds on');
+    assert.ok(passage.includes("The saved answers are those of the request's own workspace, never the open one's: a routine run's is the folder it started in"), 'it says whose answers apply');
     assert.ok(routinesDoc.includes('the server applies that answer itself, whether or not a Rundock window is open, so a routine never waits on a card for something you already allowed'),
       'the routines page says a saved answer holds with no window');
     assert.ok(flat(graderSrc).includes('auto-allow POLICY for low-risk read-only commands and saved "Always allow" answers lives here and only here'), 'the module says the policy covers saved answers');
     assert.ok(flat(chatSrc).includes('and a request a saved "Always allow" covers, are answered by the server before they get here, with or without a window'),
       'the approvals dock\'s branch says what reaches it');
     // The order the paragraph states is the order the code keeps.
-    const body = routerSrc.slice(routerSrc.indexOf('function savedAnswers()'), routerSrc.indexOf('function serverAnswer('));
+    const body = routerSrc.slice(routerSrc.indexOf('function savedAnswers('), routerSrc.indexOf('function requestWorkspace('));
     const order = ['guard.answerFilesWatched(workspace)', 'guard.checkAnswerFilesNow(workspace)', 'guard.answerFileBaseline('].map((n) => body.indexOf(n));
     assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], `watched, then checked, then the baseline read: ${order}`);
     assert.ok(!body.includes('readToolAllows'), 'and never the file as it stands');
@@ -2403,12 +2404,24 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
     const command = { tool_name: 'Bash', tool_input: { command: 'python3 tools/report.py' } };
     const { put, pending, sent, done } = routerWithNoWindow();
     let turn;
-    try { turn = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000 }); } catch (e) { restore(); throw e; }
+    // Guarded for the conversation the router's token names, as every Claude
+    // turn is: the server applies a conversation's saved answers only from
+    // the workspace whose guard holds that conversation's turn.
+    try { turn = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000, convoId: 'doc-claims-read' }); } catch (e) { restore(); throw e; }
     let released = false;
     try {
       assert.strictEqual(await put(command), null, 'with nothing saved, it waits for a card');
       boundary.addToolAllow('Bash:python3');
       assert.deepStrictEqual(await put(command), { allow: true, reason: 'always-allowed' }, 'once saved, it is answered');
+      // A turn guarded for another conversation does not bind this one.
+      const other = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000, convoId: 'doc-claims-other' });
+      turn.release();
+      try {
+        assert.strictEqual(await put(command), null, 'with only another conversation\'s turn guarded, it waits for a card');
+      } finally {
+        turn = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000, convoId: 'doc-claims-read' });
+        other.release();
+      }
       assert.deepStrictEqual(await put({ tool_name: 'Bash', tool_input: { command: 'python3 tools/report.py && rm -rf build' } }), null, 'a high-risk line under the same key waits');
       // A key written straight to the file, as a script would, and then a
       // save of another key through the store's own writer: the save never
@@ -2422,8 +2435,8 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
       turn.release();
       released = true;
       assert.strictEqual(await put(command), null, 'with no turn guarded, the saved key answers nothing');
-      assert.strictEqual(pending.size, 4, 'each one it did not answer waits on a card');
-      assert.deepStrictEqual(sent.map((m) => m.type), ['control_request', 'control_request', 'control_request', 'control_request']);
+      assert.strictEqual(pending.size, 5, 'each one it did not answer waits on a card');
+      assert.deepStrictEqual(sent.map((m) => m.type), ['control_request', 'control_request', 'control_request', 'control_request', 'control_request']);
     } finally {
       if (!released) turn.release();
       boundary.removeToolAllow('Bash:python3');

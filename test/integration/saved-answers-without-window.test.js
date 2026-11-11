@@ -81,12 +81,18 @@ const linesFor = (match) => logged.filter((l) => l.includes('Always allowed, ans
 // check interval longer than any test: the guard checks as the turn starts,
 // and then only when the router, or the test through `check`, asks it to.
 // Every change it puts back is kept on `changes`.
-async function holdTurn(convoId = null) {
+//
+// HELD FOR THE CONVERSATION THAT ASKS, as every Claude turn is guarded with
+// its conversation's id: the server applies a conversation's saved answers
+// only from the workspace whose guard holds that conversation's turn. A
+// list of ids holds one turn for each, for tests that ask from several.
+async function holdTurn(convoIds = null) {
   assert.ok(await h.waitUntil(() => !guard.answerFilesWatched(workspace()), { timeout: 5000 }), 'no other turn is running');
   const changes = [];
-  const turn = guard.acquireAnswerFileGuard(workspace(), (change) => changes.push(change), { intervalMs: HOUR, convoId });
+  const turns = (Array.isArray(convoIds) ? convoIds : [convoIds])
+    .map((convoId) => guard.acquireAnswerFileGuard(workspace(), (change) => changes.push(change), { intervalMs: HOUR, convoId }));
   assert.ok(guard.answerFilesWatched(workspace()), 'the guard watches the workspace');
-  return { changes, check: () => turn.check(), release: () => turn.release() };
+  return { changes, check: () => turns[0].check(), release: () => { for (const t of turns) t.release(); } };
 }
 
 // A window with the launch key, as the card's "Always allow" and Settings
@@ -191,7 +197,7 @@ describe('what cards ahead of a saved answer still cards with no window', { conc
   let turn;
   before(async () => {
     await noWindow();
-    turn = await holdTurn('saved-classes');
+    turn = await holdTurn(['saved-classes-plain', ...CLASSES.map(([label]) => convoOfClass(label)), ...GRADES.map(([label]) => convoOfGrade(label))]);
     for (const key of KEYS) await save(key);
     // Each key is live: it answers a plain command of its own at once.
     for (const command of ['python3 tools/report.py', 'echo hi > out.txt']) {
@@ -207,6 +213,8 @@ describe('what cards ahead of a saved answer still cards with no window', { conc
   // Each through the real hook, so each carries exactly what the hook sends
   // for it, under a saved key that matches it.
   const zshrc = '~/.zshrc';
+  const convoOfClass = (label) => `saved-class-${label.replace(/\W+/g, '-')}`;
+  const convoOfGrade = (label) => `saved-grade-${label.replace(/\W+/g, '-')}`;
   const CLASSES = [
     ['a high-risk command', 'Bash:python3', () => bashInput('python3 tools/report.py && rm -rf build'), (req) => !req.boundary && !req.answer_file && !req.startup_file && !req.code_mode_verdict, {}],
     ['an uncovered crossing', 'Bash:python3', () => bashInput(`python3 ${path.join(outside, 'notes.py')}`), (req) => req.boundary === true && req.crossings.length === 1, {}],
@@ -219,7 +227,7 @@ describe('what cards ahead of a saved answer still cards with no window', { conc
     test(`${label} under a saved \`${key}\` waits for a card and times out, as on main`, async () => {
       const { tool, input } = requestFor();
       assert.strictEqual(P.toolAllowKey(tool, input), key, `${label}: the saved key matches it`);
-      const convo = `saved-class-${label.replace(/\W+/g, '-')}`;
+      const convo = convoOfClass(label);
       const out = await runHook(tool, input, { convo, env });
       assert.strictEqual(out.permissionDecision, 'deny', `${label}: ${JSON.stringify(out)}`);
       assert.strictEqual(out.permissionDecisionReason, refusalNotice('timeout', tool, { unattended: false }), `${label}: refused as unanswered`);
@@ -243,7 +251,7 @@ describe('what cards ahead of a saved answer still cards with no window', { conc
   ];
   for (const [label, fields] of GRADES) {
     test(`a request carrying ${label} cards under a saved key that answers its command`, async () => {
-      const convo = `saved-grade-${label.replace(/\W+/g, '-')}`;
+      const convo = convoOfGrade(label);
       const extra = fields();
       const r = await ask(bash(command, convo, extra), { convo }).reply;
       assert.deepStrictEqual(r.body, TIMED_OUT, `${label}: waited and timed out`);
@@ -472,7 +480,7 @@ describe('a Code-mode verdict reaches the decision as the window passes it', () 
 
   test('a saved rule answers a push to the default branch with no window; a saved Bash:git never answers an Asks once', async () => {
     await noWindow();
-    const turn = await holdTurn('saved-code');
+    const turn = await holdTurn(['saved-code-rule', 'saved-code-tags', 'saved-code-binary']);
     try {
       await save('Bash:git-push:default-branch');
       assert.deepStrictEqual(await serverAndWindow('saved-code-rule', 'git push origin main', PUSH_MAIN, ['Bash:git-push:default-branch']),
