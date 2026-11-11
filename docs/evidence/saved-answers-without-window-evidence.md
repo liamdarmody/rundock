@@ -8,7 +8,7 @@ whenever it is run. If this file and those ever disagree, they are right.
 Taken on 2026-11-11 on macOS (Darwin 25.4.0, arm64) with Node 24.12.0. The
 last commit to change code is `629b6be5`; every commit after it changes
 tests or this file only. The runs below were taken at `916e861d` unless
-named otherwise. `0897f8b0`, after it, changes only how three of the new test
+named otherwise; the last are at `cf6946ca` and `a14b7a7e`. `0897f8b0`, after it, changes only how three of the new test
 files read their logs (through `readAppendedLog`, as the log-reader
 inventory in `test/integration/harness-log-readers.test.js` requires), adding
 and removing no test, so the counts stand. The merge base with `origin/main`
@@ -149,6 +149,53 @@ new test asks as a live run in this workspace with its own token: answered
 while a turn is guarded there, carded and timed out once none is. Row 1151
 was then run again on its own and caught.
 
+### A key planted between turns (`cf6946ca`)
+
+Once the last turn ends, the guard still holds the permissions file and its
+baseline with no turn watching, and `answerFileToBuildOn` then runs no check.
+The planted-key tests above all plant during a turn, so nothing drove that
+path. Two tests in `saved-answers-without-window.test.js` now do:
+
+- a key planted while no turn runs is never carried into the person's save:
+  on the next turn its command cards and times out, and the saved key
+  answers;
+- the same with the person's revoke of another key.
+
+Each holds a turn and releases it, plants `Bash:node` straight in the file,
+then saves `Bash:python3` (or revokes `Bash:echo`) through the window's
+message with no turn watching. On the next guarded turn, `node scripts/build.js`
+sent with no window cards and times out, and `Bash:node` is in neither the
+file nor `answerFileBaseline`. On the same turn the saved `Bash:python3` is
+answered with no card and recorded as `always-allowed`, so the card is the
+planted key refused, not every answer refused. Both passed at the head as
+written: no code change was needed.
+
+Red-first against `189d9bd7`, where the writers merge from disk, over these
+two tests (`--test-name-pattern="while no turn runs"`): **proven**. With the
+change, 2 pass; without it, both fail.
+
+A new row, 1160, "Saved answer: a save or revoke between turns builds on the
+file as it stands on disk", makes `answerFileToBuildOn` return the bytes on
+disk when no turn is watching. The row that was 1160 in the tables below is
+now 1161. Rows 1155 to 1161 were run at `cf6946ca`, and each found its guard
+text exactly once and was caught:
+
+| Row | Label | Tests red |
+|---|---|---|
+| 1155 | Saved answer: a save or revoke merges the permissions file as it stands on disk | 4: the two planted-key tests above and the two here |
+| 1156 | Saved answer: the workspace check is dropped, so the open workspace answers every request | 1 |
+| 1157 | Saved answer: a live run does not name the folder it started in | 1 |
+| 1158 | Saved answer: a conversation is bound by any turn in the workspace, not its own | 1 |
+| 1159 | Saved answer: a binary key answers an Asks-once | 1 |
+| 1160 | Saved answer: a save or revoke between turns builds on the file as it stands on disk | 2: the two tests here, and nothing else in the suite |
+| 1161 | Saved answer: a save or revoke builds on the file without the guard's check first | 2: the two planted-key tests above |
+
+`a14b7a7e` then drops a timing check from the first Code-mode test, which
+asserted the push was answered within the permission timeout and failed on a
+loaded machine while the answer was right. A card nobody answers ends in deny
+at the timeout, so the allow the test asserts is the proof that no card was
+raised.
+
 ### Mutation rows
 
 All 21 rows on the server's answers in
@@ -203,7 +250,7 @@ exactly once at `916e861d` (271 rows).
 
 ### Red-first for the whole change
 
-Run at `916e861d` against `origin/main` (`96ce74e1`), over every test file
+Run at `a14b7a7e` against `origin/main` (`96ce74e1`), over every test file
 the change adds or changes that runs as a test:
 
 - `test/integration/permission-ownership.test.js`
@@ -213,8 +260,8 @@ the change adds or changes that runs as a test:
 - `test/integration/saved-answers-workspace.test.js`
 - `test/unit/doc-claims.test.js`
 
-Outcome: **proven**. With the change, all 185 tests pass. With the changed
-source files put back to `origin/main` and the tests kept, 27 fail, all in
+Outcome: **proven**. With the change, all 187 tests pass. With the changed
+source files put back to `origin/main` and the tests kept, 29 fail, all in
 the saved-answer suites, the run attribution test and the doc-claims pins.
 None fails in `read-only-without-window.test.js`.
 
