@@ -2367,6 +2367,7 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
     assert.ok(passage.includes('an Asks-once verdict is answered only by its own saved rule key, never by a binary key such as `Bash:git`'), 'it says what answers an Asks once');
     assert.ok(passage.includes('So `savedAnswers` applies none while no turn\'s guard watches the workspace, runs `checkAnswerFilesNow` first'), 'it says the check comes first');
     assert.ok(passage.includes('and then reads that baseline (`answerFileBaseline` in `lib/workspace/answer-file-guard.js`) rather than the file'), 'it says what is read');
+    assert.ok(passage.includes("Rundock's own writes of the file build on what the guard has accepted, never on the file as it stands (`answerFileToBuildOn`"), 'it says what a writer builds on');
     assert.ok(routinesDoc.includes('the server applies that answer itself, whether or not a Rundock window is open, so a routine never waits on a card for something you already allowed'),
       'the routines page says a saved answer holds with no window');
     assert.ok(flat(graderSrc).includes('auto-allow POLICY for low-risk read-only commands and saved "Always allow" answers lives here and only here'), 'the module says the policy covers saved answers');
@@ -2379,7 +2380,7 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
     assert.ok(!body.includes('readToolAllows'), 'and never the file as it stands');
   });
 
-  test('and the server does it: a router with no window applies a saved key while a turn is guarded, and nothing once none is', async () => {
+  test('and the server does it: a router with no window applies a saved key while a turn is guarded, never a key planted before a save, and nothing once no turn is guarded', async () => {
     // A turn's guard watches the home folder's shell startup files, and the
     // test preload fails the run if any of them is the account's own
     // (test/helpers/account-home-refused.js). So the guard is given a made-up
@@ -2409,14 +2410,24 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
       boundary.addToolAllow('Bash:python3');
       assert.deepStrictEqual(await put(command), { allow: true, reason: 'always-allowed' }, 'once saved, it is answered');
       assert.deepStrictEqual(await put({ tool_name: 'Bash', tool_input: { command: 'python3 tools/report.py && rm -rf build' } }), null, 'a high-risk line under the same key waits');
+      // A key written straight to the file, as a script would, and then a
+      // save of another key through the store's own writer: the save never
+      // carries the planted key, so the router never answers it.
+      const file = boundary.boundaryPermissionsPath();
+      const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      fs.writeFileSync(file, JSON.stringify({ ...data, allowedTools: [...data.allowedTools, 'Bash:node'] }, null, 2));
+      boundary.addToolAllow('Bash:echo');
+      assert.strictEqual(await put({ tool_name: 'Bash', tool_input: { command: 'node scripts/build.js' } }), null, 'a command under the planted key waits');
+      assert.ok(!boundary.readToolAllows().includes('Bash:node') && boundary.readToolAllows().includes('Bash:echo'), 'the save wrote the file without the planted key');
       turn.release();
       released = true;
       assert.strictEqual(await put(command), null, 'with no turn guarded, the saved key answers nothing');
-      assert.strictEqual(pending.size, 3, 'each one it did not answer waits on a card');
-      assert.deepStrictEqual(sent.map((m) => m.type), ['control_request', 'control_request', 'control_request']);
+      assert.strictEqual(pending.size, 4, 'each one it did not answer waits on a card');
+      assert.deepStrictEqual(sent.map((m) => m.type), ['control_request', 'control_request', 'control_request', 'control_request']);
     } finally {
       if (!released) turn.release();
       boundary.removeToolAllow('Bash:python3');
+      boundary.removeToolAllow('Bash:echo');
       done();
       restore();
     }

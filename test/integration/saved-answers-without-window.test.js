@@ -27,7 +27,7 @@ const route = require('../helpers/permission-route.js');
 const P = require('../../public/permissions.js');
 const guard = require('../../lib/workspace/answer-file-guard.js');
 const config = require('../../lib/config.js');
-const { addToolAllow, removeToolAllow, readToolAllows } = require('../../lib/workspace/boundary.js');
+const { addToolAllow, removeToolAllow, readToolAllows, toolAllowsIn } = require('../../lib/workspace/boundary.js');
 const { keychainVerdict } = require('../../scripts/code-mode-verdict.js');
 const { refusalNotice } = require('../../scripts/refusal-notice.js');
 const PS = require('../fixtures/powershell-reads.js');
@@ -313,6 +313,74 @@ describe('only a saved answer Rundock wrote is applied', () => {
       assert.ok(fs.readFileSync(permissionsFile()).equals(was), 'and the next check put the file back');
     } finally {
       guard.checkAnswerFilesNow = check;
+      turn.release();
+      await revoke('Bash:python3');
+    }
+  });
+
+  // A PERSON'S SAVE OR REVOKE NEVER CARRIES A PLANTED KEY INTO THE FILE. Each
+  // writer builds on what the guard has accepted: a writer that merged the
+  // disk as it stands would write the planted key back as Rundock's own, the
+  // guard would take it into its baseline at the next check, and the server
+  // would answer it.
+  const baselineKeys = () => toolAllowsIn(guard.answerFileBaseline(workspace(), permissionsFile()));
+  const putBackPlant = (turn, key) => turn.changes.some((c) => c.relative === '.rundock/permissions.json' && !c.outsideTurn
+    && typeof c.agentContent === 'string' && c.agentContent.includes(key));
+  async function cardsAndTimesOut(command, convo, label) {
+    assert.strictEqual(P.classifyRisk('Bash', { command }), 'medium', `${label}: a medium command`);
+    assert.strictEqual(P.toolAllowKey('Bash', { command }), 'Bash:node', `${label}: under the planted key`);
+    const r = await ask(bash(command, convo), { convo }).reply;
+    assert.deepStrictEqual(r.body, TIMED_OUT, `${label}: the planted key answered it`);
+    assert.strictEqual(filedFor(command, convo).length, 1, `${label}: it waited on a card`);
+    assert.strictEqual(cardsFor(command).filter((m) => m._conversationId === convo).length, 1, `${label}: a card was raised`);
+  }
+
+  test('a key planted before the person saves another is never carried into the save: its command cards and times out', async () => {
+    await noWindow();
+    const convo = 'saved-launder-save';
+    const turn = await holdTurn(convo);
+    try {
+      await save('Bash:echo');
+      turn.check();
+      plant('Bash:node');
+      assert.ok(readToolAllows().includes('Bash:node'), 'the key is on disk, and no check has run since');
+      // The person's unrelated save, through the window's add_tool_allow.
+      await save('Bash:python3');
+      await cardsAndTimesOut('node scripts/build.js', convo, 'after the save');
+      assert.deepStrictEqual(savedEvents(convo), [], 'nothing was allowed');
+      assert.ok(!readToolAllows().includes('Bash:node'), 'the save wrote the file without the planted key');
+      assert.ok(readToolAllows().includes('Bash:python3') && readToolAllows().includes('Bash:echo'), 'and with every key Rundock wrote');
+      turn.check();
+      assert.ok(!baselineKeys().includes('Bash:node') && baselineKeys().includes('Bash:python3'), 'once checked, the baseline holds the save, not the plant');
+      assert.ok(putBackPlant(turn, 'Bash:node'), 'the planted change was handed to the turn, as every change the guard puts back is');
+      assert.deepStrictEqual((await ask(bash('python3 tools/report.py', convo), { convo }).reply).body, ALWAYS, 'the person\'s save answers');
+    } finally {
+      turn.release();
+      await revoke('Bash:python3');
+      await revoke('Bash:echo');
+    }
+  });
+
+  test('a key planted before the person revokes another is never carried into the revoke: its command cards and times out', async () => {
+    await noWindow();
+    const convo = 'saved-launder-revoke';
+    const turn = await holdTurn(convo);
+    try {
+      await save('Bash:python3');
+      await save('Bash:echo');
+      turn.check();
+      plant('Bash:node');
+      assert.ok(readToolAllows().includes('Bash:node'), 'the key is on disk, and no check has run since');
+      // The person's unrelated revoke, through the window's remove_tool_allow.
+      await revoke('Bash:echo');
+      await cardsAndTimesOut('node scripts/build.js', convo, 'after the revoke');
+      assert.deepStrictEqual(savedEvents(convo), [], 'nothing was allowed');
+      assert.ok(!readToolAllows().includes('Bash:node'), 'the revoke wrote the file without the planted key');
+      assert.deepStrictEqual(readToolAllows(), ['Bash:python3'], 'and with the key Rundock kept');
+      turn.check();
+      assert.deepStrictEqual(baselineKeys(), ['Bash:python3'], 'once checked, the baseline holds the revoke, not the plant');
+      assert.ok(putBackPlant(turn, 'Bash:node'), 'the planted change was handed to the turn');
+    } finally {
       turn.release();
       await revoke('Bash:python3');
     }

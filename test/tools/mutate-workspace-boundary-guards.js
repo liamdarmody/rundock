@@ -457,6 +457,11 @@ const READ_ONLY_ANSWER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite:
 // The server's own answer from a saved "Always allow": proven through the real
 // router with no window, a turn held on the answer-file guard, and the hook.
 const SAVED_ANSWER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
+// What a Rundock writer of the permissions file builds on, proven by the same
+// suite: a key planted before a person's save or revoke is never carried into
+// it, so the router never answers it.
+const SAVED_WRITER = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
+const SAVED_BUILD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
 
 // The shell startup files and Rundock's record of them: the hook's match and
 // its card's words, the stored-grant check, Codex grading, the sandbox block,
@@ -4594,6 +4599,15 @@ const MUTATIONS = [
   [SAVED_ANSWER, 'Saved answer: the verdict is dropped from the decision',
     '    const answer = decision.decidePermission(risk, key, savedAnswers(), verdict);',
     '    const answer = decision.decidePermission(risk, key, savedAnswers());'],
+  // A save or revoke builds on what the guard accepted, never the disk.
+  [SAVED_WRITER, 'Saved answer: a save or revoke merges the permissions file as it stands on disk',
+    '    const accepted = answerFileToBuildOn(getWorkspace(), file);',
+    '    const accepted = null;'],
+  // The guard's check runs first, so the planted change is put back and
+  // handed to the turn rather than written over unseen.
+  [SAVED_BUILD, 'Saved answer: a save or revoke builds on the file without the guard\'s check first',
+    '  if (g.listeners.size) checkAnswerFilesNow(workspace);\n  const was = g.snapshot.get(f);',
+    '  const was = g.snapshot.get(f);'],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
