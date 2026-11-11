@@ -94,9 +94,12 @@ const SECONDS_PER_SHARD = 600;
 // past it again; fifteen leaves room for them. Raised to sixteen once costs
 // taken from CI shard logs put the full set at the fifteen-shard bound: main
 // planned its longest shard 2 s under the limit, and a change adding rows on
-// top planned one past it. Sixteen is the smallest cap that fits both
+// top planned one past it. Sixteen is the smallest cap that fits both.
+// Raised to seventeen when main's rows and those of a change adding nine to
+// the boundary harness, merged, planned one shard past the limit at sixteen.
+// Seventeen is the smallest cap that fits both
 // (docs/evidence/mutation-shard-cap-evidence.md has the plans).
-const MAX_SHARDS = 16;
+const MAX_SHARDS = 17;
 const COSTS_FILE = 'mutation-costs.json';
 const FALLBACK_SECONDS_PER_ROW = 5;
 
