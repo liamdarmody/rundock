@@ -80,8 +80,7 @@ const outcomes = () => {
   const dir = path.join(world.ws, '.rundock', 'state');
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter((n) => /^events-.*\.jsonl$/.test(n))
-    .flatMap((n) => fs.readFileSync(path.join(dir, n), 'utf-8').split('\n').filter(Boolean))
-    .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } })
+    .flatMap((n) => h.readAppendedLog(path.join(dir, n)))
     .filter((e) => e && e.e === 'permission' && e.conv === CONVO).map((e) => e.d);
 };
 

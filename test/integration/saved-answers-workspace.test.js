@@ -92,8 +92,7 @@ function eventsIn(dir) {
   const state = path.join(dir, '.rundock', 'state');
   if (!fs.existsSync(state)) return [];
   return fs.readdirSync(state).filter((n) => /^events-.*\.jsonl$/.test(n))
-    .flatMap((n) => fs.readFileSync(path.join(state, n), 'utf-8').split('\n').filter(Boolean))
-    .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+    .flatMap((n) => h.readAppendedLog(path.join(state, n)));
 }
 const bashOutcomes = (...dirs) => dirs.flatMap(eventsIn).filter((e) => e.e === 'permission' && e.d && e.d.tool === 'Bash').map((e) => e.d.decision);
 // What the hook told a run's agent, call by call, from the workspace it ran in.

@@ -22,6 +22,7 @@ const os = require('node:os');
 const path = require('node:path');
 const WebSocket = require('ws');
 const credentials = require('./credentials.js');
+const { readAppendedLog } = require('../helpers/appended-log.js');
 
 const STUB_VERSION = '2.1.318-stub';
 const PORT = Number(process.env.E2E_PORT || 34517);
@@ -58,19 +59,13 @@ const records = (ws) => {
     .map((n) => { try { return JSON.parse(fs.readFileSync(path.join(dir, n), 'utf-8')); } catch (e) { return null; } })
     .filter((r) => r && r.routine === ROUTINE);
 };
-const answersFor = (ws, sessionId) => {
-  try {
-    return fs.readFileSync(path.join(ws, 'stub-hook-answers.jsonl'), 'utf-8').split('\n').filter(Boolean)
-      .map((l) => JSON.parse(l)).filter((a) => a.sessionId === sessionId)
-      .map((a) => a.answer && a.answer.hookSpecificOutput);
-  } catch (e) { return []; }
-};
+const answersFor = (ws, sessionId) => readAppendedLog(path.join(ws, 'stub-hook-answers.jsonl'))
+  .filter((a) => a.sessionId === sessionId).map((a) => a.answer && a.answer.hookSpecificOutput);
 const permissionEvents = (ws, since) => {
   const dir = path.join(ws, '.rundock', 'state');
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter((n) => /^events-.*\.jsonl$/.test(n))
-    .flatMap((n) => fs.readFileSync(path.join(dir, n), 'utf-8').split('\n').filter(Boolean))
-    .map((l) => { try { return JSON.parse(l); } catch (e) { return null; } })
+    .flatMap((n) => readAppendedLog(path.join(dir, n)))
     .filter((e) => e && e.e === 'permission' && Date.parse(e.ts) >= since && e.d && e.d.tool === 'Bash');
 };
 
