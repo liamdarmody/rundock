@@ -7,8 +7,8 @@
 // zsh runs the code of a glob qualifier as it expands the word, so
 // `ls 'a'*(e:'cp x f':)` copies over f. The saved answer is keyed on `ls`, and
 // it used to run the line with no card. Now the line is carded every time,
-// with Allow and Deny only, and what the person answers there does not change
-// how the next command is judged.
+// with Allow and Deny only and a sentence saying why, and what the person
+// answers there does not change how the next command is judged.
 const { test, describe, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -66,7 +66,12 @@ const press = (id, action) => cardOf(id).querySelector(`[data-perm-action="${act
 const buttonsOf = (id) => [...cardOf(id).querySelectorAll('[data-perm-action]')].map(b => b.dataset.permAction);
 const wordsOf = (id) => cardOf(id).querySelector('.permission-card').textContent.replace(/\s+/g, ' ').trim();
 const ranWithNoCard = (id) => !cardOf(id) && sent.some(m => m.type === 'permission_response' && m.requestId === id && m.allow === true);
+const contextOf = (id) => cardOf(id).querySelector('.permission-context').textContent;
 const show = (cmd) => JSON.stringify(cmd);
+const WHY = {
+  pattern: 'This line has a parenthesis inside a word, which the shell can use to run hidden code, so Rundock asks every time and there is no Always allow.',
+  unread: 'Rundock could not read this line all the way through, so it asks every time and there is no Always allow.',
+};
 
 const T = '~/.claude/settings.json';
 const LINES = [`ls *(e:'cp x ${T}':)`, `ls 'a'*(e:'cp x ${T}':)`, `ls \\a*(e:'cp x ${T}':)`, `ls "$PWD"/*(e:'cp x ${T}':)`];
@@ -83,6 +88,18 @@ describe('with "Always allow ls" saved, a line that hides code in a zsh file pat
   for (const where of WHERE) {
     test(`in a ${where}, however the word starts, with Allow and Deny only`, () => {
       for (const command of LINES) assertCardedAllowOrDeny(bash(command, where), where, command);
+    });
+
+    test(`in a ${where}, the card says why it asks, and that there is no Always allow`, () => {
+      for (const command of [...LINES, 'f() { echo hi; }; f']) {
+        assert.strictEqual(contextOf(bash(command, where)), WHY.pattern, show(command));
+      }
+      // A line the view could not read all the way through says so instead.
+      for (const command of [`ls x(+f) 'it`, `echo ${'$('.repeat(40)}x${')'.repeat(40)}`]) {
+        assert.strictEqual(contextOf(bash(command, where)), WHY.unread, show(command));
+      }
+      // A line graded high as destructive first keeps the sentence its command gives.
+      assert.strictEqual(contextOf(bash(`rm *(e:'cp x ${T}':)`, where)), 'This will permanently delete files');
     });
 
     test(`in a ${where}, the card never calls the line destructive or says it deletes`, () => {

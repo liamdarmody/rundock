@@ -2056,10 +2056,38 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
     }
   });
 
+  // THE CARD SAYS WHY. Pinned by reading the sentences off the page and
+  // asking describeToolRequest for the context of lines that carry each one,
+  // so the page and the card cannot drift apart.
+  test('the page quotes the sentence the card gives for each reason, and the card gives it', () => {
+    const quoted = (lead) => {
+      const at = passage.indexOf(lead);
+      assert.ok(at >= 0, `the page says: ${lead}`);
+      const m = passage.slice(at + lead.length).match(/^"([^"]+)"/);
+      assert.ok(m, `the page quotes a sentence after: ${lead}`);
+      return m[1];
+    };
+    const pattern = quoted('The card says why it asks, in the context sentence `describeToolRequest` gives: ');
+    const unread = quoted('or, for a line whose view failed or stopped short, ');
+    assert.ok(passage.includes('A line graded high as destructive first keeps the sentence its leading command gives.'), 'the page names the exception');
+    const contextOf = (command) => P.describeToolRequest('Bash', { command }).context;
+    for (const command of ["ls 'a'*(e:'cp a b':)", 'cat =(cp a b)', 'f() { echo hi; }; f']) assert.strictEqual(contextOf(command), pattern, command);
+    assert.strictEqual(contextOf(`echo ${'$('.repeat(40)}x${')'.repeat(40)}`), unread, 'a line nested past what the view follows');
+    assert.strictEqual(contextOf("rm *(e:'cp a b':)"), 'This will permanently delete files', 'a destructive line keeps its own');
+    for (const sentence of [pattern, unread]) assert.doesNotMatch(sentence, /delet|destructi/i, sentence);
+  });
+
+  test('the page says a function definition is graded high with them, and it is', () => {
+    assert.ok(passage.includes('A function definition (`f() { echo hi; }; f`) puts a `(` inside a word too, and is graded high with them; Code mode already asks about it.'),
+      'the page says it');
+    assert.strictEqual(P.classifyRisk('Bash', { command: 'f() { echo hi; }; f' }), 'high');
+  });
+
   test('the tests the page names exist', () => {
     for (const file of ['test/unit/permissions.test.js', 'test/unit/quoted-options-hook.test.js', 'test/unit/hook-never-crashes.test.js',
       'test/unit/read-only-on-main.test.js', 'test/tools/record-read-only-on-main.js', 'test/unit/shell-view.test.js', 'test/unit/shell-view-hook.test.js',
-      'test/unit/zsh-pattern-cards.test.js', 'test/unit/shell-view-shells.test.js']) {
+      'test/unit/zsh-pattern-cards.test.js', 'test/integration/zsh-pattern-saved-answer.test.js', 'test/unit/shell-view-shells.test.js',
+      'test/tools/zsh-pattern-grade-moves.js']) {
       assert.ok(passage.includes(`\`${file}\``), `the page names ${file}`);
       assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} exists`);
     }

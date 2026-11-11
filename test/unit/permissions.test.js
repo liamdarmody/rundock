@@ -1751,6 +1751,37 @@ describe('a ( inside a word, outside quotes, is high in Notes mode, so no saved 
     }
   });
 
+  test('a function definition puts a ( inside a word, so it is high too, as Code mode already asks', () => {
+    const command = 'f() { echo hi; }; f';
+    assert.strictEqual(S.shellView(command).wordParen, true, 'the view marks f()');
+    assertCardedUnderItsOwnKey(command);
+  });
+
+  // What the card says, from describeToolRequest's context sentence.
+  const WHY = {
+    pattern: 'This line has a parenthesis inside a word, which the shell can use to run hidden code, so Rundock asks every time and there is no Always allow.',
+    unread: 'Rundock could not read this line all the way through, so it asks every time and there is no Always allow.',
+  };
+  const contextOf = (command) => P.describeToolRequest('Bash', { command }).context;
+  test('the card says why it asks: a ( inside a word, or a line the view could not read through', () => {
+    for (const command of [...STARTS, ...FORMS.map(([, c]) => c), 'f() { echo hi; }; f']) assert.strictEqual(contextOf(command), WHY.pattern, show(command));
+    let deep = `ls *(e:'cp x ${T}':)`;
+    for (let i = 0; i < 40; i++) deep = `echo $(${deep})`;
+    for (const command of [deep, `ls x(+f) 'it`]) assert.strictEqual(contextOf(command), WHY.unread, show(command));
+    const seam = S.shellViewSeam.beforeReading;
+    S.shellViewSeam.beforeReading = () => { throw new Error('forced failure'); };
+    try {
+      assert.strictEqual(contextOf('ls'), WHY.unread, 'with the view failing');
+    } finally {
+      S.shellViewSeam.beforeReading = seam;
+    }
+    // A line graded high as destructive first keeps the sentence its command
+    // gives, and a line with no mark gets no sentence from this rule.
+    assert.strictEqual(contextOf(`rm *(e:'cp x ${T}':)`), 'This will permanently delete files');
+    assert.strictEqual(contextOf(`git push origin x(+f)`), 'This will push changes to a remote repository');
+    for (const [command] of KEPT) assert.strictEqual(contextOf(command), '', show(command));
+  });
+
   test('a line with a bracket that starts a word, or in quotes, keeps its grade, and a saved answer still covers it', () => {
     for (const [command, grade] of KEPT) {
       assert.strictEqual(risk(command), grade, show(command));
