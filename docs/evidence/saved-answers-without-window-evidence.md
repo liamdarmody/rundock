@@ -6,9 +6,13 @@ suite, by the mutation harness whenever it runs, and by `scripts/red-first.js`
 whenever it is run. If this file and those ever disagree, they are right.
 
 Taken on 2026-11-11 on macOS (Darwin 25.4.0, arm64) with Node 24.12.0. The
-last commit to change code is `629b6be5`; the commits after it add tests
-only, up to `916e861d`, and the commit after that changes only this file. The
-merge base with `origin/main` is `96ce74e1`. Each mutation command ran with
+last commit to change code is `629b6be5`; every commit after it changes
+tests or this file only. The runs below were taken at `916e861d` unless
+named otherwise. `0897f8b0`, after it, changes only how three of the new test
+files read their logs (through `readAppendedLog`, as the log-reader
+inventory in `test/integration/harness-log-readers.test.js` requires), adding
+and removing no test, so the counts stand. The merge base with `origin/main`
+is `96ce74e1`. Each mutation command ran with
 the Code-mode fixture folder set:
 `RUNDOCK_TEST_OUTSIDE_TEMP_ROOT=<a folder outside every temp folder and git tree>`.
 
