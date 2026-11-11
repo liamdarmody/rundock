@@ -2164,3 +2164,150 @@ describe('RUNDOCK-UI.md: the danger rule says the same thing in both places', ()
     }
   });
 });
+
+describe('ARCHITECTURE.md: the server answers a low-risk read itself, with or without a window', () => {
+  // The claim a person running Rundock with no window open relies on: a
+  // routine's read gets the answer a conversation's does. Pinned by putting a
+  // request to a router with no window wired to it, so the page cannot keep
+  // saying it after the server stops doing it.
+  const auth = require('../../lib/auth/index.js');
+  const { EventEmitter } = require('node:events');
+  const LEAD = '**The server answers a low-risk read itself, with or without a window.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const routerSrc = fs.readFileSync(path.join(ROOT, 'lib', 'http-router.js'), 'utf-8');
+  const graderSrc = fs.readFileSync(path.join(ROOT, 'public', 'permissions.js'), 'utf-8');
+  const chatSrc = fs.readFileSync(path.join(ROOT, 'public', 'views', 'chat.js'), 'utf-8');
+  const flat = (src) => src.replace(/\n\s*\/\/ ?/g, ' ').replace(/\s+/g, ' ');
+  const waitFor = async (ok) => {
+    for (let i = 0; i < 50; i++) { if (ok()) return true; await new Promise((r) => setTimeout(r, 20)); }
+    return ok();
+  };
+  // What the routines page says the server answers before any card, besides a
+  // read, and what still cards. The router's standing-folder-grant branch
+  // answers a crossing it covers ahead of the read and the card, so the page
+  // cannot say every place outside the workspace raises a card.
+  const GRANT_TOOLS = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
+  const GRANT_SENTENCE = `A place outside the workspace that a file tool (${GRANT_TOOLS.slice(0, -1).join(', ')} or ${GRANT_TOOLS[GRANT_TOOLS.length - 1]}) `
+    + 'reaches inside a folder you chose "Always allow this folder" for is answered by the server with no card, as it already was: '
+    + 'that grant covers everything under the folder except a secrets-tier path, an answer file, a shell startup file '
+    + '(and a write to a folder that holds one) and Rundock\'s console folder, and it never answers a shell command.';
+  const STILL_CARDS_SENTENCE = 'Every other place outside the workspace the hook graded (any a shell command reaches, and any a file tool '
+    + 'reaches that no such grant covers), an answer file, a shell startup file, a Keychain line, a secrets-tier path, '
+    + 'and anything not low risk still raises a card, as below.';
+  // A router with nothing connected to it, as Rundock on a server runs: what
+  // it answers, what it sends toward a window, and what it leaves waiting.
+  function routerWithNoWindow() {
+    const key = require.resolve('../../lib/http-router.js');
+    const shared = require.cache[key];
+    delete require.cache[key];
+    const router = require(key);
+    delete require.cache[key];
+    if (shared) require.cache[key] = shared;
+    const pending = new Map();
+    const sent = [];
+    router.wireHttpRouterDeps({
+      pendingPermissionRequests: () => pending, safeSend: (s) => sent.push(JSON.parse(s)),
+      getPermissionTimeoutMs: () => 60000, routineRun: () => null, noteRefusedCard: () => false,
+    });
+    const token = auth.issueHookToken('doc-claims-read');
+    const put = (body) => new Promise((resolve) => {
+      const req = Object.assign(new EventEmitter(), { method: 'POST', url: '/api/permission-request', headers: { [auth.HOOK_HEADER]: token } });
+      const res = Object.assign(new EventEmitter(), {
+        writeHead() {}, writableEnded: false,
+        end(payload) { this.writableEnded = true; resolve(JSON.parse(payload)); },
+      });
+      router.handleHttpRequest(req, res);
+      req.emit('data', JSON.stringify(body));
+      req.emit('end');
+      if (!res.writableEnded) resolve(null);
+    });
+    return { put, pending, sent, done: () => { for (const p of pending.values()) clearTimeout(p.timer); } };
+  }
+
+  test('the audit section, the routines page and the comments say it', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    assert.ok(passage.includes('`readOnlyAnswer` in `lib/http-router.js` requires that same module'), 'it names where the server answers');
+    assert.ok(passage.includes('whether or not a window is connected'), 'it says a window is not needed');
+    assert.ok(passage.includes('is never answered this way, nor is anything not low risk, and any error falls through to the card'), 'it says what still cards');
+    assert.ok(passage.includes('The window\'s own branch now sees only what the server did not answer.'), 'it says what the window still sees');
+    assert.ok(routinesDoc.includes('the server answers it itself, from the decision the window makes, whether or not a Rundock window is open'),
+      'the routines page says a read raises no card with no window');
+    assert.ok(routinesDoc.includes(GRANT_SENTENCE), 'the routines page says which crossings a standing folder grant answers with no card');
+    assert.ok(routinesDoc.includes(STILL_CARDS_SENTENCE), 'and that everything else the hook graded still raises a card');
+    assert.ok(!routinesDoc.includes('Anything the hook graded (a place outside the workspace'),
+      'and no longer says every place outside the workspace raises a card, which a standing folder grant answers without one');
+    assert.ok(!graderSrc.includes('client-side, and nowhere else'), 'the module no longer says the policy runs only in the browser');
+    assert.ok(flat(graderSrc).includes('two layers read it: the window, and the server bridge (readOnlyAnswer in lib/http-router.js)'), 'it says who reads it');
+    assert.ok(flat(chatSrc).includes('so a low-risk read reaches this branch only when the server did not answer it'), 'the window says what reaches it');
+    assert.ok(routerSrc.includes("require('../public/permissions.js')"), 'the server requires the module the window loads');
+  });
+
+  test('and the server does it: a router with no window answers a read with no card, and cards what is not one', async () => {
+    const dir = useWorkspace({});
+    const { put, pending, sent, done } = routerWithNoWindow();
+    try {
+      assert.deepStrictEqual(await put({ tool_name: 'Bash', tool_input: { command: 'ls -la' } }), { allow: true, reason: 'read-only' }, 'a read is answered');
+      assert.deepStrictEqual(sent, [], 'with no card sent toward a window');
+      assert.strictEqual(pending.size, 0, 'and nothing left waiting');
+      for (const body of [
+        { tool_name: 'Bash', tool_input: { command: 'npm run build' } },
+        { tool_name: 'Bash', tool_input: { command: 'cat /elsewhere/notes.md' }, boundary: true, crossings: [{ path: '/elsewhere/notes.md' }] },
+      ]) {
+        assert.strictEqual(await put(body), null, `waits for a card: ${JSON.stringify(body)}`);
+      }
+      assert.strictEqual(pending.size, 2, 'both wait');
+      assert.deepStrictEqual(sent.map((m) => m.type), ['control_request', 'control_request'], 'each as a card');
+      const month = new Date().toISOString().slice(0, 7);
+      const events = path.join(dir, '.rundock', 'state', `events-${month}.jsonl`);
+      assert.ok(await waitFor(() => fs.existsSync(events) && fs.readFileSync(events, 'utf-8').includes('"reason":"read-only"')),
+        'and the allow is recorded with its reason');
+    } finally {
+      done();
+    }
+  });
+
+  test('and a standing folder grant answers only the crossings the routines page says, with no card', async () => {
+    // The tools the page names are the hook's file tools, the ones whose
+    // crossing a stored grant may answer, and a shell command's crossing never
+    // is one: the hook marks it not grantable.
+    const hook = require('../../scripts/permission-hook.js');
+    const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8');
+    const map = hookSrc.match(/const FILE_TOOL_PATH_FIELD = \{([\s\S]*?)\};/);
+    assert.ok(map, 'the hook still keeps its file tools in FILE_TOOL_PATH_FIELD');
+    assert.deepStrictEqual([...map[1].matchAll(/(\w+):/g)].map((m) => m[1]).sort(), [...GRANT_TOOLS].sort(), 'the page names every file tool and no other');
+    const dir = useWorkspace({});
+    const granted = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-grant-'));
+    const file = path.join(granted, 'notes.md');
+    for (const tool of GRANT_TOOLS) {
+      const access = hook.classifyFileAccess(tool, { file_path: file, notebook_path: file, path: file }, dir);
+      assert.ok(access && access.where === 'outside' && access.grantable !== false, `${tool}: a crossing a grant may answer`);
+    }
+    const shell = hook.classifyShellAccess('Bash', { command: `cat ${file}` }, dir);
+    assert.ok(shell && shell.where === 'outside' && shell.grantable === false, 'a shell command\'s crossing is never one');
+
+    // And the router does it: with the folder granted, a file tool's crossing
+    // into it is answered with no card, while the same place reached by a
+    // shell command, and a place the grant does not cover, wait for a card.
+    require('../../lib/workspace/boundary.js').addBoundaryGrant(granted);
+    const { put, pending, sent, done } = routerWithNoWindow();
+    try {
+      const crossing = (p) => ({ boundary: true, resolved_path: p, crossings: [{ path: p }] });
+      assert.deepStrictEqual(await put({ tool_name: 'Read', tool_input: { file_path: file }, ...crossing(file) }),
+        { allow: true, reason: 'standing-folder-grant' }, 'a file tool\'s crossing the grant covers is answered');
+      assert.deepStrictEqual(sent, [], 'with no card sent toward a window');
+      const elsewhere = path.join(path.dirname(granted), 'not-granted', 'notes.md');
+      for (const body of [
+        { tool_name: 'Bash', tool_input: { command: `cat ${file}` }, ...crossing(file), grantable: false },
+        { tool_name: 'Read', tool_input: { file_path: elsewhere }, ...crossing(elsewhere) },
+      ]) {
+        assert.strictEqual(await put(body), null, `waits for a card: ${JSON.stringify(body)}`);
+      }
+      assert.deepStrictEqual(sent.map((m) => m.type), ['control_request', 'control_request'], 'each as a card');
+      assert.strictEqual(pending.size, 2, 'and both wait');
+    } finally {
+      done();
+      fs.rmSync(granted, { recursive: true, force: true });
+    }
+  });
+});

@@ -451,6 +451,9 @@ const SECRET_FOLDER = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), s
 const SECRET_FOLDER_GRANT = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/secret-reach-card.test.js' };
 // The same folder rule, through the real hook and the real server.
 const SECRET_FOLDER_CARD = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/secret-reach-card.test.js' };
+// The server's own answer to a low-risk read, which needs no window: proven
+// through the real router with none connected, against the real hook.
+const READ_ONLY_ANSWER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/read-only-without-window.test.js' };
 
 // The shell startup files and Rundock's record of them: the hook's match and
 // its card's words, the stored-grant check, Codex grading, the sandbox block,
@@ -4528,6 +4531,39 @@ const MUTATIONS = [
   [SWITCH_CODEX_GLUE, "Workspace switch: a Codex app-server that exits after a switch is taken off the pid file it was registered in",
     "      if (ownPid) { deps.unregisterChildPid(ownPid, ownPidFile);",
     "      if (ownPid) { deps.unregisterChildPid(ownPid);"],
+  // ===== A LOW-RISK READ IS ANSWERED BY THE SERVER, AND NOTHING GRADED IS =====
+  // Each field the hook grades keeps its request on the card path, however
+  // its command reads.
+  [READ_ONLY_ANSWER, 'Read-only answer: a crossing out of the workspace is answered with no card',
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'code_mode_verdict'];",
+    "const HOOK_GRADES = ['answer_file', 'startup_file', 'code_mode_verdict'];"],
+  [READ_ONLY_ANSWER, 'Read-only answer: an answer-file write is answered with no card',
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'code_mode_verdict'];",
+    "const HOOK_GRADES = ['boundary', 'startup_file', 'code_mode_verdict'];"],
+  [READ_ONLY_ANSWER, 'Read-only answer: a shell startup file is answered with no card',
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'code_mode_verdict'];",
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'code_mode_verdict'];"],
+  [READ_ONLY_ANSWER, 'Read-only answer: a Keychain line or any other verdict is answered with no card',
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'code_mode_verdict'];",
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];"],
+  // Only the low-risk answer: a medium command is not a read.
+  [READ_ONLY_ANSWER, 'Read-only answer: a medium command is answered as a read',
+    '    const answer = decision.decidePermission(risk, decision.toolAllowKey(data.tool_name, input), new Set());',
+    "    const answer = decision.decidePermission(risk === 'medium' ? 'low' : risk, decision.toolAllowKey(data.tool_name, input), new Set());"],
+  // Fails closed: an error is the card path, never an allow.
+  [READ_ONLY_ANSWER, 'Read-only answer: a request that cannot be graded is allowed',
+    "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return false;",
+    "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return true;"],
+  // After every token check: each of the three, with the answer moved above it.
+  [READ_ONLY_ANSWER, 'Read-only answer: a read with no token, or one Rundock never issued, is answered',
+    "    if (scope === undefined) {\n      res.writeHead(401, { 'Content-Type': 'application/json' });\n      res.end(JSON.stringify({ error: 'Not a request from an agent Rundock started' }));\n      return;\n    }",
+    "    if (scope === undefined) {\n      let early = '';\n      req.on('data', c => { early += c; });\n      req.on('end', () => {\n        let read = false;\n        try { read = readOnlyAnswer(JSON.parse(early)); } catch (e) { /* not a read */ }\n        res.writeHead(read ? 200 : 401, { 'Content-Type': 'application/json' });\n        res.end(JSON.stringify(read ? { allow: true, reason: 'read-only' } : { error: 'Not a request from an agent Rundock started' }));\n      });\n      return;\n    }"],
+  [READ_ONLY_ANSWER, 'Read-only answer: a read whose token names no run going is answered',
+    "    if (scope === null && !run) {\n      res.writeHead(401, { 'Content-Type': 'application/json' });\n      res.end(JSON.stringify({ error: 'Not a request from a run Rundock has going' }));\n      return;\n    }",
+    "    if (scope === null && !run) {\n      let early = '';\n      req.on('data', c => { early += c; });\n      req.on('end', () => {\n        let read = false;\n        try { read = readOnlyAnswer(JSON.parse(early)); } catch (e) { /* not a read */ }\n        res.writeHead(read ? 200 : 401, { 'Content-Type': 'application/json' });\n        res.end(JSON.stringify(read ? { allow: true, reason: 'read-only' } : { error: 'Not a request from a run Rundock has going' }));\n      });\n      return;\n    }"],
+  [READ_ONLY_ANSWER, 'Read-only answer: a read whose run ended before its body arrived is answered',
+    '      const still = run && routineRunOf(req);\n',
+    "      try {\n        if (readOnlyAnswer(JSON.parse(body))) {\n          res.writeHead(200, { 'Content-Type': 'application/json' });\n          res.end(JSON.stringify({ allow: true, reason: 'read-only' }));\n          return;\n        }\n      } catch (e) { /* not a read */ }\n      const still = run && routineRunOf(req);\n"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

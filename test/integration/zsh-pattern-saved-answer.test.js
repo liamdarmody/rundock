@@ -13,6 +13,12 @@
 // mode the saved `ls` answer used to run that line with no card. The same line
 // is graded in process in test/unit/permissions.test.js and drawn as a card in
 // test/unit/zsh-pattern-cards.test.js.
+//
+// The control the saved answer answers is a writing `ls`. The server answers a
+// low-risk read itself, before the window sees it, so a plain listing never
+// reaches the saved answer: it is pinned here as answered by the server, and
+// the saved answer is shown answering `ls -la > listing.txt`, which the server
+// does not answer, right before the line it must not answer.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -146,8 +152,21 @@ async function settle(r) {
 }
 
 describe('Notes mode with "Always allow ls" saved, through the hook, the server and the window', () => {
-  test('a plain listing runs under the saved answer, with no card', async () => {
-    const r = await request('ls -la');
+  test('a plain listing is answered by the server, with no card', async () => {
+    const since = client.messages.length;
+    const sentBefore = sent.length;
+    const cardsBefore = document.querySelectorAll('[id^="perm-"]').length;
+    assert.strictEqual((await runHook('ls -la')).decision, 'allow', 'the hook is told to allow it');
+    // Long enough for a request sent toward the window to have arrived.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepStrictEqual(client.messages.slice(since).filter((m) => m.type === 'control_request'), [],
+      'answered by the server: nothing reached the window');
+    assert.deepStrictEqual(sent.slice(sentBefore), [], 'and the window answered nothing');
+    assert.strictEqual(document.querySelectorAll('[id^="perm-"]').length, cardsBefore, 'no card was drawn');
+  });
+
+  test('a listing the server does not answer runs under the saved answer, with no card', async () => {
+    const r = await request('ls -la > listing.txt');
     try {
       assert.strictEqual(r.card, null, 'no card was drawn');
       assert.deepStrictEqual(r.answers().map((m) => ({ allow: m.allow, card: m.card })), [{ allow: true, card: undefined }],

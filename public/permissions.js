@@ -6,12 +6,15 @@
 // as code-language.js and markers.js.
 //
 // The permission decision path spans THREE layers (see ARCHITECTURE.md):
-// the PreToolUse hook script, the server bridge, and THIS module in the
-// browser. The auto-allow POLICY for low-risk read-only commands lives here,
-// client-side, and nowhere else; what counts as read-only is a separate
-// question, answered once in public/read-only-shell.js and read by the hook as
-// well, because a command the hook read as harmless used to be carded here
-// anyway by a narrower list kept alongside the policy.
+// the PreToolUse hook script, the server bridge, and THIS module. The
+// auto-allow POLICY for low-risk read-only commands lives here and only here,
+// and two layers read it: the window, and the server bridge (readOnlyAnswer in
+// lib/http-router.js), which requires this file through the wrapper below and
+// answers a low-risk read itself, so the answer is the same whether or not a
+// window is open. What counts as read-only is a separate question, answered
+// once in public/read-only-shell.js and read by the hook as well, because a
+// command the hook read as harmless used to be carded here anyway by a
+// narrower list kept alongside the policy.
 //
 // ONE ANSWER FOR EACH SHELL, AND NO LIST HERE. A Bash command is low only when
 // isReadOnlyShellCommand reads it as read-only, and a PowerShell command only

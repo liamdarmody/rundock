@@ -73,12 +73,13 @@ async function ask(msg, type) {
   return reply;
 }
 
-// Raise a card for a conversation exactly as the permission hook does.
+// Raise a card for a conversation exactly as the permission hook does. The
+// command is one that cards: a low-risk read is answered by the server itself.
 function raiseCard(conversationId, headers = h.hookHeaders(conversationId)) {
   return request({
     method: 'POST', path: '/api/permission-request',
     headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo attack' }, conversation_id: conversationId }),
+    body: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'npm run attack' }, conversation_id: conversationId }),
   });
 }
 
