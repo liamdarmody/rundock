@@ -118,10 +118,11 @@ describe('a saved Code-mode rule, through the real hook with no window', { skip:
     await save(RULE);
     try {
       const from = decided.length;
-      const started = Date.now();
       const out = await push();
+      // A card nobody answers ends in deny at the timeout, so an allow here is
+      // an answer given with no card; how long the hook took is not measured,
+      // since a loaded machine can take longer than the timeout to spawn it.
       assert.strictEqual(out.decision, 'allow', `the push was not answered: ${out.raw}`);
-      assert.ok(Date.now() - started < TIMEOUT_MS, 'answered before any card could time out');
       const d = lastSince(from);
       assert.ok(d, 'the router decided on the hook\'s verdict');
       assert.strictEqual(d.verdict.verdict, 'asks-once', JSON.stringify(d.verdict));
