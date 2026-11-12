@@ -1,4 +1,4 @@
-# Agents are told the full path of the workspace scratch folder: red on main and seven deliberate breaks
+# Agents are told the full path of the workspace scratch folder: red on main and eight deliberate breaks
 
 **This file is a dated record of runs on one machine, not a source of truth.**
 Every claim below is re-measured by the named tests on every run of the
@@ -7,7 +7,8 @@ suite. If this file and those tests ever disagree, the tests are right.
 Taken on 2026-11-12 on macOS (Darwin 25.4.0, arm64) with Node 24.12.0. The
 merge base is `bd0bd815`. The sections up to and including the five breaks
 were taken at `7ecfefb9`. The last section, on the Codex thread, was taken at
-`40545abe`, the last commit to change code or tests; the commit after it
+`40545abe`, apart from its closing part on the scratch folder, which was taken
+at `e559ee33`, the last commit to change code or tests; the commit after it
 changes only this file. `40545abe` replaced the in-process Codex test, so the
 two tests named "notes mode: the first turn carries the paragraph, and the
 folder is inside what Codex may write" and its code mode twin in the earlier
@@ -233,3 +234,62 @@ After both breaks were put back, at `40545abe`:
 `test/integration/codex-chat.test.js` 18 of 18,
 `test/integration/codex-sandbox-config.test.js` 2 of 2 and
 `test/unit/doc-claims.test.js` 115 of 115 passed, each file run on its own.
+
+**The folder exists for a Codex agent.** Taken at `e559ee33`. Until then
+only the Claude Code spawn environment made `<workspace>/.rundock/scratch/`.
+In a fixture where only a Codex agent had run, the folder did not exist
+before or after the turn, so a Codex agent that wrote a scratch file there by
+shell redirect, as the paragraph tells it to, would have got "No such file or
+directory". `e559ee33` moves the folder creation, with its `.gitignore`
+marker holding `*`, out of `getSpawnEnv` into `ensureScratchDir()` in
+`lib/runtime/claude.js`, which returns the folder or null and never throws.
+`getSpawnEnv` calls it and sets `TMPDIR`, `TEMP` and `TMP` as before, and
+`openCodexThread` in `lib/runtime/codex-glue.js` calls it before the thread
+is opened. There is no require cycle: `codex-glue.js` already loaded
+`claude.js` through `lib/agents/prompt.js`, and nothing `claude.js` loads
+reaches `codex-glue.js`.
+
+The stub `codex` gained one scenario option, `observePaths`: with every
+request it logs what each listed path held as the request arrived (null when
+missing, "dir", or a file's text). The test is
+`test/integration/codex-scratch-folder.test.js`. It sends messages only to a
+Codex agent, never to a Claude Code agent, takes the folder away before each
+mode, and asserts that when `thread/start` reached the stub the folder was
+there and its `.gitignore` held `*` followed by a newline, in Notes mode and
+Code mode, and that it is the folder the first turn names.
+
+- Red with the source as at `4432aa2c`, the head before the change, and the
+  new test and stub option in place: both tests fail, the folder and its
+  marker both null when `thread/start` arrived.
+- `scripts/red-first.js` at `e559ee33` with this test,
+  `test/integration/codex-scratch-files.test.js`,
+  `test/unit/scratch-files-instruction.test.js`,
+  `test/unit/agent-scratch-rule.test.js`, `test/unit/boundary.test.js` and
+  `test/unit/doc-claims.test.js`, against `origin/main`: PROVEN. 213 pass
+  with the change. With the source put back as on `main` (4 files) and the
+  tests kept (5 files, the stub among them), 14 fail: the 12 named above and
+  the two new tests.
+- The deliberate break: the `ensureScratchDir()` call taken out of
+  `openCodexThread`, made the same way as the others. Both new tests fail on
+  "the folder, ignoring itself, was there when the thread was asked for",
+  while `test/integration/codex-scratch-files.test.js` (2),
+  `test/unit/scratch-files-instruction.test.js` (9),
+  `test/unit/agent-scratch-rule.test.js` (5) and `test/unit/boundary.test.js`
+  (80) all pass.
+
+After it was put back, at `e559ee33`, each file run on its own:
+`test/integration/codex-scratch-folder.test.js` 2 of 2,
+`test/integration/codex-scratch-files.test.js` 2 of 2,
+`test/unit/scratch-files-instruction.test.js` 9 of 9,
+`test/unit/agent-scratch-rule.test.js` 5 of 5, `test/unit/boundary.test.js`
+80 of 80, `test/integration/codex-chat.test.js` 18 of 18 and
+`test/unit/doc-claims.test.js` 115 of 115. Because the stub changed, every
+other test file that drives the stub `codex`, `lib/runtime/codex-glue.js` or
+the spawn environment was run as well, 59 files in all, each on its own, and
+none failed. One of them, `test/unit/code-mode-replay.test.js`, skipped itself
+(its fixture's `root.skip`) and ran no tests.
+
+The spawn environment's code changed at `e559ee33`, where the section above
+says it is as on `main`: the folder creation moved into `ensureScratchDir()`,
+and what `getSpawnEnv` does is the same, including leaving `TMPDIR`, `TEMP`
+and `TMP` at the platform default when the folder cannot be made.
