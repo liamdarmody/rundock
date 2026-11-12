@@ -7,7 +7,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { scanMarkers, extractFrontmatterAgents, stripMarkers, stripDelegateTail } =
+const { scanMarkers, stripMarkers, stripDelegateTail } =
   require('../../public/markers.js');
 
 // ── scanMarkers: saves ──────────────────────────────────────────────────────
@@ -124,44 +124,6 @@ test('no markers yields empty actions, null delegation, no return', () => {
 test('non-string input is tolerated', () => {
   assert.deepStrictEqual(scanMarkers(undefined), { actions: [], delegation: null, hasReturn: false });
   assert.deepStrictEqual(scanMarkers(null).actions, []);
-});
-
-// ── extractFrontmatterAgents: the no-marker fallback ────────────────────────
-
-test('fenced frontmatter block with name and type extracts', () => {
-  const text = 'Here is your agent:\n```markdown\n---\nname: helper\ntype: specialist\n---\nDoes things.\n```';
-  const found = extractFrontmatterAgents(text);
-  assert.strictEqual(found.length, 1);
-  assert.strictEqual(found[0].name, 'helper');
-  assert.ok(found[0].content.startsWith('---\nname: helper'));
-});
-
-test('fenced block without a type field does not extract', () => {
-  const text = '```\n---\nname: not-an-agent\n---\nbody\n```';
-  assert.deepStrictEqual(extractFrontmatterAgents(text), []);
-});
-
-test('type must be orchestrator or specialist', () => {
-  const text = '```\n---\nname: odd\ntype: gadget\n---\nbody\n```';
-  assert.deepStrictEqual(extractFrontmatterAgents(text), []);
-});
-
-test('raw frontmatter fallback applies only when fenced found nothing', () => {
-  const raw = 'Intro.\n---\nname: raw-agent\ntype: orchestrator\n---\nBody.';
-  const found = extractFrontmatterAgents(raw);
-  assert.strictEqual(found.length, 1);
-  assert.strictEqual(found[0].name, 'raw-agent');
-
-  // When a fenced block matches, raw blocks are not also extracted.
-  const both = '```\n---\nname: fenced-agent\ntype: specialist\n---\nA\n```\n---\nname: raw-agent\ntype: specialist\n---\nB';
-  const foundBoth = extractFrontmatterAgents(both);
-  assert.deepStrictEqual(foundBoth.map(f => f.name), ['fenced-agent']);
-});
-
-test('multiple raw frontmatter blocks all extract', () => {
-  const text = '---\nname: one\ntype: specialist\n---\nA\n---\nname: two\ntype: specialist\n---\nB';
-  const found = extractFrontmatterAgents(text);
-  assert.deepStrictEqual(found.map(f => f.name), ['one', 'two']);
 });
 
 // ── display strippers ───────────────────────────────────────────────────────
