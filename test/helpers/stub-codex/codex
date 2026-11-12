@@ -44,6 +44,9 @@
 //                                         // 0.144.4 on Windows ARM). The server-side
 //                                         // slot frees, so a follow-up turn/start
 //                                         // succeeds, exactly as observed live.
+//       "observePaths": ["/abs/path"],    // log each path's state with every
+//                                         // request as it arrives: null when
+//                                         // missing, "dir", or a file's text
 //       "rules": [ {
 //         "match": {"promptIncludes": "..."},
 //         "deltas": ["chunk1 ", "chunk2"],  // item/agentMessage/delta sequence
@@ -100,6 +103,15 @@ function matches(rule, prompt) {
   const includes = m.promptIncludes == null ? [] : [].concat(m.promptIncludes);
   for (const s of includes) if (!prompt.includes(s)) return false;
   return true;
+}
+
+// One path as it stands now: null when missing, 'dir', or a file's text.
+function pathState(p) {
+  try {
+    return fs.statSync(p).isDirectory() ? 'dir' : fs.readFileSync(p, 'utf-8');
+  } catch (e) {
+    return null;
+  }
 }
 
 if (argv[0] === 'app-server') {
@@ -305,8 +317,12 @@ function runAppServer() {
     }
 
     const { id, method, params } = msg;
-    log({ method, id: id ?? null, params: params ?? null });
     const cfg = loadConfig();
+    // What the listed paths held when this request arrived, so a test can ask
+    // what was on disk at that moment rather than after the turn.
+    const observed = Array.isArray(cfg.observePaths) && cfg.observePaths.length
+      ? { observed: Object.fromEntries(cfg.observePaths.map(p => [p, pathState(p)])) } : {};
+    log({ method, id: id ?? null, params: params ?? null, ...observed });
 
     // Request-timeout tests: swallow configured methods entirely.
     if (id !== undefined && Array.isArray(cfg.dropMethods) && cfg.dropMethods.includes(method)) return;
