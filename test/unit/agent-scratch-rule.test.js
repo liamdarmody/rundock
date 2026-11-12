@@ -13,6 +13,13 @@
 // not grantable (classifyShellAccess returns grantable: false), so no standing
 // grant can ever cover it. The approval storm was correct behaviour about a
 // file that should never have been written there.
+//
+// THE PROMPT NOW NAMES THE FOLDER, NOT THE VARIABLE. Telling agents to use
+// $TMPDIR did not hold: the runtime's sandbox gives each command a TMPDIR of
+// its own, outside the workspace, and the Code-mode check grades a delete
+// through a variable as always asking, because it cannot know where the
+// variable points. The redirection below still matters, for tools that ask the
+// platform; what an agent is told is the folder's full path.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
@@ -23,17 +30,22 @@ const ROOT = path.join(__dirname, '..', '..');
 describe('the platform prompt tells agents where scratch goes', () => {
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'agents', 'prompt.js'), 'utf8');
 
-  test('it names the variable rather than a path', () => {
-    assert.match(src, /\$TMPDIR/,
-      'the redirected variable is the thing to use; a literal path cannot follow '
-      + 'the workspace');
+  test('it names the folder the spawn points TMPDIR at, rather than the variable', () => {
+    assert.match(src, /const scratch = scratchDir\(\)/,
+      'the same helper the spawn environment uses, so the folder named and the '
+      + 'folder created cannot disagree');
+    assert.match(src, /use the folder \$\{scratchFolder\}/);
+    assert.doesNotMatch(src, /use the path in \$TMPDIR/,
+      'the variable is not the thing to use: the sandbox replaces it, and a '
+      + 'delete through it always asks');
   });
 
-  test('and says plainly not to write a literal temp path', () => {
-    assert.match(src, /Never write a literal \/tmp path/);
+  test('and says plainly not to use the variables or a literal temp path', () => {
+    assert.match(src, /Do not use \$TMPDIR, TEMP, TMP or \/tmp for scratch/);
   });
 
   test('and says why, because "it needs approval" invites working around it', () => {
+    assert.match(src, /Rundock can't tell where a variable points when a command runs/);
     assert.match(src, /standing folder grant/,
       'an agent told only that something is disallowed will look for another '
       + 'route to the same place; told that the card cannot be dismissed, it '
