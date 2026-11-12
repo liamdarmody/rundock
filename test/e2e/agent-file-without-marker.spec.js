@@ -9,13 +9,18 @@
 // wrote it at the preview, before the yes, and an existing agent of the same
 // name was replaced with no copy kept.
 //
+// AND ONLY DOC'S MARKERS SAVE. A marked save is acted on by the server at the
+// end of the turn, only when the turn is Doc's (lib/agents/team-markers.js),
+// and the page sends no file-writing message at all: the marked cases run with
+// Doc, and another agent's marker is refused with a line on the page.
+//
 // WHAT IS ASSERTED, AND WHERE. On the files in the workspace's .claude/agents/
 // and .claude/skills/, not only on the page, and on every message the page
 // sends. A negative needs a point after which nothing more can arrive, so each
 // turn ends with a probe sent on the page's own socket: the server answers it
-// only after every message the page sent before it, and the save handler
-// writes synchronously, so once the probe is answered a save the reply caused
-// is on disk and its confirmation is on the page.
+// only after every message the page sent before it, and the server writes a
+// marked save before it sends the turn's result, so once the probe is answered
+// a save the reply caused is on disk and its confirmation is on its way.
 //
 // IN CONVERSATIONS OF THEIR OWN, deleted afterwards, never a seeded one: the
 // specs share one server and one workspace, and a turn gives its conversation
@@ -136,10 +141,10 @@ function watch(page) {
   return wire;
 }
 
-async function openNewConversation(page, title) {
+async function openNewConversation(page, title, agent = 'default') {
   await page.goto('/');
   await expect(page.locator('.convo-item').first()).toBeVisible();
-  const id = await page.evaluate((t) => createConversation('default', t).id, title);
+  const id = await page.evaluate(([a, t]) => createConversation(a, t).id, [agent, title]);
   await expect(page.locator('#view-chat')).toBeVisible();
   return id;
 }
@@ -248,7 +253,7 @@ test('a reply showing several unfenced agent files, with no marker, saves nothin
   });
 });
 
-test('a previewed agent file is written only when the next reply carries it in a SAVE_AGENT marker, once', async ({ page }) => {
+test('a previewed agent file is written only when Doc\'s next reply carries it in a SAVE_AGENT marker, once, by the server', async ({ page }) => {
   const file = agentFile('example-new', 'specialist', 'You are the new example agent, as approved.');
   const previewLead = 'Here is the new agent file. Shall I save it?';
   const savedLead = 'Saved the agent as approved.';
@@ -262,7 +267,7 @@ test('a previewed agent file is written only when the next reply carries it in a
   const target = () => path.join(agentsDir(), 'example-new.md');
   let convoId = null;
   try {
-    convoId = await openNewConversation(page, 'Approve then save e2e');
+    convoId = await openNewConversation(page, 'Approve then save e2e', 'rundock-guide');
     const before = listAgents();
 
     // The preview: nothing written, nothing asked for.
@@ -271,13 +276,12 @@ test('a previewed agent file is written only when the next reply carries it in a
     expect(listAgents()).toEqual(before);
     expect(fileWritesFrom(wire), 'the preview asked the server to write a file').toEqual([]);
 
-    // The yes: the marked save, once, with the marker's content.
+    // The yes: the marked save, once, with the marker's content, written by
+    // the server with nothing sent by the page.
     await turn(page, wire, convoId, 'APPROVE-YES-E2E yes, save it', savedLead);
     expect(fs.readFileSync(target(), 'utf8'), 'the file on disk is the marker content').toBe(file);
     expect(listAgents()).toEqual([...before, 'example-new.md'].sort());
-    expect(fileWritesFrom(wire), 'exactly one save, carrying the marker content').toEqual([
-      { type: 'save_agent', name: 'example-new', content: file, conversationId: convoId },
-    ]);
+    expect(fileWritesFrom(wire), 'the page asked the server to write or delete a file').toEqual([]);
     const confirmations = page.locator('#messages .msg-system', { hasText: 'Agent "example-new"' });
     await expect(confirmations).toHaveCount(1);
     await expect(confirmations).toHaveText('Agent "example-new" created');
@@ -287,7 +291,7 @@ test('a previewed agent file is written only when the next reply carries it in a
   }
 });
 
-test('a CREATE_AGENT marker still saves, once', async ({ page }) => {
+test('Doc\'s CREATE_AGENT marker still saves, once, by the server', async ({ page }) => {
   const file = agentFile('example-made', 'specialist', 'You are made by the legacy marker.');
   const lead = 'Created the agent with the legacy marker.';
   scenario([{ match: { promptIncludes: 'CREATE-MARKER-E2E' },
@@ -295,12 +299,10 @@ test('a CREATE_AGENT marker still saves, once', async ({ page }) => {
   const wire = watch(page);
   let convoId = null;
   try {
-    convoId = await openNewConversation(page, 'Create marker e2e');
+    convoId = await openNewConversation(page, 'Create marker e2e', 'rundock-guide');
     await turn(page, wire, convoId, 'CREATE-MARKER-E2E make the agent', lead);
     expect(fs.readFileSync(path.join(agentsDir(), 'example-made.md'), 'utf8')).toBe(file);
-    expect(fileWritesFrom(wire)).toEqual([
-      { type: 'save_agent', name: 'example-made', content: file, conversationId: convoId },
-    ]);
+    expect(fileWritesFrom(wire), 'the page asked the server to write or delete a file').toEqual([]);
     const confirmations = page.locator('#messages .msg-system', { hasText: 'Agent "example-made"' });
     await expect(confirmations).toHaveCount(1);
     await expect(confirmations).toHaveText('Agent "example-made" created');
@@ -310,7 +312,7 @@ test('a CREATE_AGENT marker still saves, once', async ({ page }) => {
   }
 });
 
-test('a SAVE_SKILL marker still writes the skill file, once', async ({ page }) => {
+test('Doc\'s SAVE_SKILL marker still writes the skill file, once, by the server', async ({ page }) => {
   const skill = `---\nname: ${CREATED_SKILL}\ndescription: An example skill.\n---\n\nDo the example.`;
   const lead = 'Saved the skill.';
   scenario([{ match: { promptIncludes: 'SKILL-MARKER-E2E' },
@@ -318,15 +320,36 @@ test('a SAVE_SKILL marker still writes the skill file, once', async ({ page }) =
   const wire = watch(page);
   let convoId = null;
   try {
-    convoId = await openNewConversation(page, 'Skill marker e2e');
+    convoId = await openNewConversation(page, 'Skill marker e2e', 'rundock-guide');
     await turn(page, wire, convoId, 'SKILL-MARKER-E2E make the skill', lead);
     expect(fs.readFileSync(path.join(skillsDir(), CREATED_SKILL, 'SKILL.md'), 'utf8')).toBe(skill);
-    expect(fileWritesFrom(wire)).toEqual([
-      { type: 'save_skill', name: CREATED_SKILL, content: skill, conversationId: convoId },
-    ]);
+    expect(fileWritesFrom(wire), 'the page asked the server to write or delete a file').toEqual([]);
     const confirmations = page.locator('#messages .msg-system', { hasText: `Skill "${CREATED_SKILL}"` });
     await expect(confirmations).toHaveCount(1);
     await expect(confirmations).toHaveText(`Skill "${CREATED_SKILL}" created`);
+  } finally {
+    fs.rmSync(scenarioFile(), { force: true });
+    if (convoId) await page.evaluate((id) => deleteConversation(id, { stopPropagation() {} }), convoId).catch(() => {});
+  }
+});
+
+test('another agent\'s SAVE_AGENT marker leaves the file as it was, and the page says why', async ({ page }) => {
+  const lead = 'Replacing the example agent.';
+  scenario([{ match: { promptIncludes: 'OTHER-AGENT-E2E' },
+    turn: [{ text: `${lead}\n<!-- RUNDOCK:SAVE_AGENT name=${EXISTING_NAME} -->\n${agentFile(EXISTING_NAME, 'specialist', 'You are replaced by another agent.')}\n<!-- /RUNDOCK:SAVE_AGENT -->` }] }]);
+  const wire = watch(page);
+  let convoId = null;
+  try {
+    convoId = await openNewConversation(page, 'Other agent marker e2e');
+    const before = listAgents();
+    const existingBefore = fs.readFileSync(path.join(agentsDir(), `${EXISTING_NAME}.md`));
+    await turn(page, wire, convoId, 'OTHER-AGENT-E2E replace it', lead);
+    const refusal = page.locator('#messages .msg-system', { hasText: `asked to save the agent "${EXISTING_NAME}", but only Doc can change the team` });
+    await expect(refusal).toHaveCount(1);
+    expect(fs.readFileSync(path.join(agentsDir(), `${EXISTING_NAME}.md`)).equals(existingBefore), 'the existing agent file changed').toBe(true);
+    expect(listAgents()).toEqual(before);
+    expect(fileWritesFrom(wire), 'the page asked the server to write or delete a file').toEqual([]);
+    await expect(page.locator('#messages')).not.toContainText(`Agent "${EXISTING_NAME}" updated`);
   } finally {
     fs.rmSync(scenarioFile(), { force: true });
     if (convoId) await page.evaluate((id) => deleteConversation(id, { stopPropagation() {} }), convoId).catch(() => {});
