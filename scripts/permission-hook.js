@@ -2977,6 +2977,10 @@ function codeUse(s, masked, lits) {
   const plain = (lit) => lit.kind === 'quote' && lit.pre === lit.start && !/[\\$@`{}]/.test(lit.value);
   const SETS_NAMES_UNSEEN = /exec|eval|compile|globals|locals|\bvars\b|setattr|delattr|__\w+__|builtins|modules|importlib|_getframe|f_globals|f_locals|\bglobal\b|nonlocal|globalThis|\bthis\b|\bself\b|\bwindow\b|Function|constructor|Reflect|binding|_set\b|runIn|pdb|cProfile|profile|doctest|timeit|interact|runsource|runcode|import\s*\*|\bwith\s*\(|def\s*\+|define_method|refine|\$[\w{(]|`/;
   const depthAt = (a) => { let d = 0; for (let k = 0; k < a; k++) d += OPENERS.includes(masked[k]) ? 1 : CLOSERS.includes(masked[k]) ? -1 : 0; return d; };
+  // The literal a position sits inside: the literals are in order and never
+  // overlap, so a search halves them, where a scan grew with the square of a
+  // join of many literals.
+  const litAt = (a) => { let lo = 0, hi = lits.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (lits[mid].end <= a) lo = mid + 1; else hi = mid; } return lits[lo] && lits[lo].start < a ? lits[lo] : null; };
   const fixedName = (name) => {
     if (SETS_NAMES_UNSEEN.test(s) || /[^\x00-\x7f]|\\/.test(masked)) return false;
     let defs = 0;
@@ -2984,14 +2988,17 @@ function codeUse(s, masked, lits) {
       const a = m.index;
       const b = a + name.length;
       if (masked[a] === ' ') {
-        const lit = lits.find(l => l.start < a && a < l.end);
+        const lit = litAt(a);
         if (lit && (plain(lit) || (s[a - 1] === '{' && s[b] === '}'))) continue;
         return false;
       }
       const eq = /^[ \t]*=(?!=)[ \t]*/.exec(masked.slice(b));
       const lit = eq && litByStart.get(b + eq[0].length);
-      const top = /^(?:[^\s:][^\n:]*;[ \t]*)?(?:(?:const|let|var)\s+)?$/.test(masked.slice(masked.lastIndexOf('\n', a - 1) + 1, a));
-      if (top && lit && plain(lit) && /^[ \t]*(?:[;\n#]|$)/.test(masked.slice(lit.end)) && depthAt(a) === 0) { defs++; continue; }
+      const top = () => /^(?:[^\s:][^\n:]*;[ \t]*)?(?:(?:const|let|var)\s+)?$/.test(masked.slice(masked.lastIndexOf('\n', a - 1) + 1, a));
+      if (lit && plain(lit) && /^[ \t]*(?:[;\n#]|$)/.test(masked.slice(lit.end)) && top() && depthAt(a) === 0) {
+        if (++defs > 1) return false;
+        continue;
+      }
       if (/(?:^|[^+])\+\s*$/.test(masked.slice(Math.max(0, a - 80), a)) || /^\s*\+(?![+=])/.test(masked.slice(b))) continue;
       return false;
     }
@@ -2999,13 +3006,17 @@ function codeUse(s, masked, lits) {
   };
   const fixed = new Map();
   const isFixed = (name) => { if (!fixed.has(name)) fixed.set(name, /^[A-Za-z_]\w*$/.test(name) && fixedName(name)); return fixed.get(name); };
-  // A node that is a join by `+` of plain literals and known names only.
+  // A node that is a join by `+` of plain literals and known names only,
+  // worked out once per node, however many literals it holds.
+  const whole = new Map();
   const wholeOf = (node) => {
+    if (whole.has(node)) return whole.get(node);
     const terms = splitTop(node.a, node.b, '+').map(([x, y]) => trim(x, y));
-    return terms.length > 1 && terms.every(([x, y]) => {
+    whole.set(node, terms.length > 1 && terms.every(([x, y]) => {
       const lit = litByStart.get(x);
       return lit ? lit.end === y && plain(lit) : isFixed(masked.slice(x, y));
-    });
+    }));
+    return whole.get(node);
   };
   return { nodes: [...nodes.values()], literalNode, consumed, commands, wholeOf };
 }
