@@ -3294,11 +3294,16 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   // character inside quotes; it never separates folders. Judged as a Windows
   // separator, Python code like `'\n\n'.join(...)` or `"\n== {name}"` in a
   // here-document became a relative Windows path that resolved outside, a card
-  // that can never be remembered. A drive letter or UNC name is still
-  // Windows-shaped, and a Windows host, a Windows-shaped workspace and the
-  // PowerShell tool keep the Windows reading unchanged.
+  // that can never be remembered. A drive letter is still Windows-shaped, and
+  // a Windows host, a Windows-shaped workspace and the PowerShell tool keep the
+  // Windows reading unchanged.
   const winShaped = winWorld || process.platform === 'win32' || WIN_DRIVE.test(workspaceRoot) || WIN_UNC.test(workspaceRoot);
   const posixText = opts.shellTool !== 'PowerShell' && !winShaped;
+  // NOR IS A DOUBLED BACKSLASH A NETWORK NAME THERE: `t.split('\\n\\n')` in a
+  // here-document read as `\\n\n\`, a write outside. A Windows host is decided
+  // before flavourFor is asked, so the rule names both conditions itself; a
+  // Windows host and PowerShell keep `\\server\share` as a network path.
+  const flavourOf = t => (opts.shellTool !== 'PowerShell' && !winShaped && WIN_UNC.test(t) ? path : winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText));
   // AN ANSWER FILE IS CHANGED ONLY BY WHAT CAN WRITE IT. `tail
   // .rundock/permissions.json; echo done > build.log` reads the file and writes
   // somewhere else, and `git diff .mcp.json` or `cp .mcp.json backup.json`
@@ -3603,7 +3608,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     for (const { t: lit, at } of view.names) {
       let t = lit;
       for (const re of HOME_PREFIX) { if (re.test(t)) { t = t.replace(re, home); break; } }
-      const flavour = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);
+      const flavour = flavourOf(t);
       const r = canonicalize(flavour.resolve(basesFor(flavour, false)(at), t), flavour);
       if (isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, flavour) || isAnswerFileOfAnyWorkspace(r, flavour)
         || holdsAnswerFiles(r, workspaceRoot, foldsCase, flavour) || isRundockConsolePath(r, home, foldsCase, flavour) || startupAt(r, flavour)) addAnswer(r, flavour);
@@ -3615,7 +3620,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     // `cp x ~/` writes into the home folder, not a folder called `~`.
     const re = HOME_PREFIX.find(r => r.test(named));
     const dest = re ? named.replace(re, home) : named;
-    const pmod = winWorld ? path.win32 : flavourFor(dest, workspaceRoot, posixText);
+    const pmod = flavourOf(dest);
     const d = canonicalize(pmod.resolve(basesFor(pmod, fromStart)(at), dest), pmod);
     let folder = /[\\/]$/.test(dest);
     try { folder = folder || fs.statSync(d).isDirectory(); } catch (e) { /* not there: a file name */ }
@@ -3682,7 +3687,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     // as a place outside the workspace. Only for the Bash tool: in PowerShell a
     // backslash really is a separator.
     if (opts.shellTool !== 'PowerShell' && BASH_ESCAPE.test(raw)) continue;
-    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);
+    const pmod = flavourOf(t);
     // Resolved against where the command actually runs, not against the
     // workspace root regardless. Everything BELOW still judges against the
     // workspace root: the base says where a relative path starts, never what

@@ -288,3 +288,43 @@ describe('the inverse action', POSIX, () => {
     asksAsWrite(ASKS.hiddenHome, path.join(home, '.ssh', 'config'), { codeMode: true });
   });
 });
+
+// ===== A DOUBLED BACKSLASH =====
+
+describe('a doubled backslash in Bash on macOS and Linux is not a network path', () => {
+  for (const [mode, codeMode] of MODES) {
+    test(`in a here-document, and in a -c argument quoted either way (${mode} mode)`, POSIX, () => {
+      for (const c of [
+        MAIN_RED.backslashes,
+        `python3 -c "print(open('notes/a.md').read().split('\\\\n\\\\n'))"`,
+        `python3 -c 'print(open("notes/a.md").read().split("\\\\n\\\\n"))'`,
+        "cp notes/a.md '\\\\server\\share\\a.md'",
+      ]) {
+        assert.deepStrictEqual(places(c, { codeMode }), [], c);
+      }
+    });
+  }
+
+  test('read as a POSIX path, a climb written after one still cards', POSIX, () => {
+    assert.deepStrictEqual(places("cat '\\\\x/../../../outside.txt'"), [real(path.join(root, 'outside.txt'))]);
+    asksAsWrite(py("open('\\\\\\\\x/../../../outside.txt', 'w').write('x')"), real(path.join(root, 'outside.txt')));
+  });
+
+  test('route: on a Windows host a network path in Bash still crosses, quoted or not', () => {
+    for (const workspace of [WIN_WS, ws]) {
+      for (const c of ["cp a.md '\\\\server\\share\\x'", 'cp a.md \\\\server\\share\\x', 'echo hi > "\\\\server\\share\\x"']) {
+        const r = scan(c, { workspace, opts: { platform: 'win32' } });
+        assert.ok(r && r.where === 'outside' && r.crossings.some(x => x.path === '\\\\server\\share\\x'), `${workspace}: ${c}: ${JSON.stringify(r)}`);
+      }
+    }
+  });
+
+  test('route: in PowerShell a network path still crosses, on every host', () => {
+    for (const o of [{}, { workspace: WIN_WS, opts: { platform: 'win32' } }]) {
+      for (const c of ['Copy-Item a.md \\\\server\\share\\x', 'Set-Content \\\\server\\share\\x hi']) {
+        const r = scan(c, { tool: 'PowerShell', ...o });
+        assert.ok(r && r.where === 'outside' && r.crossings.some(x => x.path === '\\\\server\\share\\x'), `${c}: ${JSON.stringify(r)}`);
+      }
+    }
+  });
+});
