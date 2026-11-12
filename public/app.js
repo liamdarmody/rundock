@@ -1232,16 +1232,8 @@ function handleResult(d, convoId) {
       ws.send(JSON.stringify({ type: 'end_delegation', conversationId: convoId }));
     }
 
-    // Fallback: raw YAML frontmatter agent definitions without the marker
-    // wrapper. Only when the marker scan produced no save/delete actions.
-    if(filesCreated === 0) {
-      for (const fm of RundockMarkers.extractFrontmatterAgents(textToScan)) {
-        ws.send(JSON.stringify({ type: 'save_agent', name: fm.name, content: fm.content, conversationId: convoId }));
-        filesCreated++;
-        console.log('[Agent] Fallback extraction:', fm.name);
-      }
-    }
-
+    // Nothing else here asks for a file write: an agent file shown without a
+    // marker is a preview, and saving it would write it before the yes.
     if(filesCreated > 0) {
       console.log('[Rundock] Saved', filesCreated, 'file(s)');
       setTimeout(() => {
