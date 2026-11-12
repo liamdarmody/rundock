@@ -2948,8 +2948,56 @@ function codeUse(s, masked, lits) {
     if (!runs) continue;
     for (const command of commandWords(open, closeOf(open))) commands.push(command);
   }
-  return { nodes: [...nodes.values()], literalNode, consumed, commands };
+
+  // A PIECE JOINED ONTO A NAME GIVEN ONE PLAIN STRING, ONCE, IS PART OF THE
+  // WHOLE PATH. After `V = "/ws"`, `V + "/etc/tools/lib"` is the path
+  // `/ws/etc/tools/lib`, a node above, and the piece read alone was a write to
+  // `/etc/tools/lib`. A name is known only where the code as written can give
+  // it no other value: one top-level `NAME = "plain"`, and every other mention
+  // an operand of `+` or a bare `{NAME}` in a string that fills names in. Any
+  // other mention may bind it again (a second assignment, a loop, a parameter,
+  // an import, `global`, `+=`, a walrus) or hand it to code that changes it,
+  // and code that can set a name unseen (exec, globals(), the shell filling in
+  // `$X`, an escaped or non-ASCII name) leaves no name known.
+  const plain = (lit) => lit.kind === 'quote' && lit.pre === lit.start && !/[\\$@`{}]/.test(lit.value);
+  const SETS_NAMES_UNSEEN = /exec|eval|compile|globals|locals|\bvars\b|setattr|delattr|__\w+__|builtins|modules|importlib|_getframe|f_globals|f_locals|\bglobal\b|nonlocal|globalThis|\bthis\b|\bself\b|\bwindow\b|Function|constructor|Reflect|binding|_set\b|runIn|pdb|cProfile|profile|doctest|timeit|interact|runsource|runcode|import\s*\*|\bwith\s*\(|def\s*\+|define_method|refine|\$[\w{(]|`/;
+  const depthAt = (a) => { let d = 0; for (let k = 0; k < a; k++) d += OPENERS.includes(masked[k]) ? 1 : CLOSERS.includes(masked[k]) ? -1 : 0; return d; };
+  const fixedName = (name) => {
+    if (SETS_NAMES_UNSEEN.test(s) || /[^\x00-\x7f]|\\/.test(masked)) return false;
+    let defs = 0;
+    for (const m of s.matchAll(new RegExp(`(?<![\\w$.])${name}(?![\\w$])`, 'g'))) {
+      const a = m.index;
+      const b = a + name.length;
+      if (masked[a] === ' ') {
+        const lit = lits.find(l => l.start < a && a < l.end);
+        if (lit && (plain(lit) || (s[a - 1] === '{' && s[b] === '}'))) continue;
+        return false;
+      }
+      const eq = /^[ \t]*=(?!=)[ \t]*/.exec(masked.slice(b));
+      const lit = eq && litByStart.get(b + eq[0].length);
+      const top = /^(?:[^\s:][^\n:]*;[ \t]*)?(?:(?:const|let|var)\s+)?$/.test(masked.slice(masked.lastIndexOf('\n', a - 1) + 1, a));
+      if (top && lit && plain(lit) && /^[ \t]*(?:[;\n#]|$)/.test(masked.slice(lit.end)) && depthAt(a) === 0) { defs++; continue; }
+      if (/(?:^|[^+])\+\s*$/.test(masked.slice(Math.max(0, a - 80), a)) || /^\s*\+(?![+=])/.test(masked.slice(b))) continue;
+      return false;
+    }
+    return defs === 1;
+  };
+  const fixed = new Map();
+  const isFixed = (name) => { if (!fixed.has(name)) fixed.set(name, /^[A-Za-z_]\w*$/.test(name) && fixedName(name)); return fixed.get(name); };
+  // A node that is a join by `+` of plain literals and known names only.
+  const wholeOf = (node) => {
+    const terms = splitTop(node.a, node.b, '+').map(([x, y]) => trim(x, y));
+    return terms.length > 1 && terms.every(([x, y]) => {
+      const lit = litByStart.get(x);
+      return lit ? lit.end === y && plain(lit) : isFixed(masked.slice(x, y));
+    });
+  };
+  return { nodes: [...nodes.values()], literalNode, consumed, commands, wholeOf };
 }
+
+// Where the reading of a joined piece starts: a test makes it throw, to see
+// the line judged as it was before that reading. Nothing in the hook sets it.
+const joinedPieceSeam = { beforeReading() {} };
 
 // The literals in a piece of code that name a place (each with whether the
 // code counts as writing it), the paths that may name an answer file and that
@@ -3008,7 +3056,7 @@ function codeParts(code, reading = null) {
   }
   let masked = '';
   for (let k = 0; k < s.length; k++) masked += blank[k] ? ' ' : s[k];
-  const { nodes, literalNode, consumed, commands: run } = codeUse(s, masked, found);
+  const { nodes, literalNode, consumed, commands: run, wholeOf } = codeUse(s, masked, found);
   const literals = [];
   const names = [];
   const seen = new Set();
@@ -3019,6 +3067,14 @@ function codeParts(code, reading = null) {
   for (const l of found) {
     if (l.kind !== 'quote') continue;
     const node = literalNode.get(l);
+    // A piece of a join whose whole path is known and judged is not judged
+    // again alone (codeUse). If that reading fails, it is, as before.
+    if (consumed.has(l)) {
+      try {
+        joinedPieceSeam.beforeReading();
+        if (wholeOf(node) && node.values.length && node.values.every(v => literalIsPlace(v, reading))) continue;
+      } catch (e) { /* judged alone */ }
+    }
     const own = !consumed.has(l) && node.values.length === 1 && node.values[0] === l.value;
     addLiteral(l.value, own && !node.quiet);
   }
@@ -4009,6 +4065,7 @@ module.exports = {
   boundaryCrossingsFor, CODE_READS_ALLOWED, UNATTENDED_NEXT_UNLOADED,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
+  joinedPieceSeam,
 };
 
 if (require.main === module) main();
