@@ -13,21 +13,18 @@
 //
 // The tests take the folder from the prompt an agent actually receives and
 // drive the real permission modules with it, so the words and the behavior
-// cannot drift apart.
+// cannot drift apart. What a Codex thread receives is tested through the real
+// server and the stub Codex, in test/integration/codex-scratch-files.test.js.
 require('../helpers/made-up-home.js');
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { EventEmitter } = require('node:events');
 
 const { _internal: srv } = require('../../server.js');
 const { buildSystemPrompt } = require('../../lib/agents/prompt.js');
 const config = require('../../lib/config.js');
 const claudeRuntime = require('../../lib/runtime/claude.js');
-const glue = require('../../lib/runtime/codex-glue.js');
-const codexAppServerLib = require('../../codex-appserver.js');
-const codexRuntime = require('../../codex.js');
 const { classifyFileAccess, classifyShellAccess } = require('../../scripts/permission-hook.js');
 const { codeModeVerdict } = require('../../scripts/code-mode-verdict.js');
 const RP = require('../../public/permissions.js');
@@ -172,70 +169,4 @@ describe('following the instruction raises no card in Code mode, and what it cla
     assert.strictEqual(decided(read), 'allow');
     assert.strictEqual(decided(wordCount(file)), 'card', 'which is why the paragraph does not say writing there needs no approval');
   });
-});
-
-describe('a Codex thread is told the same, and it is true there', () => {
-  // Driven through the Codex prompt path itself: startCodexTurn, a fresh
-  // thread, the first turn's input. The app server is a stand-in patched onto
-  // the module the glue calls, so no Codex binary is needed.
-  function fakeServer() {
-    const server = new EventEmitter();
-    server.threads = [];
-    let turnStarted;
-    server.turn = new Promise((resolve) => { turnStarted = resolve; });
-    server.isReady = () => true;
-    server.start = async () => {};
-    server.pid = () => null;
-    server.shutdown = async () => {};
-    server.startThread = async (opts) => { server.threads.push(opts); return { threadId: 'thread-scratch' }; };
-    server.startTurn = (threadId, input) => {
-      const sub = new EventEmitter();
-      turnStarted({ threadId, input });
-      setImmediate(() => sub.emit('event', { type: 'done', status: 'interrupted' }));
-      return sub;
-    };
-    return server;
-  }
-
-  for (const mode of MODES) {
-    test(`${mode} mode: the first turn carries the paragraph, and the folder is inside what Codex may write`, async () => {
-      const ws = workspaceIn(mode);
-      const server = fakeServer();
-      const create = codexAppServerLib.createCodexAppServer;
-      const resolveBin = codexRuntime.resolveCodexBin;
-      codexAppServerLib.createCodexAppServer = () => server;
-      codexRuntime.resolveCodexBin = () => 'codex-not-started';
-      // The turn's own end, awaited before the stand-ins are taken away: the
-      // turn releases what it holds as it ends, and must do so while they are
-      // still wired, or it reaches the real server's permission request.
-      let ended;
-      const turnEnded = new Promise((resolve) => { ended = resolve; });
-      const prev = glue.wireCodexGlueDeps({
-        chatProcesses: () => new Map(), recentSpawnErrors: () => new Map(),
-        safeSend: (m) => { if (JSON.parse(m).subtype === 'done') ended(); },
-        appendTranscript: () => {}, endConvoTransition: () => {}, registerChildPid: () => null,
-        unregisterChildPid: () => {}, killProcessTree: () => {}, requestServerPermission: async () => ({}),
-        getActualPort: () => 0, getPermissionTimeoutMs: () => 1000,
-      });
-      try {
-        glue.startCodexTurn(`convo-scratch-${mode}`, { content: 'count the words' }, { ...AGENT, runtime: 'codex' });
-        const { input } = await server.turn;
-        const said = scratchParagraph(input);
-        assert.strictEqual(said, scratchParagraph(buildSystemPrompt(AGENT)), 'the paragraph a Claude Code agent gets');
-        assert.strictEqual(namedFolder(said), scratchOf(ws));
-        const [thread] = server.threads;
-        assert.strictEqual(thread.sandbox, 'workspace-write');
-        assert.strictEqual(thread.cwd, ws, 'the workspace is the root Codex may write');
-        assert.ok(namedFolder(said).startsWith(thread.cwd + path.sep), 'and the scratch folder is inside it');
-      } finally {
-        let bound;
-        await Promise.race([turnEnded, new Promise((resolve) => { bound = setTimeout(resolve, 5000); })]);
-        clearTimeout(bound);
-        glue.shutdownCodexAppServer();
-        glue.wireCodexGlueDeps(prev);
-        codexAppServerLib.createCodexAppServer = create;
-        codexRuntime.resolveCodexBin = resolveBin;
-      }
-    });
-  }
 });
