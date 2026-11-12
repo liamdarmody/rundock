@@ -729,8 +729,9 @@ describe('platform delegate (Doc)', () => {
     assert.ok(!transcript(convoId).some(e => e.text.includes('DOC-OVERRIDE-FAILED')));
   });
 
-  test('platform delegate auto-returns on a CRUD marker even without COMPLETE', async () => {
+  test('platform delegate auto-returns on a CRUD marker even without COMPLETE, and its marker writes the file once', async () => {
     const convoId = h.freshConvoId('doc');
+    const skillFile = path.join(h.workspaceDir, '.claude', 'skills', 'demo-skill', 'SKILL.md');
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'doc-crud please' },
         turn: [{ agentTool: { subagent_type: 'rundock-guide', prompt: 'doc-crud save a skill' } }] },
@@ -740,11 +741,21 @@ describe('platform delegate (Doc)', () => {
         turn: [{ text: '<silent>' }] },
     ]);
 
+    const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'doc-crud please' });
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'rundock-guide', { label: 'doc result' });
     // CRUD marker alone triggers the auto-return: parent restarts silently
     const { msg: started } = await client.waitFor(m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m._agent === 'chief-of-staff' && m.autoContinue, { label: 'parent restart' });
     assert.strictEqual(started.silent, true);
+    // AND THE FILE. This test once proved only the auto-return: Doc's skill
+    // was never looked for on disk, so a save that wrote nothing passed. The
+    // server writes it at the end of Doc's turn, once, with nothing sent by
+    // any window.
+    assert.strictEqual(fs.readFileSync(skillFile, 'utf-8'), 'skill body', 'Doc\'s marker wrote the skill');
+    const saved = client.messages.slice(since).filter(m => m.type === 'skill_saved' && m.skillId === 'demo-skill');
+    assert.strictEqual(saved.length, 1, 'once');
+    assert.strictEqual(saved[0].conversationId, convoId, 'confirmed to the conversation it came from');
+    fs.rmSync(path.dirname(skillFile), { recursive: true, force: true });
   });
 });
 
