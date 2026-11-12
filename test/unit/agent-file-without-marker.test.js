@@ -242,7 +242,7 @@ describe('the client asks for a file write only through the marker scan', () => 
     // Today the only client code that asks the server to write or delete an
     // agent or skill file is MARKER_SENDS in handleResult. A message of one
     // of these types built anywhere else is a second route and is reviewed
-    // against the rule above: only a marker the person can see saves a file.
+    // against the rule above: only a marker in the reply saves a file.
     // Whitespace is removed before counting, so `type:'save_agent'` and
     // `type : "save_agent"` count alike. WHAT THIS CANNOT SEE: a type
     // assembled at runtime from pieces.
