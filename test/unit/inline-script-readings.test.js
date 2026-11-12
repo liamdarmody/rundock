@@ -328,3 +328,41 @@ describe('a doubled backslash in Bash on macOS and Linux is not a network path',
     }
   });
 });
+
+// ===== PYTHON'S % FORMATTING =====
+
+describe('a division inside Python\'s % formatting is not a folder', POSIX, () => {
+  for (const [mode, codeMode] of MODES) {
+    test(`in a here-document, in -c, and with no space around the % (${mode} mode)`, () => {
+      for (const c of [
+        MAIN_RED.percent,
+        `python3 -c 'a, b, t = 0, 1, "x"; print("%d" % (100*(b-a)/len(t)))'`,
+        py('a, b, t = 0, 1, "x"', 'print("%d"%(100*(b-a)/len(t)))'),
+        py('a, b, t = 0, 1, "x"', 'fmt = "%d"', 'print(fmt % (100*(b-a)/len(t)))'),
+      ]) {
+        assert.deepStrictEqual(places(c, { codeMode }), [], c);
+      }
+    });
+  }
+
+  test('a real place in the same script still crosses, inside the brackets too', () => {
+    asksAsWrite(py('t = "x"', 'a, b = 0, 1', 'print("%d" % (100*(b-a)/len(t)))', 'open("/etc/x", "w").write("x")'), etc);
+    asksAsWrite(py('print("%s" % (open("/etc/y", "w"),))'), real('/etc/y'));
+  });
+
+  test('Ruby\'s and Perl\'s command quotes are still read as commands', () => {
+    for (const c of [
+      "ruby <<'RB'\nputs %x(cat /etc/hosts)\nRB",
+      "ruby <<'RB'\nhosts = %x{cat /etc/hosts}\nRB",
+      "perl <<'PL'\nmy $hosts = qx (cat /etc/hosts);\nPL",
+    ]) {
+      assert.deepStrictEqual(places(c), [real('/etc/hosts')], c);
+    }
+  });
+
+  test('route: a real absolute path that follows a / still crosses', () => {
+    asksAsWrite(py('t = "x"', 'print(100*(1-0)/len(t))', 'open("/etc/x", "w").write("x")'), etc);
+    asksAsWrite(py('import pathlib', 'x = pathlib.Path("a")', 'open(x / "/etc/x", "w").write("x")'), etc);
+    asksAsWrite('cp notes/a.md $(pwd)/../../outside.md', real('/outside.md'), 'a path after a closing bracket in a word');
+  });
+});

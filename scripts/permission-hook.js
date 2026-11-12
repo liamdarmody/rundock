@@ -2228,7 +2228,10 @@ const CODE_INTERPRETER = /^(?:python(?:\d+(?:\.\d+)*)?|node|nodejs|ruby|perl)$/;
 const PROGRAM_FLAG = { python: /^-[A-Za-z]*[cm]/, node: /^(?:-[A-Za-z]*[ep]|--eval|--print)/, ruby: /^-[A-Za-z]*e/, perl: /^-[A-Za-z]*[eE]/ };
 const SCRIPT_FILE = /\.(?:sh|bash|zsh|dash|ksh|fish|command|mk)$|(?:^|\/)(?:GNUm|M|m)akefile$/;
 const SHELL_SHEBANG = /^#!.*\b(?:sh|bash|zsh|dash|ksh|fish)\b/;
-const QUOTE_OPERATOR = /^(?:qx|qq|qw|q|%[xqQwWiI]?)\s*([([{<])/;
+// Perl's quote words may have a space before the bracket (`qx (ls)`); Ruby's
+// `%` may not, and a `%` straight after a closing quote or bracket divides or
+// formats. Read as a quote, Python's `"%d" % (100*(b-a)/len(t))` ran `/len`.
+const QUOTE_OPERATOR = /^(?:(?:qx|qq|qw|q)\s*|%[xqQwWiI]?)([([{<])/;
 const CLOSING = { '(': ')', '[': ']', '{': '}', '<': '>' };
 
 function interpreterFamily(lead) {
@@ -3040,7 +3043,7 @@ function codeParts(code, reading = null) {
       i = j;
       continue;
     }
-    const q = /[\w$@%]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));
+    const q = /[\w$@%"')\]}]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));
     if (q) {
       const open = q[1];
       let depth = 0;
