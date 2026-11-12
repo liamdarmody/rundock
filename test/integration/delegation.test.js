@@ -770,7 +770,8 @@ describe('roster refresh', () => {
     // (type/order prepended BEFORE the opening ---, corrupting the frontmatter
     // so name/role parse as body); that case is covered separately in
     // test/integration/http-api.test.js. Here we want a clean roster entry.
-    client.send({ type: 'save_agent', name: 'roster-test-agent', content: '---\nname: roster-test-agent\ndisplayName: Roster\nrole: Temp Role\ndescription: A temporary test agent\ntype: specialist\norder: 8\nreportsTo: chief-of-staff\n---\nTemp agent.\n' });
+    // Saved by Doc's marker, the one way an agent is saved.
+    h.asDoc({ type: 'save_agent', name: 'roster-test-agent', content: '---\nname: roster-test-agent\ndisplayName: Roster\nrole: Temp Role\ndescription: A temporary test agent\ntype: specialist\norder: 8\nreportsTo: chief-of-staff\n---\nTemp agent.\n' });
     await client.waitFor(m => m.type === 'agent_saved' && m.agentId === 'roster-test-agent', { label: 'agent_saved' });
     assert.strictEqual(h.internal.chatProcesses.get(convoId).needsRosterRefresh, true, 'live orchestrator flagged');
 
@@ -789,7 +790,7 @@ describe('roster refresh', () => {
     assert.ok(sysPrompt.includes('Roster (roster-test-agent)'), 'new agent rendered in the roster with its display name');
 
     // cleanup
-    client.send({ type: 'delete_agent', agentId: 'roster-test-agent' });
+    h.asDoc({ type: 'delete_agent', agentId: 'roster-test-agent' });
     await client.waitFor(m => m.type === 'agent_deleted', { label: 'cleanup delete' });
   });
 });

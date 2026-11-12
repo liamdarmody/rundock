@@ -470,7 +470,9 @@ describe('permission bridge', () => {
   });
 });
 
-describe('agent + skill CRUD over WS', () => {
+// Made by Doc's markers, the one way a change to the team is made: a window's
+// socket message of any of these types is refused (team-markers.test.js).
+describe('agent + skill changes, made by Doc\'s markers', () => {
   test('save_agent creates the file, auto-assigns type/order, refreshes rosters, marks setup complete', async () => {
     // Warm the agent cache first so the cache-staleness race would fire without
     // the fix: a warm (<2s) cache means the post-save broadcast must invalidate
@@ -478,7 +480,7 @@ describe('agent + skill CRUD over WS', () => {
     h.internal.discoverAgents();
 
     const since = client.messages.length;
-    client.send({ type: 'save_agent', name: 'sales-coach', content: '---\nname: sales-coach\ndisplayName: Rex\nrole: Sales Coach\ndescription: Sales prep\n---\nYou are Rex.\n' });
+    h.asDoc({ type: 'save_agent', name: 'sales-coach', content: '---\nname: sales-coach\ndisplayName: Rex\nrole: Sales Coach\ndescription: Sales prep\n---\nYou are Rex.\n' });
     const { msg: saved } = await client.waitFor(m => m.type === 'agent_saved', { since, label: 'agent_saved' });
     assert.strictEqual(saved.agentId, 'sales-coach');
     assert.strictEqual(saved.updated, false);
@@ -505,7 +507,7 @@ describe('agent + skill CRUD over WS', () => {
     // declared name/displayName/role survive. Regression companion in
     // regression.test.js.
     const since = client.messages.length;
-    client.send({ type: 'save_agent', name: 'nodesc-agent', content: '---\nname: nodesc-agent\ndisplayName: RealName\nrole: Real Role\n---\nBody text.\n' });
+    h.asDoc({ type: 'save_agent', name: 'nodesc-agent', content: '---\nname: nodesc-agent\ndisplayName: RealName\nrole: Real Role\n---\nBody text.\n' });
     await client.waitFor(m => m.type === 'agent_saved' && m.agentId === 'nodesc-agent', { since, label: 'nodesc saved' });
     const raw = fs.readFileSync(path.join(h.workspaceDir, '.claude', 'agents', 'nodesc-agent.md'), 'utf-8');
     // the opening fence is intact and the injected keys are inside the block
@@ -515,44 +517,46 @@ describe('agent + skill CRUD over WS', () => {
     assert.strictEqual(meta.displayName, 'RealName', 'declared displayName preserved');
     assert.strictEqual(meta.name, 'nodesc-agent', 'declared name preserved as frontmatter');
     assert.strictEqual(meta.role, 'Real Role', 'declared role preserved');
-    client.send({ type: 'delete_agent', agentId: 'nodesc-agent' });
+    h.asDoc({ type: 'delete_agent', agentId: 'nodesc-agent' });
     await client.waitFor(m => m.type === 'agent_deleted', { label: 'nodesc cleanup' });
   });
 
   test('save_agent with invalid slug is rejected and writes nothing', async () => {
+    // A name a marker can carry but the slug rule refuses. A path such as
+    // ../evil cannot be written in a marker at all.
     const since = client.messages.length;
-    client.send({ type: 'save_agent', name: '../evil', content: 'x' });
+    h.asDoc({ type: 'save_agent', name: 'Evil_Agent', content: 'x' });
     const { msg } = await client.waitFor(m => m.type === 'agent_error', { since, label: 'agent_error' });
     assert.match(msg.message, /Invalid agent name/);
-    assert.strictEqual(fs.existsSync(path.join(h.workspaceDir, '.claude', 'evil.md')), false);
+    assert.strictEqual(fs.existsSync(path.join(h.workspaceDir, '.claude', 'agents', 'Evil_Agent.md')), false);
   });
 
   test('delete_agent removes user agents but refuses platform agents', async () => {
     let since = client.messages.length;
-    client.send({ type: 'delete_agent', agentId: 'sales-coach' });
+    h.asDoc({ type: 'delete_agent', agentId: 'sales-coach' });
     await client.waitFor(m => m.type === 'agent_deleted' && m.agentId === 'sales-coach', { since, label: 'agent_deleted' });
     assert.strictEqual(fs.existsSync(path.join(h.workspaceDir, '.claude', 'agents', 'sales-coach.md')), false);
 
     since = client.messages.length;
-    client.send({ type: 'delete_agent', agentId: 'rundock-guide' });
+    h.asDoc({ type: 'delete_agent', agentId: 'rundock-guide' });
     const { msg } = await client.waitFor(m => m.type === 'agent_error', { since, label: 'platform delete refusal' });
-    assert.match(msg.message, /Cannot delete platform agents/);
+    assert.match(msg.message, /platform agents cannot be changed/);
   });
 
   test('save_skill and delete_skill manage .claude/skills/<name>/SKILL.md', async () => {
     let since = client.messages.length;
-    client.send({ type: 'save_skill', name: 'test-skill', content: '---\nname: Test Skill\ndescription: A test\n---\nDo the thing.' });
+    h.asDoc({ type: 'save_skill', name: 'test-skill', content: '---\nname: Test Skill\ndescription: A test\n---\nDo the thing.' });
     await client.waitFor(m => m.type === 'skill_saved' && m.skillId === 'test-skill', { since, label: 'skill_saved' });
     const skillFile = path.join(h.workspaceDir, '.claude', 'skills', 'test-skill', 'SKILL.md');
     assert.ok(fs.existsSync(skillFile));
 
     since = client.messages.length;
-    client.send({ type: 'delete_skill', name: 'test-skill' });
+    h.asDoc({ type: 'delete_skill', name: 'test-skill' });
     await client.waitFor(m => m.type === 'skill_deleted' && m.skillId === 'test-skill', { since, label: 'skill_deleted' });
     assert.strictEqual(fs.existsSync(path.dirname(skillFile)), false);
 
     since = client.messages.length;
-    client.send({ type: 'delete_skill', name: '../../etc' });
+    h.asDoc({ type: 'delete_skill', name: 'Etc_Skill' });
     const { msg } = await client.waitFor(m => m.type === 'skill_error', { since, label: 'skill_error' });
     assert.match(msg.message, /Invalid skill name/);
   });

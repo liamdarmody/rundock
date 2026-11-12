@@ -317,3 +317,60 @@ describe('Who wrote the reply is the server\'s record', () => {
     }
   });
 });
+
+describe('A window\'s message cannot change the team', () => {
+  // Every socket message that used to save or delete an agent or skill, as a
+  // page, a local program or a stale client would send it. Each targets a file
+  // that exists (or, for a save, a name that is free), so a write shows on
+  // disk whichever way the handler would have gone.
+  const SIX = (p) => [
+    { type: 'save_agent', name: `${p}-saved`, content: teamFile(`${p}-saved`, 'Socket') },
+    { type: 'create_agent', name: `${p}-made`, content: teamFile(`${p}-made`, 'Socket') },
+    { type: 'update_agent', name: `${p}-saved`, content: teamFile(`${p}-saved`, 'Socket') },
+    { type: 'delete_agent', agentId: `${p}-gone` },
+    { type: 'save_skill', name: `${p}-skill`, content: skillFile(`${p}-skill`) },
+    { type: 'delete_skill', name: `${p}-gone-skill` },
+  ];
+
+  test('each of the six, from the window\'s own authenticated socket, is refused with an error and writes nothing', async () => {
+    const p = 'socket';
+    const before = seedFive(p);
+    const client = await h.connect();
+    try {
+      for (const msg of SIX(p)) {
+        const conversationId = h.freshConvoId('socket');
+        const since = client.messages.length;
+        client.send({ ...msg, conversationId });
+        const { msg: reply } = await client.waitFor((m) => m.conversationId === conversationId
+          && ['agent_error', 'skill_error', 'agent_saved', 'agent_deleted', 'skill_saved', 'skill_deleted'].includes(m.type),
+        { since, timeout: 4000, label: `the answer to ${msg.type}` });
+        assert.match(reply.type, /_error$/, `${msg.type} was answered with ${reply.type}`);
+        assert.strictEqual(reply.refused, true, `${msg.type} is a refusal, not a failed write`);
+        assert.match(reply.message, /only Doc can change the team/i, `${msg.type}: the refusal says why`);
+      }
+      assert.deepStrictEqual(FILES(p).map(readOrNull), before, 'every file is as it was, byte for byte, and nothing new exists');
+    } finally {
+      client.close();
+      removeFive(p);
+    }
+  });
+
+  test('a socket with no key never opens, so it cannot send one', async () => {
+    const WebSocket = require('ws');
+    const p = 'nokey';
+    const before = seedFive(p);
+    try {
+      const opened = await new Promise((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${h.port}`);
+        ws.on('open', () => { for (const msg of SIX(p)) ws.send(JSON.stringify(msg)); ws.close(); resolve(true); });
+        ws.on('unexpected-response', (_req, res) => { res.resume(); resolve(false); });
+        ws.on('error', () => resolve(false));
+      });
+      assert.strictEqual(opened, false, 'the connection was refused');
+      await h.delay(200);
+      assert.deepStrictEqual(FILES(p).map(readOrNull), before, 'nothing changed');
+    } finally {
+      removeFive(p);
+    }
+  });
+});
