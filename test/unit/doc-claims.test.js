@@ -2446,3 +2446,42 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
     }
   });
 });
+
+// THREE SPELLINGS IN AN INLINE SCRIPT THAT NAME NO PLACE. The audit section and
+// the comment above literalIsPlace say what the hook does with each; the hook
+// is asked about the examples they name, beside the cards it keeps.
+describe('ARCHITECTURE.md and the hook: three spellings in an inline script name no place', { skip: process.platform === 'win32' && 'bash on a macOS or Linux host' }, () => {
+  const hook = require('../../scripts/permission-hook.js');
+  const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8').replace(/\s*\n\s*\/\/\s*/g, ' ');
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-inline-')));
+  after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  const bash = (command, opts = {}) => hook.classifyShellAccess('Bash', { command }, ws, [], path.dirname(ws), false, opts);
+  const scan = (body) => bash(`python3 - <<'EOF'\n${body}\nEOF`);
+
+  test('the page and the comment say each rule', () => {
+    for (const said of [
+      'a word that starts with two backslashes is not a network name',
+      '`\\\\server\\share` included',
+      'A literal joined by `+` onto a name the code gives one plain string, once, at the top level',
+      'is judged as the whole path, `/ws/etc/x`, and not alone',
+      'leave the piece judged alone as before',
+      'is Python\'s formatting operator, so `"%d" % (n/len(t))` runs nothing',
+    ]) assert.ok(architecture.includes(said), `the page says: ${said}`);
+    for (const said of [
+      'THREE SPELLINGS THAT NAME NO PLACE',
+      'is judged as the whole path, `/ws/etc/x`, not alone',
+      'not a network name: `\'\\\\n\\\\n\'` is text. A Windows host and PowerShell keep `\\\\server\\share`',
+      'is Python\'s formatting: `"%d" % (n/len(t))` runs nothing',
+    ]) assert.ok(hookSrc.includes(said), `the hook says: ${said}`);
+  });
+
+  test('and the hook does what they say, and keeps the cards beside it', () => {
+    assert.strictEqual(scan(`V = "${ws}"\nopen(V + "/etc/x", "w")`), null, 'a piece joined onto a name given the workspace once');
+    assert.ok(scan(`V = "${ws}"\nV = "/"\nopen(V + "/etc/x", "w")`), 'a name assigned again');
+    assert.ok(scan('import sys\nV = sys.argv[1]\nopen(V + "/etc/x", "w")'), 'a name taken from outside');
+    assert.strictEqual(scan("t = 'a'\nparts = t.split('\\\\n\\\\n')"), null, 'two backslashes');
+    assert.ok(bash("cp a '\\\\server\\share\\x'", { platform: 'win32' }), 'a network path on a Windows host');
+    assert.strictEqual(scan('t = "a"\nprint("%d" % (100*(1-0)/len(t)))'), null, 'Python\'s % formatting');
+    assert.ok(bash("ruby <<'RB'\nputs %x(cat /etc/hosts)\nRB"), 'Ruby\'s %x( ) runs its body');
+  });
+});

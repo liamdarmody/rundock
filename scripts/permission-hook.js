@@ -2292,6 +2292,18 @@ function feedsCode(segment, body) {
 // asks this on every Codex command, so a list kept for the life of the process
 // would grow without end and keep reporting a folder made after it started,
 // an installer's `/opt` say, as missing.
+//
+// THREE SPELLINGS THAT NAME NO PLACE, each held where it is read:
+//   - A piece joined by `+` onto a name the code gives one plain string, once
+//     (`V = "/ws"`, then `V + "/etc/x"`), is judged as the whole path,
+//     `/ws/etc/x`, not alone. A name given another value or bound another way
+//     leaves the piece judged alone (codeUse, codeParts).
+//   - In Bash on macOS and Linux a word that starts with two backslashes is
+//     not a network name: `'\\n\\n'` is text. A Windows host and PowerShell
+//     keep `\\server\share` (crossingsIn).
+//   - A `%` followed by a space, or straight after a closing quote or bracket,
+//     is Python's formatting: `"%d" % (n/len(t))` runs nothing, where Ruby's
+//     `%( )` quote would run its body (QUOTE_OPERATOR).
 function firstFolderExists(lit, firstFolders) {
   const first = '/' + lit.slice(1).split('/')[0];
   if (!firstFolders.has(first)) firstFolders.set(first, fs.existsSync(first));

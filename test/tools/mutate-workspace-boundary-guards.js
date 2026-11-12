@@ -308,6 +308,10 @@ const REPEAT_HINT_LINK = { src: path.join(ROOT, 'public', 'views', 'settings.js'
 // program: escape strings, here-documents, interpreter code and a `cd` partway
 // through a chain.
 const SHELL_CODE = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-boundary.test.js' };
+// The same file, the suite for three spellings in an inline script that name
+// no place: a piece joined onto a name given one plain string, a doubled
+// backslash, and Python's `%` formatting.
+const INLINE_SCRIPT = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/inline-script-readings.test.js' };
 // The same file, the suite that runs it as its own process: a hook that dies
 // answers nothing, and the runtime carries on as though nothing had objected.
 const HOOK_CRASH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-never-crashes.test.js' };
@@ -4639,6 +4643,40 @@ const MUTATIONS = [
   [SAVED_BUILD, 'Saved answer: a save or revoke builds on the file without the guard\'s check first',
     '  if (g.listeners.size) checkAnswerFilesNow(workspace);\n  const was = g.snapshot.get(f);',
     '  const was = g.snapshot.get(f);'],
+  // ===== THREE SPELLINGS IN AN INLINE SCRIPT THAT NAME NO PLACE =====
+  [INLINE_SCRIPT, 'Inline script: a name assigned twice is known',
+    '    return defs === 1;',
+    '    return defs >= 1;'],
+  [INLINE_SCRIPT, 'Inline script: a name from sys.argv or the environment is known',
+    String.raw`if (top && lit && plain(lit) && /^[ \t]*(?:[;\n#]|$)/.test(masked.slice(lit.end)) && depthAt(a) === 0) { defs++; continue; }`,
+    'if (top && eq && depthAt(a) === 0) { defs++; continue; }'],
+  [INLINE_SCRIPT, 'Inline script: a piece is dropped though the whole path is not shaped like a place',
+    'node.values.length && node.values.every(v => literalIsPlace(v, reading))',
+    'node.values.length'],
+  [INLINE_SCRIPT, 'Inline script: a piece is dropped though what it is joined onto is not known',
+    'if (wholeOf(node) && node.values.length',
+    'if (node.values.length'],
+  [INLINE_SCRIPT, 'Inline script: a joined path is judged as a read when the call writes',
+    "quiet: useOf(a, b) === 'read'",
+    'quiet: true'],
+  [INLINE_SCRIPT, 'Inline script: the doubled-backslash rule applies on a Windows host',
+    "opts.shellTool !== 'PowerShell' && !winShaped && WIN_UNC.test(t) ? path",
+    "opts.shellTool !== 'PowerShell' && WIN_UNC.test(t) ? path"],
+  [INLINE_SCRIPT, 'Inline script: the doubled-backslash rule applies to PowerShell',
+    "opts.shellTool !== 'PowerShell' && !winShaped && WIN_UNC.test(t) ? path",
+    '!winShaped && WIN_UNC.test(t) ? path'],
+  [INLINE_SCRIPT, 'Inline script: a failed reading of a joined piece drops the piece',
+    '} catch (e) { /* judged alone */ }',
+    '} catch (e) { continue; }'],
+  [INLINE_SCRIPT, "Inline script: a % before a space is Ruby's quote again",
+    String.raw`const QUOTE_OPERATOR = /^(?:(?:qx|qq|qw|q)\s*|%[xqQwWiI]?)([([{<])/;`,
+    String.raw`const QUOTE_OPERATOR = /^(?:qx|qq|qw|q|%[xqQwWiI]?)\s*([([{<])/;`],
+  [INLINE_SCRIPT, 'Inline script: a % straight after a closing quote is a quote',
+    String.raw`const q = /[\w$@%"')\]}]/.test(s[i - 1] || ' ')`,
+    String.raw`const q = /[\w$@%]/.test(s[i - 1] || ' ')`],
+  [INLINE_SCRIPT, "Inline script: Perl's quote words lose the space before their bracket",
+    String.raw`const QUOTE_OPERATOR = /^(?:(?:qx|qq|qw|q)\s*|%[xqQwWiI]?)([([{<])/;`,
+    String.raw`const QUOTE_OPERATOR = /^(?:qx|qq|qw|q|%[xqQwWiI]?)([([{<])/;`],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
