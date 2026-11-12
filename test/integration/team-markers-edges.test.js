@@ -236,16 +236,18 @@ describe('when the decision fails, nothing is written and the next turn still wo
     test(label, async () => {
       const convoId = h.freshConvoId('fail');
       h.writeScenario([{ match: { agent: 'rundock-guide', promptIncludes: 'FAIL-CLOSED' }, turn: [{ text: `Making it.\n${saveMarker('fail-made', 'Made')}` }] }]);
-      const restore = breakIt();
+      // Cleaned up however it ends, so a failure here cannot leave a file
+      // behind for the next case to trip over.
       try {
-        const since = await chat(convoId, 'rundock-guide', 'FAIL-CLOSED make it');
-        const { msg } = await client.waitFor((m) => m.type === 'agent_error' && m.conversationId === convoId, { since, timeout: 4000, label: 'the line' });
-        assert.match(msg.message, line);
-        assert.strictEqual(fs.existsSync(agentPath('fail-made')), false, 'nothing was written');
-      } finally {
-        restore();
-      }
-      try {
+        const restore = breakIt();
+        try {
+          const since = await chat(convoId, 'rundock-guide', 'FAIL-CLOSED make it');
+          const { msg } = await client.waitFor((m) => m.type === 'agent_error' && m.conversationId === convoId, { since, timeout: 4000, label: 'the line' });
+          assert.match(msg.message, line);
+          assert.strictEqual(fs.existsSync(agentPath('fail-made')), false, 'nothing was written');
+        } finally {
+          restore();
+        }
         const since = await chat(convoId, 'rundock-guide', 'FAIL-CLOSED again');
         await client.waitFor((m) => m.type === 'agent_saved' && m.agentId === 'fail-made' && m.conversationId === convoId, { since, timeout: 4000, label: 'the next turn\'s save' });
         assert.strictEqual(readOrNull(agentPath('fail-made')), teamFile('fail-made', 'Made'), 'the next turn wrote it');
@@ -286,7 +288,9 @@ describe('the sequences', () => {
     try {
       for (const attempt of ['first', 'second']) {
         const since = await chat(convoId, 'content-lead', `RETRY-MARKER ${attempt}`);
-        await refusal(convoId, 'Wren', 'save the agent "retry-target"', since);
+        const msg = await refusal(convoId, 'Wren', 'save the agent "retry-target"', since);
+        assert.strictEqual(msg.message, 'Wren asked to save the agent "retry-target", but only Doc can change the team, so nothing was saved. Ask Doc to make this change.',
+          'the line the conversation shows, word for word, with the agent\'s display name');
         assert.strictEqual(readOrNull(agentPath('retry-target')), teamFile('retry-target', 'Before'), `${attempt} turn: unchanged`);
       }
     } finally {

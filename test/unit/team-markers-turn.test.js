@@ -72,6 +72,10 @@ function turnOf(agentId, { current } = {}) {
     buffer: '', responseText: '', toolCalls: [], exited: false, pendingAgentTools: [], deliveredTurns: [],
   };
   deps.processes.set('c1', current ? { ...entry, agentId: current, processId: 'p2' } : entry);
+  // The decision is handed the same process table the server's handler
+  // context carries, so reading the conversation's current process from it
+  // would be possible, and these tests would see it.
+  teamMarkers.wireTeamMarkers({ broadcast: (payload) => lines.push(JSON.parse(payload)), processes: deps.processes });
   engine.wireProcessHandlers(entry, 'c1', null, {});
   const emit = (...objs) => { for (const o of objs) proc.stdout.emit('data', Buffer.from(JSON.stringify(o) + '\n')); };
   return { entry, emit };
@@ -126,5 +130,31 @@ describe('the turn that ended, as the agent its entry records', () => {
     t.entry.responseText = ''; // the reset each runtime path makes after a turn (onResult)
     t.emit(wire.textDelta('Anything else?'), wire.messageStop(), wire.result('Anything else?'));
     assert.deepStrictEqual(deletes, ['example-agent']);
+  });
+});
+
+describe('the words a person reads', () => {
+  // User-facing copy, pinned whole: who asked, for what, why nothing changed,
+  // and what to do instead. UK spelling, as for everything a person reads.
+  test('the refusal of another agent\'s marker, for a save and for a delete', () => {
+    assert.strictEqual(teamMarkers.refusalLine('Wren', { kind: 'save_agent', name: 'helper' }),
+      'Wren asked to save the agent "helper", but only Doc can change the team, so nothing was saved. Ask Doc to make this change.');
+    assert.strictEqual(teamMarkers.refusalLine('Wren', { kind: 'delete_skill', name: 'notes' }),
+      'Wren asked to delete the skill "notes", but only Doc can change the team, so nothing was deleted. Ask Doc to make this change.');
+  });
+
+  test('the refusal of Doc\'s marker for its own file or a platform agent', () => {
+    const t = turnOf('rundock-guide');
+    t.emit(wire.textDelta('<!-- RUNDOCK:DELETE_AGENT name=rundock-guide -->'), wire.messageStop(), wire.result(''));
+    assert.deepStrictEqual(deletes, []);
+    assert.deepStrictEqual(lines.map((m) => [m.type, m.refused, m.message]), [['agent_error', true,
+      'Doc asked to delete the agent "rundock-guide", but Doc\'s own file and platform agents cannot be changed from a reply, so nothing was deleted.']]);
+  });
+
+  test('the refusal of a socket message', () => {
+    const sent = [];
+    team.handleTeamChangeRefused({}, { send: (m) => sent.push(JSON.parse(m)) }, { type: 'save_agent', name: 'helper', conversationId: 'c1' });
+    assert.deepStrictEqual(sent, [{ type: 'agent_error', refused: true, conversationId: 'c1',
+      message: 'Only Doc can change the team, from its own replies, so this request was refused and nothing was changed.' }]);
   });
 });
