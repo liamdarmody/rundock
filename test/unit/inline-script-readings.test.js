@@ -366,3 +366,96 @@ describe('a division inside Python\'s % formatting is not a folder', POSIX, () =
     asksAsWrite('cp notes/a.md $(pwd)/../../outside.md', real('/outside.md'), 'a path after a closing bracket in a word');
   });
 });
+
+// ===== ALL THREE: THE WORKING FOLDER, THE RETRY, THE NEXT STEP, THE HOOK =====
+
+describe('the working folder does not change the answer', POSIX, () => {
+  const ALL = [...Object.values(MAIN_RED), ...ALREADY_RAN, ...Object.values(ASKS)];
+  const from = (dir, fn) => {
+    const here = process.cwd();
+    process.chdir(dir);
+    try { return fn(); } finally { process.chdir(here); }
+  };
+  test('every line gives the same answer from the workspace and from a folder outside it', () => {
+    const inWs = from(ws, () => ALL.map(c => JSON.stringify(scan(c))));
+    const outside = from(root, () => ALL.map(c => JSON.stringify(scan(c))));
+    assert.deepStrictEqual(outside, inWs);
+    for (const c of Object.values(MAIN_RED)) assert.strictEqual(from(root, () => scan(c)), null, c);
+  });
+
+  test('the retry: each line sent twice gets the same answer both times, from either working folder', () => {
+    for (const dir of [ws, root]) {
+      for (const c of Object.values(MAIN_RED)) {
+        const first = from(dir, () => scan(c, { codeMode: true }));
+        assert.deepStrictEqual(from(dir, () => scan(c, { codeMode: true })), first, c);
+        assert.strictEqual(first, null, c);
+      }
+    }
+  });
+});
+
+describe('the most common next step', POSIX, () => {
+  test('the forms that already ran still run, and a read of /etc/hosts and a write to ~/.zshrc still ask', () => {
+    for (const c of ALREADY_RAN) assert.strictEqual(scan(c, { codeMode: true }), null, c);
+    assert.deepStrictEqual(places('cat /etc/hosts', { codeMode: true }), [real('/etc/hosts')]);
+    const zshrc = scan('echo x >> ~/.zshrc', { codeMode: true });
+    assert.ok(zshrc && zshrc.crossings.some(c => c.path === path.join(home, '.zshrc')), JSON.stringify(zshrc));
+  });
+});
+
+// Through the hook's decision path, against a capture server and a closed
+// port, the way the Code-mode hook tests judge a command.
+describe('through the hook, in Code mode and in Notes mode', () => {
+  const outside = fx.outsideTempRoot();
+  const SKIP = outside.skip || (process.platform === 'win32' && 'bash on a macOS or Linux host') || false;
+  let world, capture, deadPort, red, asks;
+  before(async () => {
+    if (SKIP) return;
+    world = fx.buildWorld(outside.dir);
+    fs.mkdirSync(path.join(world.ws, 'notes'), { recursive: true });
+    fs.writeFileSync(path.join(world.ws, 'notes', 'a.md'), 'one\n\ntwo\n');
+    red = lines(world.ws);
+    asks = STILL_ASKS(world.home, world.ws);
+    capture = await fx.startCaptureServer();
+    deadPort = await fx.closedPort();
+  });
+  after(async () => {
+    if (capture) await capture.close();
+    if (outside.dir) fs.rmSync(outside.dir, { recursive: true, force: true });
+  });
+  const bash = (command, codeMode = true) => fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command }, cwd: world.ws, codeMode });
+
+  test('Code mode: the three lines run with no card', { skip: SKIP }, async () => {
+    for (const [name, c] of Object.entries(red)) {
+      const r = await bash(c);
+      assert.strictEqual(r.cls, 'runs', `${name}: ${JSON.stringify(r.payload)}`);
+    }
+  });
+
+  test('Code mode: the lines that must still ask are asked about as writes outside, and refused with nobody to ask', { skip: SKIP }, async () => {
+    for (const [name, c] of Object.entries(asks)) {
+      const r = await bash(c);
+      assert.strictEqual(r.payload && r.payload.boundary, true, `${name}: asked about as a crossing`);
+      assert.ok((r.payload.crossings || []).some(x => x.write === true), `${name}: as a write`);
+      assert.strictEqual(r.dead.decision, 'deny', `${name}: refused when nobody can be asked`);
+    }
+  });
+
+  // Notes mode asks before a command that runs code whatever it names. Before
+  // this change the card for each line also carried a write outside; now it
+  // carries none, and it is still a card.
+  test('Notes mode: each line is still asked about, now with no crossing on the card', { skip: SKIP }, async () => {
+    for (const [name, c] of Object.entries(red)) {
+      const r = await bash(c, false);
+      assert.ok(r.payload, `${name}: asked about`);
+      assert.strictEqual(r.payload.boundary || false, false, `${name}: and with no crossing: ${JSON.stringify(r.payload.crossings)}`);
+    }
+  });
+
+  test('the undo: a line that asks is refused, and the next command, a join onto the workspace, runs', { skip: SKIP }, async () => {
+    const refused = await bash(asks.assignedTwice);
+    assert.strictEqual(refused.dead.decision, 'deny');
+    const next = await bash(red.joined);
+    assert.strictEqual(next.cls, 'runs');
+  });
+});
