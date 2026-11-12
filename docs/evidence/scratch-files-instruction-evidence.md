@@ -1,12 +1,18 @@
-# Agents are told the full path of the workspace scratch folder: red on main and five deliberate breaks
+# Agents are told the full path of the workspace scratch folder: red on main and seven deliberate breaks
 
 **This file is a dated record of runs on one machine, not a source of truth.**
 Every claim below is re-measured by the named tests on every run of the
 suite. If this file and those tests ever disagree, the tests are right.
 
-Taken on 2026-11-12 on macOS (Darwin 25.4.0, arm64) with Node 24.12.0, at
-`7ecfefb9`, the last commit to change code or tests; the commit after it adds
-only this file. The merge base is `bd0bd815`.
+Taken on 2026-11-12 on macOS (Darwin 25.4.0, arm64) with Node 24.12.0. The
+merge base is `bd0bd815`. The sections up to and including the five breaks
+were taken at `7ecfefb9`. The last section, on the Codex thread, was taken at
+`40545abe`, the last commit to change code or tests; the commit after it
+changes only this file. `40545abe` replaced the in-process Codex test, so the
+two tests named "notes mode: the first turn carries the paragraph, and the
+folder is inside what Codex may write" and its code mode twin in the earlier
+sections no longer exist: the integration test in the last section takes
+their place.
 
 ---
 
@@ -127,3 +133,103 @@ shell command that changes files asks. 1 of 211 fails: it says the same thing
 in both modes, and claims no approval for a write.
 
 After the last break was put back, the same command passed 211 of 211.
+
+---
+
+## A Codex thread, through the real server and the stub Codex
+
+Taken at `40545abe`. The test is
+`test/integration/codex-scratch-files.test.js`. It boots the real server
+against a fixture workspace that has a Codex agent, with the stub `codex`
+binary from `test/helpers/stub-codex/` on the path. It sets Notes mode and
+then Code mode with `set_workspace_mode` over the WebSocket, and in each sends
+one message to the Codex agent and then one to a Claude Code agent. It reads
+back the requests the stub received from the real app-server client over the
+JSON-RPC transport on stdio, from the log the stub appends to in the fixture
+workspace. The stub and the harness were not changed: the stub already logs
+every request it receives with its params.
+
+**What it proves, from what the stub received.**
+
+- The first `turn/start` on a new thread carries the SCRATCH FILES
+  paragraph, byte for byte the paragraph the stub `claude` received in
+  `--append-system-prompt` for a Claude Code agent in the same workspace and
+  mode.
+- The folder the paragraph names is the workspace root joined with
+  `.rundock/scratch`, with a trailing separator.
+- `thread/start` is, in full, `cwd` set to the workspace root, `sandbox`
+  `workspace-write`, `approvalPolicy` `on-request` and `approvalsReviewer`
+  `user`: no writable roots, no `config` override, no profile.
+- The turn runs on that thread and sends only `threadId` and `input`: no
+  per-turn `cwd` or `sandboxPolicy`, either of which would take precedence
+  over the thread's own. So the folder named is inside the cwd of a
+  `workspace-write` thread.
+
+**What it cannot prove.** Whether Codex's sandbox lets a command write, read
+and delete a file in that folder without an approval request. That
+enforcement is Codex's own code, and the real binary needs a signed-in
+account, so it cannot run in this suite. The stub answers only what a test
+scripts it to answer, so making it perform the write would test the stub,
+not Codex.
+
+**What that half rests on.** The sandbox options Rundock sends, listed above,
+and what Codex does with them, as recorded in
+`docs/protocol/codex-app-server/RESEARCH.md`: section 3, where a
+`thread/start` with this `cwd` and `sandbox` is answered with a
+`workspaceWrite` sandbox and the cwd as the workspace root; section 5,
+"Sandbox interaction", where under `workspace-write` with `on-request` a
+write inside the cwd or a writable root runs with no approval request and
+only an escalation, such as a write outside them, asks; and section 8, where
+per-turn settings take precedence over the thread's, which is why the test
+pins that the turn sends none. Section 5 describes the macOS sandbox
+(Seatbelt). `docs/RUNTIME-ADAPTER.md`, section 3 "Approvals", records the same
+from a measurement against codex-cli 0.156.1 with the thread options above:
+a write inside the workspace never escalates, a delete inside the workspace
+runs without escalating, and reads never escalate. The comment at the top of
+`lib/workspace/answer-file-guard.js` names files under `.rundock/` among the
+writes measured, by file edit and by shell redirect. On Windows without the
+native sandbox configured, the same section says every action escalates, so
+there a scratch write arrives as an approval request for Rundock to grade.
+
+**Red on main.**
+
+    node scripts/red-first.js --tests "node --test --require ./test/helpers/account-home-refused.js \
+      test/integration/codex-scratch-files.test.js test/unit/scratch-files-instruction.test.js \
+      test/unit/agent-scratch-rule.test.js test/unit/doc-claims.test.js"
+
+At `40545abe`, measured against `origin/main`: PROVEN. With the change, 131
+tests pass. With the source put back as on `main` (2 files:
+`lib/agents/prompt.js`, and this file, which no test reads) and the tests
+kept (3 test files), 12 of them fail: both tests in the new file, "notes
+mode: the first turn carries the paragraph naming the scratch folder, and the
+thread may write there" and its code mode twin, and the ten tests of
+`test/unit/scratch-files-instruction.test.js` and
+`test/unit/agent-scratch-rule.test.js` that failed on `main` in the section
+above. The new tests fail on "the paragraph names a folder": `main`'s
+paragraph says to use the path in `$TMPDIR`. The byte-for-byte comparison
+alone passes on `main`, since both runtimes get the same old paragraph; the
+folder is what fails.
+
+**The deliberate break.** In `lib/runtime/codex-glue.js`, the first-turn
+prompt built from `buildSystemPrompt(agentData).replace(/SCRATCH FILES:\n.*\n/, '')`,
+on a copy made outside the working tree, copied in, run, and put back with
+`git checkout`. Both tests in `test/integration/codex-scratch-files.test.js`
+fail, on "the prompt has a SCRATCH FILES section". In the same state
+`test/unit/scratch-files-instruction.test.js` (9),
+`test/unit/agent-scratch-rule.test.js` (5) and `test/unit/doc-claims.test.js`
+(115) all pass, so this test is the one that catches the Codex path dropping
+the paragraph.
+
+Red on main cannot show that the sandbox half bites, because the thread
+options are the same on `main`. So one more break, made the same way: in
+`lib/runtime/codex-glue.js`, the thread started with `sandbox: 'read-only'`.
+Both tests fail, on "workspace-write, rooted at the workspace, with nothing
+narrowing it".
+
+After both breaks were put back, at `40545abe`:
+`test/integration/codex-scratch-files.test.js` 2 of 2,
+`test/unit/scratch-files-instruction.test.js` 9 of 9,
+`test/unit/agent-scratch-rule.test.js` 5 of 5,
+`test/integration/codex-chat.test.js` 18 of 18,
+`test/integration/codex-sandbox-config.test.js` 2 of 2 and
+`test/unit/doc-claims.test.js` 115 of 115 passed, each file run on its own.
