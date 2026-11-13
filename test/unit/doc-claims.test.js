@@ -2538,3 +2538,42 @@ describe('the workspace\'s agents and skills are refused to file tools, as the p
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// scaffold/rundock-guide.md: a change Doc makes when another agent brought it in
+// ---------------------------------------------------------------------------
+
+describe('rundock-guide.md: when another agent brought Doc in, a change is asked for, not reported as made', () => {
+  // In a hand-off every save or delete marker raises a card, and Doc's reply is
+  // written before anyone answers it, so the reply must not say it is done.
+  const guide = fs.readFileSync(path.join(ROOT, 'scaffold', 'rundock-guide.md'), 'utf-8');
+  const section = (() => {
+    const from = guide.indexOf('## Delegated tasks');
+    const to = guide.indexOf('\n## ', from + 1);
+    return from < 0 ? '' : guide.slice(from, to < 0 ? undefined : to);
+  })();
+  const flat = section.replace(/\s+/g, ' ');
+
+  test('Doc is told each change waits for the person\'s Allow on a card', () => {
+    assert.ok(flat.includes('When another agent brought you in, each change waits for the person.'), 'the rule opens with when it applies');
+    assert.ok(flat.includes('Rundock shows the person a card for every save or delete marker in your reply, and nothing is written until they press Allow on it.'), 'what the card does');
+  });
+
+  test('Doc says it has asked, and never that a change is made', () => {
+    assert.ok(flat.includes('say that you have asked for each change and that it is made once they allow it on the card below'), 'asked, not done');
+    assert.ok(flat.includes('Never say an agent or skill has been created, saved, updated or deleted.'), 'no outcome claimed');
+  });
+
+  test('the outcome is Rundock\'s to tell', () => {
+    assert.ok(flat.includes('Rundock tells the next turn what the person decided'), 'the next turn hears it from Rundock');
+  });
+
+  test('the rule is about a hand-off only, and the file says nothing of a card for a direct conversation', () => {
+    const outside = guide.slice(0, guide.indexOf('## Delegated tasks')) + guide.slice(guide.indexOf('\n## ', guide.indexOf('## Delegated tasks') + 1));
+    const outsideFlat = outside.replace(/\s+/g, ' ');
+    assert.ok(!outsideFlat.includes('each change waits for the person'), 'the rule appears only in the hand-off section');
+    assert.ok(!outsideFlat.includes('nothing is written until they press Allow'), 'no card is promised for a direct conversation');
+    const dashes = [0x2013, 0x2014].map((c) => String.fromCharCode(c));
+    assert.ok(!dashes.some((d) => section.includes(d)), 'no em or en dashes');
+  });
+});
