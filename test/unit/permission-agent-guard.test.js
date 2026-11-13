@@ -3,8 +3,10 @@
 // Claude Code agent/skill config (~/.claude/agents, ~/.claude/skills). Rundock
 // never reads the global folder, so such an edit would silently succeed
 // somewhere invisible to the app (the reported bug: an agent "updated" and
-// nothing changed, surviving a restart). Workspace .claude edits, reads, and
-// ordinary file edits are deliberately NOT blocked.
+// nothing changed, surviving a restart). Reads and ordinary file edits are
+// not blocked. The workspace's own .claude is not this check's: file-tool
+// writes into its agents and skills are refused by isWorkspaceTeamFolderEdit
+// (test/unit/workspace-team-folders.test.js).
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const os = require('node:os');
@@ -28,7 +30,7 @@ describe('isProtectedClaudeEdit', () => {
     }
   });
 
-  test('allows workspace .claude edits, other files, reads, and non-edit tools', () => {
+  test('does not cover workspace .claude edits (another check does), other files, reads, and non-edit tools', () => {
     const allowed = [
       ['Write', { file_path: '/tmp/ws/.claude/agents/dev.md' }],   // workspace, not global home
       ['Edit', { file_path: '/tmp/ws/.claude/skills/x/SKILL.md' }], // workspace
