@@ -508,7 +508,10 @@ describe('the control failing: the person\'s message still goes, and the turn ru
       const realError = console.error;
       const logged = [];
       console.error = (...args) => { logged.push(args.map(String).join(' ')); realError(...args); };
-      teamNotes.seams[seam] = () => { throw new Error(`${seam} broke`); };
+      // A store that throws after it has kept the outcomes must take them back.
+      teamNotes.seams[seam] = seam === 'store'
+        ? (...args) => { real(...args); throw new Error(`${seam} broke`); }
+        : () => { throw new Error(`${seam} broke`); };
       h.writeScenario([
         { match: { agent: 'content-lead', promptIncludes: `${token}-ONE` }, turn: [{ text: `Saved.\n${saveAgent('fail-helper', teamFile('fail-helper', 'Helper'))}` }] },
         { match: { agent: 'content-lead', promptIncludes: `${token}-TWO` }, turn: [{ text: 'Second.' }] },

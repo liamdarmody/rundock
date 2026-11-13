@@ -40,6 +40,15 @@ before(() => {
   config.setWorkspace(workspace);
 });
 
+// The conversation list on disk, which every server start reads back.
+const convosFile = () => path.join(workspace, '.rundock', 'conversations.json');
+const readConvos = () => { try { return JSON.parse(fs.readFileSync(convosFile(), 'utf8')); } catch (e) { return []; } };
+const recordOf = (convoId) => readConvos().find((c) => c.id === convoId) || null;
+function seedRecord(convoId) {
+  fs.mkdirSync(path.dirname(convosFile()), { recursive: true });
+  fs.writeFileSync(convosFile(), JSON.stringify([...readConvos(), { id: convoId, title: 'seeded', sessionIds: [] }]));
+}
+
 describe('the note, byte for byte', () => {
   test('one line per outcome kind, under the heading, then a blank line', () => {
     assert.strictEqual(catchUp.teamOutcomeNote(FIVE, nameOf), [
@@ -219,6 +228,52 @@ describe('the next message a Claude Code process is written', () => {
     p.send('did it work?');
     assert.deepStrictEqual(p.contents(), [`${expectedNote}did it work?`]);
     assert.ok(logged.some((l) => l.includes('[TeamNotes]') && l.includes('disk full')));
+  });
+
+  // A STORE THAT FAILS LEAVES NOTHING OF ITSELF TO BE TOLD. Storing is one
+  // step: the record and memory hold the outcomes, or neither does, so the
+  // next turn never opens with a note that was never kept.
+  const asWritten = (content) => JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n';
+  test('the record cannot be written: nothing is left to be told, the next message goes as written, and the failure is logged', () => {
+    const p = processFor();
+    seedRecord(p.convoId);
+    const realWrite = fs.writeFileSync;
+    fs.writeFileSync = function (/** @type {any} */ file, /** @type {any[]} */ ...rest) {
+      if (String(file).endsWith('conversations.json')) throw new Error('disk full');
+      return realWrite.call(this, file, ...rest);
+    };
+    try {
+      assert.doesNotThrow(() => teamNotes.keepOutcomes(p.convoId, [refused]));
+    } finally {
+      fs.writeFileSync = realWrite;
+    }
+    p.send('did it work?');
+    assert.deepStrictEqual(p.written, [asWritten('did it work?')], 'the message, byte for byte, once storage works again');
+    assert.ok(!('teamOutcomes' in recordOf(p.convoId)), 'and the record holds none of them');
+    assert.ok(logged.some((l) => l.includes('[TeamNotes]') && l.includes('disk full')), `logged: ${JSON.stringify(logged)}`);
+  });
+
+  test('storing throws after keeping them: they are taken back, in memory and from the record', () => {
+    const p = processFor();
+    seedRecord(p.convoId);
+    const realStore = teamNotes.seams.store;
+    teamNotes.seams.store = (convoId, list) => { realStore(convoId, list); throw new Error('store broke after keeping'); };
+    assert.doesNotThrow(() => teamNotes.keepOutcomes(p.convoId, [refused]));
+    assert.ok(!('teamOutcomes' in recordOf(p.convoId)), 'the record holds none of them');
+    p.send('did it work?');
+    assert.deepStrictEqual(p.written, [asWritten('did it work?')], 'and the next message goes as written');
+    assert.ok(logged.some((l) => l.includes('[TeamNotes]') && l.includes('store broke after keeping')), `logged: ${JSON.stringify(logged)}`);
+  });
+
+  test('what was kept before a store that fails stays as it was, and is told', () => {
+    const p = processFor();
+    seedRecord(p.convoId);
+    teamNotes.keepOutcomes(p.convoId, [FIVE[0]]);
+    teamNotes.seams.store = () => { throw new Error('store broke'); };
+    teamNotes.keepOutcomes(p.convoId, [refused]);
+    assert.deepStrictEqual(recordOf(p.convoId).teamOutcomes, [FIVE[0]], 'the record holds what the earlier store kept');
+    p.send('well?');
+    assert.deepStrictEqual(p.contents(), [`${HEADING}\n- Saved (new): agent "helper", asked by Doc.\n\nwell?`]);
   });
 });
 
