@@ -4533,9 +4533,9 @@ fetchAgentNotice((agentNotice) => {
   // folder was allowed, landed where the app never reads, and reported
   // success. That is the silent failure the denial exists to prevent, in the
   // mode a developer is most likely to be running.
-  // Agents and skills are managed ONLY through the RUNDOCK:SAVE_AGENT /
+  // Agents and skills are managed ONLY through Doc's RUNDOCK:SAVE_AGENT /
   // RUNDOCK:SAVE_SKILL markers, which write into THIS workspace's .claude folder
-  // and refresh the UI. Deterministically deny any direct file edit to a
+  // and refresh the UI; another agent's markers are not acted on. Deterministically deny any direct file edit to a
   // .claude/agents or .claude/skills path, in the global ~/.claude (Claude
   // Code's native default, the branch just below) and in this workspace (after
   // the rest of the runtime home's, further below). Without the first, a
@@ -4550,7 +4550,7 @@ fetchAgentNotice((agentNotice) => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: "Rundock reads the agents and skills inside the open workspace, never the global ~/.claude copies, so this edit would land where the app never looks and change nothing it can see. Manage this workspace's agents and skills through the RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers (which write into this workspace and refresh the app), or edit the workspace's own .claude file."
+        permissionDecisionReason: "Rundock reads the agents and skills inside the open workspace, never the global ~/.claude copies, so this edit would land where the app never looks and change nothing it can see. Agents and skills in this workspace are changed only by Doc (rundock-guide), through its RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers. Hand the change to Doc, or ask the person to make it. In a routine, where nobody can be asked, say in your final message what you wanted to change."
       }
     }));
     process.exit(0);
@@ -4567,7 +4567,7 @@ fetchAgentNotice((agentNotice) => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: "Claude Code protects its own configuration folder, so it refuses this write whatever Rundock or you approve: approving it would still fail. Reading and listing that folder is unaffected. Agents, skills, routines and connectors for this workspace live in the workspace itself, which is where Rundock reads them from, so make the change there and it will take effect."
+        permissionDecisionReason: "Claude Code protects its own configuration folder, so it refuses this write whatever Rundock or you approve: approving it would still fail. Reading and listing that folder is unaffected. Routines and connectors for this workspace live in the workspace itself, which is where Rundock reads them from, so make the change there and it will take effect. Agents and skills in this workspace are changed only by Doc (rundock-guide): hand that change to Doc, or ask the person to make it."
       }
     }));
     process.exit(0);
