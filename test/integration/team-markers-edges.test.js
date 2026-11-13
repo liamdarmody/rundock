@@ -281,6 +281,44 @@ describe('a marker in a turn that does not end with a result is not acted on', (
       unseed('crash-target');
     }
   });
+
+  test('Doc\'s turn the person cancels changes nothing, even when the runtime finishes it after the cancel', async () => {
+    const convoId = h.freshConvoId('cancel');
+    seed('cancel-target', 'Before');
+    const before = fs.readFileSync(agentPath('cancel-target'));
+    // Long, so the reply's three copies in a whole turn (streamed, in the
+    // assistant message, in the result) outweigh everything else it writes.
+    const reply = `Removing it.\n${deleteMarker('cancel-target')}\n${'Still finishing. '.repeat(200)}`;
+    // The marker streams, then the turn waits for a file never written. The
+    // cancel's SIGTERM is what makes the runtime finish it.
+    h.writeScenario([{ match: { agent: 'rundock-guide', promptIncludes: 'CANCEL-TURN' },
+      holdAfterText: path.join(h.workspaceDir, `never-${convoId}`), finishOnSigterm: true, turn: [{ text: reply }] }]);
+    try {
+      const since = client.messages.length;
+      client.send({ type: 'chat', conversationId: convoId, agent: 'rundock-guide', content: 'CANCEL-TURN remove it' });
+      await client.waitFor((m) => m.type === 'stream_event' && m._conversationId === convoId && JSON.stringify(m).includes('cancel-target'), { since, label: 'the marker streamed' });
+      const child = h.internal.chatProcesses.get(convoId).process;
+      // The server's own child, closed once every byte it wrote has been read
+      // and handled.
+      const closed = new Promise((resolve) => child.once('close', resolve));
+      client.send({ type: 'cancel', conversationId: convoId });
+      await client.waitFor((m) => m.type === 'system' && m.subtype === 'cancelled' && m._conversationId === convoId, { since, label: 'the cancel' });
+      await closed;
+      const out = h.readStubOutputs().find((o) => o.pid === child.pid);
+      assert.ok(out, 'the runtime finished its turn and exited on its own');
+      assert.ok(out.stdoutBytes > 3 * reply.length, 'having written the whole turn, its result included');
+      // Everything the server sent before the child closed reaches this
+      // window before the answer to a message sent after it.
+      const asked = client.messages.length;
+      client.send({ type: 'get_runtime_status' });
+      await client.waitFor((m) => m.type === 'runtime_status', { since: asked, label: 'the answer sent after the close' });
+      assert.ok(fs.existsSync(agentPath('cancel-target')) && fs.readFileSync(agentPath('cancel-target')).equals(before), 'nothing was deleted or changed, byte for byte');
+      assert.deepStrictEqual(linesFor(client.messages.slice(since), convoId), [], 'no confirmation, and no line about the team at all');
+    } finally {
+      h.reapConvo(convoId);
+      unseed('cancel-target');
+    }
+  });
 });
 
 describe('when the decision fails, nothing is written and the next turn still works', () => {

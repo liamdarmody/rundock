@@ -112,11 +112,14 @@ describe('the turn that ended, as the agent its entry records', () => {
     assert.deepStrictEqual(deletes, ['example-agent']);
   });
 
-  test('a turn the person cancelled is not acted on, even if its result still arrives', () => {
+  test('a turn whose entry has exited is not acted on, even if its result still arrives', () => {
     const t = turnOf('rundock-guide');
     t.emit(wire.textDelta(MARKER));
-    // What the cancel handler does to the entry (process-control.js), before
-    // a result already in the pipe is read.
+    // The engine's half of a cancel: the flags the cancel handler sets on the
+    // entry (process-control.js), set here by hand, before a result already in
+    // the pipe is read. The cancel itself, sent through the real server and
+    // followed by the runtime finishing its turn, is tested in
+    // test/integration/team-markers-edges.test.js.
     t.entry.cancelled = true;
     t.entry.exited = true;
     t.emit(wire.messageStop(), wire.result(MARKER));
