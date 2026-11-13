@@ -410,12 +410,13 @@ describe('What the card shows', () => {
     try {
       client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'CANNOT-ASK change the team' });
       const prompt = await handBack('CANNOT');
-      const platform = (verb, name, past) => `Doc asked to ${verb} the agent "${name}", but Doc's own file and platform agents cannot be changed from a reply, so nothing was ${past}.`;
+      // Rundock's fixed reason for Doc's refusals, never the refusal's own message.
+      const platform = (past) => `Doc's own file and platform agents cannot be changed from a reply, so nothing was ${past}.`;
       for (const line of [
-        `- Refused: save agent "rundock-guide", asked by Doc. ${platform('save', 'rundock-guide', 'saved')}`,
-        `- Refused: delete agent "rundock-guide", asked by Doc. ${platform('delete', 'rundock-guide', 'deleted')}`,
-        `- Refused: save agent "existing-platform", asked by Doc. ${platform('save', 'existing-platform', 'saved')}`,
-        `- Refused: save agent "proposed-platform", asked by Doc. ${platform('save', 'proposed-platform', 'saved')}`,
+        `- Refused: save agent "rundock-guide", asked by Doc. ${platform('saved')}`,
+        `- Refused: delete agent "rundock-guide", asked by Doc. ${platform('deleted')}`,
+        `- Refused: save agent "existing-platform", asked by Doc. ${platform('saved')}`,
+        `- Refused: save agent "proposed-platform", asked by Doc. ${platform('saved')}`,
         '- Failed: delete agent "existing-platform", asked by Doc. Cannot delete platform agents.',
         '- Failed: save agent "Bad_Name", asked by Doc. Invalid agent name. Use lowercase letters, numbers, and hyphens only.',
       ]) assert.ok(prompt.includes(line), `the hand-back says: ${line}`);

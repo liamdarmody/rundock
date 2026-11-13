@@ -360,7 +360,11 @@ describe('the ordinary files beside them are unchanged', { skip: SKIP }, () => {
     test(`a write to each is ordinary work (${label} mode)`, async () => {
       for (const rel of NEIGHBOURS) {
         const w = await fx.judge(world, capture, deadPort, { tool: 'Write', input: { file_path: path.join(world.ws, rel), content: 'x' }, cwd: world.ws, codeMode });
-        assert.strictEqual(w.cls, 'runs', `${label}: Write ${rel} is allowed at once, as before`);
+        // The workspace's agents and skills are changed only by Doc, so a file
+        // tool is refused there with no card (isWorkspaceTeamFolderEdit); a
+        // shell write is not that refusal's, and is judged as before.
+        if (/^\.claude[\\/](agents|skills)[\\/]/.test(rel)) assert.strictEqual(w.cls, 'refused', `${label}: Write ${rel} is refused, with no card`);
+        else assert.strictEqual(w.cls, 'runs', `${label}: Write ${rel} is allowed at once, as before`);
         const b = await fx.judge(world, capture, deadPort, { tool: 'Bash', input: { command: `echo x > ${rel}` }, cwd: world.ws, codeMode });
         assert.ok(!isAnswerFileRequest(b.payload), `${label}: echo x > ${rel} is not an answer file`);
         if (codeMode) assert.strictEqual(b.cls, 'runs', `Code: echo x > ${rel} runs, as before`);
