@@ -14,10 +14,14 @@
 // measured inside every box that clips it and the viewport, since DOM text
 // passes even when CSS hides the end. Nothing is written until the person
 // presses Allow on it; then the file on disk is the file the card showed.
+// And with another conversation on screen when the card arrives: Doc's reply
+// is held until the second conversation is open, the card is not drawn there,
+// and it is drawn in the conversation that brought Doc in once the person
+// switches back, where Allow on it writes the file.
 //
-// IN CONVERSATIONS OF ITS OWN, deleted afterwards: the specs share one server
-// and one workspace. The agent file it causes is removed afterwards, and the
-// roster is read until it no longer lists it.
+// IN CONVERSATIONS OF THEIR OWN, deleted afterwards: the specs share one server
+// and one workspace. The agent files they cause are removed afterwards, and the
+// roster is read until it no longer lists them.
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -27,6 +31,7 @@ const credentials = require('./credentials.js');
 const PORT = Number(process.env.E2E_PORT || 34517);
 const STUB_VERSION = '2.1.318-stub';
 const NAME = 'example-handoff-helper';
+const OTHER = 'example-handoff-later';
 
 function overWs(fn) {
   return new Promise((resolve, reject) => {
@@ -44,8 +49,9 @@ function overWs(fn) {
 }
 
 let workspace = null;
-const agentFilePath = () => path.join(workspace, '.claude', 'agents', `${NAME}.md`);
+const agentFilePath = (name = NAME) => path.join(workspace, '.claude', 'agents', `${name}.md`);
 const scenarioFile = () => path.join(workspace, 'stub-scenario.json');
+const gateFile = () => path.join(workspace, 'team-handoff-card-e2e.gate');
 
 test.beforeAll(async () => {
   workspace = await overWs(async ({ send, waitFor }) => {
@@ -60,11 +66,11 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   if (!workspace) return;
-  for (const f of [scenarioFile(), agentFilePath()]) fs.rmSync(f, { force: true });
+  for (const f of [scenarioFile(), gateFile(), agentFilePath(NAME), agentFilePath(OTHER)]) fs.rmSync(f, { force: true });
   await expect.poll(() => overWs(async ({ send, waitFor }) => {
     send({ type: 'get_agents' });
     const roster = await waitFor((m) => m.type === 'agents');
-    return roster.agents.some((a) => a.id === NAME || a.name === NAME);
+    return roster.agents.some((a) => [NAME, OTHER].includes(a.id) || [NAME, OTHER].includes(a.name));
   }), { timeout: 15000 }).toBe(false);
 });
 
@@ -159,5 +165,67 @@ test('Doc brought in by the orchestrator: its save is a card in that conversatio
   } finally {
     fs.rmSync(scenarioFile(), { force: true });
     if (first) await page.evaluate((c) => deleteConversation(c, { stopPropagation() {} }), first).catch(() => {});
+  }
+});
+
+const laterFile = [
+  '---', `name: ${OTHER}`, 'displayName: Example Later', 'role: Example Specialist', 'type: specialist', 'order: 9', 'tools: Read', '---',
+  '', 'You are the later example helper.',
+].join('\n');
+
+test('another conversation on screen when the card arrives: no card there, and the card is drawn in its own conversation on return, where Allow writes', async ({ page }) => {
+  expect(workspace, 'the server must resolve the stub runtime, or nothing may be sent').toBeTruthy();
+  // Doc's reply waits for the gate file, so the second conversation is on
+  // screen before the card can be raised.
+  fs.writeFileSync(scenarioFile(), JSON.stringify({ rules: [
+    { match: { agent: 'rundock-guide', promptIncludes: 'HANDOFF-SWITCH-E2E-BRIEF' }, untilFile: gateFile(),
+      turn: [{ text: `HANDOFF-SWITCH-E2E-DONE made it.\n<!-- RUNDOCK:SAVE_AGENT name=${OTHER} -->\n${laterFile}\n<!-- /RUNDOCK:SAVE_AGENT -->` }] },
+    { match: { promptIncludes: '[SYSTEM: pipeline-complete]' }, turn: [{ text: '<silent>' }] },
+    { match: { promptIncludes: 'HANDOFF-SWITCH-E2E-ASK', promptExcludes: 'DELEGATION BRIEF' },
+      turn: [{ agentTool: { subagent_type: 'rundock-guide', description: 'Bringing in Doc.', prompt: 'HANDOFF-SWITCH-E2E-BRIEF add the helper' } }] },
+  ] }));
+  const received = [];
+  page.on('websocket', (socket) => socket.on('framereceived', (f) => { try { received.push(JSON.parse(f.payload)); } catch (e) { /* not JSON */ } }));
+  const cards = page.locator('#messages .msg-permission');
+  let first = null;
+  let second = null;
+  try {
+    await page.goto('/');
+    await expect(page.locator('.convo-item').first()).toBeVisible();
+    first = await page.evaluate(() => createConversation('default', 'Hand-off card switch e2e').id);
+    await page.locator('#msg-input').fill('HANDOFF-SWITCH-E2E-ASK add a helper');
+    await page.locator('#send-btn').click();
+    await expect.poll(() => received.some((m) => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === first && m._agent === 'rundock-guide'),
+      { timeout: 15000 }).toBe(true);
+
+    // Another conversation on screen, then Doc's reply and its card.
+    second = await page.evaluate(() => createConversation('default', 'Hand-off card other e2e').id);
+    await expect.poll(() => page.evaluate(() => activeConversation && activeConversation.id)).toBe(second);
+    fs.writeFileSync(gateFile(), '');
+    const asked = () => received.find((m) => m.type === 'control_request' && m._conversationId === first && m.request && m.request.tool_name === 'SaveAgent');
+    await expect.poll(() => Boolean(asked()), { timeout: 10000 }).toBe(true);
+    const requestId = asked().request_id;
+    // Once the window has taken the request, wherever it put it, counted at
+    // once: a retried count would pass when the card times out and goes.
+    await expect.poll(() => page.evaluate((id) => Boolean(document.getElementById(`perm-${id}`)
+      || RundockPermissions.findPendingPermission(pendingPermissionsByConvo, id)), requestId)).toBe(true);
+    expect(await cards.count(), 'no card is drawn in the conversation on screen').toBe(0);
+    expect(fs.existsSync(agentFilePath(OTHER)), 'nothing is written while the card waits').toBe(false);
+
+    // Back in the conversation that brought Doc in: the card is there, and
+    // Allow on it writes. The e2e server times a card out after six seconds.
+    await page.evaluate((id) => openConversation(id), first);
+    const card = cards.filter({ hasText: `Add the agent ${OTHER}` });
+    await expect(card, 'the card is drawn in the conversation that brought Doc in').toHaveCount(1);
+    await expect(card.locator('.permission-context')).toContainText('brought Doc in, and Doc asked Rundock to add this agent');
+    await card.locator('[data-perm-action="allow"]').click();
+    await expect.poll(() => fs.existsSync(agentFilePath(OTHER)), { timeout: 10000 }).toBe(true);
+    expect(fs.readFileSync(agentFilePath(OTHER), 'utf-8'), 'the file written is the file the card showed').toBe(laterFile);
+    await expect.poll(() => received.some((m) => m.type === 'agent_saved' && m.agentId === OTHER && m.conversationId === first)).toBe(true);
+  } finally {
+    for (const f of [scenarioFile(), gateFile()]) fs.rmSync(f, { force: true });
+    for (const id of [first, second]) {
+      if (id) await page.evaluate((c) => deleteConversation(c, { stopPropagation() {} }), id).catch(() => {});
+    }
   }
 });
