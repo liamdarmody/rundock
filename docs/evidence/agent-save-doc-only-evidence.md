@@ -177,3 +177,109 @@ Each file run on its own with `node --test`, all passing:
 `npx playwright test test/e2e/agent-file-without-marker.spec.js
 test/e2e/history-marker-strip.spec.js test/e2e/connector-cards.spec.js` at
 `c38750e8`: 13 passed.
+
+## Fix round
+
+Taken on 2026-11-13 on macOS with Node 24.12.0, starting from `5be92f6e`
+(main merged in, the commits above below it). Its commits:
+
+- `9e4877ab`: Doc's `SAVE_AGENT` over an existing agent file that declares
+  `type: platform` is refused, whatever the new content declares
+  (`lib/agents/team-markers.js`).
+- `7bdedb19`: an agent or skill file is written once, whole, through
+  `writeWhole` (`lib/workspace/scaffold.js`), so a write that fails at any
+  step leaves the original bytes, or no new file
+  (`lib/protocol/handlers/team.js`). **The final code commit.**
+- `6383c6c6`: the routine test reads the files only once the run has ended.
+- `5be4458f`: the cancelled turn is cancelled through the server, and the
+  stub runtime finishes the turn after the cancel (two new scenario options
+  in `test/helpers/stub-claude/claude`).
+
+### Red first
+
+**"Doc's SAVE_AGENT replacing it with specialist content is refused, and the
+file is unchanged" (`test/integration/team-markers-edges.test.js`), against
+the code at `5be92f6e`:** failed, the first line about the team was
+`agent_saved`, not the refusal: the platform agent had been replaced. Its
+companion, "Doc's DELETE_AGENT of it is refused, and the file is unchanged",
+passed: the delete handler already refuses a platform agent, and the test
+pins that through the marker path.
+
+**The four tests in "a write that fails partway leaves the agents and skills
+as they were", against the handlers at `5be92f6e`: 4 failed.** Each lists
+what every failing step left wrong:
+
+- a new agent missing type and order: steps 1 and 2 each left
+  `.claude/agents/partway-made.md` behind. Step 2 is the second write, made
+  after the first had completed.
+- an existing agent: step 1 changed the file.
+- a new skill: step 2 left the skill's folder and `SKILL.md` behind.
+- an existing skill: step 1 changed the file.
+
+At `7bdedb19` each change has four steps that can fail (five for a new
+skill, whose folder is made first), and none of them leaves anything.
+
+**The routine test and the cancel test could not fail against `5be92f6e`.**
+The behavior they measure was already right there: a routine's output is
+never read, and a cancel marks the entry exited before a result still in the
+pipe is read. The code they run (`lib/scheduler.js`,
+`lib/delegation/engine.js`, `lib/protocol/handlers/process-control.js`) is
+the same at `5be92f6e` and at the head. Each was seen failing under a break
+that makes that behavior wrong, a break the test it replaces did not catch:
+
+- The scheduler acting on a routine's reply as its agent's when the run ends
+  (`lib/scheduler.js`): "a routine run by Doc changes nothing, read once the
+  run has ended" failed, "nothing was deleted or changed, byte for byte". The
+  routine test as it was at `5be92f6e` also failed while its routine was
+  fast; given a routine slower than its 600 ms wait (800 ms, as the new
+  test's routine is), it passed under the same break.
+- The cancel handler no longer marking the entry cancelled and exited
+  (`lib/protocol/handlers/process-control.js`): "Doc's turn the person
+  cancels changes nothing, even when the runtime finishes it after the
+  cancel" failed, "nothing was deleted or changed, byte for byte": the result
+  the runtime wrote after the cancel was acted on. The unit test that sets
+  those flags by hand, now titled "a turn whose entry has exited is not acted
+  on, even if its result still arrives", passed under the same break (9 of
+  9).
+
+### Deliberate breaks
+
+Applied to the committed code at `5be4458f`, the named files run, and the
+code checked out again. The first eight are the rows above that touch the
+code this section changed, run again; the last four are new.
+
+| Break | File | Run | Failed | Caught by |
+|---|---|---|---|---|
+| The author check removed | `lib/agents/team-markers.js` | `team-markers.test.js`, `team-markers-edges.test.js` | 5 of 10, 9 of 23 | the three "writing each of the five markers" cases, the resolved id, and the reply claiming to be Doc; in the edges file, another agent declaring `type: platform`, both Codex cases, both author lookup cases, and the retry, inverse, undo and next-step sequences |
+| The author taken from the reply text or a marker attribute | `lib/agents/team-markers.js` | `team-markers.test.js` | 1 of 10 | "a reply that claims to be Doc, from a process that is not Doc, is refused" |
+| The author taken from the conversation's current process | `lib/agents/team-markers.js` | `team-markers-turn.test.js` | 2 of 9 | "Doc's turn is Doc's even when the conversation's current process is another agent", "another agent's turn is refused even when the conversation's current process is Doc" |
+| The platform-identity refusal removed | `lib/agents/team-markers.js` | `team-markers.test.js`, `team-markers-edges.test.js`, `team-markers-turn.test.js` | 1 of 10, 1 of 23, 1 of 9 | "Doc's own markers cannot write Doc's file or any platform agent", "Doc's SAVE_AGENT replacing it with specialist content is refused, and the file is unchanged", "the refusal of Doc's marker for its own file or a platform agent" |
+| An author lookup failure treated as allowed | `lib/agents/team-markers.js` | `team-markers-edges.test.js` | 2 of 23 | "the author lookup finds nobody", "the author lookup throws" |
+| A scan failure treated as allowed | `lib/agents/team-markers.js` | `team-markers-edges.test.js` | 1 of 23 | "the scan throws" |
+| The scan run once per open window (twice, with two open) | `lib/agents/team-markers.js` | `team-markers-edges.test.js` | 8 of 23 | "two windows: Doc's marker writes once, and each window is told once", the next-step sequence, both existing platform agent cases, and the four failing-write cases |
+| The refusal broadcast removed | `lib/agents/team-markers.js` | `team-markers.test.js` | 6 of 10 | the three "writing each of the five markers" cases, the resolved id, the reply claiming to be Doc, and Doc's own file or a platform agent |
+| The check of the existing file's type removed | `lib/agents/team-markers.js` | `team-markers.test.js`, `team-markers-edges.test.js`, `team-markers-turn.test.js` | 0 of 10, 1 of 23, 0 of 9 | "Doc's SAVE_AGENT replacing it with specialist content is refused, and the file is unchanged" |
+| The agent written in place, then written again with its type and order | `lib/protocol/handlers/team.js` | `team-markers-edges.test.js`, `team-markers.test.js` | 2 of 23, 0 of 10 | "a new agent missing type and order: no failing step leaves a file, and the next turn writes it", "an existing agent: no failing step changes its bytes" |
+| The skill written in place | `lib/protocol/handlers/team.js` | `team-markers-edges.test.js` | 2 of 23 | "a new skill: no failing step leaves a file or its folder", "an existing skill: no failing step changes its bytes" |
+| A new skill's folder kept when its write fails | `lib/protocol/handlers/team.js` | `team-markers-edges.test.js` | 1 of 23 | "a new skill: no failing step leaves a file or its folder" |
+
+### Tests run at the head
+
+Each file run on its own with `node --test` at `5be4458f`, all passing:
+`test/integration/team-markers.test.js` (10), `team-markers-edges.test.js`
+(23), `delegation.test.js` (25), `http-api.test.js` (44),
+`smoke-plan.test.js` (12), `chat-basic.test.js` (11),
+`conversation-metadata.test.js` (9), `delegation-chain-edges.test.js` (8),
+`runtime-status.test.js` (5), `search.test.js` (24),
+`team-membership.test.js` (5), `ws-handler-edges.test.js` (11),
+`run-now.test.js` (1); `test/unit/team-markers-turn.test.js` (9),
+`protocol-handlers-lib.test.js` (69), `approve-once.test.js` (36),
+`doc-claims.test.js` (115), `marker-pill-routing.test.js` (13),
+`package-import-protocol.test.js` (38), `regression.test.js` (24),
+`claude-cli-agent-load.test.js` (44), `stream-truth.test.js` (19),
+`stub-claude-matches-cli.test.js` (19), `stub-claude-tool-rules.test.js`
+(11). `team-markers-edges.test.js` was run three more times in a row, passing
+each time.
+
+`test/e2e/agent-file-without-marker.spec.js` was not run for this section:
+the browser could not start where these runs were made.
