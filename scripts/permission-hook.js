@@ -505,9 +505,11 @@ function isMcpDeleteTool(toolName) {
 // (~/.claude/agents, ~/.claude/skills). Rundock never reads the global folder,
 // so such an edit would silently succeed somewhere invisible to the app: the
 // reported bug where an agent "updated" and nothing changed, surviving a
-// restart. Workspace .claude edits are deliberately NOT blocked (the workspace
-// is the agent's own domain, and those land in the file the app reads); the
-// SAVE_AGENT / SAVE_SKILL markers remain the way to get a live UI refresh.
+// restart. The workspace's own .claude/agents and .claude/skills are refused
+// to these tools too (isWorkspaceTeamFolderEdit): agents and skills there are
+// changed only by Doc's SAVE_AGENT / SAVE_SKILL markers, and a file tool in a
+// routine, which runs with no permission prompts, could otherwise rewrite an
+// agent's instructions for its next run.
 const CLAUDE_EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 // The refusal's own names, for a test to bind to mechanically.
 const REFUSED_CLAUDE_EDIT_DIRS = ['agents', 'skills'];
@@ -578,6 +580,38 @@ function isRuntimeHomeSurfaceEdit(toolName, toolInput, home = os.homedir(), fold
   // would fail a test rather than silently convert a secrets card into a
   // refusal.
   return isPersistenceSurface(resolved, home, foldsCase);
+}
+
+// A FILE-TOOL WRITE INTO THE WORKSPACE'S OWN AGENTS OR SKILLS IS REFUSED, in
+// every run. Agents and skills in a workspace are changed only by Doc
+// (rundock-guide), whose save markers the server acts on. Claude Code refuses
+// these writes itself in a conversation, but a routine runs it with
+// --dangerously-skip-permissions, and there a Write into the agents folder
+// went ahead and changed an agent's instructions for its next run. The
+// comparison is isProtectedClaudeEdit's, against the workspace's .claude, so a
+// variant spelling, a symlinked workspace and a target whose folder does not
+// exist yet reach the same answer. A relative target is resolved against the
+// workspace, as classifyFileAccess resolves it. Every path field the input
+// carries is checked, not the first one present: the runtime writes the field
+// its tool names and the classifier reads that one, so a NotebookEdit naming a
+// note in file_path and an agent in notebook_path must be refused here, or the
+// classifier allows the agent write as in-workspace access. Nothing here
+// catches a throw: one reaches the handlers at the top of this file, which
+// refuse the call. The seam is for a test to make the check throw
+// (workspace-team-folders.test.js).
+const teamFolderSeam = { beforeChecking() {} };
+function isWorkspaceTeamFolderEdit(toolName, toolInput, workspaceRoot, foldsCase = hostFoldsCase()) {
+  if (!CLAUDE_EDIT_TOOLS.has(toolName)) return false;
+  const ti = toolInput || {};
+  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);
+  return targets.some((target) => {
+    teamFolderSeam.beforeChecking(target);
+    const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);
+    return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {
+      const folder = foldCase(canonicalize(path.join(workspaceRoot, '.claude', d)), foldsCase);
+      return t === folder || t.startsWith(folder + path.sep);
+    });
+  });
 }
 
 // Workspace file-access boundary (the rule: anything outside the workspace
@@ -4009,6 +4043,7 @@ module.exports = {
   boundaryCrossingsFor, CODE_READS_ALLOWED, UNATTENDED_NEXT_UNLOADED,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
+  isWorkspaceTeamFolderEdit, teamFolderSeam,
 };
 
 if (require.main === module) main();
@@ -4239,8 +4274,8 @@ fetchAgentNotice((agentNotice) => {
     } catch (e) { return []; }
   }());
   const extraDirs = [...new Set([...bornWith, ...namedSince])];
-  // A WORKSPACE OPENED UNDER THE RUNTIME HOME IS STILL A WORKSPACE. Both
-  // refusals below are about reaching the runtime's own configuration from
+  // A WORKSPACE OPENED UNDER THE RUNTIME HOME IS STILL A WORKSPACE. The two
+  // runtime-home refusals below are about reaching its own configuration from
   // somewhere else; neither is about the folder a person deliberately opened.
   // Someone authoring a plugin in `~/.claude/plugins/my-plugin` writes
   // ordinary files there, and without this the refusals would deny every one
@@ -4272,12 +4307,15 @@ fetchAgentNotice((agentNotice) => {
   // Agents and skills are managed ONLY through the RUNDOCK:SAVE_AGENT /
   // RUNDOCK:SAVE_SKILL markers, which write into THIS workspace's .claude folder
   // and refresh the UI. Deterministically deny any direct file edit to a
-  // .claude/agents or .claude/skills path, in the workspace OR the global
-  // ~/.claude (Claude Code's native default). Without this, a direct edit
-  // silently succeeds in the wrong place: an edit to the global agents folder
-  // that Rundock never reads, leaving the user told "done" while the workspace
-  // file, and the profile panel, never changed. This is enforcement, not a
-  // prompt: the wrong path can no longer look like a success.
+  // .claude/agents or .claude/skills path, in the global ~/.claude (Claude
+  // Code's native default, the branch just below) and in this workspace (after
+  // the rest of the runtime home's, further below). Without the first, a
+  // direct edit silently succeeds in the wrong place: an edit to the global
+  // agents folder that Rundock never reads, leaving the user told "done"
+  // while the workspace file, and the profile panel, never changed. Without
+  // the second, a routine, which runs with no permission prompts, could
+  // rewrite an agent's instructions for its next run. This is enforcement,
+  // not a prompt: the wrong path can no longer look like a success.
   if (!targetInsideWorkspace && isProtectedClaudeEdit(data.tool_name, data.tool_input)) {
     writeDecision(({
       hookSpecificOutput: {
@@ -4301,6 +4339,22 @@ fetchAgentNotice((agentNotice) => {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
         permissionDecisionReason: "Claude Code protects its own configuration folder, so it refuses this write whatever Rundock or you approve: approving it would still fail. Reading and listing that folder is unaffected. Agents, skills, routines and connectors for this workspace live in the workspace itself, which is where Rundock reads them from, so make the change there and it will take effect."
+      }
+    }));
+    process.exit(0);
+  }
+
+  // The workspace's own agents and skills folders (isWorkspaceTeamFolderEdit),
+  // refused before any saved answer, folder grant or mode, in every run.
+  if (isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot)) {
+    const refused = "Agents and skills in this workspace are changed only by Doc (rundock-guide), Rundock's built-in agent, so this write into the workspace's .claude/agents or .claude/skills folder was refused. The refusal is deliberate: do not retry it or try another way.";
+    writeDecision(({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: unattendedRun()
+          ? `${refused} Say in your final message what you wanted to change. ${UNATTENDED_NEXT_UNLOADED}`
+          : `${refused} Hand the change to Doc, or ask the person to make it.`,
       }
     }));
     process.exit(0);
