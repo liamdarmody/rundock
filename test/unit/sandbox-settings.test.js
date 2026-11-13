@@ -670,3 +670,165 @@ describe('the record of the startup files, in either spelling', () => {
     } finally { delete process.env.ZDOTDIR; }
   });
 });
+
+// What a workspace does with a block the other way of running wrote: the next
+// reconcile rewrites it as this run writes it, and the switch stays Rundock's
+// throughout. The same real reconcile the open path and the switch use.
+describe('the record of the startup files, through the reconcile', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const scaffold = require('../../lib/workspace/scaffold.js');
+  const { exposureRecordPath } = require('../../scripts/permission-hook.js');
+  const settingsOf = (dir) => path.join(dir, '.claude', 'settings.local.json');
+  const read = (dir) => fs.readFileSync(settingsOf(dir), 'utf-8');
+  const blockOf = (dir) => JSON.parse(read(dir)).sandbox;
+  // What this run writes for the workspace, exactly as its reconcile computes it.
+  const desired = (dir) => sandboxSettings(dir, 'darwin', os.homedir(), scaffold.tempRoots(), scaffold.workingFoldersFor(dir), scaffold.sandboxShapeFor(dir));
+  // A workspace opened by a source run, with the switch at `on`.
+  function opened(srv, state = { workspaceMode: 'notes', sandboxSwitch: 'on' }) {
+    const { makeWorkspace } = require('../helpers/workspace.js');
+    const dir = makeWorkspace({ claudeMd: '# x' });
+    fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.rundock', 'state.json'), JSON.stringify(state, null, 2));
+    srv.setWorkspace(dir);
+    srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+    return dir;
+  }
+  function replaceBlock(dir, sandbox) {
+    const settings = JSON.parse(read(dir));
+    settings.sandbox = sandbox;
+    fs.writeFileSync(settingsOf(dir), JSON.stringify(settings, null, 2));
+  }
+
+  test('the next write uses this run\'s record path, and this run then recognises the block byte for byte', () => {
+    const { _internal: srv } = require('../../server.js');
+    const { cleanup } = require('../helpers/workspace.js');
+    try {
+      // The app wrote it; a source run opens the workspace.
+      let dir = opened(srv);
+      const fresh = read(dir);
+      assert.strictEqual(JSON.stringify(blockOf(dir)), JSON.stringify(desired(dir)), 'sanity: the open wrote this run\'s block');
+      replaceBlock(dir, asApp(() => desired(dir)));
+      assert.ok(blockOf(dir).filesystem.denyWrite.includes(asApp(() => exposureRecordPath())), 'sanity: the app\'s record path is in the block');
+      srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+      assert.ok(blockOf(dir).filesystem.denyWrite.includes(exposureRecordPath()), 'the open wrote this run\'s record path');
+      assert.strictEqual(read(dir), fresh, 'and the whole file is what this run wrote, byte for byte');
+      assert.strictEqual(isRundockSandbox(blockOf(dir)), true, 'which this run recognises');
+
+      // A source run wrote it; the app's reconcile meets it.
+      dir = opened(srv);
+      const fromSource = blockOf(dir);
+      asApp(() => scaffold.reconcileSandboxForMode(dir, scaffold.sandboxShapeFor(dir), 'darwin'));
+      const rewritten = blockOf(dir);
+      assert.ok(rewritten.filesystem.denyWrite.includes(asApp(() => exposureRecordPath())), 'the app\'s reconcile wrote the app\'s record path');
+      assert.ok(!rewritten.filesystem.denyWrite.includes(exposureRecordPath()), 'in place of the checkout\'s');
+      assert.strictEqual(JSON.stringify(rewritten), JSON.stringify(asApp(() => desired(dir))), 'the block is the one the app writes, byte for byte');
+      assert.notStrictEqual(JSON.stringify(rewritten), JSON.stringify(fromSource), 'sanity: it was rewritten');
+      assert.strictEqual(asApp(() => isRundockSandbox(rewritten)), true, 'which the app recognises');
+    } finally { cleanup(); }
+  });
+
+  test('the undo: a block a source run wrote, rewritten by the app, then read by a source run again, is recognised at each step', () => {
+    const { _internal: srv } = require('../../server.js');
+    const { cleanup } = require('../helpers/workspace.js');
+    const { sandboxStatus } = require('../../lib/workspace/sandbox-status.js');
+    try {
+      const dir = opened(srv);
+      const fromSource = read(dir);
+      const managed = () => sandboxStatus(dir, 'darwin').managed;
+      assert.strictEqual(isRundockSandbox(blockOf(dir)), true, 'written by source, read by source');
+      assert.strictEqual(asApp(() => isRundockSandbox(blockOf(dir))), true, 'written by source, read by the app');
+      assert.strictEqual(asApp(managed), true, 'and the app shows the switch as Rundock\'s');
+      asApp(() => scaffold.reconcileSandboxForMode(dir, scaffold.sandboxShapeFor(dir), 'darwin'));
+      assert.notStrictEqual(read(dir), fromSource, 'sanity: the app rewrote it');
+      assert.strictEqual(asApp(() => isRundockSandbox(blockOf(dir))), true, 'rewritten by the app, read by the app');
+      assert.strictEqual(isRundockSandbox(blockOf(dir)), true, 'rewritten by the app, read by source');
+      assert.strictEqual(managed(), true, 'and a source run shows the switch as Rundock\'s');
+      srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+      assert.strictEqual(read(dir), fromSource, 'opened from source again, it is back to what source wrote, byte for byte');
+      assert.strictEqual(isRundockSandbox(blockOf(dir)), true, 'and read by source');
+    } finally { cleanup(); }
+  });
+
+  test('the retry: recognising the same block twice gives the same answer and changes nothing', () => {
+    for (const { name, read: as, other } of READERS) {
+      for (const shape of SHAPES) {
+        for (const [block, answer] of [[other(shape), true], [edited(other(shape), (deny, at) => { deny[at] = 'rundock/.startup-file-exposure.json'; }), false]]) {
+          const before = JSON.stringify(block);
+          assert.strictEqual(as(() => isRundockSandbox(block)), answer, `${name}, ${shape}: first`);
+          assert.strictEqual(as(() => isRundockSandbox(block)), answer, `${name}, ${shape}: second, the same`);
+          assert.strictEqual(JSON.stringify(block), before, `${name}, ${shape}: the block is unchanged`);
+        }
+      }
+    }
+    // And on disk: asking twice writes nothing.
+    const { _internal: srv } = require('../../server.js');
+    const { cleanup } = require('../helpers/workspace.js');
+    const { sandboxStatus } = require('../../lib/workspace/sandbox-status.js');
+    try {
+      const dir = opened(srv);
+      replaceBlock(dir, asApp(() => desired(dir)));
+      const before = read(dir);
+      assert.strictEqual(sandboxStatus(dir, 'darwin').managed, true, 'first');
+      assert.strictEqual(sandboxStatus(dir, 'darwin').managed, true, 'second, the same');
+      assert.strictEqual(read(dir), before, 'and the file is unchanged');
+    } finally { cleanup(); }
+  });
+
+  test('the most common next step: switching Notes and Code after recognition writes the right shape and keeps the switch Rundock\'s', () => {
+    const { _internal: srv } = require('../../server.js');
+    const { cleanup } = require('../helpers/workspace.js');
+    const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
+    const { sandboxStatus } = require('../../lib/workspace/sandbox-status.js');
+    const sent = [];
+    const ws = { send: (m) => sent.push(JSON.parse(m)), readyState: 1 };
+    try {
+      for (const [from, to, sandboxSwitch] of [['notes', 'code', 'on'], ['code', 'notes', 'off']]) {
+        const dir = opened(srv, { workspaceMode: from, sandboxSwitch });
+        replaceBlock(dir, asApp(() => desired(dir)));
+        assert.strictEqual(sandboxStatus(dir, 'darwin').managed, true, `${from}: the app's block is recognised`);
+        buildDispatch().set_workspace_mode({}, ws, { mode: to }, 'darwin');
+        assert.deepStrictEqual(sent.pop(), { type: 'workspace_mode_changed', mode: to }, `${from} to ${to}: changed`);
+        assert.strictEqual(sandboxStatus(dir, 'darwin').managed, true, `${from} to ${to}: the switch is still Rundock's`);
+        srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+        assert.strictEqual(JSON.stringify(blockOf(dir)), JSON.stringify(desired(dir)), `${from} to ${to}: the next open writes this run's ${sandboxSwitch} shape`);
+        assert.strictEqual(blockOf(dir).enabled, sandboxSwitch === 'on', `${from} to ${to}: the switch decides the shape, not the mode`);
+        // And the switch itself still works.
+        buildDispatch().set_workspace_sandbox({}, ws, { on: sandboxSwitch !== 'on' }, 'darwin');
+        const reply = sent.pop();
+        assert.strictEqual(reply.error, undefined, `${from} to ${to}: flipping the switch is not refused`);
+        assert.strictEqual(reply.managed, true, `${from} to ${to}: and it stays Rundock's`);
+        assert.strictEqual(JSON.stringify(blockOf(dir)), JSON.stringify(desired(dir)), `${from} to ${to}: the flip wrote this run's shape`);
+      }
+    } finally { cleanup(); }
+  });
+
+  test('the control failing: a deny list that is not an array, holds null, or holds a very long string is not recognised, and nothing throws', () => {
+    const long = 'x'.repeat(1_000_000);
+    for (const { name, read: as, other } of READERS) {
+      for (const shape of SHAPES) {
+        const base = other(shape);
+        const at = base.filesystem.denyWrite.findIndex((e) => e === RECORD || e === APP_RECORD);
+        const variants = [
+          ['not an array: null', (b) => { b.filesystem.denyWrite = null; }],
+          ['not an array: a string', (b) => { b.filesystem.denyWrite = long; }],
+          ['not an array: an object', (b) => { b.filesystem.denyWrite = { ...b.filesystem.denyWrite }; }],
+          ['not an array: a number', (b) => { b.filesystem.denyWrite = 36; }],
+          ['null for the record', (b) => { b.filesystem.denyWrite[at] = null; }],
+          ['null for another entry', (b) => { b.filesystem.denyWrite[0] = null; }],
+          ['nothing but null', (b) => { b.filesystem.denyWrite = [null]; }],
+          ['a very long string for the record', (b) => { b.filesystem.denyWrite[at] = long; }],
+          ['a very long absolute path for the record', (b) => { b.filesystem.denyWrite[at] = `/${long}`; }],
+          ['a very long string for another entry', (b) => { b.filesystem.denyWrite[3] = long; }],
+        ];
+        for (const [why, edit] of variants) {
+          const block = JSON.parse(JSON.stringify(base));
+          edit(block);
+          let ours;
+          assert.doesNotThrow(() => { ours = as(() => isRundockSandbox(block)); }, `${name}, ${shape}: ${why}: nothing throws`);
+          assert.strictEqual(ours, false, `${name}, ${shape}: ${why}: not recognised`);
+        }
+      }
+    }
+  });
+});
