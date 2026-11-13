@@ -168,10 +168,10 @@ function main() {
   fs.rmSync(tmp, { recursive: true, force: true });
 
   // This machine's folders are written as placeholders, so the output names
-  // nobody's home: the made-up workspace's root, and the temp folder the
-  // tests make their own under.
+  // nobody's home: the made-up workspace, its home and its root, and the temp
+  // folder the tests make their own under.
   const temps = [...new Set([fs.realpathSync(os.tmpdir()), os.tmpdir()])].sort((a, b) => b.length - a.length);
-  const scrub = (text) => temps.reduce((t, d) => t.split(d).join('<tmp>'), text.split(tmp).join('<root>'));
+  const scrub = (text) => temps.reduce((t, d) => t.split(d).join('<tmp>'), text.split(ws).join('<ws>').split(home).join('<home>').split(tmp).join('<root>'));
   const show = (text) => { const line = scrub(text); return JSON.stringify(line.length > 120 ? `${line.slice(0, 120)}...` : line); };
   const out = [`base ${baseSha}, head ${headSha}${changed ? ' with the hook changed in the working tree' : ''}`];
   out.push(`${compared} answers from ${lines.length} lines (${recorded.length} recorded, ${MOVES.length + KEPT.length} named), each in Notes and Code mode: ${moved.filter(m => m.from === 'lines').length} move`);
