@@ -74,7 +74,7 @@ checked out from `59072687`,** then checked out from `HEAD` again:
 
 **Not run red first.** `test/e2e/team-handoff-card.spec.js`: Chromium cannot
 start in the sandbox these runs were taken in, so the browser test was not
-run here, red or green. CI runs it.
+run red first. It was run green outside the sandbox at the head (below).
 
 ## Deliberate breaks
 
@@ -152,5 +152,12 @@ Each file run on its own with `node --test`, all passing:
 `boundary-card.test.js` (38), `code-mode-card.test.js` (45),
 `putback-card.test.js` (12), `sdlc-gate-hardening.test.js` (87).
 
-`test/e2e/team-handoff-card.spec.js` was not run here: Chromium cannot start
-in this sandbox.
+`test/e2e/team-handoff-card.spec.js`, run outside the sandbox at the head: 1
+passed (5.4s). The server log shows the card raised, Allow, the agent file
+written, and only then the hand-back to the orchestrator. Its first version
+also switched to a second conversation and back before pressing Allow; the
+window redraws only cards that arrived while their conversation was in the
+background, so a card already on screen is not drawn again on return, and the
+e2e server times a card out after six seconds. That step was removed: the test
+now checks the card is drawn in the conversation that brought Doc in, and
+answers it there.
