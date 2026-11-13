@@ -54,6 +54,10 @@
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
 // Any rule may give "untilFile": "<path>" to hold its turn until that file
 // exists, so a test decides the moment a run ends rather than racing a delay.
+// Any rule may give "holdAfterText": "<path>" to stream its turn's text and
+// hold the rest (the message's end and the result) until that file exists,
+// and "finishOnSigterm": true to have a SIGTERM write the rest at once and
+// exit, as a runtime that finishes its turn when asked to stop: see emitTurn.
 // A rule may give "shell": ["rm a.md", "mv b.md c.md"], commands the run
 // gives its shell tool. Each is put to the PreToolUse hooks the --settings
 // file names first, as Claude Code does, and really runs unless a hook or the
@@ -603,6 +607,20 @@ function emitTurn(rule, prompt) {
   // other and fills like any other, and a scenario that can only reach it by
   // crashing cannot exercise that at all.
   if (rule.stderr) writeErr(String(rule.stderr));
+  // A REPLY STILL BEING FINISHED. `holdAfterText` writes the turn up to the
+  // end of its text and holds the rest, the message's end and the result,
+  // until the named file exists. With `finishOnSigterm`, a SIGTERM no longer
+  // ends the process where it stands: the rest of the turn is written at once
+  // and the process exits once it has left, so the output log counts it.
+  if (rule.holdAfterText) {
+    const at = events.findIndex((e) => e.type === 'stream_event' && e.event && e.event.type === 'message_delta');
+    for (const e of events.slice(0, at)) writeOut(JSON.stringify(e) + '\n');
+    let held = events.slice(at);
+    const finish = () => { for (const e of held) writeOut(JSON.stringify(e) + '\n'); held = []; };
+    if (rule.finishOnSigterm) process.on('SIGTERM', () => { finish(); exitWhenWritten(0); });
+    whenFileExists(rule.holdAfterText, () => { finish(); if (PRINT) exitWhenWritten(0); });
+    return;
+  }
   if (rule.singleChunk) {
     // One write -> one 'data' chunk on the server side (small payloads do not
     // get split by the pipe). Used to pin per-chunk guard behavior.

@@ -375,6 +375,30 @@ async function shutdown() {
   await new Promise(resolve => internal.server.close(resolve));
 }
 
+// A change to the team made the only way one can be: by a marker in a reply
+// from Doc, acted on at the end of Doc's turn (lib/agents/team-markers.js).
+// Takes the shape the old socket messages had, so a test that needs an agent
+// or skill saved or deleted says what, not how: { type: 'save_agent', name,
+// content } (or create_agent, update_agent), { type: 'delete_agent', agentId },
+// { type: 'save_skill', name, content }, { type: 'delete_skill', name }. The
+// confirmations and errors are broadcast to every window, as Doc's are.
+// Returns the outcomes. A name or body the marker grammar cannot carry is a
+// test that needs rewriting, so it throws rather than sending something else.
+function asDoc(msg) {
+  const name = msg.type === 'delete_agent' ? msg.agentId : msg.name;
+  if (!/^[\w-]+$/.test(String(name))) throw new Error(`asDoc: a marker cannot name "${name}"`);
+  const marker = {
+    save_agent: 'SAVE_AGENT', create_agent: 'SAVE_AGENT', update_agent: 'SAVE_AGENT',
+    save_skill: 'SAVE_SKILL', delete_agent: 'DELETE_AGENT', delete_skill: 'DELETE_SKILL',
+  }[msg.type];
+  if (!marker) throw new Error(`asDoc: ${msg.type} is not a change to the team`);
+  const text = marker.startsWith('SAVE')
+    ? `<!-- RUNDOCK:${marker} name=${name} -->\n${msg.content}\n<!-- /RUNDOCK:${marker} -->`
+    : `<!-- RUNDOCK:${marker} name=${name} -->`;
+  const { applyTeamMarkers } = require('../../lib/agents/team-markers.js');
+  return applyTeamMarkers({ agentId: 'rundock-guide' }, text, msg.conversationId || null);
+}
+
 let convoCounter = 0;
 function freshConvoId(prefix = 'it') {
   return `${prefix}-${Date.now().toString(36)}-${++convoCounter}`;
@@ -385,7 +409,7 @@ module.exports = {
   readInvocations, clearInvocations, readAppendedLog,
   readGrandchildren, readStubOutputs, readHookAnswers, pidAlive, waitForPidExit,
   readPrompts, promptsFor, unmatchedPrompts, assertAllPromptsMatched, clearPrompts,
-  delay, waitUntil, freshConvoId, reapConvo,
+  delay, waitUntil, freshConvoId, reapConvo, asDoc,
   authHeaders, hookToken, hookHeaders,
   get internal() { return internal; },
   get port() { return port; },

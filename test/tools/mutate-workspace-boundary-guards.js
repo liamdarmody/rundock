@@ -308,6 +308,10 @@ const REPEAT_HINT_LINK = { src: path.join(ROOT, 'public', 'views', 'settings.js'
 // program: escape strings, here-documents, interpreter code and a `cd` partway
 // through a chain.
 const SHELL_CODE = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-boundary.test.js' };
+// The same file, the suite for three spellings in an inline script that name
+// no place: a piece joined onto a name given one plain string, a doubled
+// backslash, and Python's `%` formatting.
+const INLINE_SCRIPT = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/inline-script-readings.test.js' };
 // The same file, the suite that runs it as its own process: a hook that dies
 // answers nothing, and the runtime carries on as though nothing had objected.
 const HOOK_CRASH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-never-crashes.test.js' };
@@ -493,6 +497,10 @@ const STARTUP_COPY_NAMES = { src: path.join(ROOT, 'public', 'permissions.js'), s
 const STARTUP_COPY_PUTBACK = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/startup-file-guard.test.js' };
 // The test preload that keeps every test off the account's own startup files.
 const STARTUP_PRELOAD = { src: path.join(ROOT, 'test', 'helpers', 'account-home-refused.js'), suite: 'test/unit/startup-file-guard.test.js' };
+// A file tool's write into the workspace's own agents and skills folders is
+// refused, through the real hook in every mode and run, and the check itself
+// in-process with the case-folding seam set both ways.
+const TEAM_FOLDERS = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/workspace-team-folders.test.js' };
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -2003,8 +2011,8 @@ const MUTATIONS = [
     "  if (!convoId || change.outsideTurn) return;",
     "  if (!convoId) return;"],
   [CM_ANSWER_GUARD_GLUE, "Agent notice: a Codex agent's next turn is not told",
-    "  return [...waiting, input].filter(Boolean).join('\\n\\n');",
-    "  return input;"],
+    "    input = [...waiting, input].filter(Boolean).join('\\n\\n');",
+    "    input = input;"],
   [ANSWER_READS_HOOK, "Answer-file reads: a command that only reads a permission file is taken as changing it",
     "    if (writingWords.has(raw)) {",
     "    if (!readOnly) {"],
@@ -3277,8 +3285,8 @@ const MUTATIONS = [
     'guard = acquire(workspace, onChange, { convoId });',
     'guard = acquire(workspace, onChange);'],
   [ALLOWED_WIRING, "Allowed change: the server does not pass the conversation to the turn guard",
-    '    workspace: config.getWorkspace(),\n    convoId,\n',
-    '    workspace: config.getWorkspace(),\n'],
+    '      workspace: config.getWorkspace(),\n      convoId,\n',
+    '      workspace: config.getWorkspace(),\n'],
   [GUARD_RUNS, 'Guard: only the permission answers are watched',
     'const ANSWER_FILES = [...WORKSPACE_ANSWER_FILES];',
     "const ANSWER_FILES = ['.rundock/permissions.json', '.rundock/state.json', '.claude/settings.local.json', '.claude/settings.json'];"],
@@ -3963,8 +3971,10 @@ const MUTATIONS = [
     ""],
   // ===== WHAT THE SHELL CHECK READS IN CODE AND TEXT =====
   [SHELL_CODE, "Shell code: a backslash in a Bash word is a Windows separator again on a POSIX host",
-    "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);",
-    "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot);"],
+    // Every reading of a Bash word goes through flavourOf, so the POSIX
+    // reading is dropped there, for all of them at once.
+    ": flavourFor(t, workspaceRoot, posixText));",
+    ": flavourFor(t, workspaceRoot));"],
   [SHELL_CODE, "Shell code: an unquoted Bash escape is judged as written, not as bash reads it",
     " t = t.replace(/\\\\(.)/g, '$1');",
     " {}"],
@@ -4010,7 +4020,7 @@ const MUTATIONS = [
     "    if (ch === '`') {",
     "    if (false) {"],
   [SHELL_CODE, "Shell code: Perl and Ruby command quotes are not noticed",
-    "    const q = /[\\w$@%]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));",
+    String.raw`    const q = /[\w$@%"')\]}]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));`,
     "    const q = null;"],
   [SHELL_CODE, "Shell code: what an unquoted here-document runs as it expands is not judged",
     "    for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });",
@@ -4051,8 +4061,8 @@ const MUTATIONS = [
     "      for (const c of code.commands) commands.push({ text: c, at });",
     ""],
   [SHELL_CODE, "Shell code: code attached to its flag is not read",
-    "      const code = codeParts(m[1] || words[++k] || '', reading);",
-    "      const code = codeParts(words[++k] || '', reading);"],
+    "      const code = codeParts(m[1] || words[++k] || '', reading, plain);",
+    "      const code = codeParts(words[++k] || '', reading, plain);"],
   [SHELL_CODE, "Shell code: node's long --eval is not read as code",
     "|--(?:eval|print)=?)(.*)$/s",
     ")(.*)$/s"],
@@ -4639,6 +4649,121 @@ const MUTATIONS = [
   [SAVED_BUILD, 'Saved answer: a save or revoke builds on the file without the guard\'s check first',
     '  if (g.listeners.size) checkAnswerFilesNow(workspace);\n  const was = g.snapshot.get(f);',
     '  const was = g.snapshot.get(f);'],
+  // ===== THREE SPELLINGS IN AN INLINE SCRIPT THAT NAME NO PLACE =====
+  [INLINE_SCRIPT, 'Inline script: a name assigned twice is known',
+    '        if (++defs > 1) return false;',
+    '        defs = 1;'],
+  [INLINE_SCRIPT, 'Inline script: a name from sys.argv or the environment is known',
+    String.raw`if (lit && plain(lit) && /^[ \t]*(?:[;\n#]|$)/.test(masked.slice(lit.end)) && top() && depthAt(a) === 0) {`,
+    'if (eq && top() && depthAt(a) === 0) {'],
+  [INLINE_SCRIPT, 'Inline script: a piece is dropped though the whole path is not shaped like a place',
+    'node.values.length && node.values.every(v => literalIsPlace(v, reading))',
+    'node.values.length'],
+  [INLINE_SCRIPT, 'Inline script: a piece is dropped though what it is joined onto is not known',
+    'if (wholeOf(node) && node.values.length',
+    'if (node.values.length'],
+  [INLINE_SCRIPT, 'Inline script: a joined path is judged as a read when the call writes',
+    "quiet: useOf(a, b) === 'read'",
+    'quiet: true'],
+  [INLINE_SCRIPT, 'Inline script: the doubled-backslash rule applies on a Windows host',
+    "opts.shellTool !== 'PowerShell' && !winShaped && WIN_UNC.test(t) ? path",
+    "opts.shellTool !== 'PowerShell' && WIN_UNC.test(t) ? path"],
+  [INLINE_SCRIPT, 'Inline script: the doubled-backslash rule applies to PowerShell',
+    "opts.shellTool !== 'PowerShell' && !winShaped && WIN_UNC.test(t) ? path",
+    '!winShaped && WIN_UNC.test(t) ? path'],
+  [INLINE_SCRIPT, 'Inline script: a failed reading of a joined piece drops the piece',
+    '} catch (e) { /* judged alone */ }',
+    '} catch (e) { continue; }'],
+  [INLINE_SCRIPT, "Inline script: a % before a space is Ruby's quote again",
+    String.raw`const QUOTE_OPERATOR = /^(?:(?:qx|qq|qw|q)\s*|%[xqQwWiI]?)([([{<])/;`,
+    String.raw`const QUOTE_OPERATOR = /^(?:qx|qq|qw|q|%[xqQwWiI]?)\s*([([{<])/;`],
+  [INLINE_SCRIPT, 'Inline script: a % straight after a closing quote is a quote',
+    String.raw`const q = /[\w$@%"')\]}]/.test(s[i - 1] || ' ')`,
+    String.raw`const q = /[\w$@%]/.test(s[i - 1] || ' ')`],
+  [INLINE_SCRIPT, "Inline script: Perl's quote words lose the space before their bracket",
+    String.raw`const QUOTE_OPERATOR = /^(?:(?:qx|qq|qw|q)\s*|%[xqQwWiI]?)([([{<])/;`,
+    String.raw`const QUOTE_OPERATOR = /^(?:qx|qq|qw|q|%[xqQwWiI]?)([([{<])/;`],
+  // Python started plainly, with every word of the script one that loads,
+  // runs and reaches nothing, and nothing in it Python warns of.
+  [INLINE_SCRIPT, 'Inline script: an import of any module counts as one loaded before the script starts',
+    String.raw`const PY_IMPORT = /^\s*import\s+(?:sys|os(?:\.path)?)(?:\s*,\s*(?:sys|os(?:\.path)?))*\s*$/;`,
+    String.raw`const PY_IMPORT = /^\s*import\s+[\w.]+(?:\s*,\s*[\w.]+)*\s*$/;`],
+  [INLINE_SCRIPT, 'Inline script: a dunder anywhere is let through as the main guard is',
+    "s.replace(PY_MAIN_GUARD, '').includes('__') || ",
+    ''],
+  [INLINE_SCRIPT, 'Inline script: getattr is a builtin that reaches nothing',
+    "const PY_BUILTINS_ALLOWED = new Set('abs all",
+    "const PY_BUILTINS_ALLOWED = new Set('getattr abs all"],
+  [INLINE_SCRIPT, 'Inline script: the joined reading applies to node and Ruby',
+    String.raw`const PLAIN_PYTHON = /^python3(?:\.\d+)?$/;`,
+    String.raw`const PLAIN_PYTHON = /^(?:python3(?:\.\d+)?|node|ruby)$/;`],
+  [INLINE_SCRIPT, 'Inline script: Python by a path or after a variable counts as started plainly',
+    'bare && i === 0 && words[i] === lead && PLAIN_PYTHON.test(lead)',
+    'bare && PLAIN_PYTHON.test(lead)'],
+  [INLINE_SCRIPT, 'Inline script: Python after another command counts as started plainly',
+    '!b.expands && b.at < firstEnd && ',
+    '!b.expands && '],
+  [INLINE_SCRIPT, 'Inline script: a here-document the shell fills in is read for names',
+    'depth === 0 && !b.expands && b.at',
+    'depth === 0 && b.at'],
+  [INLINE_SCRIPT, 'Inline script: -c code the shell fills in is read for names',
+    ' && !(lexed[m[1] ? 1 : 2] || lexed[1]).expands',
+    ''],
+  [INLINE_SCRIPT, 'Inline script: code in a backtick or quote word is read for names',
+    'if (plainPython && !opaque && consumed.has(l)) {',
+    'if (plainPython && consumed.has(l)) {'],
+  [INLINE_SCRIPT, 'Inline script: a call or index on a literal or display is let through',
+    String.raw`if (c !== '{' && (/["'}.]/.test(src[p]) || (shut && !calls.get(p)) || /^(?:\d|None$|True$|False$)/.test(word))) return null;`,
+    ''],
+  [INLINE_SCRIPT, "Inline script: open's mode may be anything",
+    "if (w === 'open' && g.args === 2) {",
+    'if (false) {'],
+  [INLINE_SCRIPT, 'Inline script: an escape Python warns of is let through',
+    String.raw`if (l.value.replace(/\\[ntr0\\'"]/g, '').includes('\\')) return false;`,
+    ''],
+  [INLINE_SCRIPT, 'Inline script: the main guard is a dunder like any other',
+    String.raw`const PY_MAIN_GUARD = /\bif[ \t]+__name__[ \t]*==[ \t]*(["'])__main__\1[ \t]*:/g;`,
+    'const PY_MAIN_GUARD = /(?!)/g;'],
+  // ===== THE WORKSPACE'S OWN AGENTS AND SKILLS ARE REFUSED TO FILE TOOLS =====
+  // The refusal never asked: every write into the two folders is in-workspace
+  // access again. Caught by: each file tool is refused in every mode and run.
+  [TEAM_FOLDERS, 'Team folders: the workspace check is removed',
+    '  if (isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot)) {',
+    '  if (false) {'],
+  // Case compared as written: `.claude/Agents/` slips past where the host
+  // folds case. Caught by: a case variant is refused exactly where the host
+  // folds case, driven both ways through the seam.
+  [TEAM_FOLDERS, 'Team folders: case folding is dropped',
+    "    const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);\n    return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {\n      const folder = foldCase(canonicalize(path.join(workspaceRoot, '.claude', d)), foldsCase);",
+    "    const t = canonicalize(path.resolve(workspaceRoot, target));\n    return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {\n      const folder = canonicalize(path.join(workspaceRoot, '.claude', d));"],
+  // A bare prefix: `.claude/agents-old/` and `.claude/skillset/` are refused
+  // too. Caught by: everything beside those two folders keeps today's answer.
+  [TEAM_FOLDERS, 'Team folders: a prefix match also catches agents-old',
+    '      return t === folder || t.startsWith(folder + path.sep);',
+    '      return t === folder || t.startsWith(folder);'],
+  // A relative target resolved against the home folder rather than the
+  // workspace. Caught by: each spelling is refused, in-process and through
+  // the hook (the relative rows).
+  [TEAM_FOLDERS, 'Team folders: a relative target is resolved against the home folder',
+    '    const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);',
+    '    const t = foldCase(canonicalize(path.resolve(os.homedir(), target)), foldsCase);'],
+  // NotebookEdit left out of the check. Caught by: each file tool is refused,
+  // and the notebook_path spelling.
+  [TEAM_FOLDERS, 'Team folders: NotebookEdit is left out',
+    "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
+    "  if (toolName === 'NotebookEdit') return false;\n  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);"],
+  // A throw inside the check read as "not a team folder", so the write goes
+  // through as in-workspace access. Caught by: a forced failure refuses.
+  [TEAM_FOLDERS, 'Team folders: the check failing is treated as allow',
+    '  if (isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot)) {',
+    '  if ((() => { try { return isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot); } catch (e) { return false; } })()) {'],
+  // Only the first path field present is checked again, so a NotebookEdit
+  // naming a note in file_path and an agent in notebook_path is checked as
+  // the note, and the classifier, reading notebook_path, allows the agent
+  // write. Caught by: a target in those folders is refused in any path field.
+  [TEAM_FOLDERS, 'Team folders: only the first path field present is checked',
+    "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
+    "  const targets = [ti.file_path || ti.notebook_path || ti.path].filter((v) => typeof v === 'string' && v);"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

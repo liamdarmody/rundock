@@ -729,8 +729,9 @@ describe('platform delegate (Doc)', () => {
     assert.ok(!transcript(convoId).some(e => e.text.includes('DOC-OVERRIDE-FAILED')));
   });
 
-  test('platform delegate auto-returns on a CRUD marker even without COMPLETE', async () => {
+  test('platform delegate auto-returns on a CRUD marker even without COMPLETE, and its marker writes the file once', async () => {
     const convoId = h.freshConvoId('doc');
+    const skillFile = path.join(h.workspaceDir, '.claude', 'skills', 'demo-skill', 'SKILL.md');
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'doc-crud please' },
         turn: [{ agentTool: { subagent_type: 'rundock-guide', prompt: 'doc-crud save a skill' } }] },
@@ -740,11 +741,25 @@ describe('platform delegate (Doc)', () => {
         turn: [{ text: '<silent>' }] },
     ]);
 
+    const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'doc-crud please' });
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'rundock-guide', { label: 'doc result' });
+    // Brought in by the orchestrator, Doc's change is carded, and the return
+    // waits for the card (lib/agents/team-markers.js): allowed here.
+    const { msg: card } = await client.waitFor(m => m.type === 'control_request' && m._conversationId === convoId && m.request.tool_name === 'SaveSkill', { since, label: 'the card' });
+    client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convoId, allow: true, card: true });
     // CRUD marker alone triggers the auto-return: parent restarts silently
     const { msg: started } = await client.waitFor(m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m._agent === 'chief-of-staff' && m.autoContinue, { label: 'parent restart' });
     assert.strictEqual(started.silent, true);
+    // AND THE FILE. This test once proved only the auto-return: Doc's skill
+    // was never looked for on disk, so a save that wrote nothing passed. The
+    // server writes it at the end of Doc's turn, once, with nothing sent by
+    // any window.
+    assert.strictEqual(fs.readFileSync(skillFile, 'utf-8'), 'skill body', 'Doc\'s marker wrote the skill');
+    const saved = client.messages.slice(since).filter(m => m.type === 'skill_saved' && m.skillId === 'demo-skill');
+    assert.strictEqual(saved.length, 1, 'once');
+    assert.strictEqual(saved[0].conversationId, convoId, 'confirmed to the conversation it came from');
+    fs.rmSync(path.dirname(skillFile), { recursive: true, force: true });
   });
 });
 
@@ -759,7 +774,8 @@ describe('roster refresh', () => {
     // (type/order prepended BEFORE the opening ---, corrupting the frontmatter
     // so name/role parse as body); that case is covered separately in
     // test/integration/http-api.test.js. Here we want a clean roster entry.
-    client.send({ type: 'save_agent', name: 'roster-test-agent', content: '---\nname: roster-test-agent\ndisplayName: Roster\nrole: Temp Role\ndescription: A temporary test agent\ntype: specialist\norder: 8\nreportsTo: chief-of-staff\n---\nTemp agent.\n' });
+    // Saved by Doc's marker, the one way an agent is saved.
+    h.asDoc({ type: 'save_agent', name: 'roster-test-agent', content: '---\nname: roster-test-agent\ndisplayName: Roster\nrole: Temp Role\ndescription: A temporary test agent\ntype: specialist\norder: 8\nreportsTo: chief-of-staff\n---\nTemp agent.\n' });
     await client.waitFor(m => m.type === 'agent_saved' && m.agentId === 'roster-test-agent', { label: 'agent_saved' });
     assert.strictEqual(h.internal.chatProcesses.get(convoId).needsRosterRefresh, true, 'live orchestrator flagged');
 
@@ -778,7 +794,7 @@ describe('roster refresh', () => {
     assert.ok(sysPrompt.includes('Roster (roster-test-agent)'), 'new agent rendered in the roster with its display name');
 
     // cleanup
-    client.send({ type: 'delete_agent', agentId: 'roster-test-agent' });
+    h.asDoc({ type: 'delete_agent', agentId: 'roster-test-agent' });
     await client.waitFor(m => m.type === 'agent_deleted', { label: 'cleanup delete' });
   });
 });

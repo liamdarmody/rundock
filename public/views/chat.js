@@ -508,7 +508,11 @@ function renderSessionHistory(d) {
     }
     const div = document.createElement('div');
     div.style.animation = 'none';
-    if (msg.role === 'user') {
+    if (msg.role === 'system') {
+      // What Rundock did with an agent or skill marker, stored by the server.
+      div.className = 'msg-system history-msg';
+      div.textContent = msg.content || '';
+    } else if (msg.role === 'user') {
       div.className = 'msg msg-user history-msg';
       div.innerHTML = RundockChatMarkup.userBubbleHtml(esc(msg.content));
     } else {
@@ -566,7 +570,7 @@ function renderSessionHistory(d) {
   // Routing entries keep their dedicated role so sidebar preview filters them out
   // and the replay loop skips them (auto-divider on the following agent triggers).
   const historyMsgs = d.messages.filter(m => !m.content || !m.content.includes('[WORKSPACE_ANALYSIS]')).map(m => ({
-    role: m.type === 'routing' ? 'routing' : (m.role === 'user' ? 'user' : 'agent'),
+    role: m.type === 'routing' ? 'routing' : (m.role === 'user' || m.role === 'system' ? m.role : 'agent'),
     content: m.role !== 'user' ? stripRundockMarkers(m.content || '').trim() : m.content,
     agentId: m.agentId || convo.agentId,
     timestamp: m.timestamp || null,
@@ -1266,6 +1270,10 @@ function renderPermissionCard(d, convoId, host) {
         // and unclipped, since this card is the person's only look at it.
         : (toolName === 'SaveConnector' || toolName === 'DeleteConnector')
           ? `<details class="permission-detail-collapse" open><summary>What it would run</summary><code class="permission-detail">${detail.split('\n').map(esc).join('<br>')}</code></details>`
+        // Doc's change to an agent or skill in a hand-off: the whole file, open,
+        // unclipped and with its lines kept, since it is written exactly as shown.
+        : RundockPermissions.isTeamCard(toolName)
+          ? `<details class="permission-detail-collapse" open><summary>${/^Delete/.test(toolName) ? 'What would be deleted' : 'What would be written'}</summary><code class="permission-detail permission-file">${esc(detail)}</code></details>`
         : (toolName === 'Bash' && input.description && detail.length > 60)
           ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
           : `<code class="permission-detail">${esc(detail)}</code>`}

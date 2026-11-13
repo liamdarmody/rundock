@@ -676,14 +676,21 @@ const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
 const {
   startingFresh, noteUnstartedWrite, takeUnstartedWrites, withFreshCatchUp, storeHeldCatchUp, takeStoredCatchUp,
 } = require('./lib/runtime/missing-session.js');
+const teamNotes = require('./lib/agents/team-notes.js');
+teamNotes.wireTeamNotes({ appendTranscript: (...args) => appendTranscript(...args) });
 claudeRuntime.wireClaudeRuntimeDeps({
   getActualPort: () => ACTUAL_PORT,
-  // Every Claude turn runs under the same answer-file guard as a Codex turn.
-  onClaudeSpawn: (proc, { convoId, agentId }) => watchClaudeTurns(proc, {
-    workspace: config.getWorkspace(),
-    convoId,
-    onChange: (change) => codexGlue.surfaceAnswerFileChange({ agentId, processId: null }, convoId, change, 'claude'),
-  }),
+  // Every Claude turn runs under the same answer-file guard as a Codex turn,
+  // and its first message opens with what Rundock did with the last reply's
+  // team markers, when there is something to say.
+  onClaudeSpawn: (proc, { convoId, agentId }) => {
+    watchClaudeTurns(proc, {
+      workspace: config.getWorkspace(),
+      convoId,
+      onChange: (change) => codexGlue.surfaceAnswerFileChange({ agentId, processId: null }, convoId, change, 'claude'),
+    });
+    teamNotes.noteOnNextMessage(proc, convoId);
+  },
 });
 const {
   shutdownCodexAppServer,
@@ -1501,6 +1508,9 @@ const wsHandlerContext = {
   broadcast: safeSend,
   config,                                         // lib/config module: getWorkspace at use time
 };
+// The agent and skill markers in a reply are acted on here, at the end of the
+// turn, through the same handlers and broadcast (lib/agents/team-markers.js).
+require('./lib/agents/team-markers.js').wireTeamMarkers(wsHandlerContext);
 
 wss.on('connection', (ws) => {
   console.log('Client connected');
@@ -1520,6 +1530,8 @@ wss.on('connection', (ws) => {
   // told whether to run them (lib/protocol/handlers/held-routines.js).
   ws.send(JSON.stringify(require('./lib/protocol/handlers/held-routines.js').heldRoutinesMessage(WORKSPACE)));
 
+  // A card an earlier run left open becomes its outcome before anything is shown (lib/agents/team-notes.js).
+  if (WORKSPACE) { try { teamNotes.load(); } catch (e) { console.error('[TeamNotes] could not read the conversations:', e && e.message); } }
   // Re-send pending permission requests so permission cards reappear after reconnect
   for (const [requestId, pending] of pendingPermissionRequests) {
     ws.send(JSON.stringify({
@@ -1710,8 +1722,11 @@ wss.on('connection', (ws) => {
               stdio: ['pipe', 'pipe', 'pipe']
             }, (err) => handleChatSpawnError(err, convoId));
 
+            // THE AGENT DISCOVERY RESOLVED, not the name the window asked for:
+            // this id is who the turn's agent and skill markers are decided
+            // as, and a window can ask for any name.
             const entry = {
-              process: proc, buffer: '', processId, agentId: msg.agent || 'default',
+              process: proc, buffer: '', processId, agentId: agentData ? agentData.id : 'default',
               responseText: '', exited: false, resultSent: false,
               lastUserMessage: msg.content,
               // Agent tool interception state
@@ -1891,7 +1906,7 @@ wss.on('connection', (ws) => {
             stdio: ['pipe', 'pipe', 'pipe']
           }, (err) => handleChatSpawnError(err, convoId));
 
-          const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
+          const entry = { process: proc, buffer: '', processId, agentId: agentData ? agentData.id : 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
           processes.set(convoId, entry);
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));

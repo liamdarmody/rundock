@@ -475,9 +475,12 @@ describe('another workspace\'s answer files and agents, reached through a named 
     assert.strictEqual(r.cls, 'runs');
   });
 
-  test('this workspace\'s own agents are its own to edit', async () => {
+  // Agents and skills in a workspace are changed only by Doc, so a file tool
+  // is refused there in Code mode too (isWorkspaceTeamFolderEdit), with no card.
+  test('this workspace\'s own agents are refused to a file tool, with no card', async () => {
     const r = await fx.judge(world, capture, deadPort, { tool: 'Edit', input: { file_path: path.join(world.ws, '.claude', 'agents', 'mine.md'), old_string: 'a', new_string: 'b' }, cwd: world.app });
-    assert.strictEqual(r.cls, 'runs');
+    assert.strictEqual(r.cls, 'refused');
+    assert.match(r.live.reason, /changed only by Doc/);
   });
 
   test('this workspace\'s own .claude/settings.json is an answer file, and a project\'s is ordinary work', async () => {

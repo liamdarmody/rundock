@@ -2446,3 +2446,95 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
     }
   });
 });
+
+// THREE SPELLINGS IN AN INLINE SCRIPT THAT NAME NO PLACE. The audit section and
+// the comment above literalIsPlace say what the hook does with each; the hook
+// is asked about the examples they name, beside the cards it keeps.
+describe('ARCHITECTURE.md and the hook: three spellings in an inline script name no place', { skip: process.platform === 'win32' && 'bash on a macOS or Linux host' }, () => {
+  const hook = require('../../scripts/permission-hook.js');
+  const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8').replace(/\s*\n\s*\/\/\s*/g, ' ');
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-inline-')));
+  after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  const bash = (command, opts = {}) => hook.classifyShellAccess('Bash', { command }, ws, [], path.dirname(ws), false, opts);
+  const scan = (body) => bash(`python3 - <<'EOF'\n${body}\nEOF`);
+
+  test('the page and the comment say each rule', () => {
+    for (const said of [
+      'a word that starts with two backslashes is not a network name',
+      '`\\\\server\\share` included',
+      'A literal joined by `+` onto a name the code gives one plain string, once, at the top level',
+      'is judged as the whole path, `/ws/etc/x`, and not alone',
+      'leave the piece judged alone as before',
+      'is Python\'s formatting operator, so `"%d" % (n/len(t))` runs nothing',
+    ]) assert.ok(architecture.includes(said), `the page says: ${said}`);
+    for (const said of [
+      'THREE SPELLINGS THAT NAME NO PLACE',
+      'is judged as the whole path, `/ws/etc/x`, not alone',
+      'not a network name: `\'\\\\n\\\\n\'` is text. A Windows host and PowerShell keep `\\\\server\\share`',
+      'is Python\'s formatting: `"%d" % (n/len(t))` runs nothing',
+    ]) assert.ok(hookSrc.includes(said), `the hook says: ${said}`);
+  });
+
+  test('and the hook does what they say, and keeps the cards beside it', () => {
+    assert.strictEqual(scan(`V = "${ws}"\nopen(V + "/etc/x", "w")`), null, 'a piece joined onto a name given the workspace once');
+    assert.ok(scan(`V = "${ws}"\nV = "/"\nopen(V + "/etc/x", "w")`), 'a name assigned again');
+    assert.ok(scan('import sys\nV = sys.argv[1]\nopen(V + "/etc/x", "w")'), 'a name taken from outside');
+    assert.strictEqual(scan("t = 'a'\nparts = t.split('\\\\n\\\\n')"), null, 'two backslashes');
+    assert.ok(bash("cp a '\\\\server\\share\\x'", { platform: 'win32' }), 'a network path on a Windows host');
+    assert.strictEqual(scan('t = "a"\nprint("%d" % (100*(1-0)/len(t)))'), null, 'Python\'s % formatting');
+    assert.ok(bash("ruby <<'RB'\nputs %x(cat /etc/hosts)\nRB"), 'Ruby\'s %x( ) runs its body');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ARCHITECTURE.md and the hook's own comment: a file tool's write into the
+// workspace's agents and skills folders is refused
+// ---------------------------------------------------------------------------
+
+describe('the workspace\'s agents and skills are refused to file tools, as the page and the hook say', () => {
+  const HEADING = '**A file tool\'s write into the workspace\'s own agents and skills is refused outright, in every run.**';
+  const passage = (() => {
+    const at = architecture.indexOf(HEADING);
+    return at < 0 ? '' : architecture.slice(at, architecture.indexOf('\n', at));
+  })();
+
+  test('the page says which folders, which tools, which runs and why, and names the check', () => {
+    assert.ok(passage, 'ARCHITECTURE.md has the passage');
+    for (const said of [
+      'changed only by Doc (`rundock-guide`)',
+      'A Write, Edit, MultiEdit or NotebookEdit whose target is in the workspace\'s `.claude/agents/` or `.claude/skills/`, or is one of those folders',
+      'before any card, saved answer, folder grant or mode can answer it',
+      'in Notes and Code mode, in a conversation and in a routine',
+      '`isWorkspaceTeamFolderEdit` in `scripts/permission-hook.js`',
+      '--dangerously-skip-permissions',
+      'a neighbor such as `.claude/agents-old/` or `.claude/commands/` does not',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+    assert.ok(!architecture.includes('they live with the agents and skills, which are ordinary workspace files'),
+      'the page no longer calls the agents and skills ordinary workspace files');
+  });
+
+  test('the comment above CLAUDE_EDIT_TOOLS says the same, and no longer that workspace edits go unblocked', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8');
+    const end = src.indexOf('const CLAUDE_EDIT_TOOLS');
+    const comment = src.slice(src.lastIndexOf('// Deny a direct file edit to the GLOBAL', end), end).replace(/\n\/\/ ?/g, ' ');
+    assert.ok(comment.includes('The workspace\'s own .claude/agents and .claude/skills are refused to these tools too (isWorkspaceTeamFolderEdit)'), comment);
+    assert.ok(comment.includes('changed only by Doc\'s SAVE_AGENT / SAVE_SKILL markers'), comment);
+    assert.ok(!/NOT blocked/.test(comment), 'the old claim is gone');
+  });
+
+  test('and the check the page names does what the page says', () => {
+    const { isWorkspaceTeamFolderEdit } = require('../../scripts/permission-hook.js');
+    const ws = path.join(require('node:os').tmpdir(), 'doc-claims-team-folders');
+    for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']) {
+      for (const target of [path.join(ws, '.claude', 'agents', 'helper.md'), path.join(ws, '.claude', 'skills', 'example', 'SKILL.md'), path.join(ws, '.claude', 'agents')]) {
+        assert.strictEqual(isWorkspaceTeamFolderEdit(tool, { file_path: target, notebook_path: target }, ws), true, `${tool} ${path.relative(ws, target)}`);
+      }
+    }
+    for (const target of [path.join(ws, '.claude', 'agents-old', 'x.md'), path.join(ws, '.claude', 'commands', 'x.md')]) {
+      assert.strictEqual(isWorkspaceTeamFolderEdit('Write', { file_path: target }, ws), false, `a neighbor: ${path.relative(ws, target)}`);
+    }
+    for (const tool of ['Read', 'Glob', 'Grep']) {
+      assert.strictEqual(isWorkspaceTeamFolderEdit(tool, { file_path: path.join(ws, '.claude', 'agents', 'helper.md'), path: path.join(ws, '.claude', 'agents') }, ws), false, `${tool} reads`);
+    }
+  });
+});

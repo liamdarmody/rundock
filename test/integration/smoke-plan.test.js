@@ -49,17 +49,24 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
         turn: [{ text: `Proposed. ${MARKERS.saveAgent('sales-coach', '---\nname: sales-coach\n---\nbody')}` }] },
       { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM: pipeline-complete]' }, turn: [{ text: '<silent>' }] },
     ]);
+    const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 't1 create agent' });
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'rundock-guide', { label: 'doc result' });
+    // The return waits for the card Doc's change raises in a hand-off
+    // (lib/agents/team-markers.js): allowed here.
+    const { msg: card } = await client.waitFor(m => m.type === 'control_request' && m._conversationId === convoId && m.request.tool_name === 'SaveAgent', { since, label: 'the card' });
+    client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convoId, allow: true, card: true });
     const { msg: started } = await client.waitFor(m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m._agent === 'chief-of-staff' && m.autoContinue, { label: 'parent restart' });
     assert.strictEqual(started.silent, true, 'CRUD marker auto-return parks the parent silently');
   });
 
-  // T2: Approval replays the marker through the execution path. Mechanic: the
-  // save_agent WS message actually writes the file (the "approve" action).
-  test('T2: approval executes the agent write (save_agent WS path)', async () => {
+  // T2: Approval replays the marker through the execution path. Mechanic: a
+  // SAVE_AGENT marker in Doc's reply actually writes the file (the "approve"
+  // action). The window's own save_agent message is refused, so Doc's marker
+  // is the one execution path.
+  test('T2: approval executes the agent write (Doc\'s marker path)', async () => {
     const since = client.messages.length;
-    client.send({ type: 'save_agent', name: 'sales-coach', content: '---\nname: sales-coach\ndisplayName: Rex\nrole: Sales Coach\ndescription: prep\n---\nYou are Rex.\n' });
+    h.asDoc({ type: 'save_agent', name: 'sales-coach', content: '---\nname: sales-coach\ndisplayName: Rex\nrole: Sales Coach\ndescription: prep\n---\nYou are Rex.\n' });
     await client.waitFor(m => m.type === 'agent_saved' && m.agentId === 'sales-coach', { since, label: 'saved' });
     const file = path.join(h.workspaceDir, '.claude', 'agents', 'sales-coach.md');
     assert.ok(fs.existsSync(file), 'file written to disk');
@@ -67,7 +74,7 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
     // sidebar refresh broadcast
     await client.waitFor(m => m.type === 'agents', { since, label: 'roster refresh' });
     // cleanup for T3
-    client.send({ type: 'delete_agent', agentId: 'sales-coach' });
+    h.asDoc({ type: 'delete_agent', agentId: 'sales-coach' });
     await client.waitFor(m => m.type === 'agent_deleted', { label: 't2 cleanup' });
   });
 
@@ -78,7 +85,7 @@ describe('Proposal-First smoke plan (T1-T12)', () => {
     assert.strictEqual(fs.existsSync(marketingPath), false, 'nothing written for a rejected proposal');
     // deleting a non-existent agent yields a clean error, not a crash
     const since = client.messages.length;
-    client.send({ type: 'delete_agent', agentId: 'marketing-coach' });
+    h.asDoc({ type: 'delete_agent', agentId: 'marketing-coach' });
     const { msg } = await client.waitFor(m => m.type === 'agent_error', { since, label: 'clean error' });
     assert.match(msg.message, /not found/);
   });

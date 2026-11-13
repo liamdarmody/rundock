@@ -14,6 +14,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
+const team = require('../../lib/protocol/handlers/team.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
@@ -318,10 +319,25 @@ describe('dispatch table', () => {
     }
   });
 
-  test('save_agent legacy aliases map to the same handler by identity', () => {
+  test('the six agent and skill changes, legacy aliases included, map to the one refusal by identity', () => {
+    // A socket cannot change the team: only Doc's replies can, decided on the
+    // server at the end of Doc's turn (lib/agents/team-markers.js).
     const table = buildDispatch();
-    assert.strictEqual(table.create_agent, table.save_agent);
-    assert.strictEqual(table.update_agent, table.save_agent);
+    for (const type of ['save_agent', 'create_agent', 'update_agent', 'delete_agent', 'save_skill', 'delete_skill']) {
+      assert.strictEqual(table[type], team.handleTeamChangeRefused, `${type} is refused`);
+    }
+  });
+
+  test('the refusal writes nothing, answers on the conversation it came from, and says only Doc changes the team', () => {
+    const table = buildDispatch();
+    const ws = captureWs();
+    table.delete_skill({}, ws, { type: 'delete_skill', name: 'anything', conversationId: 'convo-A' });
+    table.save_agent({}, ws, { type: 'save_agent', name: 'anything', content: 'x' });
+    assert.deepStrictEqual(ws.sent.map((m) => [m.type, m.refused, m.conversationId]), [
+      ['skill_error', true, 'convo-A'],
+      ['agent_error', true, undefined],
+    ]);
+    for (const m of ws.sent) assert.match(m.message, /^Only Doc can change the team/);
   });
 
   test('the four root shims never appear in the table', () => {
@@ -1468,7 +1484,9 @@ describe('handler seams (stub ctx, capture ws)', () => {
   test('save_agent and save_skill answer Invalid path when the boundary guard refuses', () => {
     // The guard is injected (ctx.workspace.isInsideWorkspace); a refusal must
     // produce the error card, write nothing, and skip the roster broadcast.
-    const table = buildDispatch();
+    // The handlers are called in-process, as Doc's markers reach them: the
+    // socket messages of these types are refused before any handler runs.
+    const table = { save_agent: team.handleSaveAgent, save_skill: team.handleSaveSkill };
     const original = config.getWorkspace();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
     try {
