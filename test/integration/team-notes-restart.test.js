@@ -141,3 +141,71 @@ test('a refusal not yet told is told to the next turn after a restart, once, and
   assert.deepStrictEqual(prompts().filter((p) => p.includes('RS-THREE')), ['RS-THREE and now?'], 'told once, not again');
   assert.strictEqual(fs.existsSync(file(path.join('.claude', 'agents', 'restart-helper.md'))), false);
 });
+
+// The first turn of a conversation can end before any window has saved it.
+const UNSAVED = 'team-note-unsaved-across-restart';
+const recordOf = (id) => {
+  try { return JSON.parse(fs.readFileSync(file(path.join('.rundock', 'conversations.json')), 'utf8')).find((c) => c.id === id) || null; } catch (e) { return null; }
+};
+async function eventually(check, label, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+test('the first turn of a conversation no window has saved: its refusal is kept on a record of its own, the window\'s save keeps it, and a restart tells it once', async () => {
+  const helper = agentFile({ name: 'unsaved-helper', displayName: 'Helper', role: 'Example Role', type: 'specialist', order: 30, body: 'You help.' }).trim();
+  fs.writeFileSync(file('stub-scenario.json'), JSON.stringify({ rules: [
+    { match: { promptIncludes: 'US-ONE' }, turn: [{ text: `Saved it.\n<!-- RUNDOCK:SAVE_AGENT name=unsaved-helper -->\n${helper}\n<!-- /RUNDOCK:SAVE_AGENT -->` }] },
+    { match: { promptIncludes: 'US-TWO' }, turn: [{ text: 'US-TWO-ANSWERED' }] },
+    { match: { promptIncludes: 'US-THREE' }, turn: [{ text: 'US-THREE-ANSWERED' }] },
+  ] }, null, 2));
+  const answered = (text) => (m) => m.type === 'result' && m._conversationId === UNSAVED && String(m.result || '').includes(text);
+  assert.strictEqual(recordOf(UNSAVED), null, 'no record of the conversation yet');
+
+  // ── THE FIRST SERVER: the refused turn, with no record, then the window's save ──
+  const first = bootChild();
+  let client;
+  let sessionId;
+  try {
+    client = await connect(await first.ready);
+    client.send({ type: 'chat', conversationId: UNSAVED, agent: 'content-lead', content: 'US-ONE save the helper' });
+    await client.waitFor(answered('Saved it.'), 'the refused turn');
+    sessionId = (await client.waitFor((m) => m.type === 'system' && m.subtype === 'init' && m._conversationId === UNSAVED && m._sessionId, 'its session'))._sessionId;
+    await eventually(() => recordOf(UNSAVED), 'a record holding the outcome');
+    assert.deepStrictEqual(Object.keys(recordOf(UNSAVED)).sort(), ['id', 'teamOutcomes'], 'a record of its own, holding the outcome only');
+    assert.strictEqual(recordOf(UNSAVED).teamOutcomes.length, 1);
+    // The save a window sends after a turn: the metadata it holds, never the outcomes.
+    client.send({ type: 'save_conversation', conversation: {
+      id: UNSAVED, agentId: 'content-lead', title: 'Unsaved until now', status: 'active',
+      sessionId, sessionIds: [{ sessionId, agentId: 'content-lead' }], createdAt: new Date().toISOString(),
+    } });
+    await eventually(() => recordOf(UNSAVED) && recordOf(UNSAVED).title === 'Unsaved until now', 'the window\'s save');
+    assert.strictEqual(recordOf(UNSAVED).teamOutcomes.length, 1, 'the window\'s save keeps the outcome');
+    client.close();
+  } finally {
+    await stopChild(first.child);
+  }
+
+  // ── THE SECOND SERVER: the next turn is told, once ──
+  const refusal = 'Wren asked to save the agent "unsaved-helper", but only Doc can change the team, so nothing was saved. Ask Doc to make this change.';
+  const second = bootChild();
+  try {
+    client = await connect(await second.ready);
+    client.send({ type: 'chat', conversationId: UNSAVED, agent: 'content-lead', content: 'US-TWO did it work?', sessionId });
+    await client.waitFor(answered('US-TWO-ANSWERED'), 'the next turn');
+    client.send({ type: 'chat', conversationId: UNSAVED, agent: 'content-lead', content: 'US-THREE and now?', sessionId });
+    await client.waitFor(answered('US-THREE-ANSWERED'), 'the turn after');
+    client.close();
+  } finally {
+    await stopChild(second.child);
+  }
+  assert.deepStrictEqual(prompts().filter((p) => p.includes('US-TWO')),
+    [`${HEADING}\n- Refused: save agent "unsaved-helper", asked by Wren. ${refusal}\n\nUS-TWO did it work?`]);
+  assert.deepStrictEqual(prompts().filter((p) => p.includes('US-THREE')), ['US-THREE and now?'], 'told once, not again');
+  assert.ok(!('teamOutcomes' in recordOf(UNSAVED)), 'and removed from the record');
+  assert.strictEqual(recordOf(UNSAVED).title, 'Unsaved until now', 'which keeps the window\'s metadata');
+});

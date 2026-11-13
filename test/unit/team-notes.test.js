@@ -375,6 +375,38 @@ describe('kept on the conversation\'s record until it is told', () => {
   });
 });
 
+describe('a conversation no window has saved yet', () => {
+  // The first turn of a conversation can end before anything has written its
+  // record. Its outcomes are kept on disk all the same, on a record of their
+  // own, and the window's first save of the conversation keeps them.
+  const deleted = FIVE[2];
+  const told = `${HEADING}\n- Deleted: agent "old-helper", asked by Doc.\n\n`;
+  test('its outcomes are written to a record of their own, a window\'s first save keeps them, and a restart tells them once', () => {
+    const convoId = 'unit-unsaved';
+    teamNotes.wireTeamNotes({ appendTranscript: () => {} });
+    assert.strictEqual(recordOf(convoId), null, 'no record yet');
+    teamNotes.keepOutcomes(convoId, [deleted]);
+    assert.deepStrictEqual(recordOf(convoId), { id: convoId, teamOutcomes: [deleted] });
+    const conversations = require(path.join(ROOT, 'lib', 'protocol', 'handlers', 'conversations.js'));
+    conversations.handleSaveConversation({}, { send() {} }, { conversation: { id: convoId, agentId: 'content-lead', title: 'first', sessionIds: [] } });
+    assert.deepStrictEqual(recordOf(convoId).teamOutcomes, [deleted], 'the window\'s first save keeps them');
+    const restarted = restartedTeamNotes();
+    assert.strictEqual(restarted.withTeamNote(convoId, 'next'), `${told}next`);
+    assert.strictEqual(restarted.withTeamNote(convoId, 'after'), 'after');
+    assert.ok(!('teamOutcomes' in recordOf(convoId)), 'removed once told');
+    assert.strictEqual(recordOf(convoId).title, 'first', 'and the rest of the record stays');
+  });
+
+  test('a record made only to hold them goes once they are told', () => {
+    const convoId = 'unit-unsaved-told';
+    teamNotes.wireTeamNotes({ appendTranscript: () => {} });
+    teamNotes.keepOutcomes(convoId, [deleted]);
+    assert.ok(recordOf(convoId), 'kept on a record of their own');
+    assert.strictEqual(teamNotes.withTeamNote(convoId, 'next'), `${told}next`);
+    assert.strictEqual(recordOf(convoId), null, 'which goes with them');
+  });
+});
+
 describe('another agent\'s catch-up', () => {
   test('leaves the stored lines out: they were told to the turn they were for', () => {
     const transcript = [
