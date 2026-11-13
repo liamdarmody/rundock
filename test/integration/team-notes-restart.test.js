@@ -27,6 +27,7 @@ const STUB_CODEX = path.join(__dirname, '..', 'helpers', 'stub-codex');
 const BANNER_TIMEOUT_MS = 20000;
 const CONVO = 'team-note-across-restart';
 const HEADING = 'WHAT RUNDOCK DID WITH THE LAST REPLY:';
+const ONLY_DOC = 'Only Doc can change the team, so nothing was saved. Ask Doc to make this change.';
 
 let home;
 let workspace;
@@ -123,7 +124,6 @@ test('a refusal not yet told is told to the next turn after a restart, once, and
   assert.strictEqual(stored().teamOutcomes.length, 1, 'the outcome not yet told is on the conversation\'s record');
 
   // ── THE SECOND SERVER: the next turn is told, once ──
-  const refusal = 'Wren asked to save the agent "restart-helper", but only Doc can change the team, so nothing was saved. Ask Doc to make this change.';
   const second = bootChild();
   try {
     client = await connect(await second.ready);
@@ -137,7 +137,7 @@ test('a refusal not yet told is told to the next turn after a restart, once, and
     await stopChild(second.child);
   }
   assert.deepStrictEqual(prompts().filter((p) => p.includes('RS-TWO')),
-    [`${HEADING}\n- Refused: save agent "restart-helper", asked by Wren. ${refusal}\n\nRS-TWO did it work?`]);
+    [`${HEADING}\n- Refused: save agent "restart-helper", asked by agent "content-lead". ${ONLY_DOC}\n\nRS-TWO did it work?`]);
   assert.deepStrictEqual(prompts().filter((p) => p.includes('RS-THREE')), ['RS-THREE and now?'], 'told once, not again');
   assert.strictEqual(fs.existsSync(file(path.join('.claude', 'agents', 'restart-helper.md'))), false);
 });
@@ -191,7 +191,6 @@ test('the first turn of a conversation no window has saved: its refusal is kept 
   }
 
   // ── THE SECOND SERVER: the next turn is told, once ──
-  const refusal = 'Wren asked to save the agent "unsaved-helper", but only Doc can change the team, so nothing was saved. Ask Doc to make this change.';
   const second = bootChild();
   try {
     client = await connect(await second.ready);
@@ -204,7 +203,7 @@ test('the first turn of a conversation no window has saved: its refusal is kept 
     await stopChild(second.child);
   }
   assert.deepStrictEqual(prompts().filter((p) => p.includes('US-TWO')),
-    [`${HEADING}\n- Refused: save agent "unsaved-helper", asked by Wren. ${refusal}\n\nUS-TWO did it work?`]);
+    [`${HEADING}\n- Refused: save agent "unsaved-helper", asked by agent "content-lead". ${ONLY_DOC}\n\nUS-TWO did it work?`]);
   assert.deepStrictEqual(prompts().filter((p) => p.includes('US-THREE')), ['US-THREE and now?'], 'told once, not again');
   assert.ok(!('teamOutcomes' in recordOf(UNSAVED)), 'and removed from the record');
   assert.strictEqual(recordOf(UNSAVED).title, 'Unsaved until now', 'which keeps the window\'s metadata');
