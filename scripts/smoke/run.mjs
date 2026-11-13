@@ -156,9 +156,17 @@ record('S2 delegation_start event (to kit, intercepted)', !!s2ev);
 const s2blocked = await page.locator('text=Blocked a handoff').count();
 record('S2 no off-roster block for the reportsTo-less specialist', s2blocked === 0);
 
-// ── S3: platform CRUD end to end (marker scan is CLIENT code) ───────────
+// ── S3: platform CRUD end to end, through the hand-off card ─────────────
+// Roo brings Doc in, so Doc's save waits on a card: nothing is written until
+// the person presses Allow, and then the file and the created line appear.
 await sendInNewConversation('SMOKE-S3 ask doc to create smokey');
-const s3file = await waitFor(() => fs.existsSync(path.join(workspace, '.claude', 'agents', 'smokey.md')), 45000);
+const s3card = page.locator('#messages .msg-permission').filter({ hasText: 'Add the agent smokey' }).first();
+const s3asks = await waitFor(() => s3card.isVisible().catch(() => false), 45000);
+record('S3 a save during a hand-off waits on a card', !!s3asks);
+const s3path = path.join(workspace, '.claude', 'agents', 'smokey.md');
+record('S3 nothing is written before Allow', !fs.existsSync(s3path));
+if (s3asks) await s3card.locator('[data-perm-action="allow"]').click();
+const s3file = await waitFor(() => fs.existsSync(s3path), 45000);
 record('S3 Doc SAVE_AGENT marker creates the file on disk', !!s3file);
 const s3pill = await waitFor(() => page.locator('text=Agent "smokey" created').count().then(c => c > 0), 10000);
 record('S3 created pill renders', !!s3pill);
