@@ -3967,8 +3967,10 @@ const MUTATIONS = [
     ""],
   // ===== WHAT THE SHELL CHECK READS IN CODE AND TEXT =====
   [SHELL_CODE, "Shell code: a backslash in a Bash word is a Windows separator again on a POSIX host",
-    "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);",
-    "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot);"],
+    // Every reading of a Bash word goes through flavourOf, so the POSIX
+    // reading is dropped there, for all of them at once.
+    ": flavourFor(t, workspaceRoot, posixText));",
+    ": flavourFor(t, workspaceRoot));"],
   [SHELL_CODE, "Shell code: an unquoted Bash escape is judged as written, not as bash reads it",
     " t = t.replace(/\\\\(.)/g, '$1');",
     " {}"],
@@ -4014,7 +4016,7 @@ const MUTATIONS = [
     "    if (ch === '`') {",
     "    if (false) {"],
   [SHELL_CODE, "Shell code: Perl and Ruby command quotes are not noticed",
-    "    const q = /[\\w$@%]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));",
+    String.raw`    const q = /[\w$@%"')\]}]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));`,
     "    const q = null;"],
   [SHELL_CODE, "Shell code: what an unquoted here-document runs as it expands is not judged",
     "    for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });",
