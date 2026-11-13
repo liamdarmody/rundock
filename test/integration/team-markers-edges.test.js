@@ -184,19 +184,32 @@ describe('an agent file that already declares type: platform keeps it, whatever 
 });
 
 describe('a marker in a turn that does not end with a result is not acted on', () => {
-  test('a routine run by Doc changes nothing', async () => {
+  test('a routine run by Doc changes nothing, read once the run has ended', async () => {
+    const key = 'team-markers-routine';
+    const reply = `${deleteMarker('routine-target')}\n${saveMarker('routine-made', 'Made')}`;
     seed('routine-target', 'Before');
+    const before = fs.readFileSync(agentPath('routine-target'));
     h.clearInvocations();
-    h.writeScenario([{ match: { promptIncludes: 'ROUTINE-MARKERS' }, turn: [{ text: `${deleteMarker('routine-target')}\n${saveMarker('routine-made', 'Made')}` }] }]);
+    // Slower than a fixed wait would allow for, so only the run's own ending
+    // can say the marker has been written.
+    h.writeScenario([{ match: { promptIncludes: 'ROUTINE-MARKERS' }, delayMs: 800, turn: [{ text: reply }] }]);
     const since = client.messages.length;
     try {
       const doc = h.internal.discoverAgents().find((a) => a.id === 'rundock-guide');
-      h.internal.executeRoutine(doc, { name: 'team-check', schedule: 'daily 09:00', prompt: 'ROUTINE-MARKERS tidy the team' }, 'team-markers-routine');
-      assert.ok(await h.waitUntil(() => h.readInvocations().some((i) => JSON.stringify(i).includes('ROUTINE-MARKERS'))), 'the routine ran');
-      // The run's output goes nowhere the server reads. Proving that nothing
-      // follows needs real time.
-      await h.delay(600);
-      assert.strictEqual(readOrNull(agentPath('routine-target')), teamFile('routine-target', 'Before'), 'nothing was deleted');
+      h.internal.executeRoutine(doc, { name: 'team-check', schedule: 'daily 09:00', prompt: 'ROUTINE-MARKERS tidy the team' }, key);
+      // The run's ending, as the scheduler records it: the process wrote its
+      // reply, markers and all, exited, and the outcome was recorded.
+      assert.ok(await h.waitUntil(() => { const s = h.internal.routineState[key]; return !!s && s.status !== 'running'; }, { timeout: 15000 }), 'the run ended');
+      assert.strictEqual(h.internal.routineState[key].status, 'completed', 'and completed');
+      const given = h.readPrompts().filter((p) => p.prompt.includes('ROUTINE-MARKERS'));
+      assert.deepStrictEqual(given.map((p) => [p.agent, p.matched]), [['rundock-guide', true]], 'the run was Doc\'s, and was given the reply with the markers');
+      assert.ok(h.readStubOutputs().some((o) => o.agent === 'rundock-guide' && o.stdoutBytes > reply.length), 'and the reply left the process before it exited');
+      // Everything the server sent before the outcome reaches this window
+      // before the answer to a message sent after it.
+      const asked = client.messages.length;
+      client.send({ type: 'get_runtime_status' });
+      await client.waitFor((m) => m.type === 'runtime_status', { since: asked, label: 'the answer sent after the outcome' });
+      assert.ok(fs.existsSync(agentPath('routine-target')) && fs.readFileSync(agentPath('routine-target')).equals(before), 'nothing was deleted or changed, byte for byte');
       assert.strictEqual(fs.existsSync(agentPath('routine-made')), false, 'nothing was made');
       assert.deepStrictEqual(client.messages.slice(since).filter((m) => TEAM_LINES.includes(m.type)), [], 'and no line about the team');
     } finally {
