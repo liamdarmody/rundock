@@ -132,6 +132,57 @@ describe('Doc is the id rundock-guide, not a type, and never another runtime', (
   });
 });
 
+describe('an agent file that already declares type: platform keeps it, whatever Doc\'s marker says', () => {
+  // second-guide.md declares type: platform. Doc's own marker may not replace
+  // it, even with content that declares another type, and may not delete it.
+  // The first window line for the conversation is read, so a write shows as
+  // the wrong line rather than as a wait for one that never comes.
+  async function firstLine(convoId, since) {
+    const { msg } = await client.waitFor((m) => TEAM_LINES.includes(m.type) && m.conversationId === convoId, { since, timeout: 4000, label: 'the line about the team' });
+    return msg;
+  }
+
+  test('Doc\'s SAVE_AGENT replacing it with specialist content is refused, and the file is unchanged', async () => {
+    const convoId = h.freshConvoId('keepsave');
+    const before = fs.readFileSync(agentPath('second-guide'));
+    h.writeScenario([{ match: { agent: 'rundock-guide', promptIncludes: 'KEEP-PLATFORM-SAVE' }, turn: [{ text: `Saving.\n${saveMarker('second-guide', 'Gil Again')}` }] }]);
+    try {
+      const since = await chat(convoId, 'rundock-guide', 'KEEP-PLATFORM-SAVE make Gil a specialist');
+      const msg = await firstLine(convoId, since);
+      assert.deepStrictEqual([msg.type, msg.refused, msg.message], ['agent_error', true,
+        'Doc asked to save the agent "second-guide", but Doc\'s own file and platform agents cannot be changed from a reply, so nothing was saved.']);
+      await h.delay(300);
+      assert.ok(fs.readFileSync(agentPath('second-guide')).equals(before), 'the platform agent is unchanged, byte for byte');
+      assert.deepStrictEqual(linesFor(client.messages.slice(since), convoId).map((m) => m.type), ['agent_error'], 'one line, the refusal, and no save');
+    } finally {
+      h.reapConvo(convoId);
+      // Put back however it ends, so a failure here cannot change the agent
+      // the other cases in this file talk to.
+      fs.writeFileSync(agentPath('second-guide'), before);
+      h.internal.invalidateAgentCache();
+    }
+  });
+
+  test('Doc\'s DELETE_AGENT of it is refused, and the file is unchanged', async () => {
+    const convoId = h.freshConvoId('keepdelete');
+    const before = fs.readFileSync(agentPath('second-guide'));
+    h.writeScenario([{ match: { agent: 'rundock-guide', promptIncludes: 'KEEP-PLATFORM-DELETE' }, turn: [{ text: `Removing.\n${deleteMarker('second-guide')}` }] }]);
+    try {
+      const since = await chat(convoId, 'rundock-guide', 'KEEP-PLATFORM-DELETE remove Gil');
+      const msg = await firstLine(convoId, since);
+      assert.strictEqual(msg.type, 'agent_error', 'refused, not deleted');
+      assert.match(msg.message, /platform agents/, 'and the line says why');
+      await h.delay(300);
+      assert.ok(fs.readFileSync(agentPath('second-guide')).equals(before), 'the platform agent is still there, byte for byte');
+      assert.deepStrictEqual(linesFor(client.messages.slice(since), convoId).map((m) => m.type), ['agent_error'], 'one line, the refusal, and no delete');
+    } finally {
+      h.reapConvo(convoId);
+      fs.writeFileSync(agentPath('second-guide'), before);
+      h.internal.invalidateAgentCache();
+    }
+  });
+});
+
 describe('a marker in a turn that does not end with a result is not acted on', () => {
   test('a routine run by Doc changes nothing', async () => {
     seed('routine-target', 'Before');
