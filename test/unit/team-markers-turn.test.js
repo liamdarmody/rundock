@@ -221,6 +221,52 @@ describe('a hand-off is the record on the entry, and nothing an agent wrote', ()
     assert.deepStrictEqual(saves, [], 'and nothing reached the save');
   });
 
+  // A CARD'S OUTCOME THAT CANNOT BE KEPT IS NEVER LOST, AND NEVER TOLD AS A
+  // STOP. The card was held on the record, when it was raised, with the
+  // outcome a stop gives it; once decided, the outcome takes its place. With
+  // the write that keeps it failing, a later start must still tell what was
+  // decided, once, and never that nobody answered.
+  const HEADING = 'WHAT RUNDOCK DID WITH THE LAST REPLY:';
+  const notesPath = require.resolve(path.join(ROOT, 'lib', 'agents', 'team-notes.js'));
+  // The notes module as a server that has just started has it.
+  function laterStart() {
+    const running = require.cache[notesPath];
+    delete require.cache[notesPath];
+    try { return require(notesPath); } finally { require.cache[notesPath] = running; }
+  }
+  for (const [allow, told] of [
+    [false, '- Refused: save agent "example-agent", asked by Doc. It was not allowed on the card, so nothing was saved.'],
+    [true, '- Saved (new): agent "example-agent", asked by Doc.'],
+  ]) {
+    test(`a card ${allow ? 'allowed' : 'denied'} whose outcome cannot be kept: the conversation shows it once, and a later start tells what was decided, once`, () => {
+      const notes = require(notesPath);
+      const lines = [];
+      notes.wireTeamNotes({ appendTranscript: (/** @type {any} */ id, /** @type {any} */ role, /** @type {any} */ agent, /** @type {string} */ text) => lines.push(text) });
+      try {
+        docTurn({ delegation: { originalAgentId: 'chief-of-staff', originalProcessId: 'p0' } }, `Done.\n${SAVE}`);
+        assert.strictEqual(requests.length, 1, 'one card');
+        // The first write of the conversation list after the decision fails.
+        const realWrite = fs.writeFileSync;
+        let n = 0;
+        fs.writeFileSync = function (/** @type {any} */ file, /** @type {any[]} */ ...rest) {
+          if (String(file).endsWith('conversations.json') && ++n === 1) throw new Error('disk full');
+          return realWrite.call(this, file, ...rest);
+        };
+        try { requests[0].onDecision(allow, 'user', { card: true }); } finally { fs.writeFileSync = realWrite; }
+        assert.strictEqual(lines.length, 1, `the conversation shows the decision, once: ${JSON.stringify(lines)}`);
+        const later = laterStart();
+        const laterLines = [];
+        later.wireTeamNotes({ appendTranscript: (/** @type {any} */ id, /** @type {any} */ role, /** @type {any} */ agent, /** @type {string} */ text) => laterLines.push(text) });
+        assert.strictEqual(later.withTeamNote('c1', 'did it work?'), `${HEADING}\n${told}\n\ndid it work?`, 'a later start tells what was decided');
+        assert.strictEqual(later.withTeamNote('c1', 'and now?'), 'and now?', 'once');
+        assert.deepStrictEqual(laterLines, [], 'and does not store the line a second time');
+        assert.deepStrictEqual(saves, allow ? ['example-agent'] : []);
+      } finally {
+        notes.wireTeamNotes({ appendTranscript: null });
+      }
+    });
+  }
+
   test('an entry nobody brought in writes with no card, though the reply and a marker\'s attributes say it is a hand-off', () => {
     teamMarkers.seams.scan = (text) => realScan(text).map((a) => ({ ...a, delegated: true, by: 'chief-of-staff' }));
     docTurn({ delegationRecord: { from: 'chief-of-staff' } },

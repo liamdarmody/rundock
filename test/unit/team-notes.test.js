@@ -450,6 +450,49 @@ describe('a conversation no window has saved yet', () => {
   });
 });
 
+describe('a card an earlier run held becomes its outcome without being lost or told twice', () => {
+  // A card still open when Rundock stopped is held on the record with the
+  // outcome a stop gives it (lib/agents/team-markers.js). The first read
+  // after a start turns it into that outcome. A write of the record that
+  // fails there must neither lose the outcome nor leave it to be told again.
+  const STOPPED = { kind: 'save_agent', name: 'helper', author: 'rundock-guide', outcome: 'refused', reason: 'stopped',
+    message: 'Doc asked to save the agent "helper", but Rundock stopped before anyone answered the card, so nothing was saved.' };
+  const TOLD = `${HEADING}\n- Refused: save agent "helper", asked by Doc. Rundock stopped before anyone answered the card, so nothing was saved.\n\n`;
+  // Run `fn` with the nth write of the conversation list failing.
+  function withWriteFailing(nth, fn) {
+    const realWrite = fs.writeFileSync;
+    let n = 0;
+    fs.writeFileSync = function (/** @type {any} */ file, /** @type {any[]} */ ...rest) {
+      if (String(file).endsWith('conversations.json') && ++n === nth) throw new Error('disk full');
+      return realWrite.call(this, file, ...rest);
+    };
+    try { return fn(); } finally { fs.writeFileSync = realWrite; }
+  }
+  for (const nth of [1, 2]) {
+    test(`the ${nth === 1 ? 'first' : 'second'} write of the record after a start fails: the card's outcome is told once, over this start and the next, and its line is stored once`, () => {
+      const convoId = `unit-stopped-card-${nth}`;
+      fs.mkdirSync(path.dirname(convosFile()), { recursive: true });
+      fs.writeFileSync(convosFile(), JSON.stringify([...readConvos(), { id: convoId, title: 'held', sessionIds: [], teamCards: { 'old-card': { run: 'an-earlier-run', outcome: STOPPED } } }]));
+      const lines = [];
+      const turns = [];
+      withWriteFailing(nth, () => {
+        const started = restartedTeamNotes();
+        started.wireTeamNotes({ appendTranscript: (/** @type {string} */ id, /** @type {any} */ role, /** @type {any} */ agent, /** @type {string} */ text) => { if (id === convoId) lines.push(text); } });
+        turns.push(started.withTeamNote(convoId, 'turn one'));
+      });
+      assert.ok(recordOf(convoId), 'the record is still there');
+      const next = restartedTeamNotes();
+      next.wireTeamNotes({ appendTranscript: (/** @type {string} */ id, /** @type {any} */ role, /** @type {any} */ agent, /** @type {string} */ text) => { if (id === convoId) lines.push(text); } });
+      turns.push(next.withTeamNote(convoId, 'turn two'), next.withTeamNote(convoId, 'turn three'));
+      const toldTurns = turns.filter((t) => t.startsWith(HEADING));
+      assert.strictEqual(toldTurns.length, 1, `told once, not lost and not twice: ${JSON.stringify(turns)}`);
+      assert.ok(toldTurns[0] === `${TOLD}turn one` || toldTurns[0] === `${TOLD}turn two`, toldTurns[0]);
+      assert.deepStrictEqual(lines, [STOPPED.message], 'the line a person reads is stored once');
+      assert.ok(!('teamCards' in recordOf(convoId)) && !('teamOutcomes' in recordOf(convoId)), 'and the record holds neither once it is told');
+    });
+  }
+});
+
 describe('a card that wrote nothing is told why, in Rundock\'s own words', () => {
   // A change Doc makes in a hand-off is asked about on a card
   // (lib/agents/team-markers.js). One that wrote nothing is refused with a
