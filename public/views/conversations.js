@@ -824,6 +824,7 @@ function replayConversationInto(el, c) {
     const m = c.messages[i];
     if (m.role === 'user') addUserMsg(m.content, false);
     else if (m.role === 'agent') addAgentMsg(m.content, m.agentId, false, m.timestamp || null);
+    else if (m.role === 'system') addSystemMsg(m.content);
     if (m.isHistory) {
       const last = el.lastElementChild;
       if (last) last.classList.add('history-msg');

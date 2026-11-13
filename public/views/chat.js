@@ -508,7 +508,11 @@ function renderSessionHistory(d) {
     }
     const div = document.createElement('div');
     div.style.animation = 'none';
-    if (msg.role === 'user') {
+    if (msg.role === 'system') {
+      // What Rundock did with an agent or skill marker, stored by the server.
+      div.className = 'msg-system history-msg';
+      div.textContent = msg.content || '';
+    } else if (msg.role === 'user') {
       div.className = 'msg msg-user history-msg';
       div.innerHTML = RundockChatMarkup.userBubbleHtml(esc(msg.content));
     } else {
@@ -566,7 +570,7 @@ function renderSessionHistory(d) {
   // Routing entries keep their dedicated role so sidebar preview filters them out
   // and the replay loop skips them (auto-divider on the following agent triggers).
   const historyMsgs = d.messages.filter(m => !m.content || !m.content.includes('[WORKSPACE_ANALYSIS]')).map(m => ({
-    role: m.type === 'routing' ? 'routing' : (m.role === 'user' ? 'user' : 'agent'),
+    role: m.type === 'routing' ? 'routing' : (m.role === 'user' || m.role === 'system' ? m.role : 'agent'),
     content: m.role !== 'user' ? stripRundockMarkers(m.content || '').trim() : m.content,
     agentId: m.agentId || convo.agentId,
     timestamp: m.timestamp || null,

@@ -424,3 +424,36 @@ describe('the sequences a person runs', () => {
     }
   });
 });
+
+describe('the line a person reads is kept with the conversation', () => {
+  test('stored once with two windows open, after the reply that asked, and given back by the history', async () => {
+    const convoId = h.freshConvoId('kept');
+    const second = await h.connect();
+    h.writeScenario([
+      { match: { agent: 'rundock-guide', promptIncludes: 'KEPT-ONE' }, turn: [{ text: `KEPT-REPLY made it.\n${saveAgent('kept-helper', teamFile('kept-helper', 'Helper'))}` }] },
+    ]);
+    try {
+      const since = second.messages.length;
+      await chat(convoId, 'rundock-guide', 'KEPT-ONE make a helper');
+      await second.waitFor((m) => m.type === 'agent_saved' && m.conversationId === convoId, { since, label: 'the second window told too' });
+      assert.ok(h.internal.connectedClients.size >= 2, 'two windows are open');
+      const transcript = h.internal.convoTranscripts.get(convoId);
+      assert.deepStrictEqual(transcript.map((t) => [t.role, t.type || null]), [['user', null], ['agent', null], ['system', 'team']],
+        'the person\'s message, the reply, then one line for the one outcome');
+      assert.strictEqual(transcript[2].text, 'Agent "kept-helper" created');
+
+      const asked = second.messages.length;
+      second.send({ type: 'get_session_history', conversationId: convoId, sessionIds: [], limit: 200 });
+      const { msg: history } = await second.waitFor((m) => m.type === 'session_history' && m.conversationId === convoId, { since: asked, label: 'the history' });
+      assert.deepStrictEqual(history.messages.map((m) => [m.role, m.content.split('\n')[0]]), [
+        ['user', 'KEPT-ONE make a helper'],
+        ['assistant', 'KEPT-REPLY made it.'],
+        ['system', 'Agent "kept-helper" created'],
+      ]);
+    } finally {
+      second.close();
+      h.reapConvo(convoId);
+      removeAgents('kept-helper');
+    }
+  });
+});

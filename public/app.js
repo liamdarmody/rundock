@@ -826,23 +826,23 @@ function handle(d) {
     case 'agent_saved':
       if (!d.updated) setupComplete = true;
       // Non-default runtimes are worth calling out on the confirmation pill.
-      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''), d.conversationId, false);
+      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''), d.conversationId, false, true);
       break;
     case 'runtime_status':
       runtimeStatus = d;
       renderRuntimesCard();
       break;
     case 'agent_error':
-      addSystemMsgToConvo(d.message || 'Agent operation failed', d.conversationId, false);
+      addSystemMsgToConvo(d.message || 'Agent operation failed', d.conversationId, false, true);
       break;
     case 'agent_deleted':
-      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" removed', d.conversationId, false);
+      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" removed', d.conversationId, false, true);
       break;
     case 'skill_saved':
-      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'), d.conversationId, false);
+      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'), d.conversationId, false, true);
       break;
     case 'skill_error':
-      addSystemMsgToConvo(d.message || 'Skill operation failed', d.conversationId, false);
+      addSystemMsgToConvo(d.message || 'Skill operation failed', d.conversationId, false, true);
       break;
     // A routine write is the one save in this client the user waits on: the
     // editor stays on screen until the server answers, so a refusal has
@@ -897,7 +897,7 @@ function handle(d) {
       // second answer to a question the list already answers.
       break;
     case 'skill_deleted':
-      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" removed', d.conversationId, false);
+      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" removed', d.conversationId, false, true);
       break;
     case 'active_processes':
       // Defer until workspace is ready and conversations are loaded
@@ -1265,7 +1265,13 @@ function handleResult(d, convoId) {
   }
 }
 
-function addSystemMsgToConvo(text, convoId, isError = true) {
+// `keep`: a line about an agent or skill change, which the server also
+// stores in the conversation's history (lib/agents/team-notes.js). It is kept
+// with its own conversation when that one's messages are loaded, so coming
+// back to it draws it again; one not loaded yet brings it with its history.
+function addSystemMsgToConvo(text, convoId, isError = true, keep = false) {
+  const c = keep && convoId ? conversations.find(x => x.id === convoId) : null;
+  if (c && c.messages.length) c.messages.push({ role: 'system', content: text });
   if(!convoId || activeConversation?.id === convoId) addSystemMsg((isError ? 'Error: ' : '') + text);
 }
 
