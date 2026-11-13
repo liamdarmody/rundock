@@ -2233,6 +2233,9 @@ const SHELL_SHEBANG = /^#!.*\b(?:sh|bash|zsh|dash|ksh|fish)\b/;
 // formats. Read as a quote, Python's `"%d" % (100*(b-a)/len(t))` ran `/len`.
 const QUOTE_OPERATOR = /^(?:(?:qx|qq|qw|q)\s*|%[xqQwWiI]?)([([{<])/;
 const CLOSING = { '(': ')', '[': ']', '{': '}', '<': '>' };
+// Python 3 named alone, as the PATH the command starts with finds it: a path
+// can name an interpreter the workspace holds, and `python` may be Python 2.
+const PLAIN_PYTHON = /^python3(?:\.\d+)?$/;
 
 function interpreterFamily(lead) {
   if (!CODE_INTERPRETER.test(lead)) return null;
@@ -2261,11 +2264,14 @@ function feedsCode(segment, body) {
   }
   const family = interpreterFamily(lead);
   if (family) {
+    // 'python' for Python started plainly: first in its command, by its name,
+    // with no option before the program (codeParts).
+    const plain = (bare) => (bare && i === 0 && words[i] === lead && PLAIN_PYTHON.test(lead) ? 'python' : true);
     for (const a of args) {
-      if (a === '-') return true;
+      if (a === '-') return plain(a === args[0]);
       if (!a.startsWith('-') || PROGRAM_FLAG[family].test(a)) return false;
     }
-    return true;
+    return plain(!args.length);
   }
   const files = lead === 'cat' ? outs : lead === 'tee' ? args.filter(a => !a.startsWith('-')) : [];
   return files.length > 0 && !files.some(f => SCRIPT_FILE.test(f)) && !SHELL_SHEBANG.test(String(body).split('\n')[0]);
@@ -2294,10 +2300,12 @@ function feedsCode(segment, body) {
 // an installer's `/opt` say, as missing.
 //
 // THREE SPELLINGS THAT NAME NO PLACE, each held where it is read:
-//   - A piece joined by `+` onto a name the code gives one plain string, once
-//     (`V = "/ws"`, then `V + "/etc/x"`), is judged as the whole path,
-//     `/ws/etc/x`, not alone. A name given another value or bound another way
-//     leaves the piece judged alone (codeUse, codeParts).
+//   - A piece joined by `+` onto a name a Python script started plainly gives
+//     one plain string, once (`V = "/ws"`, then `V + "/etc/x"`), is judged as
+//     the whole path, `/ws/etc/x`, not alone. A name given another value or
+//     bound another way, a script that could change a name without naming it,
+//     and any other start or language leave the piece judged alone
+//     (pythonNamesClosed, feedsCode, codeUse, codeParts).
 //   - In Bash on macOS and Linux a word that starts with two backslashes is
 //     not a network name: `'\\n\\n'` is text. A Windows host and PowerShell
 //     keep `\\server\share` (crossingsIn).
@@ -2399,6 +2407,121 @@ const KEYWORDS = new Set(['if', 'elif', 'while', 'for', 'foreach', 'in', 'not', 
 const RUNS_COMMAND = new Set(['system', 'popen', 'Popen', 'check_call', 'check_output', 'getoutput', 'getstatusoutput', 'execSync',
   'spawnSync', 'execFileSync', 'spawn', 'execFile', 'execvp', 'execv', 'execlp', 'execl', 'spawnv', 'spawnvp']);
 const RUNS_COMMAND_ON_MODULE = new Set(['run', 'call', 'exec', 'capture2', 'capture3', 'popen3']);
+
+// A PYTHON SCRIPT IN WHICH A NAME CHANGES ONLY WHERE IT IS NAMED, shown by the
+// words the script uses, not by the ones it avoids. Python searches the folder
+// a script runs in, and any folder put on its path, before its own library,
+// and loads a module for more than an import: a text encoding named as the
+// script runs, a `\N{...}` escape, a coding line, a library call that imports
+// as it runs, and, on Python 3.9 (the one macOS ships), a warning shown, which
+// reads the coding line of a file named as the script is (`<stdin>`,
+// `<string>`) in that folder. A module loaded from the workspace is code the hook never reads,
+// and reaches the script's names through `__main__` or a frame, as the script
+// itself can through a frame, or its names reached by text it builds. So a
+// name is known only in a script that loads nothing and reaches nothing:
+//   - its strings read as Python reads them: each on one line (no `'''` or
+//     `"""`, nor a backtick or quote word, codeParts), its braces closed, and
+//     what it holds between braces, which an f-string or t-string runs, read
+//     as code;
+//   - no escape in a string but `\n`, `\t`, `\r`, `\0`, `\\` and a quote, no
+//     coding line, no dunder, and no character outside ASCII and no backslash
+//     in its code;
+//   - each import names `sys`, `os` or `os.path`, which Python has loaded
+//     before the script's first line, so no folder is searched for them;
+//   - every word of its code is a name of its own, or a keyword, builtin or
+//     attribute on the lists below, none of which loads a module, runs text or
+//     reaches a frame or a module's names; `open` and `str` are called where
+//     they are named, with nothing to look an encoding up by: at most two and
+//     one arguments, none named or unpacked, and `open`'s mode a plain string
+//     of its letters;
+//   - nothing Python warns of: no `is`, `assert`, `finally`, `~` or
+//     `NotImplemented`, no number run into a word, and no call or index on a
+//     string, number, constant or display (a tuple, list, dict, set or group).
+// PY_KEYWORDS and PY_BUILTINS hold every keyword and builtin Python 3 has, so
+// no word that is one is taken for a name of the script's own.
+const PY_KEYWORDS = new Set(('False None True and as assert async await break case class continue def del elif else except finally for '
+  + 'from global if import in is lambda match nonlocal not or pass raise return try while with yield').split(' '));
+const PY_KEYWORDS_ALLOWED = new Set('False None True and as break continue def elif else except for if import in lambda not or pass raise return try while with'.split(' '));
+const PY_BUILTINS = new Set(('NotImplemented abs aiter all anext any ascii bin bool breakpoint bytearray bytes callable chr classmethod compile complex '
+  + 'copyright credits delattr dict dir divmod enumerate eval exec exit filter float format frozenset getattr globals hasattr hash help hex id input '
+  + 'int isinstance issubclass iter len license list locals map max memoryview min next object oct open ord pow print property quit range repr '
+  + 'reversed round set setattr slice sorted staticmethod str sum super tuple type vars zip').split(' '));
+const PY_BUILTINS_ALLOWED = new Set('abs all any bool dict enumerate float int isinstance len list max min open print range repr reversed round set sorted str sum tuple zip'.split(' '));
+const PY_CALLED_PLAINLY = new Map([['open', 2], ['str', 1]]);
+const PY_ATTRIBUTES = new Set(('argv path exit stdin stdout stderr platform version executable maxsize environ getenv getcwd listdir makedirs mkdir '
+  + 'remove unlink rename replace rmdir walk stat sep join exists isdir isfile dirname basename abspath splitext getsize read write readline readlines '
+  + 'close split splitlines strip lstrip rstrip startswith endswith lower upper find count append extend insert pop sort items keys values get update add').split(' '));
+const PY_IMPORT = /^\s*import\s+(?:sys|os(?:\.path)?)(?:\s*,\s*(?:sys|os(?:\.path)?))*\s*$/;
+const PY_NUMBER = /^(?:\d[\d_]*(?:\.[\d_]*)?(?:[eE]\d+)?[jJ]?|0[xX][\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+)$/;
+// What each bracket in `src` is given (how many arguments, whether any is
+// named or unpacked, where its commas and its close are), or null where a
+// bracket calls or indexes a string, number, constant or display.
+function pythonBrackets(src) {
+  const given = new Map();
+  const calls = new Map();
+  const open = [];
+  for (let k = 0; k < src.length; k++) {
+    const c = src[k];
+    const f = open[open.length - 1];
+    if (f && f.fresh && !/[\s)\]}]/.test(c)) { f.fresh = false; f.args++; if (c === '*') f.odd = true; }
+    if ('([{'.includes(c)) {
+      let p = k - 1;
+      while (p >= 0 && /\s/.test(src[p])) p--;
+      let t = p;
+      while (t >= 0 && /\w/.test(src[t])) t--;
+      const word = src.slice(t + 1, p + 1);
+      const shut = /[)\]]/.test(src[p]);
+      if (c !== '{' && (/["'}.]/.test(src[p]) || (shut && !calls.get(p)) || /^(?:\d|None$|True$|False$)/.test(word))) return null;
+      open.push({ at: k, args: 0, fresh: true, odd: false, commas: [], call: c !== '{' && (shut || (word !== '' && !PY_KEYWORDS.has(word))) });
+    } else if (')]}'.includes(c)) {
+      if (f) { open.pop(); f.to = k; given.set(f.at, f); calls.set(k, f.call); }
+    } else if (f && c === ',') { f.fresh = true; f.commas.push(k); }
+    else if (f && c === '=' && !/[=<>!:]/.test(src[k - 1]) && src[k + 1] !== '=') f.odd = true;
+  }
+  return given;
+}
+function pythonNamesClosed(s, masked, lits) {
+  if (/'''|"""/.test(s) || s.includes('__') || /coding[:=]/.test(s.split('\n', 2).join('\n'))) return false;
+  const fields = [];
+  const litAt = new Map();
+  for (const l of lits) {
+    litAt.set(l.start, l);
+    if (l.value.replace(/\\[ntr0\\'"]/g, '').includes('\\')) return false;
+    const v = l.value.replace(/\{\{|\}\}/g, '');
+    let depth = 0;
+    let from = 0;
+    for (let k = 0; k < v.length && depth >= 0; k++) {
+      if (v[k] === '{' && depth++ === 0) from = k + 1;
+      else if (v[k] === '}' && --depth === 0) fields.push(v.slice(from, k));
+    }
+    if (depth !== 0) return false;
+  }
+  const code = masked.replace(/#[^\n]*/g, c => ' '.repeat(c.length));
+  const text = `${code}\n${fields.join('\n')}`;
+  if (/[^\x00-\x7f]|[\\~]/.test(text) || text.split(/[\n;]/).some(st => /\bimport\b/.test(st) && !PY_IMPORT.test(st))) return false;
+  for (const m of text.matchAll(/(?<![\w.])\d[\w.]*/g)) if (!PY_NUMBER.test(m[0])) return false;
+  const given = pythonBrackets(code);
+  if (!given || !pythonBrackets(fields.join('\n'))) return false;
+  for (const m of text.matchAll(/(?<!\w)[A-Za-z_]\w*/g)) {
+    const w = m[0];
+    let p = m.index - 1;
+    while (p >= 0 && /\s/.test(text[p])) p--;
+    if (text[p] === '.') { if (PY_ATTRIBUTES.has(w)) continue; return false; }
+    if (PY_KEYWORDS.has(w) ? !PY_KEYWORDS_ALLOWED.has(w) : PY_BUILTINS.has(w) && !PY_BUILTINS_ALLOWED.has(w)) return false;
+    if (!PY_CALLED_PLAINLY.has(w)) continue;
+    let q = m.index + w.length;
+    while (q < code.length && /\s/.test(code[q])) q++;
+    const g = m.index < code.length && code[q] === '(' && given.get(q);
+    if (!g || g.odd || g.args > PY_CALLED_PLAINLY.get(w)) return false;
+    if (w === 'open' && g.args === 2) {
+      let a = g.commas[0] + 1;
+      while (/\s/.test(code[a])) a++;
+      const mode = litAt.get(a);
+      if (!mode || mode.pre !== a || !/^[rwaxbt+]+$/.test(mode.value) || code.slice(mode.end, g.to).trim()) return false;
+    }
+  }
+  return true;
+}
 
 function codeUse(s, masked, lits) {
   const litByStart = new Map(lits.map(l => [l.pre, l]));
@@ -2972,17 +3095,18 @@ function codeUse(s, masked, lits) {
   // an operand of `+` or a bare `{NAME}` in a string that fills names in. Any
   // other mention may bind it again (a second assignment, a loop, a parameter,
   // an import, `global`, `+=`, a walrus) or hand it to code that changes it,
-  // and code that can set a name unseen (exec, globals(), the shell filling in
-  // `$X`, an escaped or non-ASCII name) leaves no name known.
+  // and in a script that could change a name without naming it
+  // (pythonNamesClosed), no name is known.
   const plain = (lit) => lit.kind === 'quote' && lit.pre === lit.start && !/[\\$@`{}]/.test(lit.value);
-  const SETS_NAMES_UNSEEN = /exec|eval|compile|globals|locals|\bvars\b|setattr|delattr|__\w+__|builtins|modules|importlib|_getframe|f_globals|f_locals|\bglobal\b|nonlocal|globalThis|\bthis\b|\bself\b|\bwindow\b|Function|constructor|Reflect|binding|_set\b|runIn|pdb|cProfile|profile|doctest|timeit|interact|runsource|runcode|import\s*\*|\bwith\s*\(|def\s*\+|define_method|refine|\$[\w{(]|`/;
+  let shown = null;
+  const closed = () => (shown === null ? (shown = pythonNamesClosed(s, masked, lits)) : shown);
   const depthAt = (a) => { let d = 0; for (let k = 0; k < a; k++) d += OPENERS.includes(masked[k]) ? 1 : CLOSERS.includes(masked[k]) ? -1 : 0; return d; };
   // The literal a position sits inside: the literals are in order and never
   // overlap, so a search halves them, where a scan grew with the square of a
   // join of many literals.
   const litAt = (a) => { let lo = 0, hi = lits.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (lits[mid].end <= a) lo = mid + 1; else hi = mid; } return lits[lo] && lits[lo].start < a ? lits[lo] : null; };
   const fixedName = (name) => {
-    if (SETS_NAMES_UNSEEN.test(s) || /[^\x00-\x7f]|\\/.test(masked)) return false;
+    if (!closed()) return false;
     let defs = 0;
     for (const m of s.matchAll(new RegExp(`(?<![\\w$.])${name}(?![\\w$])`, 'g'))) {
       const a = m.index;
@@ -3031,10 +3155,13 @@ const joinedPieceSeam = { beforeReading() {} };
 // literal is quoted text on one line, so an apostrophe in a comment cannot
 // swallow the code after it. A path built from parts is given whole, beside
 // the literals it was built from.
-function codeParts(code, reading = null) {
+function codeParts(code, reading = null, plainPython = false) {
   const s = String(code);
   const found = [];
   const commands = [];
+  // Set where a backtick span or quote operator is blanked: Python reads
+  // neither, so code in one is code the joined reading has not seen.
+  let opaque = false;
   // The code with each literal's text, each backtick span and each quote
   // operator's body blanked, so nothing inside one is read as code.
   const blank = new Uint8Array(s.length);
@@ -3059,6 +3186,7 @@ function codeParts(code, reading = null) {
       const j = s.indexOf('`', i + 1);
       const end = j < 0 ? s.length : j;
       commands.push(s.slice(i + 1, end));
+      opaque = true;
       // A template literal is a string too, for the paths code builds in one.
       if (j >= 0) found.push({ start: i, pre: i, end: j + 1, value: s.slice(i + 1, j), kind: 'template' });
       blankOut(i + 1, end);
@@ -3077,6 +3205,7 @@ function codeParts(code, reading = null) {
       }
       commands.push(s.slice(i + q[0].length, j));
       blankOut(i + q[0].length, j);
+      opaque = true;
       i = j;
     }
   }
@@ -3094,8 +3223,9 @@ function codeParts(code, reading = null) {
     if (l.kind !== 'quote') continue;
     const node = literalNode.get(l);
     // A piece of a join whose whole path is known and judged is not judged
-    // again alone (codeUse). If that reading fails, it is, as before.
-    if (consumed.has(l)) {
+    // again alone (codeUse), in Python started plainly (feedsCode). If that
+    // reading fails, it is, as before.
+    if (plainPython && !opaque && consumed.has(l)) {
       try {
         joinedPieceSeam.beforeReading();
         if (wholeOf(node) && node.values.length && node.values.every(v => literalIsPlace(v, reading))) continue;
@@ -3128,10 +3258,13 @@ function segmentAt(text, at) {
 // The command's text with each here-document body fed to code taken out, and
 // beside it the literals in that code that name a place and the commands the
 // code runs, each at its command's `<<`.
-function heredocText(command, reading = null) {
+function heredocText(command, reading = null, depth = 0) {
   const s = String(command);
   const cut = stripHeredocs(s);
   if (!cut.ok || !cut.bodies.length) return { text: s, literals: [], names: [], commands: [] };
+  // Where the command's first segment ends: Python started plainly is first.
+  const first = lexSegments(cut.text)[0];
+  const firstEnd = first ? cut.text.indexOf(first.text) + first.text.length : 0;
   let text = '';
   let from = 0;
   const literals = [];
@@ -3144,7 +3277,8 @@ function heredocText(command, reading = null) {
     const subs = b.expands ? substitutions(b.body, 'bash', { quoted: true }) : { ok: true, bodies: [] };
     if (seg === null || !subs.ok || !feedsCode(seg, b.body)) { text += b.body; continue; }
     const at = b.at + text.length - b.bodyAt;
-    const code = codeParts(b.body, reading);
+    const plainPython = depth === 0 && !b.expands && b.at < firstEnd && feedsCode(seg, b.body) === 'python';
+    const code = codeParts(b.body, reading, plainPython);
     for (const l of code.literals) literals.push({ ...l, at });
     for (const t of code.names) names.push({ t, at });
     for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });
@@ -3214,10 +3348,12 @@ function inlineCode(text, reading = null, depth = 0) {
   const names = [];
   const commands = [];
   let from = 0;
+  let segs = 0;
   for (const seg of lexSegments(text)) {
     const at = text.indexOf(seg.text, from);
     if (at < 0) break;
     from = at + seg.text.length;
+    const firstSeg = segs++ === 0;
     const lexed = lexWords(seg.text);
     const words = lexed.map(w => w.text);
     // zsh RUNS THE CODE OF AN `e` GLOB QUALIFIER from inside the word: `ls
@@ -3246,7 +3382,10 @@ function inlineCode(text, reading = null, depth = 0) {
     for (let k = i + 1; family && k < words.length; k++) {
       const m = INLINE_CODE[family].exec(words[k]);
       if (!m) continue;
-      const code = codeParts(m[1] || words[++k] || '', reading);
+      // Python started plainly, first on the line, its code in the word after
+      // `-c` or attached to it, with nothing in it the shell fills in.
+      const plain = depth === 0 && firstSeg && i === 0 && k === 1 && PLAIN_PYTHON.test(words[0]) && /^-c/.test(words[1]) && !(lexed[m[1] ? 1 : 2] || lexed[1]).expands;
+      const code = codeParts(m[1] || words[++k] || '', reading, plain);
       for (const l of code.literals) literals.push({ ...l, at });
       for (const t of code.names) names.push({ t, at });
       for (const c of code.commands) commands.push({ text: c, at });
@@ -3265,7 +3404,7 @@ function inlineCode(text, reading = null, depth = 0) {
 // stopped being seen. It is measured from where the command starts: it runs
 // in a shell of its own, so a `cd` inside it moves nothing outside it.
 function judgedShellText(command, reading = null, depth = 0) {
-  const view = heredocText(command, reading);
+  const view = heredocText(command, reading, depth);
   const inline = inlineCode(view.text, reading, depth);
   return {
     text: view.text,

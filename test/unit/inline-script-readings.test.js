@@ -82,24 +82,26 @@ const ASKS = STILL_ASKS(home, ws);
 // ===== A PIECE JOINED ONTO A NAME GIVEN ONE PLAIN STRING, ONCE =====
 
 describe('a piece joined onto a name given the workspace once is judged as the whole path', POSIX, () => {
+  // Only sys and os are imported: a script that imports anything else keeps
+  // the card (a name that code the hook never reads can change, below).
   const CALLS = [
     'sys.path.insert(0, V + "/etc/tools/lib")',
     'print(V + "/etc/x/y")',
     'open(V + "/etc/x/y", "w").write("x")',
     'os.makedirs(V + "/etc/x/y")',
-    'shutil.rmtree(V + "/etc/x/y")',
+    'os.rmdir(V + "/etc/x/y")',
   ];
   for (const [mode, codeMode] of MODES) {
     test(`in a here-document, in any call, a write among them (${mode} mode)`, () => {
       assert.deepStrictEqual(places(MAIN_RED.joined, { codeMode }), []);
       for (const call of CALLS) {
-        assert.deepStrictEqual(places(py('import os, shutil, sys', `V = "${ws}"`, call), { codeMode }), [], call);
+        assert.deepStrictEqual(places(py('import os, sys', `V = "${ws}"`, call), { codeMode }), [], call);
       }
     });
 
     test(`in python3 -c, first on its line or after other statements (${mode} mode)`, () => {
       for (const call of CALLS.map(c => c.replace(/"/g, "'"))) {
-        for (const c of [`python3 -c "V = '${ws}'; ${call}"`, `python3 -c "import os, shutil, sys; V = '${ws}'; ${call}"`]) {
+        for (const c of [`python3 -c "V = '${ws}'; ${call}"`, `python3 -c "import os, sys; V = '${ws}'; ${call}"`]) {
           assert.deepStrictEqual(places(c, { codeMode }), [], c);
         }
       }
@@ -220,6 +222,253 @@ describe('every way past a joined piece keeps its card', POSIX, () => {
     ]) {
       asksAsWrite(c, etc);
     }
+  });
+});
+
+// ===== A NAME IS KNOWN ONLY WHERE THE SCRIPT SHOWS NOTHING CAN CHANGE IT =====
+//
+// Code the hook never reads can change a name: a module in the workspace,
+// loaded by an import or by Python itself as the script runs, reaches the
+// script's names through `__main__` or a frame, and so can the script, through
+// a frame or its names reached by text it builds. The joined reading is for
+// Python started plainly, and a name is known only where every word of the
+// script's code is one the hook knows loads nothing and reaches nothing.
+//
+// Modules an agent could leave in the workspace with a write inside, each
+// changing the script's name from outside it.
+const MODULES = {
+  'helper.py': "import __main__\n__main__.V = '/'\n",
+  'booster.py': "import sys\nsys._getframe(1).f_globals['V'] = '/'\n",
+  // Named as one of Python's own: the folder the script runs in is searched
+  // before Python's own library.
+  'json.py': "import __main__\n__main__.V = '/'\n",
+  're.py': "import __main__\n__main__.V = '/'\n",
+  'subprocess.py': "import __main__\n__main__.V = '/'\n",
+  'helper.js': "global.V = '/';\n",
+  'helper.rb': "Object.send(:remove_const, :V)\nV = '/'\n",
+};
+for (const [name, text] of Object.entries(MODULES)) fs.writeFileSync(path.join(ws, name), text);
+
+describe('a name that code the hook never reads can change keeps the piece judged alone', POSIX, () => {
+  const W = `V = "${ws}"`;
+  const USE = 'open(V + "/etc/x", "w").write("x")';
+  // A write outside to `want` (by default the bare piece, `/etc/x`).
+  const keeps = (label, command, want = etc) => {
+    const r = scan(command);
+    assert.ok(r && r.where === 'outside' && r.grantable === false && r.crossings.some(c => c.path === want && c.write === true),
+      `${label}: a write outside to ${want}\n${command}\n${JSON.stringify(r)}`);
+  };
+  const runs = (label, command) => assert.strictEqual(scan(command), null, `${label}: runs\n${command}`);
+
+  test('a module in the workspace imported by its own name changes the name before the write', () => {
+    keeps('import helper', py(`V = '${ws}'`, 'import helper', "open(V + '/etc/x', 'w')"));
+    keeps('import booster', py(W, 'import booster', 'open(V + "/etc/x", "w")'));
+  });
+
+  test('the script changes the name through a frame it reaches by names built from strings', () => {
+    keeps('getattr on a frame', py(`V = '${ws}'; import os, sys; f = getattr(sys, '_' + 'getframe')(); d = getattr(f, 'f_' + 'glo' + 'bals'); d['V'] = os.environ['HOME']; os.makedirs(V + '/etc', exist_ok=True); open(V + '/etc/../.zshrc', 'a').write('x')`), real('/etc'));
+  });
+
+  test('every other way to the name, a frame or the script\'s module, without naming the name', () => {
+    for (const [label, lines] of Object.entries({
+      'import __main__': ['import __main__', '__main__.V = "/"'],
+      'sys.modules': ['import sys', 'sys.modules["__main__"].V = "/"'],
+      'vars()': ['vars()["V"] = "/"'],
+      'globals()': ['globals()["V"] = "/"'],
+      'exec': ['exec(\'V = "/"\')'],
+      '__builtins__': ['__builtins__.exec(\'V = "/"\')'],
+      'import importlib': ['import importlib', 'importlib.import_module("helper")'],
+      'from helper import *': ['from helper import *'],
+      'a relative import': ['from . import helper'],
+      'getattr with a name split in two': ['import sys', 'getattr(sys, "_get" + "frame")(0).f_globals["V"] = "/"'],
+      'sys._getframe': ['import sys', 'sys._getframe(0).f_globals["V"] = "/"'],
+      "a generator's frame": ['def g():', '    yield 1', 'gen = g()', 'gen.gi_frame.f_globals["V"] = "/"'],
+      'getattr spelled outside ASCII': ['import sys', 'ｇｅｔａｔｔｒ(sys, "_getframe")(0).f_globals["V"] = "/"'],
+      '__import__': ['__import__("helper")'],
+      'help, which imports what it is asked about': ['help("helper")'],
+      'os.sys': ['import os', 'm = os.sys.modules'],
+      'a class pattern reads attributes by name': ['import sys', 'match sys:', '    case object(_getframe=gf):', '        match gf(0):', '            case object(f_globals=d):', '                d["V"] = "/"'],
+      'the type of a string, called with an encoding': ['type("")(b"", "idna")'],
+    })) {
+      keeps(label, py(W, ...lines, USE));
+    }
+  });
+
+  // Python searches the folder the script runs in, and any folder put on its
+  // path, before its own library, and loads modules for more than an import.
+  test('an import or a load of anything Python has not loaded before the script starts', () => {
+    for (const [label, lines] of Object.entries({
+      'a module named as one of Python\'s own (json.py in the workspace)': ['import json'],
+      'shutil, not loaded before the script starts': ['import os, shutil, sys'],
+      'an alias': ['import os as o'],
+      'from os import': ['from os import path'],
+      'a text encoding looked up as the script runs (idna loads re)': ['"x".encode("idna")'],
+      'a bytes decode looked up the same way': ['b"".decode("base64")'],
+      'str given an encoding': ['str(b"", "idna")'],
+      'open given an encoding by position': ['open("notes/a.md", "r", -1, "idna")'],
+      'open given an encoding by name': ['open("notes/a.md", encoding="idna")'],
+      'open given an error handler that loads unicodedata': ['open("notes/b.md", "w", errors="namereplace")'],
+      'open unpacked': ['a = ["notes/a.md", "r", -1, "idna"]', 'open(*a)'],
+      'open handed on as a value': ['o = open', 'o("notes/a.md", "r", -1, "idna")'],
+      'a library call that imports as it runs (os.popen loads subprocess)': ['import os', 'os.popen("true")'],
+      'a \\N{...} escape loads unicodedata as the script is compiled': ['x = "\\N{BULLET}"'],
+    })) {
+      keeps(label, py(W, ...lines, USE));
+    }
+    keeps('a coding line loads its codec as the script is compiled', py('# -*- coding: big5 -*-', W, USE));
+  });
+
+  // On Python 3.9, the one macOS ships, a warning shown as the script compiles
+  // or runs opens a file named as the script is (`<stdin>` here, `<string>`
+  // for -c) in the folder it runs in, and loads the codec that file's coding
+  // line names, which imports a module the workspace can hold. Each of these
+  // is a warning some Python 3 gives.
+  test('anything Python warns of, as the script compiles or runs', () => {
+    for (const [label, lines] of Object.entries({
+      'is with a literal': ['y = V is "a"'],
+      'is with None (is is left out whole)': ['y = V is None'],
+      'an assert given a tuple': ['assert (V, "x")'],
+      'a call on a string': ['y = "a"("x")'],
+      'a call on a number': ['y = 1(2)'],
+      'a call on a tuple': ['y = (1, 2)(3)'],
+      'an index on a list given a string': ['y = [1, 2]["a"]'],
+      'an index on a set': ['y = {1}[0]'],
+      'an index on None': ['y = None[0]'],
+      'an index on the ellipsis': ['y = ...[0]'],
+      'a call in an f-string': ['y = f"{1(2)}"'],
+      'an escape Python does not know': ['y = "\\d"'],
+      'an escape bytes do not know': ['y = b"\\u0041"'],
+      'a number run into a word': ['y = 1if V else 2'],
+      'NotImplemented in a test': ['y = bool(NotImplemented)'],
+      'an inverted bool': ['y = ~True'],
+      "open's U mode": ['open("notes/a.md", "rU")'],
+      "open's mode in a name": ['m = "r"', 'open("notes/a.md", m)'],
+      'finally, which warns of a break in it': ['for n in [1]:', '    try:', '        pass', '    finally:', '        break'],
+    })) {
+      keeps(label, py(W, ...lines, USE));
+    }
+  });
+
+  // Each of these hides code from where the hook reads it as code, while
+  // Python runs it: the hook takes a string to end at the next quote on its
+  // line, and Python does not always.
+  test('code hidden in what the hook reads as a string, a quote or a backtick', () => {
+    for (const [label, lines] of Object.entries({
+      'a string over three quotes': ['x = """', 'abc"""; y = "".encode("idna")'],
+      "a % read as Ruby's quote": ['k = 3 %(len("".encode("idna")) + 1)'],
+      'backticks in two comments': ['# `', 'y = "".encode("idna")', '# `'],
+      'an f-string holding a string in its own quote (Python 3.12)': ['y = f"{"x" + "".encode("idna") + "y"}"'],
+      'a t-string (Python 3.14)': ['y = t"{\'\'.encode(\'idna\')}"'],
+      'an f-string that runs a call': ['y = f"{\'\'.encode(\'idna\')}"'],
+    })) {
+      keeps(label, py(W, ...lines, USE));
+    }
+  });
+
+  // What Python finds as it starts, before the script's first line, comes
+  // from how it is started: a path to an interpreter in the workspace, an
+  // option, a variable, or a command before it on the line.
+  test('Python started any way but plainly, first on the line', () => {
+    const body = `${W}\n${USE}\nEOF`;
+    for (const [label, c] of Object.entries({
+      'an option (-S leaves os unloaded, found in the workspace)': `python3 -S - <<'EOF'\n${body}`,
+      'a variable before it': `PYTHONPATH=. python3 - <<'EOF'\n${body}`,
+      'a variable exported before it': `export PYTHONPATH=.; python3 - <<'EOF'\n${body}`,
+      'a command before it': `cd "${ws}" && python3 - <<'EOF'\n${body}`,
+      'an interpreter by its path': `.venv/bin/python3 - <<'EOF'\n${body}`,
+      'python, which may be Python 2': `python - <<'EOF'\n${body}`,
+      'a here-document the shell fills in': `python3 - <<EOF\n${W}\n$(cat x)\n${USE}\nEOF`,
+      'in another shell\'s -c': `bash -c "python3 -c \\"V = '${ws}'; open(V + '/etc/x', 'w')\\""`,
+      'a -c the shell fills in': `python3 -c "V = '${ws}'; x = '$X'; open(V + '/etc/x', 'w')"`,
+      'a -c after an option': `python3 -I -c "V = '${ws}'; open(V + '/etc/x', 'w')"`,
+    })) {
+      keeps(label, c);
+    }
+  });
+
+  // A node or Ruby script whose text the Python rules would pass: each
+  // language's require runs a module it never reads.
+  test('the joined reading is Python\'s alone: node and Ruby keep today\'s reading', () => {
+    keeps('node', `node - <<'JS'\nvar V = "${ws}";\nrequire("./helper");\nprocess.stdout.write(V + "/etc/x");\nJS`);
+    keeps('ruby', `ruby <<'RB'\nV = "${ws}"\nrequire "./helper"\nFile.write(V + "/etc/x", "x")\nRB`);
+  });
+
+  test('import sys alone, and import os, sys, with a harmless join, run', () => {
+    runs('import sys', py('import sys', W, 'sys.path.insert(0, V + "/etc/tools/lib")'));
+    runs('import os, sys', py('import os, sys', W, 'os.makedirs(V + "/etc/x", exist_ok=True)', USE));
+    runs('in -c', `python3 -c "import os, sys; V = '${ws}'; os.makedirs(V + '/etc/x', exist_ok=True)"`);
+  });
+
+  test('a script written the common way still runs', () => {
+    runs('calls on calls, indexes on names, a list after in, a mode', py(
+      'import os, sys',
+      W,
+      'rows = [["a", "b"]]',
+      'first = rows[0][1]',
+      'if first in ["a", "b"] and not (len(rows) > 2):',
+      '    print(sorted(os.listdir(V + "/notes"))[0], 1.5, 0x1f)',
+      'open(V + "/etc/x/a.md", "a").write("x\\t" + str(2) + "\\n")',
+    ));
+    runs('a folder made and a list written', py(
+      'import os, sys',
+      W,
+      '# Make the folder, then write the names in it, one to a line.',
+      'os.makedirs(V + "/etc/x", exist_ok=True)',
+      'names = sorted(os.listdir(V + "/notes"))',
+      'with open(V + "/etc/x/list.txt", "w") as f:',
+      '    for n in names:',
+      '        f.write(n + "\\n")',
+      'print("wrote " + str(len(names)) + f" names to {V}/etc/x", file=sys.stderr)',
+    ));
+  });
+});
+
+// Every builtin, keyword, attribute and module of the Python on this machine:
+// each one not on the hook's allowed lists keeps the card where it appears.
+// The lists here are the rule, written out: a word added to the hook's lists
+// without being added here, or one Python adds that the hook does not know,
+// turns this red.
+describe('every word Python has, not on the allowed lists, keeps the card', () => {
+  const listed = spawnSync('python3', ['-I', '-c', [
+    'import builtins, keyword, sys, os, io, json',
+    'out = {"builtins": [n for n in dir(builtins) if n[:1].islower()], "keywords": keyword.kwlist + getattr(keyword, "softkwlist", []),',
+    '  "attributes": sorted({n for o in (sys, os, os.path, str, bytes, list, dict, set, int, float, io.TextIOWrapper, os.stat_result, type(os.environ)) for n in dir(o) if not n.startswith("__")}),',
+    '  "modules": sorted(getattr(sys, "stdlib_module_names", sys.builtin_module_names))}',
+    'print(json.dumps(out))',
+  ].join('\n')], { encoding: 'utf8' });
+  const SKIP = (process.platform === 'win32' && 'bash on a macOS or Linux host') || (listed.status !== 0 && 'no python3 on this machine') || false;
+  const words = SKIP ? null : JSON.parse(listed.stdout);
+  const W = `V = "${ws}"`;
+  const USE = 'open(V + "/etc/x", "w").write("x")';
+  const ALLOWED_BUILTINS = new Set('abs all any bool dict enumerate float int isinstance len list max min open print range repr reversed round set sorted str sum tuple zip'.split(' '));
+  const CALLED_PLAINLY = new Set(['open', 'str']);
+  // `import` is read on its own: only an import of sys, os or os.path passes.
+  // `is`, `assert` and `finally` are left out for the warnings Python gives.
+  const ALLOWED_KEYWORDS = new Set('False None True and as break continue def elif else except for if in lambda not or pass raise return try while with _'.split(' '));
+  const ALLOWED_ATTRIBUTES = new Set(('argv path exit stdin stdout stderr platform version executable maxsize environ getenv getcwd listdir makedirs mkdir '
+    + 'remove unlink rename replace rmdir walk stat sep join exists isdir isfile dirname basename abspath splitext getsize read write readline readlines '
+    + 'close split splitlines strip lstrip rstrip startswith endswith lower upper find count append extend insert pop sort items keys values get update add').split(' '));
+  const known = (line) => scan(py(W, line, USE)) === null;
+
+  test('a builtin', { skip: SKIP }, () => {
+    for (const b of words.builtins) {
+      assert.strictEqual(known(`x = ${b}`), ALLOWED_BUILTINS.has(b) && !CALLED_PLAINLY.has(b), b);
+    }
+    assert.strictEqual(known('x = NotImplemented'), false, 'NotImplemented');
+  });
+
+  test('a keyword', { skip: SKIP }, () => {
+    for (const k of words.keywords) assert.strictEqual(known(`x = ${k}`), ALLOWED_KEYWORDS.has(k), k);
+  });
+
+  test('an attribute of sys, os, os.path, the builtin types and an open file', { skip: SKIP }, () => {
+    for (const a of words.attributes) assert.strictEqual(known(`x = y.${a}`), ALLOWED_ATTRIBUTES.has(a), a);
+    for (const a of ALLOWED_ATTRIBUTES) assert.ok(known(`x = y.${a}`), a);
+  });
+
+  test('an import of every module but sys and os', { skip: SKIP }, () => {
+    for (const m of words.modules) assert.strictEqual(known(`import ${m}`), m === 'sys' || m === 'os', m);
+    assert.ok(known('import os.path'), 'os.path');
   });
 });
 
