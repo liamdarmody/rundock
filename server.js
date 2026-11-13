@@ -676,14 +676,21 @@ const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
 const {
   startingFresh, noteUnstartedWrite, takeUnstartedWrites, withFreshCatchUp, storeHeldCatchUp, takeStoredCatchUp,
 } = require('./lib/runtime/missing-session.js');
+const teamNotes = require('./lib/agents/team-notes.js');
+teamNotes.wireTeamNotes({ appendTranscript: (...args) => appendTranscript(...args) });
 claudeRuntime.wireClaudeRuntimeDeps({
   getActualPort: () => ACTUAL_PORT,
-  // Every Claude turn runs under the same answer-file guard as a Codex turn.
-  onClaudeSpawn: (proc, { convoId, agentId }) => watchClaudeTurns(proc, {
-    workspace: config.getWorkspace(),
-    convoId,
-    onChange: (change) => codexGlue.surfaceAnswerFileChange({ agentId, processId: null }, convoId, change, 'claude'),
-  }),
+  // Every Claude turn runs under the same answer-file guard as a Codex turn,
+  // and its first message opens with what Rundock did with the last reply's
+  // team markers, when there is something to say.
+  onClaudeSpawn: (proc, { convoId, agentId }) => {
+    watchClaudeTurns(proc, {
+      workspace: config.getWorkspace(),
+      convoId,
+      onChange: (change) => codexGlue.surfaceAnswerFileChange({ agentId, processId: null }, convoId, change, 'claude'),
+    });
+    teamNotes.noteOnNextMessage(proc, convoId);
+  },
 });
 const {
   shutdownCodexAppServer,

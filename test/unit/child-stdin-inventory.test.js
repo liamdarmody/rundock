@@ -70,9 +70,15 @@ const GUARDED_STAND_INS = [
   { file: 'lib/runtime/claude.js', fn: 'spawnClaude', made: 'unstarted(refusal)', name: 'standIn', stands: 'a Claude Code below the version floor' },
 ];
 
-// The two places that replace a stdin's write: the handler itself, and the
-// answer-file guard, which wraps the write the handler has already wrapped.
-const WRITE_WRAPPERS = ['lib/runtime/child-stdin.js | guardChildStdin', 'lib/runtime/claude-turn-guard.js | watchClaudeTurns'];
+// The three places that replace a stdin's write: the handler itself, the
+// answer-file guard, which wraps the write the handler has already wrapped,
+// and the note of what Rundock did with the last reply's team markers, which
+// wraps both and calls through to them.
+const WRITE_WRAPPERS = [
+  'lib/runtime/child-stdin.js | guardChildStdin',
+  'lib/runtime/claude-turn-guard.js | watchClaudeTurns',
+  'lib/agents/team-notes.js | noteOnNextMessage',
+];
 
 // ── Reading the source ──
 
@@ -354,7 +360,7 @@ describe('every write to a child\'s stdin goes to a child whose stdin was given 
       'guardChildStdin is called in the start paths, and for the stand-ins, and nowhere else');
   });
 
-  test('only the handler and the answer-file guard replace a stdin\'s write', () => {
+  test('only the handler, the answer-file guard and the team note replace a stdin\'s write', () => {
     const wrappers = sitesOf(/(?<![\w$])((?:[\w$]+\.)*stdin\.write)\s*=(?!=)/g).map((s) => `${s.file} | ${s.fn}`);
     assert.deepStrictEqual(wrappers.sort(), [...WRITE_WRAPPERS].sort());
   });
