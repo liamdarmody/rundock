@@ -67,10 +67,11 @@ function removeAgents(...names) {
   h.internal.invalidateAgentCache();
 }
 
-// Every prompt a stub runtime was sent that carries `token`, in order.
-const promptsWith = (token) => h.readPrompts().filter((p) => p.prompt.includes(token));
-const onlyPrompt = (token) => {
-  const found = promptsWith(token);
+// Every prompt a stub runtime was sent that carries `token`, in order, to one
+// agent when it is named (an arriving agent is sent the conversation so far).
+const promptsWith = (token, agent) => h.readPrompts().filter((p) => p.prompt.includes(token) && (!agent || p.agent === agent));
+const onlyPrompt = (token, agent) => {
+  const found = promptsWith(token, agent);
   assert.strictEqual(found.length, 1, `one prompt carries ${token} (got ${found.length})`);
   return found[0];
 };
@@ -143,6 +144,35 @@ describe('the next turn is told, first, under Rundock\'s heading', () => {
     } finally {
       h.reapConvo(convoId);
       removeAgents('resumed-helper');
+    }
+  });
+
+  test('a resume Claude Code refuses: the turn started again in its place is told, once', async () => {
+    const convoId = h.freshConvoId('deadresume');
+    const rules = [
+      { match: { agent: 'rundock-guide', promptIncludes: 'DEAD-ONE' }, exitAfterTurn: 0,
+        turn: [{ text: `Made the helper.\n${saveAgent('dead-helper', teamFile('dead-helper', 'Helper'))}` }] },
+      { match: { agent: 'rundock-guide', promptIncludes: 'DEAD-TWO' }, turn: [{ text: 'Started again.' }] },
+    ];
+    h.writeScenario(rules);
+    try {
+      const since = client.messages.length;
+      await chat(convoId, 'rundock-guide', 'DEAD-ONE make a helper');
+      const sessionId = await sessionOf(convoId, since);
+      await exited(convoId);
+      // Claude Code no longer has the session, so the resume is refused before
+      // the process reads its message, and the server starts the turn again.
+      h.writeScenario(rules, { deadSessions: [sessionId] });
+      await chat(convoId, 'rundock-guide', 'DEAD-TWO is it there?', { sessionId });
+      const told = promptsWith('DEAD-TWO', 'rundock-guide');
+      assert.strictEqual(told.length, 1, 'one prompt reached a process that read it');
+      assert.strictEqual(told[0].resume, null, 'the one started again, fresh');
+      assert.ok(told[0].prompt.startsWith(note('- Saved (new): agent "dead-helper", asked by Doc.')),
+        `and it opens with the note (got ${JSON.stringify(told[0].prompt.slice(0, 200))})`);
+      assert.ok(told[0].prompt.endsWith('DEAD-TWO is it there?'));
+    } finally {
+      h.reapConvo(convoId);
+      removeAgents('dead-helper');
     }
   });
 
@@ -381,7 +411,7 @@ describe('the sequences a person runs', () => {
       client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'NEXT-TWO ask Doc then' });
       assert.ok(await h.waitUntil(() => h.readPrompts().some((p) => p.agent === 'chief-of-staff' && p.prompt.includes('NEXT-DONE'))),
         'the orchestrator was handed the conversation back');
-      assert.strictEqual(onlyPrompt('NEXT-TWO').prompt,
+      assert.strictEqual(onlyPrompt('NEXT-TWO', 'chief-of-staff').prompt,
         note(refusedLine('Cos', 'save', 'agent', 'next-helper', 'saved')) + 'NEXT-TWO ask Doc then', 'the refusal reached the orchestrator first');
       assert.ok(!onlyPrompt('NEXT-BRIEF').prompt.includes(HEADING), 'Doc\'s brief carried no note: the refusal was already told');
       const back = onlyPrompt('NEXT-DONE').prompt;
