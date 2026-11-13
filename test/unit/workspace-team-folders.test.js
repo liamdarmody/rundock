@@ -290,11 +290,15 @@ describe('a target in those folders is refused in any path field, whatever the o
 });
 
 // What each of these was answered before this refusal existed, and still is.
+// Read, Glob and Grep each on both folders, then the writes beside them.
 function today(ws) {
   const writeTo = (...parts) => edit('Write', path.join(ws, ...parts));
   return [
     ['a Read of an agent file', { tool_name: 'Read', tool_input: { file_path: agentFile(ws) } }, 'allow', IN_WORKSPACE],
+    ['a Read of a skill file', { tool_name: 'Read', tool_input: { file_path: skillFile(ws) } }, 'allow', IN_WORKSPACE],
     ['a Glob of the agents folder', { tool_name: 'Glob', tool_input: { pattern: '*.md', path: path.join(ws, '.claude', 'agents') } }, 'allow', IN_WORKSPACE],
+    ['a Glob of the skills folder', { tool_name: 'Glob', tool_input: { pattern: '**/SKILL.md', path: path.join(ws, '.claude', 'skills') } }, 'allow', IN_WORKSPACE],
+    ['a Grep of the agents folder', { tool_name: 'Grep', tool_input: { pattern: 'name', path: path.join(ws, '.claude', 'agents') } }, 'allow', IN_WORKSPACE],
     ['a Grep of the skills folder', { tool_name: 'Grep', tool_input: { pattern: 'name', path: path.join(ws, '.claude', 'skills') } }, 'allow', IN_WORKSPACE],
     ['a Write to .claude/commands', writeTo('.claude', 'commands', 'x.md'), 'allow', IN_WORKSPACE],
     ['a Write to notes/agents', writeTo('notes', 'agents', 'x.md'), 'allow', IN_WORKSPACE],
@@ -307,27 +311,33 @@ function today(ws) {
   ];
 }
 
+// Each row is its own subtest, so a change that breaks several rows names
+// every one of them rather than only the first.
 describe('everything beside those two folders keeps today\'s answer', () => {
-  test('none of them is refused by the check, in-process', () => {
+  test('none of them is refused by the check, in-process', async (t) => {
     for (const ws of [wsCode, wsNotes]) {
       for (const [what, request] of today(ws)) {
-        for (const foldsCase of [true, false]) {
-          assert.strictEqual(hook.isWorkspaceTeamFolderEdit(request.tool_name, request.tool_input, ws, foldsCase), false,
-            `${what} (${path.basename(ws)}, foldsCase ${foldsCase})`);
-        }
+        await t.test(`${what} (${path.basename(ws)})`, () => {
+          for (const foldsCase of [true, false]) {
+            assert.strictEqual(hook.isWorkspaceTeamFolderEdit(request.tool_name, request.tool_input, ws, foldsCase), false,
+              `${what} (${path.basename(ws)}, foldsCase ${foldsCase})`);
+          }
+        });
       }
     }
   });
 
   for (const [label, ws, who] of RUNS) {
-    test(`each keeps today's answer through the hook in ${label}`, async () => {
+    test(`each keeps today's answer through the hook in ${label}`, async (t) => {
       const env = envFor(ws, who);
       for (const [what, request, decision, reason] of today(ws)) {
-        asked.length = 0;
-        const r = await runHook(env, request);
-        assert.strictEqual(r.decision, decision, `${what}: ${r.out}`);
-        assert.match(r.reason, reason, `${what}: answered as before`);
-        assert.strictEqual(asked.length, 0, `${what}: no card, as before`);
+        await t.test(what, async () => {
+          asked.length = 0;
+          const r = await runHook(env, request);
+          assert.strictEqual(r.decision, decision, `${what}: ${r.out}`);
+          assert.match(r.reason, reason, `${what}: answered as before`);
+          assert.strictEqual(asked.length, 0, `${what}: no card, as before`);
+        });
       }
     });
   }
