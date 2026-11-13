@@ -150,10 +150,13 @@ async function nextWindowFlushed(lastType, lastName, convoId) {
 }
 
 describe('Doc saves, creates and deletes, each exactly once, with no window open', () => {
-  test('Doc brought in by an orchestrator\'s Agent call', async () => {
+  // In a hand-off each change waits for its own card (lib/agents/team-markers.js,
+  // test/integration/team-handoff-cards.test.js), so with no window open nothing
+  // is written; the next window is shown the cards, and an Allow on each writes.
+  test('Doc brought in by an orchestrator\'s Agent call: nothing is written with no window open, and each change once its card is allowed', async () => {
     const p = 'docdel';
     const convoId = h.freshConvoId('docdel');
-    seedFive(p);
+    const before = seedFive(p);
     const gate = path.join(h.workspaceDir, `gate-${convoId}`);
     h.writeScenario([
       { match: { agent: 'chief-of-staff', promptIncludes: 'DOC-DELEGATED' },
@@ -165,10 +168,21 @@ describe('Doc saves, creates and deletes, each exactly once, with no window open
     try {
       await startThenCloseEveryWindow({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'DOC-DELEGATED please' }, 'rundock-guide');
       fs.writeFileSync(gate, '');
-      assert.ok(await h.waitUntil(() => !fs.existsSync(agentPath(`${p}-gone`)) && fs.existsSync(skillPath(`${p}-skill`))),
-        'the files changed at the turn\'s end, with no window open');
+      assert.ok(await h.waitUntil(() => [...h.internal.pendingPermissionRequests.values()].filter((r) => r.conversationId === convoId).length === 5),
+        'five cards wait, with no window open');
+      await h.delay(300);
+      assert.deepStrictEqual(FILES(p).map(readOrNull), before, 'and nothing is written');
+      const next = await h.connect();
+      const ids = new Set();
+      assert.ok(await h.waitUntil(() => {
+        for (const m of next.messages) if (m.type === 'control_request' && m._conversationId === convoId) ids.add(m.request_id);
+        return ids.size === 5;
+      }), 'the next window is shown the five cards');
+      for (const requestId of ids) next.send({ type: 'permission_response', requestId, conversationId: convoId, allow: true, card: true });
+      await next.waitFor((m) => m.type === 'skill_deleted' && m.skillId === `${p}-gone-skill` && m.conversationId === convoId, { label: 'the last change' });
+      assert.ok(await h.waitUntil(() => !fs.existsSync(agentPath(`${p}-gone`)) && fs.existsSync(skillPath(`${p}-skill`))));
       assertDocWroteFive(p);
-      const next = await nextWindowFlushed('agent_deleted', `${p}-gone`, convoId);
+      await h.delay(300);
       assertConfirmedOnce(next.messages, p, convoId);
       next.close();
     } finally {

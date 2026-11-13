@@ -744,6 +744,10 @@ describe('platform delegate (Doc)', () => {
     const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'doc-crud please' });
     await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'rundock-guide', { label: 'doc result' });
+    // Brought in by the orchestrator, Doc's change is carded, and the return
+    // waits for the card (lib/agents/team-markers.js): allowed here.
+    const { msg: card } = await client.waitFor(m => m.type === 'control_request' && m._conversationId === convoId && m.request.tool_name === 'SaveSkill', { since, label: 'the card' });
+    client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convoId, allow: true, card: true });
     // CRUD marker alone triggers the auto-return: parent restarts silently
     const { msg: started } = await client.waitFor(m => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m._agent === 'chief-of-staff' && m.autoContinue, { label: 'parent restart' });
     assert.strictEqual(started.silent, true);

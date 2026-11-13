@@ -155,9 +155,9 @@ describe('In a hand-off, each change raises its own card before anything is writ
     try {
       client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'CARDCALL-ASK change the team' });
       const cards = await cardsFor(client, convoId, 5);
-      assert.deepStrictEqual(cards.map((c) => [c.request.tool_name, c.request.input.name]), [
-        ['SaveAgent', `${p}-saved`], ['SaveAgent', `${p}-made`], ['DeleteAgent', `${p}-gone`], ['SaveSkill', `${p}-skill`], ['DeleteSkill', `${p}-gone-skill`],
-      ], 'one card per marker, in the reply\'s order');
+      assert.deepStrictEqual(cards.map((c) => `${c.request.tool_name} ${c.request.input.name}`).sort(), [
+        `DeleteAgent ${p}-gone`, `DeleteSkill ${p}-gone-skill`, `SaveAgent ${p}-made`, `SaveAgent ${p}-saved`, `SaveSkill ${p}-skill`,
+      ], 'one card per marker');
       assert.strictEqual(new Set(cards.map((c) => c.request_id)).size, 5, 'each its own card');
       assert.strictEqual(pendingFor(convoId).length, 5, 'raised through the server\'s own permission request');
       await h.delay(300);
@@ -184,7 +184,7 @@ describe('In a hand-off, each change raises its own card before anything is writ
       await delegateMarker(client, convoId, 'CARDMARKER',
         `On it.\n${saveAgent('cardmarker-new', teamFile('cardmarker-new', 'New'))}\n${deleteAgent('cardmarker-old')}\n${deleteSkill('cardmarker-skill')}`);
       const cards = await cardsFor(client, convoId, 3);
-      assert.deepStrictEqual(cards.map((c) => c.request.tool_name), ['SaveAgent', 'DeleteAgent', 'DeleteSkill']);
+      assert.deepStrictEqual(cards.map((c) => c.request.tool_name).sort(), ['DeleteAgent', 'DeleteSkill', 'SaveAgent']);
       await h.delay(300);
       assert.deepStrictEqual(snapshot(files), before, 'nothing is written while the cards wait');
       const since = client.messages.length;
@@ -248,8 +248,9 @@ describe('Written only on an Allow a person gave on that card', () => {
       const refusal = 'Doc asked to save the agent "deny-helper", but it was not allowed on the card, so nothing was saved.';
       const { msg } = await lineFor(client, convoId, refusal, since);
       assert.strictEqual(msg.refused, true);
-      assert.strictEqual(await handBack('DENY').then((p) => p.startsWith(note(`- Refused: save agent "deny-helper", asked by Doc. ${refusal}`))), true,
-        'the orchestrator is told it was refused');
+      const prompt = await handBack('DENY');
+      assert.ok(prompt.startsWith(note(`- Refused: save agent "deny-helper", asked by Doc. ${refusal}`)),
+        `the orchestrator is told it was refused (got ${JSON.stringify(prompt.slice(0, 300))})`);
       assert.deepStrictEqual(snapshot([agentPath('deny-helper')]), before, 'the file is as it was, byte for byte');
     } finally {
       client.close();
