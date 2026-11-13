@@ -217,6 +217,10 @@
     // .mcp.json: a stdio server is a command run outside the sandbox. High, so
     // it is carded ahead of every standing allow and never offers one.
     if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') return 'high';
+    // A change Doc makes to an agent or skill while another agent brought it
+    // in (lib/agents/team-markers.js): the files every later run follows.
+    // High for the same reasons, so no standing allow answers it.
+    if (isTeamCard(toolName)) return 'high';
     if (toolName.startsWith('mcp__')) {
       // MCP reads auto-approve in the permission hook, so by the time a request
       // reaches the card it's a write or destructive action. Flag destructive ones
@@ -289,6 +293,8 @@
       detail = input.file_path || '';
     } else if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') {
       ({ summary, context, detail } = connectorCopy(toolName, input));
+    } else if (isTeamCard(toolName)) {
+      ({ summary, context, detail } = teamCopy(toolName, input));
     } else if (toolName.startsWith('mcp__')) {
       const parts = toolName.split('__');
       const server = connectorServerName(toolName);
@@ -369,6 +375,27 @@
     }
     said.push('Rundock asks about every connector an agent adds or removes, so there is no Always allow.');
     return { summary: `${verb} the connector ${i.name || ''}`.trim(), context: said.join(' '), detail: lines.length ? lines.join('\n') : JSON.stringify(i) };
+  }
+
+  // THE CARD FOR A CHANGE DOC MAKES WHILE ANOTHER AGENT BROUGHT IT IN: the
+  // agent or skill, whether it would be added, replaced or deleted, who brought
+  // Doc in, and for a save the whole file that would be written, every byte,
+  // since the server writes exactly what this card shows. Line breaks and tabs
+  // are the file's own and are kept; any other control character is shown by
+  // its escape, as on the connector card.
+  const TEAM_CARDS = ['SaveAgent', 'DeleteAgent', 'SaveSkill', 'DeleteSkill'];
+  function isTeamCard(toolName) { return TEAM_CARDS.indexOf(toolName) !== -1; }
+  function teamCopy(toolName, input) {
+    const i = input || {};
+    const kind = /Skill$/.test(toolName) ? 'skill' : 'agent';
+    const action = /^Delete/.test(toolName) ? 'delete' : (i.action === 'replace' ? 'replace' : 'add');
+    const said = (v) => escapeControl(String(v == null ? '' : v));
+    const follow = kind === 'agent' ? 'Agents follow their instructions every time they run' : 'Agents follow a skill\'s instructions whenever they use it';
+    const context = `${said(i.by || 'Another agent')} brought Doc in, and Doc asked Rundock to ${action} this ${kind}${i.file ? ` (${said(i.file)})` : ''}. `
+      + `${follow}, so check ${action === 'delete' ? 'this is the one to delete' : 'what would be written'} before you allow it. `
+      + 'Rundock asks about every change Doc makes when another agent brought it in, so there is no Always allow.';
+    const detail = action === 'delete' ? said(i.file) : String(i.content == null ? '' : i.content).replace(CONTROL_ALL, (c) => (c === '\n' || c === '\t' ? c : escapeControl(c)));
+    return { summary: `${action[0].toUpperCase()}${action.slice(1)} the ${kind} ${said(i.name)}`, context, detail };
   }
 
   // Key for always-allow matching.
@@ -909,7 +936,7 @@
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
   return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy, answerFileSummary, answerFileKind,
-    MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend,
+    MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend, isTeamCard,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions,

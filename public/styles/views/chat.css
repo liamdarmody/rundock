@@ -141,6 +141,8 @@ body.light .permission-detail { background: var(--elevated); }
 .permission-detail-collapse summary { cursor: pointer; padding: 4px 0; color: var(--text-2); opacity: 0.8; }
 .permission-detail-collapse summary:hover { opacity: 1; }
 .permission-detail-collapse .permission-detail { max-height: none; margin-top: 6px; }
+/* An agent or skill file Doc would write: shown whole, line by line, indents kept. */
+.permission-detail.permission-file { white-space: pre-wrap; word-break: break-word; }
 /* The same disclosure under a plain error sentence (public/readable-error.js)
    wherever the error is said: Settings, Routines, a run, the editor's status,
    the workspace picker. It holds a system error's raw code, message and path,
