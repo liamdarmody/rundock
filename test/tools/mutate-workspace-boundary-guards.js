@@ -4440,6 +4440,51 @@ const MUTATIONS = [
   [STARTUP_SANDBOX, "Startup files: the list with ZDOTDIR's zsh files is recorded as written",
     'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
     'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36];'],
+  // The record of the startup files is accepted in the spelling either way of
+  // running writes, and in no other: break each spelling and each refusal.
+  // The record found anywhere in the block, rather than where this run writes
+  // it, changes nothing on its own (a moved entry shifts its neighbours, and
+  // the whole-block comparison refuses that), so the position row compares the
+  // lists with the record left out wherever it sits.
+  [STARTUP_SANDBOX, 'Record spelling: the app\'s record in the block\'s home is recognised',
+    '(entry === path.posix.join(home, STARTUP_FILE_EXPOSURE_RECORD.app)\n      || entry',
+    '(entry'],
+  [STARTUP_SANDBOX, 'Record spelling: another checkout\'s record is recognised',
+    '\n      || entry === path.posix.join(path.posix.dirname(entry), STARTUP_FILE_EXPOSURE_RECORD.source));',
+    ');'],
+  [STARTUP_SANDBOX, 'Record spelling: another deny entry changed is refused',
+    'deny.map((e, i) => (i === at ? theirs : e))',
+    'block.filesystem.denyWrite'],
+  [STARTUP_SANDBOX, 'Record spelling: the record moved to another position is refused',
+    '  return recordSpelling(theirs, home) ? withDenyWrite(rebuilt, deny.map((e, i) => (i === at ? theirs : e))) : rebuilt;',
+    '  const own = Array.isArray(block.filesystem.denyWrite) ? block.filesystem.denyWrite : [];\n'
+      + '  const found = own.findIndex((e) => recordSpelling(e, home));\n'
+      + '  const rest = (list, i) => JSON.stringify(list.filter((e, j) => j !== i));\n'
+      + '  return found !== -1 && rest(own, found) === rest(deny, at) ? withDenyWrite(rebuilt, own) : rebuilt;'],
+  [STARTUP_SANDBOX, 'Record spelling: a relative record entry is refused',
+    "typeof entry === 'string' && path.posix.isAbsolute(entry)",
+    "typeof entry === 'string'"],
+  [STARTUP_SANDBOX, 'Record spelling: the app\'s record name in another folder is refused',
+    'entry === path.posix.join(home, STARTUP_FILE_EXPOSURE_RECORD.app)',
+    'path.posix.basename(entry) === STARTUP_FILE_EXPOSURE_RECORD.app'],
+  [STARTUP_SANDBOX, 'Record spelling: a record entry with another file name is refused',
+    '|| entry === path.posix.join(path.posix.dirname(entry), STARTUP_FILE_EXPOSURE_RECORD.source));',
+    '|| entry === path.posix.normalize(entry));'],
+  [STARTUP_SANDBOX, 'Record spelling: a record entry that is not a string is refused',
+    "  return typeof entry === 'string' && path.posix.isAbsolute(entry)",
+    "  if (typeof entry !== 'string') return entry !== undefined;\n  return path.posix.isAbsolute(entry)"],
+  [STARTUP_SANDBOX, 'Record spelling: a record entry not joined as Rundock joins a path is refused',
+    'entry === path.posix.join(path.posix.dirname(entry), STARTUP_FILE_EXPOSURE_RECORD.source)',
+    'path.posix.basename(entry) === STARTUP_FILE_EXPOSURE_RECORD.source'],
+  [STARTUP_SANDBOX, 'Record spelling: a deny list that is not an array is refused, and nothing throws',
+    'Array.isArray(block.filesystem.denyWrite) ? block.filesystem.denyWrite[at] : undefined',
+    'block.filesystem.denyWrite[at]'],
+  [STARTUP_SANDBOX, 'Record spelling: an earlier deny list that carries the record has the same latitude',
+    'const rebuilt = recordAsWritten(sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode), block, claimedHome);\n  if (sameSandbox(block, rebuilt)) return true;',
+    'const rebuilt = sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode);\n  if (sameSandbox(block, recordAsWritten(rebuilt, block, claimedHome))) return true;'],
+  [STARTUP_SANDBOX, 'Record spelling: recognising a block never changes it',
+    '  return recordSpelling(theirs, home) ? withDenyWrite(rebuilt, deny.map((e, i) => (i === at ? theirs : e))) : rebuilt;',
+    '  if (recordSpelling(theirs, home)) block.filesystem.denyWrite[at] = deny[at];\n  return rebuilt;'],
   [STARTUP_GUARD, 'Startup files: the guard watches none of them',
     '  for (const e of entries) watchHomeFile(g, e.path, read(e.path));\n',
     ''],
