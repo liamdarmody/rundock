@@ -310,6 +310,184 @@ describe('when the decision fails, nothing is written and the next turn still wo
   }
 });
 
+describe('a write that fails partway leaves the agents and skills as they were', () => {
+  // A FULL DISK, AT EVERY STEP. Each change is made again and again, with a
+  // different step of its write failing each time: the nth step that writes
+  // into .claude (a folder made, a file opened for writing, a write into one,
+  // a flush, or a rename onto a name there) fails with ENOSPC, and a write
+  // that fails lands half its bytes first, as a write cut short does. Every
+  // step after that runs as it would, so what the writer does to clean up is
+  // what the disk shows. The run that reaches no failing step is the change
+  // going through. The fs functions are module attributes, patched only for
+  // the length of one change, which runs in-process as Doc's marker does.
+  const enospc = () => Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+  function failingAt(n, fn) {
+    const folder = path.join(h.workspaceDir, '.claude');
+    const roots = [folder, fs.realpathSync(folder)];
+    const inside = (p) => typeof p === 'string' && roots.some((root) => path.resolve(p).startsWith(root + path.sep));
+    const real = {
+      mkdirSync: fs.mkdirSync, openSync: fs.openSync, closeSync: fs.closeSync, writeSync: fs.writeSync,
+      writeFileSync: fs.writeFileSync, fsyncSync: fs.fsyncSync, renameSync: fs.renameSync,
+    };
+    const opened = new Set();
+    let steps = 0;
+    let depth = 0;
+    // One call is one step, whatever calls it makes inside itself.
+    const run = (name, args) => { depth += 1; try { return real[name].apply(fs, args); } finally { depth -= 1; } };
+    const fails = (target) => {
+      if (depth > 0 || !(typeof target === 'number' ? opened.has(target) : inside(target))) return false;
+      steps += 1;
+      return steps === n;
+    };
+    const half = (data, offset = 0, length = null) => {
+      const bytes = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+      const end = length === null ? bytes.length : offset + length;
+      return bytes.subarray(offset, offset + Math.floor((end - offset) / 2));
+    };
+    fs.mkdirSync = function (p, ...rest) { if (fails(p)) throw enospc(); return run('mkdirSync', [p, ...rest]); };
+    fs.openSync = function (p, flags, ...rest) {
+      const writing = typeof flags === 'number'
+        ? (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR)) !== 0
+        : /[wa+]/.test(String(flags || 'r'));
+      if (writing && fails(p)) throw enospc();
+      const fd = run('openSync', [p, flags, ...rest]);
+      if (writing && inside(p)) opened.add(fd);
+      return fd;
+    };
+    fs.closeSync = function (fd, ...rest) { opened.delete(fd); return run('closeSync', [fd, ...rest]); };
+    fs.writeSync = function (fd, data, ...rest) {
+      if (!fails(fd)) return run('writeSync', [fd, data, ...rest]);
+      run('writeSync', [fd, Buffer.isBuffer(data) && typeof rest[0] === 'number' ? half(data, rest[0], typeof rest[1] === 'number' ? rest[1] : null) : half(data)]);
+      throw enospc();
+    };
+    fs.writeFileSync = function (target, data, ...rest) {
+      if (!fails(target)) return run('writeFileSync', [target, data, ...rest]);
+      run(typeof target === 'number' ? 'writeSync' : 'writeFileSync', [target, half(data)]);
+      throw enospc();
+    };
+    fs.fsyncSync = function (fd, ...rest) { if (fails(fd)) throw enospc(); return run('fsyncSync', [fd, ...rest]); };
+    fs.renameSync = function (from, to, ...rest) { if (fails(to)) throw enospc(); return run('renameSync', [from, to, ...rest]); };
+    try { fn(); } finally { Object.assign(fs, real); }
+    return steps;
+  }
+
+  // Every file and folder under .claude/agents and .claude/skills, each file
+  // with its bytes, so a file left behind, a temporary one included, shows.
+  function tree() {
+    const found = {};
+    const walk = (dir) => {
+      for (const name of fs.readdirSync(dir).sort()) {
+        const p = path.join(dir, name);
+        const key = path.relative(h.workspaceDir, p).split(path.sep).join('/');
+        if (fs.statSync(p).isDirectory()) { found[`${key}/`] = ''; walk(p); } else found[key] = fs.readFileSync(p).toString('base64');
+      }
+    };
+    for (const sub of ['agents', 'skills']) {
+      const dir = path.join(h.workspaceDir, '.claude', sub);
+      if (fs.existsSync(dir)) walk(dir);
+    }
+    return found;
+  }
+
+  // The change made with its first step failing, then its second, and so on,
+  // until a run reaches no failing step. Returns what each failing step left
+  // wrong (nothing, for a sound writer), how many steps could fail, and the
+  // outcome of the run that went through.
+  function everyStepFailing(prepare, change) {
+    const wrong = [];
+    for (let n = 1; n <= 40; n++) {
+      prepare();
+      const before = tree();
+      let outcomes = [];
+      if (failingAt(n, () => { outcomes = change(); }) < n) return { wrong, failingSteps: n - 1, outcome: outcomes[0] && outcomes[0].outcome };
+      const outcome = outcomes[0] ? outcomes[0].outcome : 'nothing';
+      if (outcome !== 'error') wrong.push(`step ${n}: answered ${outcome}`);
+      const after = tree();
+      for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+        if (!(key in before)) wrong.push(`step ${n}: ${key} was left behind`);
+        else if (!(key in after)) wrong.push(`step ${n}: ${key} is gone`);
+        else if (before[key] !== after[key]) wrong.push(`step ${n}: ${key} changed`);
+      }
+    }
+    throw new Error('the change never got past its failing steps');
+  }
+
+  const skillPath = (name) => path.join(h.workspaceDir, '.claude', 'skills', name, 'SKILL.md');
+  const skillFile = (name, label) => `---\nname: ${name}\ndescription: An example skill.\n---\n\n${label}.`;
+  // A new agent with neither type nor order, which the save gives both.
+  const bareAgent = (name) => `---\nname: ${name}\ndescription: An example agent\n---\n\nYou are ${name}.`;
+  function setSkill(name, content) {
+    fs.rmSync(path.dirname(skillPath(name)), { recursive: true, force: true });
+    if (content !== null) {
+      fs.mkdirSync(path.dirname(skillPath(name)), { recursive: true });
+      fs.writeFileSync(skillPath(name), content);
+    }
+    h.internal.invalidateAgentCache();
+  }
+
+  test('a new agent missing type and order: no failing step leaves a file, and the next turn writes it', async () => {
+    const name = 'partway-made';
+    const convoId = h.freshConvoId('partway');
+    const save = () => h.asDoc({ type: 'save_agent', name, content: bareAgent(name), conversationId: convoId });
+    try {
+      const { wrong, failingSteps, outcome } = everyStepFailing(() => unseed(name), save);
+      assert.deepStrictEqual(wrong, [], 'every failing step was answered as an error and left the agents and skills as they were');
+      assert.ok(failingSteps >= 1, 'the write had a step to fail');
+      assert.strictEqual(outcome, 'saved', 'the run with no failing step saved it');
+
+      // The second step fails, after the first has been taken, and then a
+      // turn of Doc's through the runtime makes the same change.
+      unseed(name);
+      const before = tree();
+      const since = client.messages.length;
+      failingAt(2, save);
+      assert.deepStrictEqual(tree(), before, 'nothing was left by the failed write');
+      await client.waitFor((m) => m.type === 'agent_error' && m.conversationId === convoId && /could not be done/.test(m.message), { since, label: 'the error line' });
+      h.writeScenario([{ match: { agent: 'rundock-guide', promptIncludes: 'PARTWAY-NEXT' },
+        turn: [{ text: `Making it.\n<!-- RUNDOCK:SAVE_AGENT name=${name} -->\n${bareAgent(name)}\n<!-- /RUNDOCK:SAVE_AGENT -->` }] }]);
+      const next = await chat(convoId, 'rundock-guide', 'PARTWAY-NEXT make it');
+      await client.waitFor((m) => m.type === 'agent_saved' && m.agentId === name && m.conversationId === convoId, { since: next, label: 'the next turn\'s save' });
+      const saved = fs.readFileSync(agentPath(name), 'utf-8');
+      assert.match(saved, /^type: specialist$/m, 'given a type');
+      assert.match(saved, /^order: \d+$/m, 'and an order');
+    } finally {
+      h.reapConvo(convoId);
+      unseed(name);
+    }
+  });
+
+  const OTHERS = [
+    ['an existing agent: no failing step changes its bytes', 'partway-saved',
+      (name) => seed(name, 'Before'),
+      (name) => h.asDoc({ type: 'save_agent', name, content: teamFile(name, 'After') }),
+      'updated', (name) => assert.strictEqual(readOrNull(agentPath(name)), teamFile(name, 'After')),
+      (name) => unseed(name)],
+    ['a new skill: no failing step leaves a file or its folder', 'partway-skill',
+      (name) => setSkill(name, null),
+      (name) => h.asDoc({ type: 'save_skill', name, content: skillFile(name, 'After') }),
+      'saved', (name) => assert.strictEqual(readOrNull(skillPath(name)), skillFile(name, 'After')),
+      (name) => setSkill(name, null)],
+    ['an existing skill: no failing step changes its bytes', 'partway-old-skill',
+      (name) => setSkill(name, skillFile(name, 'Before')),
+      (name) => h.asDoc({ type: 'save_skill', name, content: skillFile(name, 'After') }),
+      'updated', (name) => assert.strictEqual(readOrNull(skillPath(name)), skillFile(name, 'After')),
+      (name) => setSkill(name, null)],
+  ];
+  for (const [label, name, prepare, change, went, check, clear] of OTHERS) {
+    test(label, () => {
+      try {
+        const { wrong, failingSteps, outcome } = everyStepFailing(() => prepare(name), () => change(name));
+        assert.deepStrictEqual(wrong, [], 'every failing step was answered as an error and left the agents and skills as they were');
+        assert.ok(failingSteps >= 1, 'the write had a step to fail');
+        assert.strictEqual(outcome, went, 'the run with no failing step went through');
+        check(name);
+      } finally {
+        clear(name);
+      }
+    });
+  }
+});
+
 describe('the sequences', () => {
   test('two windows: Doc\'s marker writes once, and each window is told once', async () => {
     const convoId = h.freshConvoId('twowin');
