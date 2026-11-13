@@ -153,10 +153,10 @@ function main() {
     const dir = fs.mkdtempSync(path.join(tmp, 'calls-'));
     const baseFile = path.join(tmp, 'hook-at-base.js');
     fs.writeFileSync(baseFile, baseSrc);
-    const run = spawnSync(process.execPath, ['--test', '--require', './test/helpers/account-home-refused.js', '--require', PRELOAD, ...files], {
+    const run = countedRun(spawnSync(process.execPath, ['--test', '--require', './test/helpers/account-home-refused.js', '--require', PRELOAD, ...files], {
       cwd: ROOT, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024,
       env: { ...process.env, RUNDOCK_INLINE_MOVES: dir, RUNDOCK_INLINE_MOVES_BASE: baseFile },
-    });
+    }));
     testSummary = String(run.stdout).split('\n').filter(l => /^ℹ (tests|pass|fail) /.test(l)).map(l => l.slice(2)).join(', ');
     for (const f of fs.readdirSync(dir)) {
       const text = fs.readFileSync(path.join(dir, f), 'utf8');
@@ -234,5 +234,15 @@ function main() {
   }
 }
 
-module.exports = { hookFromSource };
+// A run of the tests whose calls are counted: one that failed, was stopped or
+// never started may have made only some of them, so its count is not taken.
+function countedRun(run) {
+  if (run.error || run.signal || run.status !== 0) {
+    const tail = String(run.stdout || '').split('\n').filter(l => /^ℹ (tests|pass|fail) /.test(l)).join(', ');
+    throw new Error(`the test run did not finish cleanly (${run.error ? run.error.message : run.signal || `exit ${run.status}`}${tail ? `; ${tail}` : ''})`);
+  }
+  return run;
+}
+
+module.exports = { hookFromSource, countedRun };
 if (require.main === module) main();

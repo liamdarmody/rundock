@@ -765,3 +765,18 @@ describe('through the hook, in Code mode and in Notes mode', () => {
     assert.strictEqual(next.cls, 'runs');
   });
 });
+
+// The tool that lists the answers these readings move counts the comparisons
+// a run of the existing tests made. A run that failed, was stopped or never
+// started may have made only some of them, so its count is never taken.
+describe('the answer-moves tool counts a test run only when it finished cleanly', () => {
+  const { countedRun } = require('../tools/inline-script-answer-moves.js');
+  test('a failed, stopped or unstarted run is refused, and a clean one is taken', () => {
+    assert.strictEqual(typeof countedRun, 'function', 'the tool checks the run it counts');
+    assert.throws(() => countedRun({ status: 1, signal: null, stdout: 'ℹ fail 1\n', stderr: '' }), /did not finish cleanly/);
+    assert.throws(() => countedRun({ status: null, signal: 'SIGKILL', stdout: '', stderr: '' }), /did not finish cleanly/);
+    assert.throws(() => countedRun({ status: null, signal: null, error: new Error('spawn ENOENT'), stdout: '', stderr: '' }), /did not finish cleanly/);
+    const clean = { status: 0, signal: null, stdout: 'ℹ pass 1\n', stderr: '' };
+    assert.strictEqual(countedRun(clean), clean);
+  });
+});
