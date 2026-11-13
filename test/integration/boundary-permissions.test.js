@@ -327,13 +327,13 @@ describe('workspace file-access boundary', () => {
 
   // THE COPY-IN PATH, END TO END. A user may want a global agent or skill
   // added to their workspace: the guide agent lists what is in the global
-  // folder (a read) and copies one INTO the workspace (a write, inside).
-  // Neither step may card, because the refusal above only governs editing
-  // the global file in place, a different act entirely. This is the case a
-  // later tightening would most easily break by accident, so it gets its
-  // own end-to-end proof rather than being inferred from the read test and
-  // the deny test separately.
-  test('the copy-in path: reading a global skill file and writing its content into the workspace both raise no card', async () => {
+  // folder (a read, which may not card) and saves a copy into the workspace.
+  // The save is Doc's marker, which the server writes; a file tool writing
+  // the copy into the workspace's skills folder is refused, with no card,
+  // because agents and skills in a workspace are changed only by Doc
+  // (isWorkspaceTeamFolderEdit), and that refusal says so rather than the
+  // global one's.
+  test('the copy-in path: reading a global skill file raises no card, and a file tool writing it into the workspace is refused with no card', async () => {
     const globalSkill = path.join(os.homedir(), '.claude', 'skills', 'shared-skill', 'SKILL.md');
     fs.mkdirSync(path.dirname(globalSkill), { recursive: true });
     const content = '# Shared Skill\n\nSomething useful, defined once, globally.\n';
@@ -349,10 +349,11 @@ describe('workspace file-access boundary', () => {
     const workspaceSkill = path.join(h.workspaceDir, '.claude', 'skills', 'shared-skill', 'SKILL.md');
     since = client.messages.length;
     const writeOut = await runHook('Write', { file_path: workspaceSkill, content });
-    assert.strictEqual(decisionOf(writeOut), 'allow', 'copying it into the workspace is an ordinary inside write');
+    assert.strictEqual(decisionOf(writeOut), 'deny', 'a file tool writing into the workspace\'s skills is refused');
+    assert.match(reasonOf(writeOut), /changed only by Doc/, 'refused as the workspace\'s own, not as the global copy');
     await h.delay(200);
     assert.strictEqual(client.messages.slice(since).filter(m => m.type === 'control_request').length, 0,
-      'no card for writing the copy into the workspace either: the refusal governs the global file in place, not this');
+      'no card for writing the copy into the workspace either');
   });
 
   // The following two are claims about what a person sees, driven through
@@ -391,10 +392,15 @@ describe('workspace file-access boundary', () => {
     fs.mkdirSync(path.join(pluginWs, '.claude', 'agents'), { recursive: true });
 
     const inWorkspace = { RUNDOCK_WORKSPACE: pluginWs };
-    for (const rel of ['README.md', path.join('src', 'index.js'), path.join('.claude', 'agents', 'mine.md')]) {
+    for (const rel of ['README.md', path.join('src', 'index.js')]) {
       const out = await runHook('Write', { file_path: path.join(pluginWs, rel), content: 'x' }, inWorkspace);
       assert.strictEqual(decisionOf(out), 'allow', `${rel} is inside the opened workspace and is written normally`);
     }
+    // Except its own agents and skills, which in any workspace are changed
+    // only by Doc, and are refused as that workspace's, not as the runtime's.
+    const own = await runHook('Write', { file_path: path.join(pluginWs, '.claude', 'agents', 'mine.md'), content: 'x' }, inWorkspace);
+    assert.strictEqual(decisionOf(own), 'deny', 'the opened workspace\'s own agents folder is refused to a file tool');
+    assert.match(reasonOf(own), /changed only by Doc/, 'with the workspace\'s refusal, not the runtime home\'s');
 
     // AND THE REFUSAL STILL HOLDS FOR THE RUNTIME'S OWN CONFIGURATION, reached
     // from that same workspace: being opened under the folder does not hand

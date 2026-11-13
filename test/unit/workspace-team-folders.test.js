@@ -301,3 +301,120 @@ describe('the real hook process, in a routine run\'s environment', () => {
     assert.strictEqual(asked.length, 0, 'refused by the hook, with no card');
   });
 });
+
+// THE STEPS AROUND A REFUSAL: what an agent does just before it, just after
+// it, and instead of it.
+describe('the steps around a refusal', () => {
+  for (const [label, ws, who] of RUNS) {
+    test(`the inverse action: a Read of an agent file is allowed, and the Edit that follows it refused, in ${label}`, async () => {
+      const env = envFor(ws, who);
+      asked.length = 0;
+      const read = await runHook(env, { tool_name: 'Read', tool_input: { file_path: agentFile(ws) } });
+      assert.strictEqual(read.decision, 'allow', read.out);
+      assert.match(read.reason, IN_WORKSPACE);
+      await assertRefused(env, edit('Edit', agentFile(ws)), 'the Edit after the Read');
+    });
+
+    test(`the undo: after the refused Edit, a Write to notes/a.md is allowed, in ${label}`, async () => {
+      const env = envFor(ws, who);
+      await assertRefused(env, edit('Edit', agentFile(ws)), 'the Edit');
+      asked.length = 0;
+      const next = await runHook(env, edit('Write', path.join(ws, 'notes', 'a.md')));
+      assert.strictEqual(next.decision, 'allow', next.out);
+      assert.match(next.reason, IN_WORKSPACE);
+      assert.strictEqual(asked.length, 0, 'an ordinary write in the workspace, with no card');
+    });
+  }
+
+  // A workspace whose answers would allow the write if anything asked them:
+  // a saved "Always allow" for every file tool, folder grants covering the
+  // two folders, and the agents folder named as a working folder. The server
+  // standing in for Rundock allows everything as well. The refusal comes
+  // before all of them, so the same write is refused however often it is sent.
+  const granted = (mode) => {
+    const ws = path.join(root, `ws-granted-${mode}`);
+    makeWorkspace(ws, mode);
+    const agents = path.join(ws, '.claude', 'agents');
+    fs.writeFileSync(path.join(ws, '.rundock', 'permissions.json'), `${JSON.stringify({
+      allowedDirs: [agents, path.join(ws, '.claude', 'skills'), path.join(ws, '.claude')],
+      allowedTools: EDIT_TOOLS,
+    })}\n`);
+    fs.writeFileSync(path.join(ws, '.rundock', 'state.json'), `${JSON.stringify({ workspaceMode: mode, workingFolders: [agents] })}\n`);
+    return ws;
+  };
+  for (const [label, mode, who] of [
+    ['Code mode, a conversation', 'code', 'conversation'],
+    ['Notes mode, a conversation', 'notes', 'conversation'],
+    ['Code mode, a routine run', 'code', 'routine'],
+    ['Notes mode, a routine run', 'notes', 'routine'],
+  ]) {
+    test(`the retry: the same refused Write sent twice is refused twice, with no saved answer or folder grant consulted, in ${label}`, async () => {
+      const ws = granted(mode);
+      const env = envFor(ws, who);
+      assert.ok(env.RUNDOCK_EXTRA_DIRS.split(path.delimiter).includes(path.join(ws, '.claude', 'agents')),
+        'sanity: the agents folder is named as a working folder');
+      for (const attempt of ['first', 'second']) {
+        await assertRefused(env, edit('Write', agentFile(ws)), `the ${attempt} Write`);
+      }
+    });
+  }
+
+  // Rundock's settings do not route the Agent tool through this hook at all
+  // (the PreToolUse matchers name the file tools, the shell tools and
+  // connector actions), so the hand-over never meets it in the app. Asked
+  // here anyway, before and after the refusal, so the refusal is shown to
+  // leave its answer exactly as it was: Code mode allows it with no card,
+  // and Notes mode asks Rundock as for any other tool, whose answer here is
+  // an Allow.
+  const handOver = {
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'rundock-guide', description: 'Update the helper agent', prompt: 'Change the helper agent\'s description to say it drafts replies.' },
+  };
+  for (const [label, ws, cards] of [['Code mode', wsCode, 0], ['Notes mode', wsNotes, 1]]) {
+    test(`the most common next step: after the refusal, handing the change to Doc is allowed, in ${label}, a conversation`, async () => {
+      const env = envFor(ws, 'conversation');
+      asked.length = 0;
+      const before = await runHook(env, handOver);
+      assert.strictEqual(asked.length, cards, 'sanity: how this mode answers an Agent call');
+      await assertRefused(env, edit('Write', agentFile(ws)), 'the Write');
+      asked.length = 0;
+      const after = await runHook(env, handOver);
+      assert.strictEqual(after.decision, 'allow', after.out);
+      assert.doesNotMatch(after.reason, REFUSED);
+      assert.deepStrictEqual([after.decision, after.reason, asked.length], [before.decision, before.reason, cards],
+        'answered as it was before the refusal');
+    });
+  }
+});
+
+// WHAT THE AGENT IS TOLD, word for word. It says who changes agents and
+// skills here and what to do instead, and never that the write was outside
+// the workspace, which it was not. A routine is told to say so in its final
+// message, in the words every refusal gives a routine (scripts/refusal-notice.js).
+// UK spelling, because a person may read it (CONTRIBUTING.md).
+const { UNATTENDED_NEXT } = require('../../scripts/refusal-notice.js');
+const OPENS = 'Agents and skills in this workspace are changed only by Doc (rundock-guide), Rundock\'s built-in agent, so this write into the workspace\'s .claude/agents or .claude/skills folder was refused. The refusal is deliberate: do not retry it or try another way.';
+const SAID = {
+  conversation: `${OPENS} Hand the change to Doc, or ask the person to make it.`,
+  routine: `${OPENS} Say in your final message what you wanted to change. ${UNATTENDED_NEXT}`,
+};
+const US_SPELLINGS = /iz(?:e|es|ed|ing|ation)\b|yz(?:e|es|ed|ing)\b|\b(?:color|behavior|favor|honor|center|catalog|canceled|traveled|license)\b/i;
+
+describe('what the refusal tells the agent', () => {
+  for (const [label, ws, who] of RUNS) {
+    test(`the words, in ${label}`, async () => {
+      const r = await runHook(envFor(ws, who), edit('Write', agentFile(ws)));
+      assert.strictEqual(r.decision, 'deny', r.out);
+      assert.match(r.reason, /changed only by Doc/, 'who changes agents and skills here');
+      if (who === 'routine') {
+        assert.match(r.reason, /Say in your final message what you wanted to change/, 'what a routine does instead');
+        assert.doesNotMatch(r.reason, /ask the person/, 'a routine has nobody to ask');
+      } else {
+        assert.match(r.reason, /Hand the change to Doc, or ask the person to make it/, 'what a conversation does instead');
+      }
+      assert.doesNotMatch(r.reason, /outside/i, 'the write was inside the workspace, and is never said to be outside it');
+      assert.doesNotMatch(r.reason, US_SPELLINGS, 'UK spelling');
+      assert.strictEqual(r.reason, SAID[who], 'word for word');
+    });
+  }
+});
