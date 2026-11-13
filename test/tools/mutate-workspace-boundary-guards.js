@@ -497,6 +497,10 @@ const STARTUP_COPY_NAMES = { src: path.join(ROOT, 'public', 'permissions.js'), s
 const STARTUP_COPY_PUTBACK = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/startup-file-guard.test.js' };
 // The test preload that keeps every test off the account's own startup files.
 const STARTUP_PRELOAD = { src: path.join(ROOT, 'test', 'helpers', 'account-home-refused.js'), suite: 'test/unit/startup-file-guard.test.js' };
+// A file tool's write into the workspace's own agents and skills folders is
+// refused, through the real hook in every mode and run, and the check itself
+// in-process with the case-folding seam set both ways.
+const TEAM_FOLDERS = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/workspace-team-folders.test.js' };
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -4720,6 +4724,46 @@ const MUTATIONS = [
   [INLINE_SCRIPT, 'Inline script: the main guard is a dunder like any other',
     String.raw`const PY_MAIN_GUARD = /\bif[ \t]+__name__[ \t]*==[ \t]*(["'])__main__\1[ \t]*:/g;`,
     'const PY_MAIN_GUARD = /(?!)/g;'],
+  // ===== THE WORKSPACE'S OWN AGENTS AND SKILLS ARE REFUSED TO FILE TOOLS =====
+  // The refusal never asked: every write into the two folders is in-workspace
+  // access again. Caught by: each file tool is refused in every mode and run.
+  [TEAM_FOLDERS, 'Team folders: the workspace check is removed',
+    '  if (isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot)) {',
+    '  if (false) {'],
+  // Case compared as written: `.claude/Agents/` slips past where the host
+  // folds case. Caught by: a case variant is refused exactly where the host
+  // folds case, driven both ways through the seam.
+  [TEAM_FOLDERS, 'Team folders: case folding is dropped',
+    "    const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);\n    return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {\n      const folder = foldCase(canonicalize(path.join(workspaceRoot, '.claude', d)), foldsCase);",
+    "    const t = canonicalize(path.resolve(workspaceRoot, target));\n    return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {\n      const folder = canonicalize(path.join(workspaceRoot, '.claude', d));"],
+  // A bare prefix: `.claude/agents-old/` and `.claude/skillset/` are refused
+  // too. Caught by: everything beside those two folders keeps today's answer.
+  [TEAM_FOLDERS, 'Team folders: a prefix match also catches agents-old',
+    '      return t === folder || t.startsWith(folder + path.sep);',
+    '      return t === folder || t.startsWith(folder);'],
+  // A relative target resolved against the home folder rather than the
+  // workspace. Caught by: each spelling is refused, in-process and through
+  // the hook (the relative rows).
+  [TEAM_FOLDERS, 'Team folders: a relative target is resolved against the home folder',
+    '    const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);',
+    '    const t = foldCase(canonicalize(path.resolve(os.homedir(), target)), foldsCase);'],
+  // NotebookEdit left out of the check. Caught by: each file tool is refused,
+  // and the notebook_path spelling.
+  [TEAM_FOLDERS, 'Team folders: NotebookEdit is left out',
+    "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
+    "  if (toolName === 'NotebookEdit') return false;\n  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);"],
+  // A throw inside the check read as "not a team folder", so the write goes
+  // through as in-workspace access. Caught by: a forced failure refuses.
+  [TEAM_FOLDERS, 'Team folders: the check failing is treated as allow',
+    '  if (isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot)) {',
+    '  if ((() => { try { return isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot); } catch (e) { return false; } })()) {'],
+  // Only the first path field present is checked again, so a NotebookEdit
+  // naming a note in file_path and an agent in notebook_path is checked as
+  // the note, and the classifier, reading notebook_path, allows the agent
+  // write. Caught by: a target in those folders is refused in any path field.
+  [TEAM_FOLDERS, 'Team folders: only the first path field present is checked',
+    "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
+    "  const targets = [ti.file_path || ti.notebook_path || ti.path].filter((v) => typeof v === 'string' && v);"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

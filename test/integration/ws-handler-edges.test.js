@@ -33,6 +33,14 @@ function request(msg, pred, label) {
   return client.waitFor(pred, { since, label }).then(r => r.msg);
 }
 
+// A change to the team, made as Doc's reply makes it (a window's own message
+// for one is refused), and the answer it broadcasts.
+function asDoc(msg, pred, label) {
+  const since = client.messages.length;
+  h.asDoc(msg);
+  return client.waitFor(pred, { since, label }).then(r => r.msg);
+}
+
 describe('workspace lifecycle edges', () => {
   test('set_workspace to a missing directory answers the user-facing error and switches nothing', async () => {
     const before = h.internal.getWorkspace();
@@ -208,7 +216,7 @@ describe('team CRUD edges', () => {
   });
 
   test('save_agent with type but no order gains an order after the type line', async () => {
-    const res = await request({
+    const res = await asDoc({
       type: 'save_agent', name: 'edge-typed',
       content: '---\nname: Edge Typed\ndescription: Typed bench agent.\ntype: specialist\n---\n\nBody.\n',
     }, m => m.type === 'agent_saved', 'agent_saved');
@@ -218,10 +226,10 @@ describe('team CRUD edges', () => {
   });
 
   test('save_skill and delete_skill refuse bad names and missing skills with their own wordings', async () => {
-    const bad = await request({ type: 'save_skill', name: 'Bad Name!', content: '# nope' },
+    const bad = await asDoc({ type: 'save_skill', name: 'Bad_Name', content: '# nope' },
       m => m.type === 'skill_error', 'skill_error name');
     assert.match(bad.message, /^Invalid skill name\. Use lowercase letters/);
-    const missing = await request({ type: 'delete_skill', name: 'never-existed' },
+    const missing = await asDoc({ type: 'delete_skill', name: 'never-existed' },
       m => m.type === 'skill_error', 'skill_error missing');
     assert.strictEqual(missing.message, 'Skill "never-existed" not found.');
   });

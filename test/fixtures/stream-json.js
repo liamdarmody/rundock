@@ -96,12 +96,15 @@ function toLines(events) {
   return events.map(e => JSON.stringify(e)).join('\n') + '\n';
 }
 
-// Canonical marker strings, so tests and stub scenarios never typo them.
+// Canonical marker strings, so tests and stub scenarios never typo them. The
+// save markers carry their body on its own lines, as the marker scan reads
+// them (public/markers.js): without the line break after the opening marker
+// the scan sees no save at all, and a test built on one proves nothing.
 const MARKERS = {
   RETURN: '<!-- RUNDOCK:RETURN -->',
   COMPLETE: '<!-- RUNDOCK:COMPLETE -->',
-  saveAgent: (name, payload) => `<!-- RUNDOCK:SAVE_AGENT name=${name} -->${payload}<!-- /RUNDOCK:SAVE_AGENT -->`,
-  saveSkill: (name, payload) => `<!-- RUNDOCK:SAVE_SKILL name=${name} -->${payload}<!-- /RUNDOCK:SAVE_SKILL -->`,
+  saveAgent: (name, payload) => `<!-- RUNDOCK:SAVE_AGENT name=${name} -->\n${payload}\n<!-- /RUNDOCK:SAVE_AGENT -->`,
+  saveSkill: (name, payload) => `<!-- RUNDOCK:SAVE_SKILL name=${name} -->\n${payload}\n<!-- /RUNDOCK:SAVE_SKILL -->`,
 };
 
 module.exports = {

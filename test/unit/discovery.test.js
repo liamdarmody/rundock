@@ -501,8 +501,42 @@ describe('rosters and system prompt', () => {
       'the marker rule says how far it reaches, because it was read as reaching further');
     assert.doesNotMatch(prompt, /Do not attempt to create, modify, or delete files in \.claude\/ directly/,
       'and the sentence that generalised it to the whole directory is gone');
-    assert.match(prompt, /marker rule above is the one real exception/i,
+    assert.match(prompt, /rule above about \.claude\/agents\/ and \.claude\/skills\/ is the one real exception/i,
       'the attempt-first rule defers to it rather than contradicting it');
+  });
+
+  test('buildSystemPrompt: only Doc is told the agent and skill marker rule; everyone else is told to go through Doc', () => {
+    // The server acts on agent and skill markers only from Doc's turns and
+    // refuses every other agent's (lib/agents/team-markers.js). An agent told
+    // to write the markers would be refused every time, so the prompt has to
+    // agree with the server: Doc gets the rule, and every other agent is told
+    // the change goes through Doc, an orchestrator by delegating it.
+    useWorkspace({ agents: standardTeam(), claudeMd: '# Test Workspace\n' });
+    const agents = srv.discoverAgents();
+    const promptOf = (id) => {
+      const agent = agents.find(a => a.id === id);
+      assert.ok(agent, `${id} is on the roster`);
+      return srv.buildSystemPrompt(agent);
+    };
+    const doc = promptOf('rundock-guide');
+    assert.match(doc, /\.claude\/skills\/ are managed through SAVE_AGENT and SAVE_SKILL markers/, 'Doc is told to use the markers');
+    assert.match(doc, /Only your markers are acted on/, 'and that only its own are acted on');
+
+    for (const [id, label] of [['chief-of-staff', 'an orchestrator'], ['content-lead', 'a lead'], ['content-analyst', 'a specialist'], ['default', 'the default agent']]) {
+      const prompt = promptOf(id);
+      assert.doesNotMatch(prompt, /managed through SAVE_AGENT and SAVE_SKILL markers/, `${label} is not told to use the markers`);
+      assert.doesNotMatch(prompt, /<!-- RUNDOCK:(SAVE|CREATE|DELETE)_(AGENT|SKILL)/, `${label} is shown no agent or skill marker to copy`);
+      assert.match(prompt, /changed only by Doc \(rundock-guide\)/, `${label} is told only Doc changes the team`);
+      assert.match(prompt, /Do not write agent or skill markers/, `${label} is told not to write them`);
+      assert.match(prompt, /THAT IS THE WHOLE OF THE RULE/, `${label}: the rule still says how far it reaches`);
+    }
+    assert.match(promptOf('chief-of-staff'), /When the team needs a change, delegate it to Doc by calling the Agent tool with subagent_type=rundock-guide/,
+      'the orchestrator delegates it');
+    assert.match(promptOf('chief-of-staff'), /Platform operations \(creating or editing agents, skills, or workspace config\) MUST be delegated to Doc/,
+      'and keeps its delegation rule');
+    for (const id of ['content-lead', 'content-analyst', 'default']) {
+      assert.match(promptOf(id), /hand back to the agent who brought you in, or, if nobody did, tell the person to ask Doc/, `${id} hands back or sends the person to Doc`);
+    }
   });
 
   test('buildSystemPrompt: agents are told the truth about connectors, which is now that the tab exists', () => {

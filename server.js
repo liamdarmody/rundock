@@ -1501,6 +1501,9 @@ const wsHandlerContext = {
   broadcast: safeSend,
   config,                                         // lib/config module: getWorkspace at use time
 };
+// The agent and skill markers in a reply are acted on here, at the end of the
+// turn, through the same handlers and broadcast (lib/agents/team-markers.js).
+require('./lib/agents/team-markers.js').wireTeamMarkers(wsHandlerContext);
 
 wss.on('connection', (ws) => {
   console.log('Client connected');
@@ -1710,8 +1713,11 @@ wss.on('connection', (ws) => {
               stdio: ['pipe', 'pipe', 'pipe']
             }, (err) => handleChatSpawnError(err, convoId));
 
+            // THE AGENT DISCOVERY RESOLVED, not the name the window asked for:
+            // this id is who the turn's agent and skill markers are decided
+            // as, and a window can ask for any name.
             const entry = {
-              process: proc, buffer: '', processId, agentId: msg.agent || 'default',
+              process: proc, buffer: '', processId, agentId: agentData ? agentData.id : 'default',
               responseText: '', exited: false, resultSent: false,
               lastUserMessage: msg.content,
               // Agent tool interception state
@@ -1891,7 +1897,7 @@ wss.on('connection', (ws) => {
             stdio: ['pipe', 'pipe', 'pipe']
           }, (err) => handleChatSpawnError(err, convoId));
 
-          const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
+          const entry = { process: proc, buffer: '', processId, agentId: agentData ? agentData.id : 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
           processes.set(convoId, entry);
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));

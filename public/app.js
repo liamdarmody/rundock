@@ -1187,34 +1187,30 @@ function handleResult(d, convoId) {
   let reduced = null;
 
   try {
-  // Detect agent and skill definitions in responses and route to server.
-  // SAVE markers (upsert): RUNDOCK:SAVE_AGENT, RUNDOCK:SAVE_SKILL
-  // Legacy CREATE markers also supported for backward compatibility.
+  // Route the reply's connector, delegation and return markers to the server.
   // Prefer streamingRawText: it contains the raw text with HTML comment markers intact.
   // d.result from stream-json is often empty or may strip HTML comments.
+  //
+  // AGENT AND SKILL MARKERS ARE NOT SENT FROM HERE. The server acts on them at
+  // the end of the turn, from the text it collected from the agent's own
+  // process, and only when that agent is Doc; every window open on the
+  // conversation receives the confirmation or the refusal. A window cannot
+  // say who wrote a reply, and every open window used to act on the same one.
   const textToScan = state.streamingRawText || d.result || state.latestText || '';
   if(textToScan && ws) {
-    let filesCreated = 0;
-
     // Marker scanning is pure logic in markers.js (unit-tested); this block
-    // owns the WebSocket sends. Action order preserves the historical send
-    // order: agent saves, skill saves, skill deletes, agent deletes.
+    // owns the WebSocket sends.
     const scan = RundockMarkers.scanMarkers(textToScan);
     const MARKER_SENDS = {
-      save_agent:   a => ({ type: 'save_agent', name: a.name, content: a.content }),
-      save_skill:   a => ({ type: 'save_skill', name: a.name, content: a.content }),
       save_connector:   a => ({ type: 'save_connector', name: a.name, content: a.content }),
       delete_connector: a => ({ type: 'delete_connector', name: a.name }),
-      delete_skill: a => ({ type: 'delete_skill', name: a.name }),
-      delete_agent: a => ({ type: 'delete_agent', agentId: a.name }),
     };
     for (const action of scan.actions) {
+      if (!MARKER_SENDS[action.kind]) continue;
       // THE CONVERSATION THAT PRODUCED THE MARKER, SENT WITH IT. Without this
       // the reply has nothing to route by, and its confirmation pill lands in
-      // whichever conversation happens to be on screen: a skill created in one
-      // thread announcing itself in another.
+      // whichever conversation happens to be on screen.
       ws.send(JSON.stringify({ ...MARKER_SENDS[action.kind](action), conversationId: convoId }));
-      filesCreated++;
       console.log('[Marker]', action.kind + ':', action.name);
     }
 
@@ -1232,25 +1228,9 @@ function handleResult(d, convoId) {
       ws.send(JSON.stringify({ type: 'end_delegation', conversationId: convoId }));
     }
 
-    // Fallback: raw YAML frontmatter agent definitions without the marker
-    // wrapper. Only when the marker scan produced no save/delete actions.
-    if(filesCreated === 0) {
-      for (const fm of RundockMarkers.extractFrontmatterAgents(textToScan)) {
-        ws.send(JSON.stringify({ type: 'save_agent', name: fm.name, content: fm.content, conversationId: convoId }));
-        filesCreated++;
-        console.log('[Agent] Fallback extraction:', fm.name);
-      }
-    }
-
-    if(filesCreated > 0) {
-      console.log('[Rundock] Saved', filesCreated, 'file(s)');
-      setTimeout(() => {
-        if(ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'get_agents' }));
-          ws.send(JSON.stringify({ type: 'get_skills' }));
-        }
-      }, 500);
-    }
+    // Nothing else here asks for a file write: an agent file shown without a
+    // marker is a preview, and saving it would write it before the yes. The
+    // roster and skills arrive from the server after any change it makes.
   }
 
   // Everything from here (silent-park heuristic, message finalisation,

@@ -2485,3 +2485,56 @@ describe('ARCHITECTURE.md and the hook: three spellings in an inline script name
     assert.ok(bash("ruby <<'RB'\nputs %x(cat /etc/hosts)\nRB"), 'Ruby\'s %x( ) runs its body');
   });
 });
+
+// ---------------------------------------------------------------------------
+// ARCHITECTURE.md and the hook's own comment: a file tool's write into the
+// workspace's agents and skills folders is refused
+// ---------------------------------------------------------------------------
+
+describe('the workspace\'s agents and skills are refused to file tools, as the page and the hook say', () => {
+  const HEADING = '**A file tool\'s write into the workspace\'s own agents and skills is refused outright, in every run.**';
+  const passage = (() => {
+    const at = architecture.indexOf(HEADING);
+    return at < 0 ? '' : architecture.slice(at, architecture.indexOf('\n', at));
+  })();
+
+  test('the page says which folders, which tools, which runs and why, and names the check', () => {
+    assert.ok(passage, 'ARCHITECTURE.md has the passage');
+    for (const said of [
+      'changed only by Doc (`rundock-guide`)',
+      'A Write, Edit, MultiEdit or NotebookEdit whose target is in the workspace\'s `.claude/agents/` or `.claude/skills/`, or is one of those folders',
+      'before any card, saved answer, folder grant or mode can answer it',
+      'in Notes and Code mode, in a conversation and in a routine',
+      '`isWorkspaceTeamFolderEdit` in `scripts/permission-hook.js`',
+      '--dangerously-skip-permissions',
+      'a neighbor such as `.claude/agents-old/` or `.claude/commands/` does not',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+    assert.ok(!architecture.includes('they live with the agents and skills, which are ordinary workspace files'),
+      'the page no longer calls the agents and skills ordinary workspace files');
+  });
+
+  test('the comment above CLAUDE_EDIT_TOOLS says the same, and no longer that workspace edits go unblocked', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8');
+    const end = src.indexOf('const CLAUDE_EDIT_TOOLS');
+    const comment = src.slice(src.lastIndexOf('// Deny a direct file edit to the GLOBAL', end), end).replace(/\n\/\/ ?/g, ' ');
+    assert.ok(comment.includes('The workspace\'s own .claude/agents and .claude/skills are refused to these tools too (isWorkspaceTeamFolderEdit)'), comment);
+    assert.ok(comment.includes('changed only by Doc\'s SAVE_AGENT / SAVE_SKILL markers'), comment);
+    assert.ok(!/NOT blocked/.test(comment), 'the old claim is gone');
+  });
+
+  test('and the check the page names does what the page says', () => {
+    const { isWorkspaceTeamFolderEdit } = require('../../scripts/permission-hook.js');
+    const ws = path.join(require('node:os').tmpdir(), 'doc-claims-team-folders');
+    for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']) {
+      for (const target of [path.join(ws, '.claude', 'agents', 'helper.md'), path.join(ws, '.claude', 'skills', 'example', 'SKILL.md'), path.join(ws, '.claude', 'agents')]) {
+        assert.strictEqual(isWorkspaceTeamFolderEdit(tool, { file_path: target, notebook_path: target }, ws), true, `${tool} ${path.relative(ws, target)}`);
+      }
+    }
+    for (const target of [path.join(ws, '.claude', 'agents-old', 'x.md'), path.join(ws, '.claude', 'commands', 'x.md')]) {
+      assert.strictEqual(isWorkspaceTeamFolderEdit('Write', { file_path: target }, ws), false, `a neighbor: ${path.relative(ws, target)}`);
+    }
+    for (const tool of ['Read', 'Glob', 'Grep']) {
+      assert.strictEqual(isWorkspaceTeamFolderEdit(tool, { file_path: path.join(ws, '.claude', 'agents', 'helper.md'), path: path.join(ws, '.claude', 'agents') }, ws), false, `${tool} reads`);
+    }
+  });
+});
