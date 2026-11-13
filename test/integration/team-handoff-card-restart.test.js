@@ -153,3 +153,98 @@ test('a card open when the server stops writes nothing, an answer to it after th
     `the next turn is told (got ${JSON.stringify(told[0].slice(0, 400))})`);
   assert.strictEqual(fs.existsSync(agentPath()), false);
 });
+
+// THE FIRST TURN OF A CONVERSATION CAN END WITH ITS CARD OPEN BEFORE ANY
+// WINDOW HAS SAVED THE CONVERSATION. The card is held all the same, on a
+// record of its own, which a window's save keeps; and after a restart it
+// writes nothing and is told, as a card on a saved conversation is.
+const UNSAVED = 'handoff-card-unsaved-across-restart';
+const UNSAVED_NAME = 'unsaved-card-helper';
+const recordOf = (id) => {
+  try { return JSON.parse(fs.readFileSync(file(path.join('.rundock', 'conversations.json')), 'utf8')).find((c) => c.id === id) || null; } catch (e) { return null; }
+};
+const linesOf = (id) => {
+  const f = file(path.join('.rundock', 'transcripts', `${id}.json`));
+  return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')).filter((t) => t.type === 'team').map((t) => t.text) : [];
+};
+async function eventually(check, label, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+test('a card raised before any window saved its conversation is held on a record of its own, the window\'s save keeps it, and after a restart it writes nothing and is told once', async () => {
+  const helper = agentFile({ name: UNSAVED_NAME, displayName: 'Helper', role: 'Example Role', type: 'specialist', order: 30, body: 'You help.' }).trim();
+  const unsavedPath = file(path.join('.claude', 'agents', `${UNSAVED_NAME}.md`));
+  fs.writeFileSync(file('stub-scenario.json'), JSON.stringify({ rules: [
+    { match: { agent: 'rundock-guide', promptIncludes: 'UC-BRIEF' },
+      turn: [{ text: `UC-DONE made it.\n<!-- RUNDOCK:SAVE_AGENT name=${UNSAVED_NAME} -->\n${helper}\n<!-- /RUNDOCK:SAVE_AGENT -->` }] },
+    { match: { agent: 'chief-of-staff', promptIncludes: 'UC-ASK' },
+      turn: [{ agentTool: { subagent_type: 'rundock-guide', prompt: 'UC-BRIEF add the helper' } }] },
+    { match: { agent: 'chief-of-staff', promptIncludes: 'UC-NEXT' }, turn: [{ text: 'UC-NEXT-ANSWERED' }] },
+    { match: { agent: 'chief-of-staff', promptIncludes: 'UC-AFTER' }, turn: [{ text: 'UC-AFTER-ANSWERED' }] },
+  ] }, null, 2));
+  assert.strictEqual(recordOf(UNSAVED), null, 'no record of the conversation yet');
+
+  // ── THE FIRST SERVER: the card is raised with no record, then the window's save, then the stop ──
+  const first = bootChild();
+  let client;
+  let card;
+  try {
+    client = await connect(await first.ready);
+    client.send({ type: 'chat', conversationId: UNSAVED, agent: 'chief-of-staff', content: 'UC-ASK add a helper' });
+    card = await client.waitFor((m) => m.type === 'control_request' && m._conversationId === UNSAVED && m.request.tool_name === 'SaveAgent', 'the card');
+    await eventually(() => recordOf(UNSAVED), 'a record holding the open card');
+    assert.deepStrictEqual(Object.keys(recordOf(UNSAVED)).sort(), ['id', 'teamCards'], 'a record of its own, holding the card only');
+    assert.strictEqual(Object.keys(recordOf(UNSAVED).teamCards).length, 1);
+    // A record that only holds the server's own fields is not a conversation a window can show.
+    const listed = async (label) => {
+      const since = client.messages.length;
+      client.send({ type: 'get_conversations' });
+      const reply = await client.waitFor((m) => m.type === 'conversations' && client.messages.indexOf(m) >= since, label);
+      return reply.conversations.map((c) => c.id);
+    };
+    assert.ok(!(await listed('the list before any save')).includes(UNSAVED), 'not listed while only its card is held');
+    // The save a window sends: the metadata it holds, never the card.
+    client.send({ type: 'save_conversation', conversation: {
+      id: UNSAVED, agentId: 'chief-of-staff', title: 'Unsaved until now', status: 'active', sessionIds: [], createdAt: new Date().toISOString(),
+    } });
+    await eventually(() => recordOf(UNSAVED) && recordOf(UNSAVED).title === 'Unsaved until now', 'the window\'s save');
+    assert.strictEqual(Object.keys(recordOf(UNSAVED).teamCards || {}).length, 1, 'the window\'s save keeps the card');
+    assert.ok((await listed('the list after the save')).includes(UNSAVED), 'listed once a window has saved it');
+    client.close();
+  } finally {
+    await stopChild(first.child);
+  }
+  assert.strictEqual(fs.existsSync(unsavedPath), false, 'nothing was written before the stop');
+
+  // ── THE SECOND SERVER: the old card writes nothing, the conversation shows it, and the next turn is told once ──
+  const line = `Doc asked to save the agent "${UNSAVED_NAME}", but Rundock stopped before anyone answered the card, so nothing was saved.`;
+  const second = bootChild();
+  try {
+    client = await connect(await second.ready);
+    await client.waitFor((m) => m.type === 'pending_permissions', 'the cards still waiting');
+    client.send({ type: 'permission_response', requestId: card.request_id, conversationId: UNSAVED, allow: true, card: true });
+    await client.waitFor((m) => m.type === 'permission_ended' && m.requestId === card.request_id && m.reason === 'not-pending', 'the answer refused');
+    assert.strictEqual(fs.existsSync(unsavedPath), false, 'an answer to the old card writes nothing');
+    assert.deepStrictEqual(linesOf(UNSAVED), [line], 'the conversation shows the change as refused');
+    assert.ok(!('teamCards' in recordOf(UNSAVED)), 'and the record no longer holds the card');
+    client.send({ type: 'chat', conversationId: UNSAVED, agent: 'chief-of-staff', content: 'UC-NEXT did it work?' });
+    await client.waitFor((m) => m.type === 'result' && m._conversationId === UNSAVED && String(m.result || '').includes('UC-NEXT-ANSWERED'), 'the next turn');
+    client.send({ type: 'chat', conversationId: UNSAVED, agent: 'chief-of-staff', content: 'UC-AFTER and now?' });
+    await client.waitFor((m) => m.type === 'result' && m._conversationId === UNSAVED && String(m.result || '').includes('UC-AFTER-ANSWERED'), 'the turn after');
+    client.close();
+  } finally {
+    await stopChild(second.child);
+  }
+  const told = prompts().filter((p) => p.includes('UC-NEXT'));
+  assert.strictEqual(told.length, 1);
+  assert.ok(told[0].startsWith(`${HEADING}\n- Refused: save agent "${UNSAVED_NAME}", asked by Doc. Rundock stopped before anyone answered the card, so nothing was saved.\n\n`),
+    `the next turn is told (got ${JSON.stringify(told[0].slice(0, 400))})`);
+  assert.deepStrictEqual(prompts().filter((p) => p.includes('UC-AFTER')).map((p) => p.includes(HEADING)), [false], 'told once, not again');
+  assert.strictEqual(recordOf(UNSAVED).title, 'Unsaved until now', 'the record keeps the window\'s metadata');
+  assert.strictEqual(fs.existsSync(unsavedPath), false);
+});

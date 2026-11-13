@@ -425,6 +425,29 @@ describe('a conversation no window has saved yet', () => {
     assert.strictEqual(teamNotes.withTeamNote(convoId, 'next'), `${told}next`);
     assert.strictEqual(recordOf(convoId), null, 'which goes with them');
   });
+
+  test('a card open on it is held on a record of its own, left out of the list, and the record goes once the card is decided', () => {
+    // A card Doc's change raised in a hand-off (lib/agents/team-markers.js).
+    const convoId = 'unit-unsaved-card';
+    const stopped = { kind: 'save_agent', name: 'helper', author: 'rundock-guide', outcome: 'refused', reason: 'stopped', message: 'Doc asked to save the agent "helper", but Rundock stopped before anyone answered the card, so nothing was saved.' };
+    teamNotes.holdCard(convoId, 'card-one', stopped);
+    assert.deepStrictEqual(Object.keys(recordOf(convoId)).sort(), ['id', 'teamCards'], 'a record of its own, holding the card only');
+    assert.deepStrictEqual(Object.keys(recordOf(convoId).teamCards), ['card-one']);
+    teamNotes.keepOutcomes(convoId, [deleted]);
+    // The turn that raised the card wrote the person's message to the transcript.
+    const { transcriptDir } = require(path.join(ROOT, 'lib', 'store', 'transcripts.js'));
+    fs.mkdirSync(transcriptDir(), { recursive: true });
+    fs.writeFileSync(path.join(transcriptDir(), `${convoId}.json`), JSON.stringify([{ role: 'user', agent: 'user', text: 'add a helper' }]));
+    const conversations = require(path.join(ROOT, 'lib', 'protocol', 'handlers', 'conversations.js'));
+    const sent = [];
+    conversations.handleGetConversations({ processes: new Map(), store: { countConversationMessages: () => 0 } }, { send: (s) => sent.push(JSON.parse(s)) }, {});
+    assert.ok(!sent[0].conversations.some((c) => c.id === convoId), 'a record holding only the server\'s own fields is not listed');
+    assert.deepStrictEqual(Object.keys(recordOf(convoId)).sort(), ['id', 'teamCards', 'teamOutcomes'], 'and it is kept on disk');
+    assert.strictEqual(teamNotes.withTeamNote(convoId, 'next'), `${told}next`);
+    assert.deepStrictEqual(Object.keys(recordOf(convoId)).sort(), ['id', 'teamCards'], 'telling the outcomes leaves the card held');
+    teamNotes.dropCard(convoId, 'card-one');
+    assert.strictEqual(recordOf(convoId), null, 'and the record goes once the card is decided');
+  });
 });
 
 describe('a card that wrote nothing is told why, in Rundock\'s own words', () => {
