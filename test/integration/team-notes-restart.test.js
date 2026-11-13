@@ -178,6 +178,14 @@ test('the first turn of a conversation no window has saved: its refusal is kept 
     await eventually(() => recordOf(UNSAVED), 'a record holding the outcome');
     assert.deepStrictEqual(Object.keys(recordOf(UNSAVED)).sort(), ['id', 'teamOutcomes'], 'a record of its own, holding the outcome only');
     assert.strictEqual(recordOf(UNSAVED).teamOutcomes.length, 1);
+    // A record that only holds outcomes is not a conversation a window can show.
+    const listed = async (label) => {
+      const since = client.messages.length;
+      client.send({ type: 'get_conversations' });
+      const reply = await client.waitFor((m, i) => m.type === 'conversations' && i >= since, label);
+      return reply.conversations.map((c) => c.id);
+    };
+    assert.ok(!(await listed('the list before any save')).includes(UNSAVED), 'not listed while only its outcomes are kept');
     // The save a window sends after a turn: the metadata it holds, never the outcomes.
     client.send({ type: 'save_conversation', conversation: {
       id: UNSAVED, agentId: 'content-lead', title: 'Unsaved until now', status: 'active',
@@ -185,6 +193,7 @@ test('the first turn of a conversation no window has saved: its refusal is kept 
     } });
     await eventually(() => recordOf(UNSAVED) && recordOf(UNSAVED).title === 'Unsaved until now', 'the window\'s save');
     assert.strictEqual(recordOf(UNSAVED).teamOutcomes.length, 1, 'the window\'s save keeps the outcome');
+    assert.ok((await listed('the list after the save')).includes(UNSAVED), 'listed once a window has saved it');
     client.close();
   } finally {
     await stopChild(first.child);
