@@ -502,3 +502,171 @@ describe('the shell startup files join the deny list', () => {
     } finally { cleanup(); }
   });
 });
+
+// THE RECORD OF THE STARTUP FILES, IN EITHER SPELLING.
+//
+// The deny list names Rundock's record of the shell startup files where the
+// process that wrote the block keeps it: in the home folder for the desktop
+// app (RUNDOCK_ELECTRON set), in the checkout for a source run. So a block one
+// of them wrote differs from what the other would write in that entry alone,
+// and read by the other it looked like a person's edit: the switch locked as
+// set up outside Rundock, and the block was never reconciled again. The entry
+// is accepted in either spelling, at its own position, and every other part of
+// the block is still compared byte for byte.
+//
+// RUNDOCK_ELECTRON is the real input that tells the two apart, so a test sets
+// it, calls, and removes it again before anything else runs.
+const APP_RECORD = `${HOME}/.rundock-startup-file-exposure.json`;
+const ELSEWHERE = '/Users/someone/clones/rundock/.startup-file-exposure.json';
+const SHAPES = ['on', 'off'];
+function asApp(fn) {
+  process.env.RUNDOCK_ELECTRON = '1';
+  try { return fn(); } finally { delete process.env.RUNDOCK_ELECTRON; }
+}
+const asSource = (fn) => fn();
+const written = (shape) => sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], shape);
+// Each way of reading a block, with the block the other way wrote.
+const READERS = [
+  { name: 'the app', read: asApp, other: (shape) => written(shape) },
+  { name: 'a source run', read: asSource, other: (shape) => asApp(() => written(shape)) },
+];
+// A copy of the block, its deny list changed by `edit(deny, at)`, where `at` is
+// the record entry's position.
+function edited(block, edit) {
+  const copy = JSON.parse(JSON.stringify(block));
+  const deny = copy.filesystem.denyWrite;
+  edit(deny, deny.findIndex((e) => e === RECORD || e === APP_RECORD));
+  return copy;
+}
+// Each way of reading still recognises the block the other way wrote, and
+// refuses every variant of it.
+function refusedEitherWay(variants) {
+  for (const { name, read, other } of READERS) {
+    for (const shape of SHAPES) {
+      const base = other(shape);
+      assert.strictEqual(read(() => isRundockSandbox(base)), true, `sanity: ${name} recognises the other's ${shape} block as written`);
+      for (const [why, edit] of variants) {
+        const block = edited(base, edit);
+        let ours;
+        assert.doesNotThrow(() => { ours = read(() => isRundockSandbox(block)); }, `${name}, ${shape}: ${why}: nothing throws`);
+        assert.strictEqual(ours, false, `${name}, ${shape}: ${why}: a person's edit`);
+      }
+    }
+  }
+}
+
+describe('the record of the startup files, in either spelling', () => {
+  test('the app recognises a block a source run wrote, on and off', () => {
+    for (const shape of SHAPES) {
+      const block = written(shape);
+      assert.ok(block.filesystem.denyWrite.includes(RECORD), `sanity: the ${shape} block names the checkout's record`);
+      assert.strictEqual(asApp(() => isRundockSandbox(block)), true, `the app reads the ${shape} block a source run wrote as Rundock's`);
+    }
+  });
+
+  test('the inverse action: a source run recognises a block the app wrote, on and off', () => {
+    for (const shape of SHAPES) {
+      const block = asApp(() => written(shape));
+      assert.ok(block.filesystem.denyWrite.includes(APP_RECORD), `sanity: the ${shape} block names the record in the home folder`);
+      assert.strictEqual(isRundockSandbox(block), true, `a source run reads the ${shape} block the app wrote as Rundock's`);
+    }
+  });
+
+  test('a block another checkout wrote is recognised, by a source run and by the app', () => {
+    // A second clone, or this one moved: the same name in another folder.
+    for (const { name, read } of READERS) {
+      for (const shape of SHAPES) {
+        for (const record of [ELSEWHERE, '/opt/rundock/.startup-file-exposure.json']) {
+          const block = edited(written(shape), (deny, at) => { deny[at] = record; });
+          assert.strictEqual(read(() => isRundockSandbox(block)), true, `${name}, ${shape}: ${record}`);
+        }
+      }
+    }
+  });
+
+  test('another deny entry changed is still a person\'s edit', () => {
+    refusedEitherWay([
+      ['a startup file renamed', (deny) => { deny[deny.indexOf(`${HOME}/.bashrc`)] = `${HOME}/.bashrc.local`; }],
+      ['an answer file swapped for another path', (deny) => { deny[0] = `${WS}/.rundock/other.json`; }],
+      ['the entry before the record spelled as another checkout\'s record', (deny, at) => { deny[at - 1] = ELSEWHERE; }],
+      ['a startup file spelled as the app\'s record', (deny) => { deny[deny.indexOf(`${HOME}/.zshrc`)] = APP_RECORD; }],
+    ]);
+  });
+
+  test('the record entry moved to another position is a person\'s edit', () => {
+    refusedEitherWay([
+      ['swapped with the entry before it', (deny, at) => { [deny[at - 1], deny[at]] = [deny[at], deny[at - 1]]; }],
+      ['moved to the start of the list', (deny, at) => { deny.unshift(deny.splice(at, 1)[0]); }],
+      ['moved to the start of the startup files', (deny, at) => { deny.splice(23, 0, deny.splice(at, 1)[0]); }],
+    ]);
+  });
+
+  test('a relative record entry is a person\'s edit', () => {
+    refusedEitherWay(['.startup-file-exposure.json', 'rundock/.startup-file-exposure.json', '../rundock/.startup-file-exposure.json',
+      '~/.rundock-startup-file-exposure.json', 'Users/someone/.rundock-startup-file-exposure.json', '.rundock-startup-file-exposure.json',
+    ].map((record) => [record, (deny, at) => { deny[at] = record; }]));
+  });
+
+  test('the app\'s record name in a folder other than the block\'s home is a person\'s edit', () => {
+    refusedEitherWay(['/Users/someone-else/.rundock-startup-file-exposure.json', `${HOME}/clones/.rundock-startup-file-exposure.json`,
+      '/Users/.rundock-startup-file-exposure.json', '/.rundock-startup-file-exposure.json', `${WS}/.rundock-startup-file-exposure.json`,
+    ].map((record) => [record, (deny, at) => { deny[at] = record; }]));
+  });
+
+  test('a record entry with any other file name is a person\'s edit', () => {
+    refusedEitherWay([`${ELSEWHERE}.bak`, '/Users/someone/clones/rundock/startup-file-exposure.json',
+      '/Users/someone/clones/rundock/.Startup-File-Exposure.json', '/Users/someone/clones/rundock/x.startup-file-exposure.json',
+      `${HOME}/.rundock-startup-file-exposure.jsonx`, `${HOME}/.rundock-startup-file-exposure`, `${HOME}/.zshrc`, '/tmp',
+    ].map((record) => [record, (deny, at) => { deny[at] = record; }]));
+  });
+
+  test('a record entry not spelled the way a path is joined is a person\'s edit', () => {
+    // Rundock joins the record's path, so it never writes a trailing slash, a
+    // doubled one, or a `.` or `..` part. A block that does was written by hand.
+    refusedEitherWay([`${ELSEWHERE}/`, '/Users/someone/clones/../clones/rundock/.startup-file-exposure.json',
+      '/Users/someone//clones/rundock/.startup-file-exposure.json', '/Users/someone/./.startup-file-exposure.json',
+      `${HOME}/./.rundock-startup-file-exposure.json`, `${HOME}//.rundock-startup-file-exposure.json`, `${APP_RECORD}/`,
+    ].map((record) => [record, (deny, at) => { deny[at] = record; }]));
+  });
+
+  test('a record entry that is not a string is a person\'s edit, and nothing throws', () => {
+    refusedEitherWay([null, undefined, 42, true, {}, [], [APP_RECORD], { path: RECORD }]
+      .map((record) => [JSON.stringify(record) || 'undefined', (deny, at) => { deny[at] = record; }]));
+  });
+
+  test('the earlier shapes are recognised exactly as before, by either way of running', () => {
+    // None of them carries the record, so neither way of running reads them
+    // differently, and the lengths no build wrote stay a person's edit.
+    const legacy = { enabled: true, autoAllowBashIfSandboxed: true, filesystem: { allowWrite: [WS, `${HOME}/.npm`] }, network: { allowedDomains: ['*'] } };
+    for (const { name, read } of READERS) {
+      assert.strictEqual(read(() => isRundockSandbox(legacy)), true, `${name}: the 0.12.0 block`);
+      for (const shape of SHAPES) {
+        const current = written(shape);
+        const without = JSON.parse(JSON.stringify(current));
+        delete without.filesystem.denyWrite;
+        assert.strictEqual(read(() => isRundockSandbox(without)), true, `${name}, ${shape}: no deny list`);
+        for (const n of WRITTEN_DENY_LENGTHS.filter((len) => len < STARTUP_DENY.length + 23)) {
+          assert.strictEqual(read(() => isRundockSandbox(edited(current, (deny) => { deny.splice(n); }))), true, `${name}, ${shape}: the ${n}-entry list`);
+        }
+        for (const n of [4, 20, 30, 35]) {
+          assert.strictEqual(read(() => isRundockSandbox(edited(current, (deny) => { deny.splice(n); }))), false, `${name}, ${shape}: the ${n}-entry list no build wrote`);
+        }
+      }
+    }
+  });
+
+  test('an earlier deny list that carries the record is recognised in either spelling too', () => {
+    // With ZDOTDIR naming another folder this run writes 41 entries, and the
+    // 36-entry list, record last, is one an earlier build wrote.
+    const blocks = READERS.map((reader) => SHAPES.map((shape) => [shape, reader.other(shape)]));
+    process.env.ZDOTDIR = '/Users/someone/zdot';
+    try {
+      READERS.forEach(({ name, read }, i) => {
+        for (const [shape, block] of blocks[i]) {
+          assert.strictEqual(read(() => written(shape)).filesystem.denyWrite.length, block.filesystem.denyWrite.length + 5, 'sanity: this run writes the longer list');
+          assert.strictEqual(read(() => isRundockSandbox(block)), true, `${name}, ${shape}: the other's 36-entry list`);
+        }
+      });
+    } finally { delete process.env.ZDOTDIR; }
+  });
+});
