@@ -531,3 +531,65 @@ describe('the control failing: when the check throws, the call is refused and th
     });
   }
 });
+
+// THE RUNTIME HOME'S REFUSALS NAME THE ROUTE THAT WORKS. A file-tool write to
+// the runtime home's agents or skills, or to the rest of its configuration
+// folder, is refused as before, with no card. The reason now sends the agent to
+// Doc, or to the person, and never to a route that is refused in turn: another
+// agent's markers are not acted on, and a file-tool write into the workspace's
+// own agents and skills folders is refused.
+describe("the runtime home's refusals name the route that works", () => {
+  const globalWrites = () => [
+    ["a Write to the runtime home's agents", edit('Write', path.join(home, '.claude', 'agents', 'x.md'))],
+    ["an Edit of the runtime home's skills", edit('Edit', path.join(home, '.claude', 'skills', 'x', 'SKILL.md'))],
+  ];
+  const restWrites = () => [
+    ["a Write to the runtime home's settings", edit('Write', path.join(home, '.claude', 'settings.json'))],
+    ["a Write into the runtime home's plugins", edit('Write', path.join(home, '.claude', 'plugins', 'example', 'plugin.json'))],
+  ];
+  const seen = new Map();
+  async function refusedWith(env, request, what, label) {
+    asked.length = 0;
+    const r = await runHook(env, request);
+    assert.strictEqual(r.status, 0, `${what} (${label}): the hook answered (${r.err})`);
+    assert.strictEqual(r.decision, 'deny', `${what} (${label}): ${r.out}`);
+    assert.strictEqual(asked.length, 0, `${what} (${label}): refused by the hook, with no card`);
+    if (!seen.has(what)) seen.set(what, new Set());
+    seen.get(what).add(r.reason);
+    return r.reason;
+  }
+
+  for (const [label, ws, who] of RUNS) {
+    test(`the global agents and skills refusal sends the change to Doc or the person (${label})`, async () => {
+      const env = envFor(ws, who);
+      for (const [what, request] of globalWrites()) {
+        const reason = await refusedWith(env, request, what, label);
+        assert.match(reason, /never the global ~\/\.claude copies/, `${what}: still says what Rundock reads`);
+        assert.match(reason, /Agents and skills in this workspace are changed only by Doc \(rundock-guide\), through its RUNDOCK:SAVE_AGENT \/ RUNDOCK:SAVE_SKILL markers\./, `${what}: names who changes them`);
+        assert.match(reason, /Hand the change to Doc, or ask the person to make it\./, `${what}: gives the next step`);
+        assert.doesNotMatch(reason, /Manage this workspace's agents and skills through/, `${what}: no longer offers the markers to any agent`);
+        assert.doesNotMatch(reason, /edit the workspace's own \.claude file/, `${what}: no longer offers a file edit in the workspace`);
+        assert.match(reason, /In a routine, where nobody can be asked, say in your final message what you wanted to change\./, `${what}: says what to do in a routine`);
+      }
+    });
+
+    test(`the rest of the runtime home's refusal keeps agents and skills with Doc (${label})`, async () => {
+      const env = envFor(ws, who);
+      for (const [what, request] of restWrites()) {
+        const reason = await refusedWith(env, request, what, label);
+        assert.match(reason, /protects its own configuration folder/, `${what}: still says why`);
+        assert.match(reason, /Reading and listing that folder is unaffected\./, `${what}: still says reading is unaffected`);
+        assert.match(reason, /Routines and connectors for this workspace live in the workspace itself/, `${what}: still says where routines and connectors live`);
+        assert.match(reason, /Agents and skills in this workspace are changed only by Doc \(rundock-guide\)/, `${what}: keeps agents and skills with Doc`);
+        assert.doesNotMatch(reason, /Agents, skills, routines and connectors/, `${what}: no longer sends an agent or skill change into the workspace`);
+      }
+    });
+  }
+
+  test('each reason is the same in a conversation and in a routine', () => {
+    assert.strictEqual(seen.size, 4, 'every write above was refused');
+    for (const [what, reasons] of seen) {
+      assert.strictEqual(reasons.size, 1, `${what}: one reason for every run`);
+    }
+  });
+});
