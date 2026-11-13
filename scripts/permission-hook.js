@@ -2262,8 +2262,14 @@ const CODE_INTERPRETER = /^(?:python(?:\d+(?:\.\d+)*)?|node|nodejs|ruby|perl)$/;
 const PROGRAM_FLAG = { python: /^-[A-Za-z]*[cm]/, node: /^(?:-[A-Za-z]*[ep]|--eval|--print)/, ruby: /^-[A-Za-z]*e/, perl: /^-[A-Za-z]*[eE]/ };
 const SCRIPT_FILE = /\.(?:sh|bash|zsh|dash|ksh|fish|command|mk)$|(?:^|\/)(?:GNUm|M|m)akefile$/;
 const SHELL_SHEBANG = /^#!.*\b(?:sh|bash|zsh|dash|ksh|fish)\b/;
-const QUOTE_OPERATOR = /^(?:qx|qq|qw|q|%[xqQwWiI]?)\s*([([{<])/;
+// Perl's quote words may have a space before the bracket (`qx (ls)`); Ruby's
+// `%` may not, and a `%` straight after a closing quote or bracket divides or
+// formats. Read as a quote, Python's `"%d" % (100*(b-a)/len(t))` ran `/len`.
+const QUOTE_OPERATOR = /^(?:(?:qx|qq|qw|q)\s*|%[xqQwWiI]?)([([{<])/;
 const CLOSING = { '(': ')', '[': ']', '{': '}', '<': '>' };
+// Python 3 named alone, as the PATH the command starts with finds it: a path
+// can name an interpreter the workspace holds, and `python` may be Python 2.
+const PLAIN_PYTHON = /^python3(?:\.\d+)?$/;
 
 function interpreterFamily(lead) {
   if (!CODE_INTERPRETER.test(lead)) return null;
@@ -2292,11 +2298,14 @@ function feedsCode(segment, body) {
   }
   const family = interpreterFamily(lead);
   if (family) {
+    // 'python' for Python started plainly: first in its command, by its name,
+    // with no option before the program (codeParts).
+    const plain = (bare) => (bare && i === 0 && words[i] === lead && PLAIN_PYTHON.test(lead) ? 'python' : true);
     for (const a of args) {
-      if (a === '-') return true;
+      if (a === '-') return plain(a === args[0]);
       if (!a.startsWith('-') || PROGRAM_FLAG[family].test(a)) return false;
     }
-    return true;
+    return plain(!args.length);
   }
   const files = lead === 'cat' ? outs : lead === 'tee' ? args.filter(a => !a.startsWith('-')) : [];
   return files.length > 0 && !files.some(f => SCRIPT_FILE.test(f)) && !SHELL_SHEBANG.test(String(body).split('\n')[0]);
@@ -2323,6 +2332,20 @@ function feedsCode(segment, body) {
 // asks this on every Codex command, so a list kept for the life of the process
 // would grow without end and keep reporting a folder made after it started,
 // an installer's `/opt` say, as missing.
+//
+// THREE SPELLINGS THAT NAME NO PLACE, each held where it is read:
+//   - A piece joined by `+` onto a name a Python script started plainly gives
+//     one plain string, once (`V = "/ws"`, then `V + "/etc/x"`), is judged as
+//     the whole path, `/ws/etc/x`, not alone. A name given another value or
+//     bound another way, a script that could change a name without naming it,
+//     and any other start or language leave the piece judged alone
+//     (pythonNamesClosed, feedsCode, codeUse, codeParts).
+//   - In Bash on macOS and Linux a word that starts with two backslashes is
+//     not a network name: `'\\n\\n'` is text. A Windows host and PowerShell
+//     keep `\\server\share` (crossingsIn).
+//   - A `%` followed by a space, or straight after a closing quote or bracket,
+//     is Python's formatting: `"%d" % (n/len(t))` runs nothing, where Ruby's
+//     `%( )` quote would run its body (QUOTE_OPERATOR).
 function firstFolderExists(lit, firstFolders) {
   const first = '/' + lit.slice(1).split('/')[0];
   if (!firstFolders.has(first)) firstFolders.set(first, fs.existsSync(first));
@@ -2418,6 +2441,123 @@ const KEYWORDS = new Set(['if', 'elif', 'while', 'for', 'foreach', 'in', 'not', 
 const RUNS_COMMAND = new Set(['system', 'popen', 'Popen', 'check_call', 'check_output', 'getoutput', 'getstatusoutput', 'execSync',
   'spawnSync', 'execFileSync', 'spawn', 'execFile', 'execvp', 'execv', 'execlp', 'execl', 'spawnv', 'spawnvp']);
 const RUNS_COMMAND_ON_MODULE = new Set(['run', 'call', 'exec', 'capture2', 'capture3', 'popen3']);
+
+// A PYTHON SCRIPT IN WHICH A NAME CHANGES ONLY WHERE IT IS NAMED, shown by the
+// words the script uses, not by the ones it avoids. Python searches the folder
+// a script runs in, and any folder put on its path, before its own library,
+// and loads a module for more than an import: a text encoding named as the
+// script runs, a `\N{...}` escape, a coding line, a library call that imports
+// as it runs, and, on Python 3.9 (the one macOS ships), a warning shown, which
+// reads the coding line of a file named as the script is (`<stdin>`,
+// `<string>`) in that folder. A module loaded from the workspace is code the hook never reads,
+// and reaches the script's names through `__main__` or a frame, as the script
+// itself can through a frame, or its names reached by text it builds. So a
+// name is known only in a script that loads nothing and reaches nothing:
+//   - its strings read as Python reads them: each on one line (no `'''` or
+//     `"""`, nor a backtick or quote word, codeParts), its braces closed, and
+//     what it holds between braces, which an f-string or t-string runs, read
+//     as code;
+//   - no escape in a string but `\n`, `\t`, `\r`, `\0`, `\\` and a quote, no
+//     coding line, no dunder but the main guard (`if __name__ == "__main__":`,
+//     which only reads a name), and no character outside ASCII and no
+//     backslash in its code;
+//   - each import names `sys`, `os` or `os.path`, which Python has loaded
+//     before the script's first line, so no folder is searched for them;
+//   - every word of its code is a name of its own, or a keyword, builtin or
+//     attribute on the lists below, none of which loads a module, runs text or
+//     reaches a frame or a module's names; `open` and `str` are called where
+//     they are named, with nothing to look an encoding up by: at most two and
+//     one arguments, none named or unpacked, and `open`'s mode a plain string
+//     of its letters;
+//   - nothing Python warns of: no `is`, `assert`, `finally`, `~` or
+//     `NotImplemented`, no number run into a word, and no call or index on a
+//     string, number, constant or display (a tuple, list, dict, set or group).
+// PY_KEYWORDS and PY_BUILTINS hold every keyword and builtin Python 3 has, so
+// no word that is one is taken for a name of the script's own.
+const PY_KEYWORDS = new Set(('False None True and as assert async await break case class continue def del elif else except finally for '
+  + 'from global if import in is lambda match nonlocal not or pass raise return try while with yield').split(' '));
+const PY_KEYWORDS_ALLOWED = new Set('False None True and as break continue def elif else except for if import in lambda not or pass raise return try while with'.split(' '));
+const PY_BUILTINS = new Set(('NotImplemented abs aiter all anext any ascii bin bool breakpoint bytearray bytes callable chr classmethod compile complex '
+  + 'copyright credits delattr dict dir divmod enumerate eval exec exit filter float format frozenset getattr globals hasattr hash help hex id input '
+  + 'int isinstance issubclass iter len license list locals map max memoryview min next object oct open ord pow print property quit range repr '
+  + 'reversed round set setattr slice sorted staticmethod str sum super tuple type vars zip').split(' '));
+const PY_BUILTINS_ALLOWED = new Set('abs all any bool dict enumerate float int isinstance len list max min open print range repr reversed round set sorted str sum tuple zip'.split(' '));
+const PY_CALLED_PLAINLY = new Map([['open', 2], ['str', 1]]);
+const PY_ATTRIBUTES = new Set(('argv path exit stdin stdout stderr platform version executable maxsize environ getenv getcwd listdir makedirs mkdir '
+  + 'remove unlink rename replace rmdir walk stat sep join exists isdir isfile dirname basename abspath splitext getsize read write readline readlines '
+  + 'close split splitlines strip lstrip rstrip startswith endswith lower upper find count append extend insert pop sort items keys values get update add').split(' '));
+const PY_IMPORT = /^\s*import\s+(?:sys|os(?:\.path)?)(?:\s*,\s*(?:sys|os(?:\.path)?))*\s*$/;
+const PY_MAIN_GUARD = /\bif[ \t]+__name__[ \t]*==[ \t]*(["'])__main__\1[ \t]*:/g;
+const PY_NUMBER = /^(?:\d[\d_]*(?:\.[\d_]*)?(?:[eE]\d+)?[jJ]?|0[xX][\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+)$/;
+// What each bracket in `src` is given (how many arguments, whether any is
+// named or unpacked, where its commas and its close are), or null where a
+// bracket calls or indexes a string, number, constant or display.
+function pythonBrackets(src) {
+  const given = new Map();
+  const calls = new Map();
+  const open = [];
+  for (let k = 0; k < src.length; k++) {
+    const c = src[k];
+    const f = open[open.length - 1];
+    if (f && f.fresh && !/[\s)\]}]/.test(c)) { f.fresh = false; f.args++; if (c === '*') f.odd = true; }
+    if ('([{'.includes(c)) {
+      let p = k - 1;
+      while (p >= 0 && /\s/.test(src[p])) p--;
+      let t = p;
+      while (t >= 0 && /\w/.test(src[t])) t--;
+      const word = src.slice(t + 1, p + 1);
+      const shut = /[)\]]/.test(src[p]);
+      if (c !== '{' && (/["'}.]/.test(src[p]) || (shut && !calls.get(p)) || /^(?:\d|None$|True$|False$)/.test(word))) return null;
+      open.push({ at: k, args: 0, fresh: true, odd: false, commas: [], call: c !== '{' && (shut || (word !== '' && !PY_KEYWORDS.has(word))) });
+    } else if (')]}'.includes(c)) {
+      if (f) { open.pop(); f.to = k; given.set(f.at, f); calls.set(k, f.call); }
+    } else if (f && c === ',') { f.fresh = true; f.commas.push(k); }
+    else if (f && c === '=' && !/[=<>!:]/.test(src[k - 1]) && src[k + 1] !== '=') f.odd = true;
+  }
+  return given;
+}
+function pythonNamesClosed(s, masked, lits) {
+  if (/'''|"""/.test(s) || s.replace(PY_MAIN_GUARD, '').includes('__') || /coding[:=]/.test(s.split('\n', 2).join('\n'))) return false;
+  const fields = [];
+  const litAt = new Map();
+  for (const l of lits) {
+    litAt.set(l.start, l);
+    if (l.value.replace(/\\[ntr0\\'"]/g, '').includes('\\')) return false;
+    const v = l.value.replace(/\{\{|\}\}/g, '');
+    let depth = 0;
+    let from = 0;
+    for (let k = 0; k < v.length && depth >= 0; k++) {
+      if (v[k] === '{' && depth++ === 0) from = k + 1;
+      else if (v[k] === '}' && --depth === 0) fields.push(v.slice(from, k));
+    }
+    if (depth !== 0) return false;
+  }
+  const code = masked.replace(/#[^\n]*/g, c => ' '.repeat(c.length));
+  const text = `${code}\n${fields.join('\n')}`;
+  if (/[^\x00-\x7f]|[\\~]/.test(text) || text.split(/[\n;]/).some(st => /\bimport\b/.test(st) && !PY_IMPORT.test(st))) return false;
+  for (const m of text.matchAll(/(?<![\w.])\d[\w.]*/g)) if (!PY_NUMBER.test(m[0])) return false;
+  const given = pythonBrackets(code);
+  if (!given || !pythonBrackets(fields.join('\n'))) return false;
+  for (const m of text.matchAll(/(?<!\w)[A-Za-z_]\w*/g)) {
+    const w = m[0];
+    let p = m.index - 1;
+    while (p >= 0 && /\s/.test(text[p])) p--;
+    if (text[p] === '.') { if (PY_ATTRIBUTES.has(w)) continue; return false; }
+    if (PY_KEYWORDS.has(w) ? !PY_KEYWORDS_ALLOWED.has(w) : PY_BUILTINS.has(w) && !PY_BUILTINS_ALLOWED.has(w)) return false;
+    if (!PY_CALLED_PLAINLY.has(w)) continue;
+    let q = m.index + w.length;
+    while (q < code.length && /\s/.test(code[q])) q++;
+    const g = m.index < code.length && code[q] === '(' && given.get(q);
+    if (!g || g.odd || g.args > PY_CALLED_PLAINLY.get(w)) return false;
+    if (w === 'open' && g.args === 2) {
+      let a = g.commas[0] + 1;
+      while (/\s/.test(code[a])) a++;
+      const mode = litAt.get(a);
+      if (!mode || mode.pre !== a || !/^[rwaxbt+]+$/.test(mode.value) || code.slice(mode.end, g.to).trim()) return false;
+    }
+  }
+  return true;
+}
 
 function codeUse(s, masked, lits) {
   const litByStart = new Map(lits.map(l => [l.pre, l]));
@@ -2982,8 +3122,68 @@ function codeUse(s, masked, lits) {
     if (!runs) continue;
     for (const command of commandWords(open, closeOf(open))) commands.push(command);
   }
-  return { nodes: [...nodes.values()], literalNode, consumed, commands };
+
+  // A PIECE JOINED ONTO A NAME GIVEN ONE PLAIN STRING, ONCE, IS PART OF THE
+  // WHOLE PATH. After `V = "/ws"`, `V + "/etc/tools/lib"` is the path
+  // `/ws/etc/tools/lib`, a node above, and the piece read alone was a write to
+  // `/etc/tools/lib`. A name is known only where the code as written can give
+  // it no other value: one top-level `NAME = "plain"`, and every other mention
+  // an operand of `+` or a bare `{NAME}` in a string that fills names in. Any
+  // other mention may bind it again (a second assignment, a loop, a parameter,
+  // an import, `global`, `+=`, a walrus) or hand it to code that changes it,
+  // and in a script that could change a name without naming it
+  // (pythonNamesClosed), no name is known.
+  const plain = (lit) => lit.kind === 'quote' && lit.pre === lit.start && !/[\\$@`{}]/.test(lit.value);
+  let shown = null;
+  const closed = () => (shown === null ? (shown = pythonNamesClosed(s, masked, lits)) : shown);
+  const depthAt = (a) => { let d = 0; for (let k = 0; k < a; k++) d += OPENERS.includes(masked[k]) ? 1 : CLOSERS.includes(masked[k]) ? -1 : 0; return d; };
+  // The literal a position sits inside: the literals are in order and never
+  // overlap, so a search halves them, where a scan grew with the square of a
+  // join of many literals.
+  const litAt = (a) => { let lo = 0, hi = lits.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (lits[mid].end <= a) lo = mid + 1; else hi = mid; } return lits[lo] && lits[lo].start < a ? lits[lo] : null; };
+  const fixedName = (name) => {
+    if (!closed()) return false;
+    let defs = 0;
+    for (const m of s.matchAll(new RegExp(`(?<![\\w$.])${name}(?![\\w$])`, 'g'))) {
+      const a = m.index;
+      const b = a + name.length;
+      if (masked[a] === ' ') {
+        const lit = litAt(a);
+        if (lit && (plain(lit) || (s[a - 1] === '{' && s[b] === '}'))) continue;
+        return false;
+      }
+      const eq = /^[ \t]*=(?!=)[ \t]*/.exec(masked.slice(b));
+      const lit = eq && litByStart.get(b + eq[0].length);
+      const top = () => /^(?:[^\s:][^\n:]*;[ \t]*)?(?:(?:const|let|var)\s+)?$/.test(masked.slice(masked.lastIndexOf('\n', a - 1) + 1, a));
+      if (lit && plain(lit) && /^[ \t]*(?:[;\n#]|$)/.test(masked.slice(lit.end)) && top() && depthAt(a) === 0) {
+        if (++defs > 1) return false;
+        continue;
+      }
+      if (/(?:^|[^+])\+\s*$/.test(masked.slice(Math.max(0, a - 80), a)) || /^\s*\+(?![+=])/.test(masked.slice(b))) continue;
+      return false;
+    }
+    return defs === 1;
+  };
+  const fixed = new Map();
+  const isFixed = (name) => { if (!fixed.has(name)) fixed.set(name, /^[A-Za-z_]\w*$/.test(name) && fixedName(name)); return fixed.get(name); };
+  // A node that is a join by `+` of plain literals and known names only,
+  // worked out once per node, however many literals it holds.
+  const whole = new Map();
+  const wholeOf = (node) => {
+    if (whole.has(node)) return whole.get(node);
+    const terms = splitTop(node.a, node.b, '+').map(([x, y]) => trim(x, y));
+    whole.set(node, terms.length > 1 && terms.every(([x, y]) => {
+      const lit = litByStart.get(x);
+      return lit ? lit.end === y && plain(lit) : isFixed(masked.slice(x, y));
+    }));
+    return whole.get(node);
+  };
+  return { nodes: [...nodes.values()], literalNode, consumed, commands, wholeOf };
 }
+
+// Where the reading of a joined piece starts: a test makes it throw, to see
+// the line judged as it was before that reading. Nothing in the hook sets it.
+const joinedPieceSeam = { beforeReading() {} };
 
 // The literals in a piece of code that name a place (each with whether the
 // code counts as writing it), the paths that may name an answer file and that
@@ -2991,10 +3191,13 @@ function codeUse(s, masked, lits) {
 // literal is quoted text on one line, so an apostrophe in a comment cannot
 // swallow the code after it. A path built from parts is given whole, beside
 // the literals it was built from.
-function codeParts(code, reading = null) {
+function codeParts(code, reading = null, plainPython = false) {
   const s = String(code);
   const found = [];
   const commands = [];
+  // Set where a backtick span or quote operator is blanked: Python reads
+  // neither, so code in one is code the joined reading has not seen.
+  let opaque = false;
   // The code with each literal's text, each backtick span and each quote
   // operator's body blanked, so nothing inside one is read as code.
   const blank = new Uint8Array(s.length);
@@ -3019,6 +3222,7 @@ function codeParts(code, reading = null) {
       const j = s.indexOf('`', i + 1);
       const end = j < 0 ? s.length : j;
       commands.push(s.slice(i + 1, end));
+      opaque = true;
       // A template literal is a string too, for the paths code builds in one.
       if (j >= 0) found.push({ start: i, pre: i, end: j + 1, value: s.slice(i + 1, j), kind: 'template' });
       blankOut(i + 1, end);
@@ -3026,7 +3230,7 @@ function codeParts(code, reading = null) {
       i = j;
       continue;
     }
-    const q = /[\w$@%]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));
+    const q = /[\w$@%"')\]}]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));
     if (q) {
       const open = q[1];
       let depth = 0;
@@ -3037,12 +3241,13 @@ function codeParts(code, reading = null) {
       }
       commands.push(s.slice(i + q[0].length, j));
       blankOut(i + q[0].length, j);
+      opaque = true;
       i = j;
     }
   }
   let masked = '';
   for (let k = 0; k < s.length; k++) masked += blank[k] ? ' ' : s[k];
-  const { nodes, literalNode, consumed, commands: run } = codeUse(s, masked, found);
+  const { nodes, literalNode, consumed, commands: run, wholeOf } = codeUse(s, masked, found);
   const literals = [];
   const names = [];
   const seen = new Set();
@@ -3053,6 +3258,15 @@ function codeParts(code, reading = null) {
   for (const l of found) {
     if (l.kind !== 'quote') continue;
     const node = literalNode.get(l);
+    // A piece of a join whose whole path is known and judged is not judged
+    // again alone (codeUse), in Python started plainly (feedsCode). If that
+    // reading fails, it is, as before.
+    if (plainPython && !opaque && consumed.has(l)) {
+      try {
+        joinedPieceSeam.beforeReading();
+        if (wholeOf(node) && node.values.length && node.values.every(v => literalIsPlace(v, reading))) continue;
+      } catch (e) { /* judged alone */ }
+    }
     const own = !consumed.has(l) && node.values.length === 1 && node.values[0] === l.value;
     addLiteral(l.value, own && !node.quiet);
   }
@@ -3080,10 +3294,13 @@ function segmentAt(text, at) {
 // The command's text with each here-document body fed to code taken out, and
 // beside it the literals in that code that name a place and the commands the
 // code runs, each at its command's `<<`.
-function heredocText(command, reading = null) {
+function heredocText(command, reading = null, depth = 0) {
   const s = String(command);
   const cut = stripHeredocs(s);
   if (!cut.ok || !cut.bodies.length) return { text: s, literals: [], names: [], commands: [] };
+  // Where the command's first segment ends: Python started plainly is first.
+  const first = lexSegments(cut.text)[0];
+  const firstEnd = first ? cut.text.indexOf(first.text) + first.text.length : 0;
   let text = '';
   let from = 0;
   const literals = [];
@@ -3096,7 +3313,8 @@ function heredocText(command, reading = null) {
     const subs = b.expands ? substitutions(b.body, 'bash', { quoted: true }) : { ok: true, bodies: [] };
     if (seg === null || !subs.ok || !feedsCode(seg, b.body)) { text += b.body; continue; }
     const at = b.at + text.length - b.bodyAt;
-    const code = codeParts(b.body, reading);
+    const plainPython = depth === 0 && !b.expands && b.at < firstEnd && feedsCode(seg, b.body) === 'python';
+    const code = codeParts(b.body, reading, plainPython);
     for (const l of code.literals) literals.push({ ...l, at });
     for (const t of code.names) names.push({ t, at });
     for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });
@@ -3166,10 +3384,12 @@ function inlineCode(text, reading = null, depth = 0) {
   const names = [];
   const commands = [];
   let from = 0;
+  let segs = 0;
   for (const seg of lexSegments(text)) {
     const at = text.indexOf(seg.text, from);
     if (at < 0) break;
     from = at + seg.text.length;
+    const firstSeg = segs++ === 0;
     const lexed = lexWords(seg.text);
     const words = lexed.map(w => w.text);
     // zsh RUNS THE CODE OF AN `e` GLOB QUALIFIER from inside the word: `ls
@@ -3198,7 +3418,10 @@ function inlineCode(text, reading = null, depth = 0) {
     for (let k = i + 1; family && k < words.length; k++) {
       const m = INLINE_CODE[family].exec(words[k]);
       if (!m) continue;
-      const code = codeParts(m[1] || words[++k] || '', reading);
+      // Python started plainly, first on the line, its code in the word after
+      // `-c` or attached to it, with nothing in it the shell fills in.
+      const plain = depth === 0 && firstSeg && i === 0 && k === 1 && PLAIN_PYTHON.test(words[0]) && /^-c/.test(words[1]) && !(lexed[m[1] ? 1 : 2] || lexed[1]).expands;
+      const code = codeParts(m[1] || words[++k] || '', reading, plain);
       for (const l of code.literals) literals.push({ ...l, at });
       for (const t of code.names) names.push({ t, at });
       for (const c of code.commands) commands.push({ text: c, at });
@@ -3217,7 +3440,7 @@ function inlineCode(text, reading = null, depth = 0) {
 // stopped being seen. It is measured from where the command starts: it runs
 // in a shell of its own, so a `cd` inside it moves nothing outside it.
 function judgedShellText(command, reading = null, depth = 0) {
-  const view = heredocText(command, reading);
+  const view = heredocText(command, reading, depth);
   const inline = inlineCode(view.text, reading, depth);
   return {
     text: view.text,
@@ -3272,11 +3495,16 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   // character inside quotes; it never separates folders. Judged as a Windows
   // separator, Python code like `'\n\n'.join(...)` or `"\n== {name}"` in a
   // here-document became a relative Windows path that resolved outside, a card
-  // that can never be remembered. A drive letter or UNC name is still
-  // Windows-shaped, and a Windows host, a Windows-shaped workspace and the
-  // PowerShell tool keep the Windows reading unchanged.
+  // that can never be remembered. A drive letter is still Windows-shaped, and
+  // a Windows host, a Windows-shaped workspace and the PowerShell tool keep the
+  // Windows reading unchanged.
   const winShaped = winWorld || process.platform === 'win32' || WIN_DRIVE.test(workspaceRoot) || WIN_UNC.test(workspaceRoot);
   const posixText = opts.shellTool !== 'PowerShell' && !winShaped;
+  // NOR IS A DOUBLED BACKSLASH A NETWORK NAME THERE: `t.split('\\n\\n')` in a
+  // here-document read as `\\n\n\`, a write outside. A Windows host is decided
+  // before flavourFor is asked, so the rule names both conditions itself; a
+  // Windows host and PowerShell keep `\\server\share` as a network path.
+  const flavourOf = t => (opts.shellTool !== 'PowerShell' && !winShaped && WIN_UNC.test(t) ? path : winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText));
   // AN ANSWER FILE IS CHANGED ONLY BY WHAT CAN WRITE IT. `tail
   // .rundock/permissions.json; echo done > build.log` reads the file and writes
   // somewhere else, and `git diff .mcp.json` or `cp .mcp.json backup.json`
@@ -3581,7 +3809,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     for (const { t: lit, at } of view.names) {
       let t = lit;
       for (const re of HOME_PREFIX) { if (re.test(t)) { t = t.replace(re, home); break; } }
-      const flavour = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);
+      const flavour = flavourOf(t);
       const r = canonicalize(flavour.resolve(basesFor(flavour, false)(at), t), flavour);
       if (isWorkspaceAnswerFile(r, workspaceRoot, foldsCase, flavour) || isAnswerFileOfAnyWorkspace(r, flavour)
         || holdsAnswerFiles(r, workspaceRoot, foldsCase, flavour) || isRundockConsolePath(r, home, foldsCase, flavour) || startupAt(r, flavour)) addAnswer(r, flavour);
@@ -3593,7 +3821,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     // `cp x ~/` writes into the home folder, not a folder called `~`.
     const re = HOME_PREFIX.find(r => r.test(named));
     const dest = re ? named.replace(re, home) : named;
-    const pmod = winWorld ? path.win32 : flavourFor(dest, workspaceRoot, posixText);
+    const pmod = flavourOf(dest);
     const d = canonicalize(pmod.resolve(basesFor(pmod, fromStart)(at), dest), pmod);
     let folder = /[\\/]$/.test(dest);
     try { folder = folder || fs.statSync(d).isDirectory(); } catch (e) { /* not there: a file name */ }
@@ -3660,7 +3888,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     // as a place outside the workspace. Only for the Bash tool: in PowerShell a
     // backslash really is a separator.
     if (opts.shellTool !== 'PowerShell' && BASH_ESCAPE.test(raw)) continue;
-    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);
+    const pmod = flavourOf(t);
     // Resolved against where the command actually runs, not against the
     // workspace root regardless. Everything BELOW still judges against the
     // workspace root: the base says where a relative path starts, never what
@@ -4043,6 +4271,7 @@ module.exports = {
   boundaryCrossingsFor, CODE_READS_ALLOWED, UNATTENDED_NEXT_UNLOADED,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
+  joinedPieceSeam,
   isWorkspaceTeamFolderEdit, teamFolderSeam,
 };
 
@@ -4304,9 +4533,9 @@ fetchAgentNotice((agentNotice) => {
   // folder was allowed, landed where the app never reads, and reported
   // success. That is the silent failure the denial exists to prevent, in the
   // mode a developer is most likely to be running.
-  // Agents and skills are managed ONLY through the RUNDOCK:SAVE_AGENT /
+  // Agents and skills are managed ONLY through Doc's RUNDOCK:SAVE_AGENT /
   // RUNDOCK:SAVE_SKILL markers, which write into THIS workspace's .claude folder
-  // and refresh the UI. Deterministically deny any direct file edit to a
+  // and refresh the UI; another agent's markers are not acted on. Deterministically deny any direct file edit to a
   // .claude/agents or .claude/skills path, in the global ~/.claude (Claude
   // Code's native default, the branch just below) and in this workspace (after
   // the rest of the runtime home's, further below). Without the first, a
@@ -4321,7 +4550,7 @@ fetchAgentNotice((agentNotice) => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: "Rundock reads the agents and skills inside the open workspace, never the global ~/.claude copies, so this edit would land where the app never looks and change nothing it can see. Manage this workspace's agents and skills through the RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers (which write into this workspace and refresh the app), or edit the workspace's own .claude file."
+        permissionDecisionReason: "Rundock reads the agents and skills inside the open workspace, never the global ~/.claude copies, so this edit would land where the app never looks and change nothing it can see. Agents and skills in this workspace are changed only by Doc (rundock-guide), through its RUNDOCK:SAVE_AGENT / RUNDOCK:SAVE_SKILL markers. Hand the change to Doc, or ask the person to make it. In a routine, where nobody can be asked, say in your final message what you wanted to change."
       }
     }));
     process.exit(0);
@@ -4338,7 +4567,7 @@ fetchAgentNotice((agentNotice) => {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: "Claude Code protects its own configuration folder, so it refuses this write whatever Rundock or you approve: approving it would still fail. Reading and listing that folder is unaffected. Agents, skills, routines and connectors for this workspace live in the workspace itself, which is where Rundock reads them from, so make the change there and it will take effect."
+        permissionDecisionReason: "Claude Code protects its own configuration folder, so it refuses this write whatever Rundock or you approve: approving it would still fail. Reading and listing that folder is unaffected. Routines and connectors for this workspace live in the workspace itself, which is where Rundock reads them from, so make the change there and it will take effect. Agents and skills in this workspace are changed only by Doc (rundock-guide): hand that change to Doc, or ask the person to make it."
       }
     }));
     process.exit(0);
