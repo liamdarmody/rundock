@@ -4653,24 +4653,24 @@ const MUTATIONS = [
   // folds case. Caught by: a case variant is refused exactly where the host
   // folds case, driven both ways through the seam.
   [TEAM_FOLDERS, 'Team folders: case folding is dropped',
-    "  const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);\n  return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {\n    const folder = foldCase(canonicalize(path.join(workspaceRoot, '.claude', d)), foldsCase);",
-    "  const t = canonicalize(path.resolve(workspaceRoot, target));\n  return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {\n    const folder = canonicalize(path.join(workspaceRoot, '.claude', d));"],
+    "    const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);\n    return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {\n      const folder = foldCase(canonicalize(path.join(workspaceRoot, '.claude', d)), foldsCase);",
+    "    const t = canonicalize(path.resolve(workspaceRoot, target));\n    return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {\n      const folder = canonicalize(path.join(workspaceRoot, '.claude', d));"],
   // A bare prefix: `.claude/agents-old/` and `.claude/skillset/` are refused
   // too. Caught by: everything beside those two folders keeps today's answer.
   [TEAM_FOLDERS, 'Team folders: a prefix match also catches agents-old',
-    '    return t === folder || t.startsWith(folder + path.sep);',
-    '    return t === folder || t.startsWith(folder);'],
+    '      return t === folder || t.startsWith(folder + path.sep);',
+    '      return t === folder || t.startsWith(folder);'],
   // A relative target resolved against the home folder rather than the
   // workspace. Caught by: each spelling is refused, in-process and through
   // the hook (the relative rows).
   [TEAM_FOLDERS, 'Team folders: a relative target is resolved against the home folder',
-    '  const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);',
-    '  const t = foldCase(canonicalize(path.resolve(os.homedir(), target)), foldsCase);'],
+    '    const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);',
+    '    const t = foldCase(canonicalize(path.resolve(os.homedir(), target)), foldsCase);'],
   // NotebookEdit left out of the check. Caught by: each file tool is refused,
   // and the notebook_path spelling.
   [TEAM_FOLDERS, 'Team folders: NotebookEdit is left out',
-    "  if (typeof target !== 'string' || !target) return false;\n  teamFolderSeam.beforeChecking(target);",
-    "  if (typeof target !== 'string' || !target) return false;\n  if (toolName === 'NotebookEdit') return false;\n  teamFolderSeam.beforeChecking(target);"],
+    "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
+    "  if (toolName === 'NotebookEdit') return false;\n  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);"],
   // A throw inside the check read as "not a team folder", so the write goes
   // through as in-workspace access. Caught by: a forced failure refuses.
   [TEAM_FOLDERS, 'Team folders: the check failing is treated as allow',

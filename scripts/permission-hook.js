@@ -591,20 +591,26 @@ function isRuntimeHomeSurfaceEdit(toolName, toolInput, home = os.homedir(), fold
 // comparison is isProtectedClaudeEdit's, against the workspace's .claude, so a
 // variant spelling, a symlinked workspace and a target whose folder does not
 // exist yet reach the same answer. A relative target is resolved against the
-// workspace, as classifyFileAccess resolves it. Nothing here catches a throw:
-// one reaches the handlers at the top of this file, which refuse the call.
-// The seam is for a test to make the check throw (workspace-team-folders.test.js).
+// workspace, as classifyFileAccess resolves it. Every path field the input
+// carries is checked, not the first one present: the runtime writes the field
+// its tool names and the classifier reads that one, so a NotebookEdit naming a
+// note in file_path and an agent in notebook_path must be refused here, or the
+// classifier allows the agent write as in-workspace access. Nothing here
+// catches a throw: one reaches the handlers at the top of this file, which
+// refuse the call. The seam is for a test to make the check throw
+// (workspace-team-folders.test.js).
 const teamFolderSeam = { beforeChecking() {} };
 function isWorkspaceTeamFolderEdit(toolName, toolInput, workspaceRoot, foldsCase = hostFoldsCase()) {
   if (!CLAUDE_EDIT_TOOLS.has(toolName)) return false;
   const ti = toolInput || {};
-  const target = ti.file_path || ti.notebook_path || ti.path;
-  if (typeof target !== 'string' || !target) return false;
-  teamFolderSeam.beforeChecking(target);
-  const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);
-  return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {
-    const folder = foldCase(canonicalize(path.join(workspaceRoot, '.claude', d)), foldsCase);
-    return t === folder || t.startsWith(folder + path.sep);
+  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);
+  return targets.some((target) => {
+    teamFolderSeam.beforeChecking(target);
+    const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);
+    return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {
+      const folder = foldCase(canonicalize(path.join(workspaceRoot, '.claude', d)), foldsCase);
+      return t === folder || t.startsWith(folder + path.sep);
+    });
   });
 }
 

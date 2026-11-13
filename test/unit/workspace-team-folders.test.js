@@ -243,6 +243,52 @@ describe('every spelling of a target in those folders is refused', () => {
   }
 });
 
+// A CALL WHOSE PATH FIELDS DISAGREE. The runtime writes the field its tool
+// names (notebook_path for NotebookEdit, file_path for the others), and the
+// boundary classifier reads that same field, so a check that read only the
+// first field present could look at an ordinary note while the tool wrote an
+// agent's instructions, and the classifier would then allow that write as
+// in-workspace access. Every path field the input carries is checked, so a
+// target in those folders is refused whichever field names it and whatever
+// the other fields say.
+const also = (request, extra) => ({ ...request, tool_input: { ...request.tool_input, ...extra } });
+function conflicting(ws) {
+  const note = path.join(ws, 'notes', 'a.md');
+  return [
+    ['a NotebookEdit naming a note in file_path and an agent in notebook_path', also(edit('NotebookEdit', agentFile(ws)), { file_path: note })],
+    ['a NotebookEdit naming a note in file_path and a skill in notebook_path', also(edit('NotebookEdit', skillFile(ws)), { file_path: note })],
+    ['a NotebookEdit naming a note in notebook_path and an agent in path', also(edit('NotebookEdit', note), { path: agentFile(ws) })],
+    ['a NotebookEdit naming a number in file_path and an agent in notebook_path', also(edit('NotebookEdit', agentFile(ws)), { file_path: 1 })],
+    ['a Write naming a note in file_path and an agent in notebook_path', also(edit('Write', note), { notebook_path: agentFile(ws) })],
+    ['a Write naming a note in file_path and a skill in path', also(edit('Write', note), { path: skillFile(ws) })],
+    ['an Edit naming a note in file_path and an agent in path', also(edit('Edit', note), { path: agentFile(ws) })],
+    ['an Edit naming a note in file_path and a skill in notebook_path', also(edit('Edit', note), { notebook_path: skillFile(ws) })],
+    ['a MultiEdit naming a note in file_path and an agent in path', also(edit('MultiEdit', note), { path: agentFile(ws) })],
+  ];
+}
+
+describe('a target in those folders is refused in any path field, whatever the other fields say', () => {
+  test('each is refused by the check, in-process', () => {
+    for (const ws of [wsCode, wsNotes]) {
+      for (const [what, request] of conflicting(ws)) {
+        for (const foldsCase of [true, false]) {
+          assert.strictEqual(hook.isWorkspaceTeamFolderEdit(request.tool_name, request.tool_input, ws, foldsCase), true,
+            `${what} (${path.basename(ws)}, foldsCase ${foldsCase})`);
+        }
+      }
+    }
+  });
+
+  for (const [label, ws, who] of RUNS) {
+    test(`each is refused through the hook in ${label}`, async () => {
+      const env = envFor(ws, who);
+      for (const [what, request] of conflicting(ws)) {
+        await assertRefused(env, request, what);
+      }
+    });
+  }
+});
+
 // What each of these was answered before this refusal existed, and still is.
 function today(ws) {
   const writeTo = (...parts) => edit('Write', path.join(ws, ...parts));
