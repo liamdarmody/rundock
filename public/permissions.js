@@ -217,9 +217,8 @@
     // .mcp.json: a stdio server is a command run outside the sandbox. High, so
     // it is carded ahead of every standing allow and never offers one.
     if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') return 'high';
-    // A change Doc makes to an agent or skill while another agent brought it
-    // in (lib/agents/team-markers.js): the files every later run follows.
-    // High for the same reasons, so no standing allow answers it.
+    // Doc's change to an agent or skill in a hand-off (lib/agents/team-markers.js):
+    // the files every later run follows, so no standing allow answers it.
     if (isTeamCard(toolName)) return 'high';
     if (toolName.startsWith('mcp__')) {
       // MCP reads auto-approve in the permission hook, so by the time a request
@@ -377,12 +376,9 @@
     return { summary: `${verb} the connector ${i.name || ''}`.trim(), context: said.join(' '), detail: lines.length ? lines.join('\n') : JSON.stringify(i) };
   }
 
-  // THE CARD FOR A CHANGE DOC MAKES WHILE ANOTHER AGENT BROUGHT IT IN: the
-  // agent or skill, whether it would be added, replaced or deleted, who brought
-  // Doc in, and for a save the whole file that would be written, every byte,
-  // since the server writes exactly what this card shows. Line breaks and tabs
-  // are the file's own and are kept; any other control character is shown by
-  // its escape, as on the connector card.
+  // THE CARD FOR DOC'S CHANGE IN A HAND-OFF: for a save, the whole file, since the
+  // server writes exactly what it shows. Line breaks and tabs are kept; any other
+  // control character is shown by its escape, as on the connector card.
   const TEAM_CARDS = ['SaveAgent', 'DeleteAgent', 'SaveSkill', 'DeleteSkill'];
   function isTeamCard(toolName) { return TEAM_CARDS.indexOf(toolName) !== -1; }
   function teamCopy(toolName, input) {

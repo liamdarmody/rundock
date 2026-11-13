@@ -445,8 +445,10 @@ describe('a conversation no window has saved yet', () => {
     assert.deepStrictEqual(Object.keys(recordOf(convoId)).sort(), ['id', 'teamCards', 'teamOutcomes'], 'and it is kept on disk');
     assert.strictEqual(teamNotes.withTeamNote(convoId, 'next'), `${told}next`);
     assert.deepStrictEqual(Object.keys(recordOf(convoId)).sort(), ['id', 'teamCards'], 'telling the outcomes leaves the card held');
-    teamNotes.dropCard(convoId, 'card-one');
-    assert.strictEqual(recordOf(convoId), null, 'and the record goes once the card is decided');
+    teamNotes.decideCard(convoId, 'card-one', stopped);
+    assert.deepStrictEqual(Object.keys(recordOf(convoId)).sort(), ['id', 'teamOutcomes'], 'deciding the card turns it into its outcome');
+    teamNotes.withTeamNote(convoId, 'after');
+    assert.strictEqual(recordOf(convoId), null, 'and the record goes once the card is decided and its outcome told');
   });
 });
 
