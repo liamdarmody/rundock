@@ -4676,6 +4676,13 @@ const MUTATIONS = [
   [TEAM_FOLDERS, 'Team folders: the check failing is treated as allow',
     '  if (isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot)) {',
     '  if ((() => { try { return isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot); } catch (e) { return false; } })()) {'],
+  // Only the first path field present is checked again, so a NotebookEdit
+  // naming a note in file_path and an agent in notebook_path is checked as
+  // the note, and the classifier, reading notebook_path, allows the agent
+  // write. Caught by: a target in those folders is refused in any path field.
+  [TEAM_FOLDERS, 'Team folders: only the first path field present is checked',
+    "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
+    "  const targets = [ti.file_path || ti.notebook_path || ti.path].filter((v) => typeof v === 'string' && v);"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

@@ -113,6 +113,92 @@ back with `git checkout`.
 
 ---
 
+## Fix round
+
+Taken on 2026-11-13 on the same machine and Node. The base is `e5abc029`.
+Two changes, each in its own commit, then the mutation row and this section.
+
+### A target in any path field is refused (`99a93c16`)
+
+**What was wrong.** `isWorkspaceTeamFolderEdit` checked only the first path
+field present (`file_path`, then `notebook_path`, then `path`). The runtime
+writes the field its tool names, and `classifyFileAccess` reads that same
+field (`FILE_TOOL_PATH_FIELD`). A NotebookEdit naming `<ws>/notes/a.md` in
+`file_path` and `<ws>/.claude/agents/helper.md` in `notebook_path` was checked
+as the note, and the classifier then allowed the agent write as in-workspace
+access. A Write, Edit or MultiEdit with an extra `notebook_path` or `path` in
+the folders, and a NotebookEdit with a number in `file_path`, slipped past the
+same way.
+
+**The change.** The check now looks at every path field the input carries
+that is a non-empty string, and refuses if any of them is inside the two
+folders. The call site was already independent of `refusalTarget` and
+`targetInsideWorkspace`, so nothing computed from another field can skip it.
+The existing refusals of the runtime home's folders keep their own target
+choice, unchanged.
+
+**Red first.** The new tests in `test/unit/workspace-team-folders.test.js`
+("a target in those folders is refused in any path field, whatever the other
+fields say": one in-process table and one through the hook per mode and run),
+run against the code at `e5abc029`: 5 tests, 5 failed. Each through-the-hook
+failure read `allow` with the reason `In-workspace file access` for the first
+row, the NotebookEdit naming a note in `file_path` and an agent in
+`notebook_path`. Each of the nine rows, put to the check in-process at
+`e5abc029` with the folding seam both ways, returned `false`. At `99a93c16`
+the file held 44 tests, all passing.
+
+### Read, Glob and Grep of both folders keep today's answer (`6d771c7c`)
+
+The table of what keeps today's answer had a Read and a Glob of the agents
+folder and a Grep of the skills folder only. It now has each of the three
+read tools on each folder: a Read of a skill file, a Glob of the skills
+folder and a Grep of the agents folder were added. The rows are run
+in-process with the folding seam both ways and through the hook in Code and
+Notes mode, in a conversation and in a routine run, each its own subtest.
+
+**The new rows pass on the base**, since they hold today's answer: against
+the hook at `e5abc029`, the two table tests and their subtests ran 89 tests,
+all passing, the three new rows among them in all six places each.
+
+**Each new row red under a break.** With the check extended to Read, Glob and
+Grep (`if (!CLAUDE_EDIT_TOOLS.has(toolName) && !READ_FILE_TOOLS.has(toolName))`),
+the same run had 89 tests, 41 failed: all six read rows, the three new ones
+among them, each in-process in both workspaces and through the hook in all
+four modes and runs (36), and the five table tests that hold them.
+
+### The mutation run
+
+At `6d771c7c`, with the row this round adds:
+
+    node test/tools/mutate-workspace-boundary-guards.js --rows 1168:1169
+
+| Row | Tests red | Among them |
+|---|---|---|
+| only the first path field present is checked | 5 | a target in those folders is refused in any path field: in-process, and through the hook in every mode and run (4) |
+
+Four earlier rows search the lines this round changed (case folding, the
+prefix match, the relative target, NotebookEdit left out). Each was moved to
+the new lines, breaking the same rule there, and the six earlier rows were
+run again at `6d771c7c`:
+
+    node test/tools/mutate-workspace-boundary-guards.js --rows 1162:1168
+
+| Row | Tests red | Among them |
+|---|---|---|
+| the workspace check is removed | 35 | each file tool is refused; each spelling and each disagreeing-fields row through the hook; every sequence; the words; a forced failure |
+| case folding is dropped | 1 | a case variant is refused exactly where the host folds case, driven both ways through the seam |
+| a prefix match also catches agents-old | 6 | the `.claude/agents-old` and `.claude/skillset` rows, in-process in both workspaces and through the hook |
+| a relative target is resolved against the home folder | 5 | each spelling is refused, in-process and through the hook (4) |
+| NotebookEdit is left out | 14 | each file tool is refused (4); each spelling (5); each disagreeing-fields row (5) |
+| the check failing is treated as allow | 4 | a forced failure refuses, in every mode and run |
+
+The three hand breakages above change the call site, its placement and the
+reason; none touches the lines this round changed, so they were not run
+again. `test/unit/mutation-scope.test.js` (61 tests) and
+`test/unit/mutation-harness-targets.test.js` (14 tests) passed afterwards.
+
+---
+
 ## The last code commit
 
-`5a608875`.
+`99a93c16`.
