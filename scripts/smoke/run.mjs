@@ -160,9 +160,10 @@ record('S2 no off-roster block for the reportsTo-less specialist', s2blocked ===
 // Roo brings Doc in, so Doc's save waits on a card: nothing is written until
 // the person presses Allow, and then the file and the created line appear.
 await sendInNewConversation('SMOKE-S3 ask doc to create smokey');
-const s3card = page.locator('#messages .msg-permission').filter({ hasText: 'Add the agent smokey' }).first();
+const s3card = page.locator('#messages .msg-permission')
+  .filter({ has: page.locator('.permission-summary', { hasText: /^\s*Add the agent smokey\s*$/ }) }).first();
 const s3asks = await waitFor(() => s3card.isVisible().catch(() => false), 45000);
-record('S3 a save during a hand-off waits on a card', !!s3asks);
+record('S3 a save during a hand-off waits on a card whose summary names the agent', !!s3asks);
 const s3path = path.join(workspace, '.claude', 'agents', 'smokey.md');
 record('S3 nothing is written before Allow', !fs.existsSync(s3path));
 if (s3asks) await s3card.locator('[data-perm-action="allow"]').click();
