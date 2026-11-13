@@ -418,3 +418,60 @@ describe('what the refusal tells the agent', () => {
     });
   }
 });
+
+// THE CONTROL FAILING. A check that throws must refuse, never allow: a throw
+// caught here and read as "not a team folder" would let the very write it
+// exists to stop through as ordinary in-workspace access. The check calls
+// teamFolderSeam.beforeChecking, a module attribute, which a preload in the
+// hook's own process makes throw, the pattern of hook-never-crashes.test.js.
+// The hook runs main() as it loads, but decides only once its input has been
+// read, so the attribute is set before the check runs.
+const FAILS = path.join(root, 'team-folder-check-fails.js');
+fs.writeFileSync(FAILS, `
+  const Module = require('module');
+  const compile = Module.prototype._compile;
+  Module.prototype._compile = function (content, filename) {
+    const done = compile.apply(this, arguments);
+    if (filename === ${JSON.stringify(HOOK)} && this.exports && this.exports.teamFolderSeam) {
+      this.exports.teamFolderSeam.beforeChecking = () => { throw new Error('forced failure'); };
+    }
+    return done;
+  };
+`);
+const COULD_NOT_CHECK = 'Rundock could not check this request, so it was refused rather than approved on your behalf.';
+
+describe('the control failing: when the check throws, the call is refused and the hook never crashes', () => {
+  test('the check reaches its seam once it knows the call is a file tool\'s, with a target', () => {
+    assert.strictEqual(typeof (hook.teamFolderSeam && hook.teamFolderSeam.beforeChecking), 'function', 'the seam is a module attribute');
+    const seen = [];
+    const was = hook.teamFolderSeam.beforeChecking;
+    hook.teamFolderSeam.beforeChecking = (target) => { seen.push(target); };
+    try {
+      hook.isWorkspaceTeamFolderEdit('Read', { file_path: agentFile(wsNotes) }, wsNotes);
+      hook.isWorkspaceTeamFolderEdit('Write', {}, wsNotes);
+      hook.isWorkspaceTeamFolderEdit('Write', { file_path: agentFile(wsNotes) }, wsNotes);
+    } finally {
+      hook.teamFolderSeam.beforeChecking = was;
+    }
+    assert.deepStrictEqual(seen, [agentFile(wsNotes)]);
+  });
+
+  for (const [label, ws, who] of RUNS) {
+    test(`a forced failure refuses, in ${label}`, async () => {
+      const env = envFor(ws, who);
+      const said = who === 'routine' ? `${COULD_NOT_CHECK} ${hook.UNATTENDED_NEXT_UNLOADED}` : COULD_NOT_CHECK;
+      for (const target of [path.join(ws, 'notes', 'a.md'), agentFile(ws)]) {
+        asked.length = 0;
+        const r = await runHook(env, edit('Write', target), { preload: FAILS });
+        assert.strictEqual(r.status, 0, `${path.relative(ws, target)}: the hook answered rather than crashing (${r.err})`);
+        assert.strictEqual(r.decision, 'deny', `${path.relative(ws, target)}: ${r.out}`);
+        assert.strictEqual(r.reason, said, `${path.relative(ws, target)}: refused as a request Rundock could not check`);
+        assert.strictEqual(asked.length, 0, `${path.relative(ws, target)}: with no card`);
+      }
+      // A Read is not a file tool's write, so the check never reaches its seam.
+      const read = await runHook(env, { tool_name: 'Read', tool_input: { file_path: agentFile(ws) } }, { preload: FAILS });
+      assert.strictEqual(read.decision, 'allow', read.out);
+      assert.match(read.reason, IN_WORKSPACE);
+    });
+  }
+});

@@ -593,11 +593,14 @@ function isRuntimeHomeSurfaceEdit(toolName, toolInput, home = os.homedir(), fold
 // exist yet reach the same answer. A relative target is resolved against the
 // workspace, as classifyFileAccess resolves it. Nothing here catches a throw:
 // one reaches the handlers at the top of this file, which refuse the call.
+// The seam is for a test to make the check throw (workspace-team-folders.test.js).
+const teamFolderSeam = { beforeChecking() {} };
 function isWorkspaceTeamFolderEdit(toolName, toolInput, workspaceRoot, foldsCase = hostFoldsCase()) {
   if (!CLAUDE_EDIT_TOOLS.has(toolName)) return false;
   const ti = toolInput || {};
   const target = ti.file_path || ti.notebook_path || ti.path;
   if (typeof target !== 'string' || !target) return false;
+  teamFolderSeam.beforeChecking(target);
   const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);
   return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {
     const folder = foldCase(canonicalize(path.join(workspaceRoot, '.claude', d)), foldsCase);
@@ -4034,7 +4037,7 @@ module.exports = {
   boundaryCrossingsFor, CODE_READS_ALLOWED, UNATTENDED_NEXT_UNLOADED,
   REFUSED_CLAUDE_EDIT_DIRS, isReadOnlyShellCommand, isReadOnlyPowerShellCommand, isRundockAnswerFileAnywhere, isRundockWorkspaceSettingsFile, isAnswerFileOfAnyWorkspace, otherWorkspaceRootOf, isOtherWorkspaceAgentSurface,
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
-  isWorkspaceTeamFolderEdit,
+  isWorkspaceTeamFolderEdit, teamFolderSeam,
 };
 
 if (require.main === module) main();
