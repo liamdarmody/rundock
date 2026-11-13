@@ -48,6 +48,14 @@ function seedRecord(convoId) {
   fs.mkdirSync(path.dirname(convosFile()), { recursive: true });
   fs.writeFileSync(convosFile(), JSON.stringify([...readConvos(), { id: convoId, title: 'seeded', sessionIds: [] }]));
 }
+// The module as a server that has just started has it: nothing in memory, so
+// only what is on the record can be told.
+function restartedTeamNotes() {
+  const key = require.resolve(path.join(ROOT, 'lib', 'agents', 'team-notes.js'));
+  const running = require.cache[key];
+  delete require.cache[key];
+  try { return require(key); } finally { require.cache[key] = running; }
+}
 
 describe('the note, byte for byte', () => {
   test('one line per outcome kind, under the heading, then a blank line', () => {
@@ -274,6 +282,62 @@ describe('the next message a Claude Code process is written', () => {
     assert.deepStrictEqual(recordOf(p.convoId).teamOutcomes, [FIVE[0]], 'the record holds what the earlier store kept');
     p.send('well?');
     assert.deepStrictEqual(p.contents(), [`${HEADING}\n- Saved (new): agent "helper", asked by Doc.\n\nwell?`]);
+  });
+
+  // A NOTE THAT COULD NOT BE BUILT OR DELIVERED IS NOT SPENT. The turn it
+  // failed for goes as written, and the outcomes stay, in memory and on the
+  // record, until a note is delivered: a restart in between loses nothing.
+  for (const seam of ['build', 'deliver']) {
+    test(`${seam === 'build' ? 'building' : 'delivering'} the note throws: the outcomes stay on the record, and a restart tells them once`, () => {
+      const p = processFor();
+      seedRecord(p.convoId);
+      teamNotes.keepOutcomes(p.convoId, [refused]);
+      teamNotes.seams[seam] = () => { throw new Error(`${seam} broke`); };
+      p.send('did it work?');
+      assert.deepStrictEqual(p.written, [asWritten('did it work?')], 'the turn it failed for goes as written');
+      assert.deepStrictEqual(recordOf(p.convoId).teamOutcomes, [refused], 'and the record still holds the refusal');
+      teamNotes.seams[seam] = realSeams[seam];
+      const restarted = restartedTeamNotes();
+      const next = { written: [], stdin: null };
+      next.stdin = { write(chunk) { next.written.push(JSON.parse(String(chunk)).message.content); return true; } };
+      restarted.noteOnNextMessage(next, p.convoId);
+      next.stdin.write(asWritten('still there?'));
+      next.stdin.write(asWritten('and now?'));
+      assert.deepStrictEqual(next.written, [`${expectedNote}still there?`, 'and now?'], 'told once, after the restart');
+      assert.ok(!('teamOutcomes' in recordOf(p.convoId)), 'and removed from the record once told');
+    });
+  }
+
+  test('a record that cannot be cleared of a note keeps the outcomes and sends the message as written, so a restart cannot tell them twice', () => {
+    const p = processFor();
+    seedRecord(p.convoId);
+    teamNotes.keepOutcomes(p.convoId, [refused]);
+    const realWrite = fs.writeFileSync;
+    fs.writeFileSync = function (/** @type {any} */ file, /** @type {any[]} */ ...rest) {
+      if (String(file).endsWith('conversations.json')) throw new Error('disk full');
+      return realWrite.call(this, file, ...rest);
+    };
+    try {
+      p.send('did it work?');
+    } finally {
+      fs.writeFileSync = realWrite;
+    }
+    assert.deepStrictEqual(recordOf(p.convoId).teamOutcomes, [refused], 'the record still holds the refusal');
+    assert.ok(logged.some((l) => l.includes('[TeamNotes]') && l.includes('disk full')), `logged: ${JSON.stringify(logged)}`);
+    p.send('and now?');
+    assert.deepStrictEqual(p.contents(), ['did it work?', `${expectedNote}and now?`], 'told once storage works again');
+    assert.ok(!('teamOutcomes' in recordOf(p.convoId)));
+  });
+
+  test('a note that could not be built is told to the next message the same process is written', () => {
+    const p = processFor();
+    teamNotes.keepOutcomes(p.convoId, [refused]);
+    teamNotes.seams.build = () => { throw new Error('build broke'); };
+    p.send('did it work?');
+    teamNotes.seams.build = realSeams.build;
+    p.send('and now?');
+    p.send('again?');
+    assert.deepStrictEqual(p.contents(), ['did it work?', `${expectedNote}and now?`, 'again?']);
   });
 });
 
