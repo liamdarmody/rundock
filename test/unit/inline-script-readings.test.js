@@ -14,6 +14,7 @@
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -452,9 +453,29 @@ describe('through the hook, in Code mode and in Notes mode', () => {
     }
   });
 
-  test('the undo: a line that asks is refused, and the next command, a join onto the workspace, runs', { skip: SKIP }, async () => {
-    const refused = await bash(asks.assignedTwice);
-    assert.strictEqual(refused.dead.decision, 'deny');
+  // The person's Deny comes from a server that answers every card with a
+  // deny, the shape the app's answer takes.
+  test('the undo: a line that asks is denied, and the next command, a join onto the workspace, runs', { skip: SKIP }, async () => {
+    const posted = [];
+    const denying = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => {
+        posted.push(body);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ allow: false, reason: 'denied' }));
+      });
+    });
+    await new Promise(r => denying.listen(0, '127.0.0.1', r));
+    try {
+      const input = { session_id: 'undo', transcript_path: '', permission_mode: 'acceptEdits', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: asks.assignedTwice }, cwd: world.ws };
+      const denied = await fx.runHook(fx.hookEnv(world, { port: denying.address().port }), input);
+      const card = posted.map(b => { try { return JSON.parse(b); } catch (e) { return null; } }).find(d => d && d.boundary === true);
+      assert.ok(card && card.crossings.some(c => c.write === true), `the card was raised, as a write outside: ${posted.join('\n')}`);
+      assert.strictEqual(denied.decision, 'deny');
+    } finally {
+      await new Promise(r => denying.close(r));
+    }
     const next = await bash(red.joined);
     assert.strictEqual(next.cls, 'runs');
   });
