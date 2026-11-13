@@ -74,6 +74,15 @@ const ENGINE_NOTES = { src: ENGINE.src, suite: TEAM_NOTES };
 const CATCHUP_NOTES = { src: CATCHUP.src, suite: TEAM_NOTES };
 const SERVER_NOTES = { src: SERVER.src, suite: TEAM_NOTES };
 const LINES_NOTES = { src: path.join(ROOT, 'lib', 'delegation', 'rundock-lines.js'), suite: TEAM_NOTES_UNIT };
+const CATCHUP_NOTES_UNIT = { src: CATCHUP.src, suite: TEAM_NOTES_UNIT };
+// A card for each agent or skill change Doc makes while another agent brought
+// it in, written only on an Allow given on that card (lib/agents/team-markers.js).
+const CARDS = 'test/integration/team-handoff-cards.test.js';
+const TEAM_MARKERS_SRC = path.join(ROOT, 'lib', 'agents', 'team-markers.js');
+const MARKERS_CARDS = { src: TEAM_MARKERS_SRC, suite: CARDS };
+const MARKERS_TURN = { src: TEAM_MARKERS_SRC, suite: 'test/unit/team-markers-turn.test.js' };
+const ENGINE_CARDS = { src: ENGINE.src, suite: CARDS };
+const GRADING_CARDS = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/team-change-card.test.js' };
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. The whole
 // stale-session suite takes some twenty seconds unbroken, and a broken guard
@@ -461,6 +470,38 @@ const MUTATIONS = [
   [LINES_NOTES, 'the team note\'s heading is left out of Rundock\'s own headings',
     '  ...Object.values(CATCH_UP_HEADINGS),\n',
     '  ...Object.values(CATCH_UP_HEADINGS).filter((heading) => heading !== CATCH_UP_HEADINGS.outcomes),\n'],
+
+  // ===== IN A HAND-OFF, EACH CHANGE DOC MAKES IS WRITTEN ONLY ON AN ALLOW GIVEN ON ITS CARD =====
+  [MARKERS_TURN, 'whether Doc was brought in is read from the reply, not the process entry',
+    "  try { by = entry.delegation ? String(entry.delegation.originalAgentId || '') : null; } catch (e) { by = ''; }",
+    "  try { by = /brought me in|delegated by/i.test(text) ? 'chief-of-staff' : null; } catch (e) { by = ''; }"],
+  [only(MARKERS_CARDS, 'An allow that did not come from a card writes nothing'), 'a change is written on an allow that did not come from its card',
+    'allow === true && how && how.card === true ?',
+    'allow === true ?'],
+  [only(MARKERS_CARDS, 'No answer before the timeout, with every window closed: nothing is written, and the outcome is refused, saying nobody answered'), 'a change is written when its card times out',
+    'allow === true && how && how.card === true ?',
+    "(allow === true && how && how.card === true) || reason === 'timeout' ?"],
+  [only(MARKERS_CARDS, 'Doc brought in by an orchestrator\'s Agent call: one card per change, five in one reply, and nothing written while they wait'), 'only the first change in a reply raises a card, and the rest are written',
+    '      if (by !== null) {',
+    '      if (by !== null && action === actions[0]) {'],
+  [GRADING_CARDS, 'the four names of Doc\'s hand-off changes are not graded high',
+    "    if (isTeamCard(toolName)) return 'high';\n",
+    ''],
+  [only(ENGINE_CARDS, 'Doc is not ended while its card waits; once allowed, the orchestrator is told it was saved, and the conversation keeps the line'), 'Doc\'s hand-back fires before its cards are answered',
+    '        afterTeamCards(e, () => { if (e.pendingKill && !e.exited) scheduleScopeReturnKill(e, convoId); });',
+    '        scheduleScopeReturnKill(e, convoId);'],
+  [only(MARKERS_CARDS, 'a new agent is written with the order its card showed, though another agent joined the team while the card waited'), 'an allowed change is written from the marker, not from what its card showed',
+    '  const result = write({ ...action, content }, conversationId);',
+    '  const result = write(action, conversationId);'],
+  [MARKERS_TURN, 'a card is raised when the person is talking to Doc directly',
+    "  try { by = entry.delegation ? String(entry.delegation.originalAgentId || '') : null; } catch (e) { by = ''; }",
+    "  try { by = String((entry.delegation && entry.delegation.originalAgentId) || ''); } catch (e) { by = ''; }"],
+  [CATCHUP_NOTES_UNIT, 'a card that wrote nothing is told with its outcome\'s message, not Rundock\'s sentence for its code',
+    "      const card = o.author === DOC_ID && isCardEnd(o.reason) ? `${CARD_ENDS[o.reason](change[1])}, so nothing was ${change[2]}.` : '';",
+    "      const card = o.author === DOC_ID && isCardEnd(o.reason) ? flat(o.message) : '';"],
+  [CATCHUP_NOTES_UNIT, 'a code the server never sets is given a card\'s sentence',
+    "      const card = o.author === DOC_ID && isCardEnd(o.reason) ? `${CARD_ENDS[o.reason](change[1])}, so nothing was ${change[2]}.` : '';",
+    "      const card = o.author === DOC_ID && o.reason ? `${(CARD_ENDS[o.reason] || CARD_ENDS.unanswered)(change[1])}, so nothing was ${change[2]}.` : '';"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
