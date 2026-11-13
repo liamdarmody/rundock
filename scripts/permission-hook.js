@@ -2424,8 +2424,9 @@ const RUNS_COMMAND_ON_MODULE = new Set(['run', 'call', 'exec', 'capture2', 'capt
 //     what it holds between braces, which an f-string or t-string runs, read
 //     as code;
 //   - no escape in a string but `\n`, `\t`, `\r`, `\0`, `\\` and a quote, no
-//     coding line, no dunder, and no character outside ASCII and no backslash
-//     in its code;
+//     coding line, no dunder but the main guard (`if __name__ == "__main__":`,
+//     which only reads a name), and no character outside ASCII and no
+//     backslash in its code;
 //   - each import names `sys`, `os` or `os.path`, which Python has loaded
 //     before the script's first line, so no folder is searched for them;
 //   - every word of its code is a name of its own, or a keyword, builtin or
@@ -2452,6 +2453,7 @@ const PY_ATTRIBUTES = new Set(('argv path exit stdin stdout stderr platform vers
   + 'remove unlink rename replace rmdir walk stat sep join exists isdir isfile dirname basename abspath splitext getsize read write readline readlines '
   + 'close split splitlines strip lstrip rstrip startswith endswith lower upper find count append extend insert pop sort items keys values get update add').split(' '));
 const PY_IMPORT = /^\s*import\s+(?:sys|os(?:\.path)?)(?:\s*,\s*(?:sys|os(?:\.path)?))*\s*$/;
+const PY_MAIN_GUARD = /\bif[ \t]+__name__[ \t]*==[ \t]*(["'])__main__\1[ \t]*:/g;
 const PY_NUMBER = /^(?:\d[\d_]*(?:\.[\d_]*)?(?:[eE]\d+)?[jJ]?|0[xX][\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+)$/;
 // What each bracket in `src` is given (how many arguments, whether any is
 // named or unpacked, where its commas and its close are), or null where a
@@ -2481,7 +2483,7 @@ function pythonBrackets(src) {
   return given;
 }
 function pythonNamesClosed(s, masked, lits) {
-  if (/'''|"""/.test(s) || s.includes('__') || /coding[:=]/.test(s.split('\n', 2).join('\n'))) return false;
+  if (/'''|"""/.test(s) || s.replace(PY_MAIN_GUARD, '').includes('__') || /coding[:=]/.test(s.split('\n', 2).join('\n'))) return false;
   const fields = [];
   const litAt = new Map();
   for (const l of lits) {

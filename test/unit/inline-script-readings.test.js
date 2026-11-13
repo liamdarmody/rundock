@@ -472,6 +472,42 @@ describe('every word Python has, not on the allowed lists, keeps the card', () =
   });
 });
 
+// ===== THE MAIN GUARD =====
+
+describe('a script that runs its code under the main guard is read as one without it', POSIX, () => {
+  const W = `V = "${ws}"`;
+  for (const [mode, codeMode] of MODES) {
+    test(`a write under the guard, on its line and in the block below, in a here-document and in -c (${mode} mode)`, () => {
+      // The code in -c is quoted with the quote it does not use.
+      const dashC = (code) => (code.includes("'") ? `python3 -c "${code}"` : `python3 -c '${code}'`);
+      for (const q of ['"', "'"]) {
+        const guard = `if __name__ == ${q}__main__${q}:`;
+        const code = (between) => `V = ${q}${ws}${q}\n${guard}${between}open(V + ${q}/etc/x/y${q}, ${q}w${q})`;
+        for (const c of [
+          py(W, `${guard} open(V + "/etc/x/y", "w")`),
+          py(W, guard, '    open(V + "/etc/x/y", "w")'),
+          dashC(code(' ')),
+          dashC(code('\n    ')),
+        ]) {
+          assert.deepStrictEqual(places(c, { codeMode }), [], c);
+        }
+      }
+    });
+  }
+
+  test('a dunder anywhere but the guard, and a name given its value under the guard, still ask', () => {
+    for (const c of [
+      py(W, 'if __name__ == "__main__": __import__("helper")', 'open(V + "/etc/x", "w")'),
+      py(W, 'if __name__ == "__main__" or __import__("helper"):', '    open(V + "/etc/x", "w")'),
+      py(W, 'if __name__ != "__main__":', '    pass', 'open(V + "/etc/x", "w")'),
+      py(W, 'if __name__ == "__main__":', '    V = "/"', '    open(V + "/etc/x", "w")'),
+      py(W, 'if __name__ == "__main__": print(__file__)', 'open(V + "/etc/x", "w")'),
+    ]) {
+      asksAsWrite(c, etc);
+    }
+  });
+});
+
 // The reading of a joined piece fails through a seam on the hook module, never
 // through anything a caller sets: the line is judged as it was before that
 // reading existed.
