@@ -207,6 +207,12 @@ conversation is. Every write of the conversation list was checked
 A record made only to hold outcomes is removed again once they are told; one
 a window has saved keeps everything else.
 
+Such a record is not a conversation a window can show, so `handleGetConversations`
+leaves a record holding only `id` and `teamOutcomes` out of the list it sends,
+while keeping it on disk. Without that it appeared in the sidebar as an
+untitled conversation. The restart test asks for the list before the window's
+save (not listed; red on the previous handler) and after it (listed).
+
 **The author's name.** The note named who asked by the agent's display name,
 and a refusal quoted the line a person reads, which carries it too. A display
 name is set by an agent file, which a save marker can write. The note
@@ -292,6 +298,8 @@ row whose target is `lib/agents/team-notes.js` or
   is the build seam in `lib/agents/team-notes.js`.
 - `keepOutcomes(convoId, outcomes)` and `withTeamNote(convoId, input, proc)`
   are called as before.
+- `handleGetConversations` leaves a record holding only `id` and
+  `teamOutcomes` out of the list sent to windows.
 - A saved conversation can now be a record holding only `id` and
   `teamOutcomes`, until a window saves it or its outcomes are told.
 - The note's pinned bytes in `test/unit/team-notes.test.js`,
@@ -303,7 +311,7 @@ row whose target is `lib/agents/team-notes.js` or
   changed.
 
 The change's non-test lines against main (`lib/`, `server.js`, `public/`) are
-294 added, under the size limit of 300.
+298 added, under the size limit of 300.
 
 ### Tests run at the head
 
