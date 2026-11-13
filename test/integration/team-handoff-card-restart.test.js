@@ -148,6 +148,8 @@ test('a card open when the server stops writes nothing, an answer to it after th
   }
   const told = prompts().filter((p) => p.includes('RC-NEXT'));
   assert.strictEqual(told.length, 1);
-  assert.ok(told[0].includes(`${HEADING}\n- Refused: save agent "${NAME}", asked by Doc. ${line}\n\n`), `the next turn is told (got ${JSON.stringify(told[0].slice(0, 400))})`);
+  // Told why in Rundock's own sentence, never the line a person reads.
+  assert.ok(told[0].startsWith(`${HEADING}\n- Refused: save agent "${NAME}", asked by Doc. Rundock stopped before anyone answered the card, so nothing was saved.\n\n`),
+    `the next turn is told (got ${JSON.stringify(told[0].slice(0, 400))})`);
   assert.strictEqual(fs.existsSync(agentPath()), false);
 });

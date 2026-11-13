@@ -129,6 +129,22 @@ async function handBack(token, timeout = 15000) {
 }
 const HEADING = 'WHAT RUNDOCK DID WITH THE LAST REPLY:';
 const note = (...lines) => `${HEADING}\n${lines.join('\n')}\n\n`;
+// The note's line for a card that wrote nothing: Rundock's fixed sentence for
+// why, never the outcome's own message.
+const CARD_ENDS = {
+  denied: () => 'It was not allowed on the card',
+  unanswered: () => 'Nobody answered the card in time',
+  cancelled: () => 'The turn was cancelled before the card was answered',
+  stopped: () => 'Rundock stopped before anyone answered the card',
+  changed: (noun) => `The ${noun} changed on disk after the card was shown`,
+};
+const cardLine = (code, verb, noun, name) => `- Refused: ${verb} ${noun} "${name}", asked by Doc. ${CARD_ENDS[code](noun)}, so nothing was ${verb === 'save' ? 'saved' : 'deleted'}.`;
+// The lines under the note's heading, in the order given.
+const noteLines = (prompt) => {
+  const [heading, ...lines] = prompt.split('\n\n')[0].split('\n');
+  assert.strictEqual(heading, HEADING, `the prompt opens with the note (got ${JSON.stringify(prompt.slice(0, 300))})`);
+  return lines;
+};
 
 // Doc brought in by a DELEGATE marker: the orchestrator answers once and is
 // parked, then its reply's DELEGATE marker reaches the server as the window
@@ -249,8 +265,9 @@ describe('Written only on an Allow a person gave on that card', () => {
       const { msg } = await lineFor(client, convoId, refusal, since);
       assert.strictEqual(msg.refused, true);
       const prompt = await handBack('DENY');
-      assert.ok(prompt.startsWith(note(`- Refused: save agent "deny-helper", asked by Doc. ${refusal}`)),
-        `the orchestrator is told it was refused (got ${JSON.stringify(prompt.slice(0, 300))})`);
+      assert.ok(prompt.startsWith(note(cardLine('denied', 'save', 'agent', 'deny-helper'))),
+        `the orchestrator is told it was refused, and why (got ${JSON.stringify(prompt.slice(0, 300))})`);
+      assert.deepStrictEqual(storedLines(convoId), [refusal], 'the line a person reads is unchanged');
       assert.deepStrictEqual(snapshot([agentPath('deny-helper')]), before, 'the file is as it was, byte for byte');
     } finally {
       client.close();
@@ -274,8 +291,9 @@ describe('Written only on an Allow a person gave on that card', () => {
       const prompt = await handBack('NOANSWER', PERM_TIMEOUT + 10000);
       const saved = 'Doc asked to save the agent "noanswer-helper", but nobody answered the card in time, so nothing was saved.';
       const deleted = 'Doc asked to delete the skill "noanswer-skill", but nobody answered the card in time, so nothing was deleted.';
-      assert.ok(prompt.startsWith(HEADING) && prompt.includes(`- Refused: save agent "noanswer-helper", asked by Doc. ${saved}`)
-        && prompt.includes(`- Refused: delete skill "noanswer-skill", asked by Doc. ${deleted}`), `both refused (got ${JSON.stringify(prompt.slice(0, 500))})`);
+      assert.deepStrictEqual(noteLines(prompt).sort(), [
+        cardLine('unanswered', 'save', 'agent', 'noanswer-helper'), cardLine('unanswered', 'delete', 'skill', 'noanswer-skill'),
+      ].sort(), 'both refused, saying nobody answered');
       assert.deepStrictEqual(snapshot(files), before, 'nothing is written, byte for byte');
       const next = await h.connect();
       next.send({ type: 'flush_buffer' });
@@ -474,9 +492,8 @@ describe('What is written is what the card showed', () => {
       assert.strictEqual(fs.readFileSync(agentPath('next-reply'), 'utf-8'), teamFile('next-reply', 'First'), 'the first card wrote what it showed, not the later reply');
       answer(client, second, false);
       const prompt = await handBack('NEXTREPLY');
-      assert.ok(prompt.includes('- Saved (new): agent "next-reply", asked by Doc.')
-        && prompt.includes('- Refused: save agent "next-reply", asked by Doc. Doc asked to save the agent "next-reply", but it was not allowed on the card, so nothing was saved.'),
-      `the orchestrator is told both (got ${JSON.stringify(prompt.slice(0, 500))})`);
+      assert.deepStrictEqual(noteLines(prompt), ['- Saved (new): agent "next-reply", asked by Doc.', cardLine('denied', 'save', 'agent', 'next-reply')],
+        'the orchestrator is told both');
       assert.strictEqual(fs.readFileSync(agentPath('next-reply'), 'utf-8'), teamFile('next-reply', 'First'));
     } finally {
       client.close();
@@ -507,7 +524,11 @@ describe('What is written is what the card showed', () => {
         ['delete', 'agent', 'went-delete', 'deleted'], ['delete', 'skill', 'went-skill', 'deleted']]) {
         await lineFor(client, convoId, `Doc asked to ${verb} the ${kind} "${name}", but the ${kind} changed on disk after the card was shown, so nothing was ${past}.`, since);
       }
-      await handBack('CHANGED');
+      const prompt = await handBack('CHANGED');
+      assert.deepStrictEqual(noteLines(prompt).sort(), [
+        cardLine('changed', 'save', 'agent', 'appeared-agent'), cardLine('changed', 'save', 'agent', 'went-agent'),
+        cardLine('changed', 'delete', 'agent', 'went-delete'), cardLine('changed', 'delete', 'skill', 'went-skill'),
+      ].sort(), 'the orchestrator is told each changed on disk');
       assert.strictEqual(fs.readFileSync(agentPath('appeared-agent'), 'utf-8'), 'written by someone else', 'the file that appeared is left as it is');
       assert.strictEqual(fs.existsSync(agentPath('went-agent')), false, 'the one that went is not made again');
       assert.strictEqual(fs.existsSync(agentPath('went-delete')), false);
@@ -548,7 +569,9 @@ describe('The hand-back waits for the cards and tells the truth', () => {
     seedSkill('cancel-skill');
     const files = [agentPath('cancel-helper'), skillPath('cancel-skill')];
     const before = snapshot(files);
-    agentCall('CANCELWAIT', `CANCELWAIT-DONE done.\n${saveAgent('cancel-helper', teamFile('cancel-helper', 'Helper'))}\n${deleteSkill('cancel-skill')}`);
+    agentCall('CANCELWAIT', `CANCELWAIT-DONE done.\n${saveAgent('cancel-helper', teamFile('cancel-helper', 'Helper'))}\n${deleteSkill('cancel-skill')}`, {
+      more: [{ match: { agent: 'chief-of-staff', promptIncludes: 'CANCELWAIT-NEXT' }, turn: [{ text: 'CANCELWAIT-NEXT-ANSWERED' }] }],
+    });
     const client = await h.connect();
     try {
       client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'CANCELWAIT-ASK change them' });
@@ -568,6 +591,15 @@ describe('The hand-back waits for the cards and tells the truth', () => {
       await h.delay(500);
       assert.deepStrictEqual(snapshot(files), before, 'nothing is written, even when the cards are answered afterwards');
       assert.deepStrictEqual(handBacks('CANCELWAIT'), [], 'and nothing is handed back: the person said stop');
+      // The person's next message is the next turn, and it is told why.
+      const next = client.messages.length;
+      client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'CANCELWAIT-NEXT what happened?' });
+      await client.waitFor((m) => m.type === 'result' && m._conversationId === convoId && String(m.result || '').includes('CANCELWAIT-NEXT-ANSWERED'), { since: next, label: 'the next turn' });
+      const told = h.readPrompts().filter((p) => p.agent === 'chief-of-staff' && p.prompt.includes('CANCELWAIT-NEXT')).map((p) => p.prompt);
+      assert.strictEqual(told.length, 1);
+      assert.deepStrictEqual(noteLines(told[0]).sort(), [
+        cardLine('cancelled', 'save', 'agent', 'cancel-helper'), cardLine('cancelled', 'delete', 'skill', 'cancel-skill'),
+      ].sort(), 'the next turn is told both were cancelled');
     } finally {
       client.close();
       h.reapConvo(convoId);
@@ -661,7 +693,7 @@ describe('The control failing writes nothing, says so, and the server keeps serv
       assert.ok(await h.waitUntil(() => openWindows() === 0), 'the window is gone with its card open');
       const prompt = await handBack('DROPS', PERM_TIMEOUT + 10000);
       const line = 'Doc asked to save the agent "drops-helper", but nobody answered the card in time, so nothing was saved.';
-      assert.ok(prompt.startsWith(note(`- Refused: save agent "drops-helper", asked by Doc. ${line}`)), `the orchestrator is told (got ${JSON.stringify(prompt.slice(0, 300))})`);
+      assert.ok(prompt.startsWith(note(cardLine('unanswered', 'save', 'agent', 'drops-helper'))), `the orchestrator is told (got ${JSON.stringify(prompt.slice(0, 300))})`);
       assert.strictEqual(fs.existsSync(agentPath('drops-helper')), false, 'nothing is written');
       const next = await h.connect();
       next.send({ type: 'flush_buffer' });
