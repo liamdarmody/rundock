@@ -303,6 +303,7 @@ describe('a name that code the hook never reads can change keeps the piece judge
       'an alias': ['import os as o'],
       'from os import': ['from os import path'],
       'a text encoding looked up as the script runs (idna loads re)': ['"x".encode("idna")'],
+      'the same with a space before the attribute': ['"x". encode("idna")'],
       'a bytes decode looked up the same way': ['b"".decode("base64")'],
       'str given an encoding': ['str(b"", "idna")'],
       'open given an encoding by position': ['open("notes/a.md", "r", -1, "idna")'],
@@ -323,11 +324,12 @@ describe('a name that code the hook never reads can change keeps the piece judge
   // for -c) in the folder it runs in, and loads the codec that file's coding
   // line names, which imports a module the workspace can hold. Each of these
   // is a warning some Python 3 gives.
+  // None of them names V but in the join: any other mention leaves it unknown.
   test('anything Python warns of, as the script compiles or runs', () => {
     for (const [label, lines] of Object.entries({
-      'is with a literal': ['y = V is "a"'],
-      'is with None (is is left out whole)': ['y = V is None'],
-      'an assert given a tuple': ['assert (V, "x")'],
+      'is with a literal': ['x = "b"', 'y = x is "a"'],
+      'is with None (is is left out whole)': ['x = "b"', 'y = x is None'],
+      'an assert given a tuple': ['x = "b"', 'assert (x, "y")'],
       'a call on a string': ['y = "a"("x")'],
       'a call on a number': ['y = 1(2)'],
       'a call on a tuple': ['y = (1, 2)(3)'],
@@ -338,7 +340,7 @@ describe('a name that code the hook never reads can change keeps the piece judge
       'a call in an f-string': ['y = f"{1(2)}"'],
       'an escape Python does not know': ['y = "\\d"'],
       'an escape bytes do not know': ['y = b"\\u0041"'],
-      'a number run into a word': ['y = 1if V else 2'],
+      'a number run into a word': ['x = "b"', 'y = 1if x else 2'],
       'NotImplemented in a test': ['y = bool(NotImplemented)'],
       'an inverted bool': ['y = ~True'],
       "open's U mode": ['open("notes/a.md", "rU")'],
@@ -381,6 +383,8 @@ describe('a name that code the hook never reads can change keeps the piece judge
       'in another shell\'s -c': `bash -c "python3 -c \\"V = '${ws}'; open(V + '/etc/x', 'w')\\""`,
       'a -c the shell fills in': `python3 -c "V = '${ws}'; x = '$X'; open(V + '/etc/x', 'w')"`,
       'a -c after an option': `python3 -I -c "V = '${ws}'; open(V + '/etc/x', 'w')"`,
+      'an option bundled with -c': `python3 -Sc "V = '${ws}'; open(V + '/etc/x', 'w')"`,
+      'a -c after a command': `cd "${ws}" && python3 -c "V = '${ws}'; open(V + '/etc/x', 'w')"`,
     })) {
       keeps(label, c);
     }
