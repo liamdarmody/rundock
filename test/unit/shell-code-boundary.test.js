@@ -67,9 +67,12 @@ describe('a backslash in a Bash word on a POSIX host is not a Windows separator'
     assert.deepStrictEqual(places('cat ..\\/..\\/secret.txt'), [real(path.join(root, 'secret.txt'))]);
   });
 
-  test('a drive letter or a UNC name is still a Windows path', () => {
+  // A doubled backslash is two backslashes here, and a network path only on a
+  // Windows host or in PowerShell (inline-script-readings.test.js).
+  test('a drive letter is still a Windows path, and a UNC name only on a Windows host', () => {
     assert.ok(scan('cat C:\\Users\\someone\\notes.txt'), 'a drive letter');
-    assert.ok(scan("cp a.md '\\\\server\\share\\a.md'"), 'a UNC name');
+    assert.strictEqual(scan("cp a.md '\\\\server\\share\\a.md'"), null, 'a UNC name in Bash on a POSIX host');
+    assert.ok(scan("cp a.md '\\\\server\\share\\a.md'", { opts: { platform: 'win32' } }), 'a UNC name on a Windows host');
   });
 
   test('PowerShell keeps the backslash as a separator', () => {
