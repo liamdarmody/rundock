@@ -1,5 +1,6 @@
 'use strict';
-// A reply that shows an agent file without a save marker saves nothing.
+// A reply that shows an agent file without a save marker saves nothing, and
+// no window asks the server to write or delete an agent or skill file at all.
 //
 // THE DEFECT. When the marker scan found no save or delete, the client fell
 // back to looking for anything shaped like an agent file (frontmatter with a
@@ -9,17 +10,20 @@
 // The server's save replaces any file of that name and keeps no copy, so an
 // existing agent could be overwritten by its own preview.
 //
-// THE RULE NOW. The client asks the server to write or delete an agent or
-// skill file only for an action the marker scan returned. Text that merely
-// looks like an agent file is text.
+// THE RULE NOW. Only a marker in the reply saves a file, and the server acts
+// on it at the end of the turn, from the text it collected from the agent's
+// own process, and only when that agent is Doc (lib/agents/team-markers.js).
+// The window sends none of these changes: it cannot tell who wrote a reply,
+// and every open window used to act on the same one. Connector markers are
+// unchanged: the window still forwards them, and the server asks first.
 //
 // HOW IT IS TESTED. handleResult lives in app.js, the page's own script, which
 // cannot be required. So it is cut out of the source and RUN, against a socket
 // that records what is sent, the real marker scan, and stubs for the render
 // half it hands over to. A copy of its logic would stay green if the real one
 // changed; the real one cannot. The source pins below then cover what a run
-// cannot: a second route that builds a save from reply text in some shape no
-// input here happens to exercise.
+// cannot: a route that builds one of these messages in some shape no input
+// here happens to exercise.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -143,53 +147,34 @@ describe('a reply that shows an agent file with no marker sends nothing', () => 
   });
 });
 
-describe('a marked save still sends exactly one save, with the marker content', () => {
+describe('a marked save sends nothing from the window: the server acts on it', () => {
   const file = agentFile('example-agent', 'specialist');
+  const skill = '---\nname: example-skill\ndescription: An example skill.\n---\n\nDo the example.';
+  const MARKED = [
+    ['a SAVE_AGENT marker', 'Saved.\n<!-- RUNDOCK:SAVE_AGENT name=example-agent -->\n' + file + '\n<!-- /RUNDOCK:SAVE_AGENT -->'],
+    ['a SAVE_AGENT marker whose body is fenced', 'Saved.\n<!-- RUNDOCK:SAVE_AGENT name=example-agent -->\n```markdown\n' + file + '\n```\n<!-- /RUNDOCK:SAVE_AGENT -->'],
+    ['a CREATE_AGENT marker', '<!-- RUNDOCK:CREATE_AGENT name=example-agent -->\n' + file + '\n<!-- /RUNDOCK:CREATE_AGENT -->'],
+    ['a SAVE_SKILL marker', '<!-- RUNDOCK:SAVE_SKILL name=example-skill -->\n' + skill + '\n<!-- /RUNDOCK:SAVE_SKILL -->'],
+    ['a DELETE_AGENT marker', 'Removed.\n<!-- RUNDOCK:DELETE_AGENT name=example-agent -->'],
+    ['a DELETE_SKILL marker', 'Removed.\n<!-- RUNDOCK:DELETE_SKILL name=example-skill -->'],
+    ['a marked save beside a previewed file', 'Preview:\n```markdown\n' + agentFile('example-lead', 'orchestrator') + '\n```\n'
+      + '<!-- RUNDOCK:SAVE_AGENT name=example-agent -->\n' + file + '\n<!-- /RUNDOCK:SAVE_AGENT -->'],
+  ];
+  for (const [label, reply] of MARKED) {
+    test(`${label}`, () => {
+      const { sent, timers } = runReply(reply);
+      assert.deepStrictEqual(fileWrites(sent), [], 'the window asked the server to write or delete a file');
+      assert.deepStrictEqual(sent, [], 'and sent nothing else for it');
+      assert.deepStrictEqual(timers, [], 'and scheduled no roster refresh: the server sends the roster after a change');
+    });
+  }
 
-  test('a SAVE_AGENT marker', () => {
-    const reply = 'Saved.\n<!-- RUNDOCK:SAVE_AGENT name=example-agent -->\n' + file + '\n<!-- /RUNDOCK:SAVE_AGENT -->';
-    const { sent, timers } = runReply(reply);
-    assert.deepStrictEqual(sent, [
-      { type: 'save_agent', name: 'example-agent', content: file, conversationId: 'convo-A' },
-    ]);
-    assert.deepStrictEqual(timers.map((t) => t.ms), [500], 'one roster refresh is scheduled after a save');
-  });
-
-  test('a SAVE_AGENT marker whose body is fenced saves the file without the fence', () => {
-    const reply = 'Saved.\n<!-- RUNDOCK:SAVE_AGENT name=example-agent -->\n```markdown\n' + file + '\n```\n<!-- /RUNDOCK:SAVE_AGENT -->';
+  test('a connector marker is still forwarded, once, with its conversation', () => {
+    const reply = 'Adding it.\n<!-- RUNDOCK:SAVE_CONNECTOR name=local-tools -->\n{"command":"node"}\n<!-- /RUNDOCK:SAVE_CONNECTOR -->';
     const { sent } = runReply(reply);
     assert.deepStrictEqual(sent, [
-      { type: 'save_agent', name: 'example-agent', content: file, conversationId: 'convo-A' },
+      { type: 'save_connector', name: 'local-tools', content: '{"command":"node"}', conversationId: 'convo-A' },
     ]);
-  });
-
-  test('a CREATE_AGENT marker', () => {
-    const reply = '<!-- RUNDOCK:CREATE_AGENT name=example-agent -->\n' + file + '\n<!-- /RUNDOCK:CREATE_AGENT -->';
-    const { sent, timers } = runReply(reply);
-    assert.deepStrictEqual(sent, [
-      { type: 'save_agent', name: 'example-agent', content: file, conversationId: 'convo-A' },
-    ]);
-    assert.deepStrictEqual(timers.map((t) => t.ms), [500]);
-  });
-
-  test('a SAVE_SKILL marker', () => {
-    const skill = '---\nname: example-skill\ndescription: An example skill.\n---\n\nDo the example.';
-    const reply = '<!-- RUNDOCK:SAVE_SKILL name=example-skill -->\n' + skill + '\n<!-- /RUNDOCK:SAVE_SKILL -->';
-    const { sent, timers } = runReply(reply);
-    assert.deepStrictEqual(sent, [
-      { type: 'save_skill', name: 'example-skill', content: skill, conversationId: 'convo-A' },
-    ]);
-    assert.deepStrictEqual(timers.map((t) => t.ms), [500]);
-  });
-
-  test('a marked save beside a previewed file saves only the marked one', () => {
-    // A reply that previews one agent and saves another must not save the
-    // preview as well. Before, it could not happen in this order (the
-    // fallback ran only when the scan found nothing), and it must not start.
-    const reply = 'Preview:\n```markdown\n' + agentFile('example-lead', 'orchestrator') + '\n```\n'
-      + '<!-- RUNDOCK:SAVE_AGENT name=example-agent -->\n' + file + '\n<!-- /RUNDOCK:SAVE_AGENT -->';
-    const { sent } = runReply(reply);
-    assert.deepStrictEqual(sent.map((m) => `${m.type}:${m.name}`), ['save_agent:example-agent']);
   });
 });
 
@@ -207,12 +192,12 @@ describe('the client asks for a file write only through the marker scan', () => 
     assert.doesNotMatch(header, /fallback/i, 'the header contract describes a fallback the client no longer has');
   });
 
-  test('handleResult sends exactly these five messages, and the saves only from scanMarkers actions', () => {
+  test('handleResult sends exactly these three messages, and connector changes only from scanMarkers actions', () => {
     // Every send in handleResult, by its argument: each piece after a
-    // `ws.send(` up to the first `);`. A sixth send is a second route, and a
-    // second route that builds a save from reply text is the defect this file
-    // closes. Whitespace is collapsed so a reformat is not a failure; a new
-    // send, or a changed one, is.
+    // `ws.send(` up to the first `);`. A fourth send is a second route, and a
+    // route that builds an agent or skill change from reply text is the defect
+    // this file closes. Whitespace is collapsed so a reformat is not a
+    // failure; a new send, or a changed one, is.
     const body = HANDLE_RESULT_SRC;
     const sends = body.split('ws.send(').slice(1).map((piece) => {
       const end = piece.indexOf(');');
@@ -223,11 +208,9 @@ describe('the client asks for a file write only through the marker scan', () => 
       'JSON.stringify({ ...MARKER_SENDS[action.kind](action), conversationId: convoId })',
       "JSON.stringify({ type: 'delegate', conversationId: convoId, targetAgent, context })",
       "JSON.stringify({ type: 'end_delegation', conversationId: convoId })",
-      "JSON.stringify({ type: 'get_agents' })",
-      "JSON.stringify({ type: 'get_skills' })",
-    ], 'handleResult sends exactly these five messages');
+    ], 'handleResult sends exactly these three messages');
     // Any send at all, not only through the name ws, so an alias is counted.
-    assert.strictEqual(body.split('.send(').length - 1, 5, 'a send was added to handleResult under another name');
+    assert.strictEqual(body.split('.send(').length - 1, 3, 'a send was added to handleResult under another name');
 
     // The table is read in one place, and that place walks the scan's actions.
     assert.ok(body.includes('const scan = RundockMarkers.scanMarkers(textToScan);'), 'the scan is no longer taken from scanMarkers');
@@ -235,20 +218,21 @@ describe('the client asks for a file write only through the marker scan', () => 
     assert.ok(loopAt > -1, 'the sends no longer walk scan.actions');
     const loop = body.slice(loopAt, body.indexOf('\n    }\n', loopAt));
     assert.ok(loop.includes('MARKER_SENDS[action.kind](action)'), 'the marker loop no longer builds its sends from the table');
-    assert.strictEqual(body.split('MARKER_SENDS[').length - 1, 1, 'the send table is read outside the marker loop');
+    assert.strictEqual(body.split('MARKER_SENDS[').length - 1, 2, 'the send table is read outside the marker loop');
+    const tableAt = body.indexOf('const MARKER_SENDS = {');
+    const table = body.slice(tableAt, body.indexOf('};', tableAt));
+    // One key per line after the opening brace, read up to its colon.
+    const keys = table.split('\n').slice(1).map((line) => line.trim()).filter(Boolean).map((line) => line.slice(0, line.indexOf(':')));
+    assert.deepStrictEqual(keys, ['save_connector', 'delete_connector'],
+      'the send table holds the two connector changes and nothing else');
   });
 
-  test('no client file builds a file-writing message outside the send table', () => {
-    // Today the only client code that asks the server to write or delete an
-    // agent or skill file is MARKER_SENDS in handleResult. A message of one
-    // of these types built anywhere else is a second route and is reviewed
-    // against the rule above: only a marker in the reply saves a file.
+  test('no client file builds an agent or skill change at all', () => {
+    // The server decides these at the end of a turn and refuses all six from a
+    // socket, so a client file that builds one is a route back to the defect.
     // Whitespace is removed before counting, so `type:'save_agent'` and
     // `type : "save_agent"` count alike. WHAT THIS CANNOT SEE: a type
     // assembled at runtime from pieces.
-    const tableAt = APP_SRC.indexOf('const MARKER_SENDS = {');
-    assert.ok(tableAt > -1, 'the send table was not found, so this check reads nothing');
-    const table = APP_SRC.slice(tableAt, APP_SRC.indexOf('};', tableAt));
     const found = [];
     for (const [file, src] of clientSources()) {
       const flat = src.replace(/\s+/g, '');
@@ -259,12 +243,7 @@ describe('the client asks for a file write only through the marker scan', () => 
         }
       }
     }
-    assert.deepStrictEqual(found.sort(), [
-      'app.js:delete_agent', 'app.js:delete_skill', 'app.js:save_agent', 'app.js:save_skill',
-    ], 'a file-writing message is built outside the send table');
-    for (const type of ['save_agent', 'save_skill', 'delete_agent', 'delete_skill']) {
-      assert.ok(table.includes(`type: '${type}'`), `${type} is no longer built in the send table`);
-    }
+    assert.deepStrictEqual(found.sort(), [], 'a client file builds an agent or skill change again');
   });
 });
 

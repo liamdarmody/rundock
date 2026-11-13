@@ -84,12 +84,12 @@ describe('platform agent runtime awareness', () => {
 describe('agent_saved runtime tag', () => {
   test('saving a codex agent reports runtime codex; a claude agent reports claude', async () => {
     let since = client.messages.length;
-    client.send({ type: 'save_agent', name: 'codex-writer', content: agentFile({ name: 'codex-writer', type: 'specialist', order: 7, runtime: 'codex' }) });
+    h.asDoc({ type: 'save_agent', name: 'codex-writer', content: agentFile({ name: 'codex-writer', type: 'specialist', order: 7, runtime: 'codex' }) });
     const { msg: saved } = await client.waitFor(m => m.type === 'agent_saved' && m.agentId === 'codex-writer', { since, label: 'codex agent_saved' });
     assert.strictEqual(saved.runtime, 'codex');
 
     since = client.messages.length;
-    client.send({ type: 'save_agent', name: 'plain-writer', content: agentFile({ name: 'plain-writer', type: 'specialist', order: 8 }) });
+    h.asDoc({ type: 'save_agent', name: 'plain-writer', content: agentFile({ name: 'plain-writer', type: 'specialist', order: 8 }) });
     const { msg: saved2 } = await client.waitFor(m => m.type === 'agent_saved' && m.agentId === 'plain-writer', { since, label: 'claude agent_saved' });
     assert.strictEqual(saved2.runtime, 'claude');
   });
