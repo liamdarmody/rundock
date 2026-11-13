@@ -639,6 +639,10 @@ describe('the sequences', () => {
       assert.strictEqual(fs.existsSync(agentPath('nextstep-made')), false, 'the orchestrator wrote nothing');
       since = client.messages.length;
       client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'NEXT-STEP-DOC ask Doc' });
+      // Doc, brought in by the orchestrator, has its change carded, and an
+      // Allow on the card writes it (lib/agents/team-markers.js).
+      const { msg: card } = await client.waitFor((m) => m.type === 'control_request' && m._conversationId === convoId && m.request.tool_name === 'SaveAgent', { since, label: 'the card' });
+      client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convoId, allow: true, card: true });
       await client.waitFor((m) => m.type === 'agent_saved' && m.agentId === 'nextstep-made' && m.conversationId === convoId, { since, timeout: 5000, label: 'Doc\'s save' });
       await client.waitFor((m) => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convoId && m._agent === 'chief-of-staff' && m.autoContinue, { since, label: 'the orchestrator restored' });
       await h.delay(300);

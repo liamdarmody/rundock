@@ -275,6 +275,12 @@ describe('the orchestrator taking the conversation back after Doc\'s change is t
       { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM: pipeline-complete]' }, turn: [{ text: '<silent>' }] },
     ]);
   }
+  // Brought in by the orchestrator, Doc's change waits for its card, and so
+  // does the hand-back (lib/agents/team-markers.js): allowed here.
+  async function allowTheCard(convoId, since) {
+    const { msg: card } = await client.waitFor((m) => m.type === 'control_request' && m._conversationId === convoId && m.request.tool_name === 'SaveAgent', { since, label: 'the card' });
+    client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convoId, allow: true, card: true });
+  }
   async function handBack(token) {
     assert.ok(await h.waitUntil(() => h.readPrompts().some((p) => p.agent === 'chief-of-staff' && p.prompt.includes('[SYSTEM: pipeline-complete]') && p.prompt.includes(`${token}-DONE`))),
       'the orchestrator was resumed with the hand-back');
@@ -285,7 +291,9 @@ describe('the orchestrator taking the conversation back after Doc\'s change is t
     const convoId = h.freshConvoId('hbok');
     docDelegation('HBOK', `HBOK-DONE made it.\n${saveAgent('handback-helper', teamFile('handback-helper', 'Helper'))}`);
     try {
+      const since = client.messages.length;
       client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'HBOK-ASK get Doc to add a helper' });
+      await allowTheCard(convoId, since);
       const [prompt, ...more] = await handBack('HBOK');
       assert.deepStrictEqual(more, [], 'one hand-back');
       assert.ok(prompt.startsWith(note('- Saved (new): agent "handback-helper", asked by Doc.')),
@@ -409,7 +417,11 @@ describe('the sequences a person runs', () => {
     ]);
     try {
       await chat(convoId, 'chief-of-staff', 'NEXT-ONE save a helper');
+      const since = client.messages.length;
       client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'NEXT-TWO ask Doc then' });
+      // Doc's change waits for its card in a hand-off (lib/agents/team-markers.js): allowed here.
+      const { msg: card } = await client.waitFor((m) => m.type === 'control_request' && m._conversationId === convoId && m.request.tool_name === 'SaveAgent', { since, label: 'the card' });
+      client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convoId, allow: true, card: true });
       assert.ok(await h.waitUntil(() => h.readPrompts().some((p) => p.agent === 'chief-of-staff' && p.prompt.includes('NEXT-DONE'))),
         'the orchestrator was handed the conversation back');
       assert.strictEqual(onlyPrompt('NEXT-TWO', 'chief-of-staff').prompt,

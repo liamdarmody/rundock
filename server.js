@@ -1530,6 +1530,8 @@ wss.on('connection', (ws) => {
   // told whether to run them (lib/protocol/handlers/held-routines.js).
   ws.send(JSON.stringify(require('./lib/protocol/handlers/held-routines.js').heldRoutinesMessage(WORKSPACE)));
 
+  // A card an earlier run left open becomes its outcome before anything is shown (lib/agents/team-notes.js).
+  if (WORKSPACE) { try { teamNotes.load(); } catch (e) { console.error('[TeamNotes] could not read the conversations:', e && e.message); } }
   // Re-send pending permission requests so permission cards reappear after reconnect
   for (const [requestId, pending] of pendingPermissionRequests) {
     ws.send(JSON.stringify({

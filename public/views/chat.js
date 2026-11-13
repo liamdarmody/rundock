@@ -1270,6 +1270,10 @@ function renderPermissionCard(d, convoId, host) {
         // and unclipped, since this card is the person's only look at it.
         : (toolName === 'SaveConnector' || toolName === 'DeleteConnector')
           ? `<details class="permission-detail-collapse" open><summary>What it would run</summary><code class="permission-detail">${detail.split('\n').map(esc).join('<br>')}</code></details>`
+        // Doc's change to an agent or skill in a hand-off: the whole file, open,
+        // unclipped and with its lines kept, since it is written exactly as shown.
+        : RundockPermissions.isTeamCard(toolName)
+          ? `<details class="permission-detail-collapse" open><summary>${/^Delete/.test(toolName) ? 'What would be deleted' : 'What would be written'}</summary><code class="permission-detail permission-file">${esc(detail)}</code></details>`
         : (toolName === 'Bash' && input.description && detail.length > 60)
           ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
           : `<code class="permission-detail">${esc(detail)}</code>`}
