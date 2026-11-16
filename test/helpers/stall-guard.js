@@ -24,6 +24,10 @@ const path = require('node:path');
 // and short enough that a stalled run ends within five minutes.
 const LIMIT_MS = 240 * 1000;
 
+// How long a file may stay open once its tests have finished: time enough for
+// its own after hooks to close what it opened.
+const EXIT_GRACE_MS = 60 * 1000;
+
 const timers = new Map();
 
 function fileName() {
@@ -58,9 +62,19 @@ function clearLimit(t) {
 // The process `node --test` itself runs in only hands files out to child
 // processes; the tests run in those, so that is where the hooks go.
 if (!process.execArgv.includes('--test')) {
-  const { beforeEach, afterEach } = require('node:test');
+  const { beforeEach, afterEach, after } = require('node:test');
   beforeEach((t) => setLimit(t));
   afterEach((t) => clearLimit(t));
+  // Every test has passed, but a server, timer or child the file left running
+  // can still hold it open with nothing more to report. Ending the file with
+  // --test-force-exit would hide that, and pass; this ends it as a failure
+  // that names what was still open.
+  after(() => {
+    setTimeout(() => {
+      const open = [...new Set(process.getActiveResourcesInfo())].join(', ');
+      stop(`every test finished, but the file was still open ${EXIT_GRACE_MS / 1000} seconds later (open: ${open}).`);
+    }, EXIT_GRACE_MS).unref();
+  });
 }
 
 module.exports = { LIMIT_MS, setLimit };

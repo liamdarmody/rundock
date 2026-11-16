@@ -79,6 +79,16 @@ describe('a stalled run ends and names what stalled', { concurrency: true }, () 
       assert.ok(oneLineNames(r.out, `${FIXTURES}/never-settles.js`, 'a promise nobody resolves'),
         `no line of the output names both the file and the test that stalled:\n${r.out}`);
     });
+
+  test('a file whose tests all pass but which is left open ends the run non-zero within five minutes, naming the file',
+    { timeout: OWN_LIMIT_MS }, async (t) => {
+      guard.setLimit(t, OWN_LIMIT_MS);
+      const r = await runFixture('open-handle.js');
+      assert.ok(!r.watchdogFired, `the run was still going after five minutes:\n${r.out}`);
+      assert.notStrictEqual(r.code, 0, `the run exited zero with the file still open:\n${r.out}`);
+      assert.ok(oneLineNames(r.out, `${FIXTURES}/open-handle.js`, 'still open'),
+        `no line of the output names the file and says it was still open:\n${r.out}`);
+    });
 });
 
 test('the stall fixtures are never picked up by npm test\'s own glob', () => {
