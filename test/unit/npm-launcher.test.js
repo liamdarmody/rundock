@@ -9,8 +9,9 @@
 // it cannot read is refused, never started some other way.
 //
 // Every case stands win32 in through the helper's own argument, or through
-// the runtime's own seam for the platform, and lays the npm folder out in a
-// real temp folder. No start is real: spawn is recorded in its place.
+// the runtime's own seams for the platform and the lookup, and lays the npm
+// folder out in a real temp folder. No start is real: spawn is recorded in
+// its place.
 // Its Codex turns run the guard, which watches the home folder's shell
 // startup files, so the file runs with a made-up home.
 require('../helpers/made-up-home.js');
@@ -217,14 +218,29 @@ function freshClaude() {
   return mod;
 }
 
-// The runtime asks `where.exe` for Claude Code only on a real Windows, and
-// `which` everywhere else, so a `which` that names `bin`, first on PATH,
-// stands in for the lookup.
+// The runtime asks `where.exe` for Claude Code on Windows, and `which`
+// everywhere else, so unless a test stands the Windows lookup in
+// (whereExe), a `which` that names `bin`, first on PATH, stands in for it.
 function finderFor(bin) {
   const dir = makeTempDir('npm-launcher-which-');
   fs.writeFileSync(path.join(dir, 'which'), `#!/bin/sh\nprintf '%s\\n' '${bin}'\n`);
   fs.chmodSync(path.join(dir, 'which'), 0o755);
   return dir;
+}
+
+// The Windows lookup, stood in for the function that runs it: `where.exe
+// <command>` prints `found` and nothing else, as where.exe prints it, and
+// every command asked is recorded. Anything else throws, as a command that is
+// not there would. `found` is a real temp folder laid out as npm lays out
+// `%APPDATA%\npm`, because the start reads the package beside it.
+function whereExe(command, found) {
+  const asked = [];
+  const execSync = (cmd) => {
+    asked.push(cmd);
+    if (cmd !== `where.exe ${command}`) throw new Error(`${cmd}: not found`);
+    return `${found}\r\n`;
+  };
+  return { asked, execSync };
 }
 
 // A binary that answers --version as a current Claude Code, for the version
@@ -260,16 +276,19 @@ function recordedSpawn() {
 // platform stood in, spawn recorded and a workspace for the pid file, inside
 // the Electron app or under node server.js. Settles once anything the start
 // surfaces has been surfaced, with what it handed spawn, the errors it
-// surfaced, and the pid file as it started and once it closed.
-async function startChat(bin, { platform = 'win32', args = CHAT_ARGS, options = { stdio: 'ignore' }, electron = false, rt = freshClaude(), onError } = {}) {
+// surfaced, and the pid file as it started and once it closed. With `lookup`
+// (whereExe), the runtime's own lookup runs as on `platform` and asks it, and
+// nothing on PATH answers.
+async function startChat(bin, { platform = 'win32', args = CHAT_ARGS, options = { stdio: 'ignore' }, electron = false, rt = freshClaude(), onError, lookup } = {}) {
   const previousWs = config.getWorkspace();
   config.setWorkspace(makeTempDir('npm-launcher-ws-'));
   const { calls, spawn } = recordedSpawn();
-  const prev = rt.wireClaudeRuntimeDeps({ onClaudeSpawn: () => {}, platform: () => platform, spawn });
+  const standIns = lookup ? { lookupPlatform: () => platform, execSync: lookup.execSync } : {};
+  const prev = rt.wireClaudeRuntimeDeps({ onClaudeSpawn: () => {}, platform: () => platform, spawn, ...standIns });
   const before = { PATH: process.env.PATH, RUNDOCK_ELECTRON: process.env.RUNDOCK_ELECTRON };
   const errors = [];
   try {
-    process.env.PATH = [finderFor(bin), '/usr/bin', '/bin'].join(path.delimiter);
+    process.env.PATH = [lookup ? makeTempDir('npm-launcher-path-') : finderFor(bin), '/usr/bin', '/bin'].join(path.delimiter);
     if (electron) process.env.RUNDOCK_ELECTRON = '1'; else delete process.env.RUNDOCK_ELECTRON;
     rt.spawnClaude(args, options, (err) => { errors.push(err); if (onError) onError(err); });
     const tracked = rt.loadPidFile();
@@ -472,6 +491,35 @@ describe('a chat started through spawnClaude', () => {
     assert.strictEqual(options.env, given.env, 'the very environment the caller built');
     assert.deepStrictEqual(chat.tracked.map((r) => [r.pid, r.cmd]), [[70000, 'cli.js']], 'recorded by the entry point it runs');
     assert.deepStrictEqual(chat.left, [], 'and forgotten when it closed');
+  });
+
+  test('when the Windows lookup finds only an npm claude.cmd, a chat starts this Node with its package\'s entry point first, the prompt as given, and no shell', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const npm = npmFolder(CLAUDE_CODE, { pkg: claudePackage(), files: { 'cli.js': '' } });
+    const lookup = whereExe('claude', npm.bin);
+    const prompt = 'Tidy the notes & echo x > y.txt | more %PATH% ^ and "a quote left open';
+    const args = ['--print', prompt, ...CHAT_ARGS];
+    const chat = await startChat(npm.bin, { args, lookup });
+    assert.deepStrictEqual(lookup.asked, ['where.exe claude'], 'Claude Code looked up as on Windows, once');
+    assert.deepStrictEqual(chat.errors, []);
+    assert.strictEqual(chat.calls.length, 1, 'one start');
+    const [{ file, args: handed, options }] = chat.calls;
+    assert.strictEqual(file, process.execPath, 'the Node Rundock runs on, never the claude.cmd the lookup found');
+    assert.deepStrictEqual(handed, [npm.entry('cli.js'), ...args], 'the entry point first, then the prompt and arguments unchanged');
+    assert.strictEqual('shell' in options, false, 'no shell');
+  });
+
+  test('a path an earlier lookup found is let go when the Windows lookup is stood in, so that lookup is asked', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const rt = freshClaude();
+    const found = runnable('claude');
+    const first = await startChat(found, { platform: 'darwin', rt });
+    assert.deepStrictEqual(first.calls.map((c) => c.file), [found], 'found by the host\'s own lookup first');
+    const npm = npmFolder(CLAUDE_CODE, { pkg: claudePackage(), files: { 'cli.js': '' } });
+    const lookup = whereExe('claude', npm.bin);
+    const chat = await startChat(npm.bin, { rt, lookup });
+    assert.deepStrictEqual(lookup.asked, ['where.exe claude'], 'the Windows lookup asked, not the path found before');
+    assert.deepStrictEqual(chat.calls.map((c) => [c.file, c.args[0]]), [[process.execPath, npm.entry('cli.js')]]);
   });
 
   test('a prompt holding &, |, %, ^ and an unbalanced quote reaches spawn byte for byte, with no shell', async () => {
@@ -695,6 +743,21 @@ describe('the Codex app server', () => {
     assert.deepStrictEqual(options, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] }, 'the options it is always started with');
     assert.strictEqual('shell' in options, false, 'no shell');
     assert.strictEqual(options.env, env, 'the very environment the host built');
+  });
+
+  test('when the Windows lookup finds only an npm codex.cmd, the app server starts this Node with its package\'s entry point, then app-server, and no shell', async () => {
+    const { CODEX } = launcher();
+    const npm = npmFolder(CODEX, { pkg: packageFor(CODEX), files: { 'bin/codex.js': '' } });
+    const lookup = whereExe('codex', npm.bin);
+    const bin = require('../../codex.js').resolveCodexBin({ platform: 'win32', execSync: lookup.execSync });
+    assert.deepStrictEqual(lookup.asked, ['where.exe codex'], 'Codex looked up as on Windows');
+    assert.strictEqual(bin, npm.bin, 'the codex.cmd the lookup found');
+    const { calls } = await startCodex(bin);
+    assert.strictEqual(calls.length, 1, 'one start');
+    const [{ file, args, options }] = calls;
+    assert.strictEqual(file, process.execPath, 'the Node Rundock runs on, never the codex.cmd the lookup found');
+    assert.deepStrictEqual(args, [npm.entry('bin/codex.js'), 'app-server'], 'the entry point, then app-server');
+    assert.strictEqual('shell' in options, false, 'no shell');
   });
 
   test('inside the Electron app the Node start carries ELECTRON_RUN_AS_NODE, and under node server.js nothing is added', async () => {
