@@ -2296,6 +2296,48 @@ function wikilinkResolves(tree, target, fromPath) {
   return !!findFileInTree(tree, wikilinkSearchName(target), fromPath);
 }
 
+// The notes the editor's [[ suggestions can offer, as { path, name, target }.
+// Read from the tree the Files sidebar draws, skipping what the server's walk
+// hides (dot names, node_modules) in case a tree ever arrives with them, so
+// the popup can never list a file the sidebar would not show. Notes only
+// (.md), and only those some link spelling reaches: see wikilinkTargetFor.
+function wikilinkCandidates(tree, fromPath) {
+  const out = [];
+  (function walk(list) {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      if (!item || typeof item.name !== 'string' || typeof item.path !== 'string') continue;
+      if (item.name.startsWith('.') || item.name === 'node_modules') continue;
+      if (item.type === 'folder') { walk(item.children); continue; }
+      if (item.type !== 'file' || !/\.md$/i.test(item.name)) continue;
+      const target = wikilinkTargetFor(tree, item.path, fromPath);
+      if (target) out.push({ path: item.path, name: item.name.replace(/\.md$/i, ''), target });
+    }
+  })(tree);
+  return out;
+}
+
+// The link target that opens exactly the note at `path` when written in the
+// note at fromPath, or null when none does. The shortest spelling first: the
+// bare name, then the path without .md, then each with .md kept (for a name
+// like "chart.png.md", whose bare form names another file). Each spelling is
+// checked through the same resolver a click uses, so two notes sharing a name
+// get different targets and each opens its own note. A spelling with a
+// character that ends or splits a link ([ ] | # ^) or a control character is
+// never offered: written into [[...]] it would not read back as the same link.
+const WIKILINK_UNSAFE_TARGET_RE = /[[\]|#^\u0000-\u001f\u007f-\u009f]/;
+function wikilinkTargetFor(tree, path, fromPath) {
+  const p = String(path);
+  const name = p.split('/').pop();
+  const bare = name.replace(/\.md$/i, '');
+  const spellings = [bare, p.replace(/\.md$/i, ''), name, p];
+  for (const s of spellings) {
+    if (!s || WIKILINK_UNSAFE_TARGET_RE.test(s) || s !== s.trim()) continue;
+    if (findFileInTree(tree, wikilinkSearchName(s), fromPath) === p) return s;
+  }
+  return null;
+}
+
 // Where a note made from a link to a missing note goes, as { path }, or why it
 // cannot be made, as { refusal } in plain words. A bare name goes beside the
 // note the link was written in (fromPath); a name with a folder in it counts
@@ -2493,6 +2535,7 @@ return {
   openBinaryOrUnsupportedFile, renderEditorContent, setEditorMode,
   getFileContentForSave, openWikilink, openWorkspaceFilePath,
   highlightFileInSidebar, findFileInTree, wikilinkSearchName, wikilinkResolves, linkCreatePath, fileConnections,
+  wikilinkCandidates, wikilinkTargetFor,
   createNoteFromLink, settleLinkCreate, linkCreatesConnectionLost,
   renderFileConnections, drawFileConnections, drawFileConnectionsLoading, removeFileConnections,
   fileConnectionsIndexReady,
