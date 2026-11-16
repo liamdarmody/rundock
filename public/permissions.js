@@ -677,6 +677,16 @@
     return null;
   }
 
+  // The conversations left waiting on the person: every one holding a request
+  // except the one on screen, which needs no mark because its cards are in
+  // front of them. Each is marked in the conversation list, as a request that
+  // arrived in the background is.
+  function waitingConversations(byConvo, activeId) {
+    const ids = [];
+    for (const entry of byConvo) if (entry[0] && entry[0] !== activeId && entry[1].size) ids.push(entry[0]);
+    return ids;
+  }
+
   // Drop every queued request for one conversation (the server's cancel
   // sweep has already answered them). Returns how many were dropped.
   function clearPendingPermissions(byConvo, convoId) {
@@ -935,6 +945,6 @@
     MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend, isTeamCard,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
-    routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions,
+    routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions, waitingConversations,
     permissionOwner, markPermissionEnded, permissionEnded, endedPermissionCopy, staleRequestIds, findPendingPermission };
 }));
