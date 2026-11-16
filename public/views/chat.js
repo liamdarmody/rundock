@@ -314,7 +314,9 @@ function buildDelegationDivider(agentData, opts = {}) {
 // notice by itself when they have finished: the server learns Claude Code is
 // connected only from a turn that works, so the card waits for "I've
 // reconnected" and runs that one check then. Where no console can be opened it
-// shows the steps to run. Every state is fixed copy, and none says "sign in".
+// shows the steps to run. Every state is fixed copy, and none says "sign in",
+// with one exception: a check that could not start Claude Code because its npm
+// package could not be read shows the server's own words for that, as text.
 const AUTH_DOCS = '<a href="https://docs.rundock.ai/troubleshooting/authentication" target="_blank" rel="noopener">';
 const authTitle = (t, pulse) => `<div class="auth-error-title">${pulse ? '<span class="auth-pulse" aria-hidden="true"></span>' : ''}${t}</div>`;
 const authBody = (t) => `<div class="auth-error-body">${t}</div>`;
@@ -354,10 +356,11 @@ const AUTH_CARD = {
     + `<ol class="auth-error-steps"><li>Open a terminal and run <code>${AUTH_LOGIN_CMD}</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li></ol>`
     + `<div class="auth-error-foot">Then resend your message. ${AUTH_DOCS}Full steps and details &#x2192;</a></div>`],
 };
-function drawAuthCard(el, state) {
+function drawAuthCard(el, state, said) {
   const [tone, html] = AUTH_CARD[state];
   el.className = 'auth-error-card' + (tone ? ` ${tone}` : '');
   el.innerHTML = html;
+  if (said) el.querySelector('.auth-error-body').textContent = said;
   el.querySelectorAll('[data-auth]').forEach(b => b.addEventListener('click', () => authCardAction(el, b.dataset.auth)));
 }
 // Open the console: through the desktop's main process where there is one,
@@ -372,7 +375,8 @@ async function authCardAction(el, action) {
   if (action === 'check') {
     drawAuthCard(el, 'checking');
     const r = await fetch('/api/claude/connection', { method: 'POST' }).then(x => (x.ok ? x.json() : null), () => null);
-    drawAuthCard(el, r && r.connected === true ? 'reconnected' : (!r || r.known === false ? 'unchecked' : 'notyet'));
+    const state = r && r.connected === true ? 'reconnected' : (!r || r.known === false ? 'unchecked' : 'notyet');
+    drawAuthCard(el, state, state === 'unchecked' && r && typeof r.message === 'string' ? r.message : '');
     return;
   }
   const r = await Promise.resolve().then(reconnectClaude).catch(() => null);
@@ -716,7 +720,7 @@ function handlePermissionRequest(d, convoId) {
   // the user would never see that it had happened.
   const decision = (req.boundary || req.answer_file === true)
     ? { action: 'card' }
-    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict);
+    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict, { toolName, input });
   const isActive = activeConversation?.id === convoId;
   const route = RundockPermissions.routePermissionRequest(decision, isActive);
   // A card that will be shown, here or when its conversation opens, is
@@ -1284,7 +1288,7 @@ function renderPermissionCard(d, convoId, host) {
         <button class="btn-perm ${RundockPermissions.allowButtonClass(allowLabel, answerFile)}" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">${esc(allowLabel)}</button>
         ${wholeFolderOffered
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
-          : (!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
+          : (!boundary && !answerFile && key && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>
@@ -1569,7 +1573,8 @@ function handleOwnerlessPermissionRequest(d) {
   const decision = (req.boundary || req.answer_file === true)
     ? { action: 'card' }
     : RundockPermissions.decidePermission(classifyRisk(toolName, input),
-      RundockPermissions.verdictAllowKey(req.code_mode_verdict) || toolAllowKey(toolName, input), alwaysAllowedTools, req.code_mode_verdict || undefined);
+      RundockPermissions.verdictAllowKey(req.code_mode_verdict) || toolAllowKey(toolName, input), alwaysAllowedTools, req.code_mode_verdict || undefined,
+      { toolName, input });
   if (decision && decision.action === 'allow') {
     if (ws) ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: '', allow: true }));
     return;
@@ -1644,8 +1649,9 @@ function respondPermission(requestId, allow, always, allowFolder) {
     toolInput: pending.toolInput || {}
   }));
 
-  // Store always-allow pattern if requested
-  if (allow && always) {
+  // Store always-allow pattern if requested. A request with no key has no
+  // Always allow on its card, and saves nothing however it is answered.
+  if (allow && always && pending.key) {
     alwaysAllowedTools.add(pending.key);
     // Written back so the answer outlives this tab. The cache is updated first
     // so the next card in the same session is silent whether or not the write

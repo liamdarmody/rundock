@@ -14,7 +14,8 @@
 //   - Code fences directly inside a save block are cosmetic formatting and
 //     are stripped; inner fences in the body are preserved (fences are NOT
 //     parsing delimiters, so frontmatter templates with fenced examples
-//     survive intact).
+//     survive intact). The closing fence goes only with an opening one, so
+//     a body that ends with its own fenced block keeps it.
 //   - Action order matches the historical scan order: agent saves, skill
 //     saves, skill deletes, agent deletes, in text order within each kind.
 //   - DELEGATE honours the FIRST marker only; RETURN is a boolean.
@@ -25,10 +26,14 @@
   else root.RundockMarkers = factory();
 }(typeof self !== 'undefined' ? self : this, function () {
 
-  // Strip a single cosmetic code fence wrapping a save block's content.
+  // Strip a single cosmetic code fence wrapping a save block's content. A
+  // closing fence is the wrapper's only when an opening fence starts the
+  // content: a body that ends with its own fenced block keeps its last fence.
   /** @param {string} content */
   function stripCosmeticFence(content) {
-    return content.replace(/^```[^\n]*\n/, '').replace(/\n```\s*$/, '').trim();
+    const opening = /^```[^\n]*\n/.exec(content);
+    if (!opening) return content.trim();
+    return content.slice(opening[0].length).replace(/\n```\s*$/, '').trim();
   }
 
   // Scan response text for RUNDOCK markers. Returns:

@@ -770,24 +770,26 @@ describe('the version probe', { skip: POSIX }, () => {
 // it in node_modules. The launcher is the stub under a Windows name, so a run
 // of it shows in its log, and it answers --version with `said`, never with
 // the package's version, so a version read from the package is told from one
-// read by running it. `pkg` is the package.json text, or null for none.
-// `where.exe` finds the launcher on Windows; here a `which` that names it,
-// first on PATH, stands in.
+// read by running it. `pkg` is the package.json text, or null for none. The
+// package's entry point, `cli.js`, is the stub too, with a log of its own: on
+// Windows a chat starts it with Node in place of the launcher
+// (lib/runtime/npm-launcher.js). `where.exe` finds the launcher on Windows;
+// here a `which` that names it, first on PATH, stands in.
 function npmGlobal(pkg, { said = '2.1.318 (Claude Code)', name = 'claude.cmd' } = {}) {
   const stub = makeStub(said);
   const bin = path.join(stub.dir, name);
   fs.renameSync(stub.bin, bin);
+  const pkgDir = path.join(stub.dir, 'node_modules', '@anthropic-ai', 'claude-code');
   if (pkg !== null) {
-    const pkgDir = path.join(stub.dir, 'node_modules', '@anthropic-ai', 'claude-code');
-    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.renameSync(stubAt(pkgDir, said).bin, path.join(pkgDir, 'cli.js'));
     fs.writeFileSync(path.join(pkgDir, 'package.json'), pkg);
   }
   const finder = makeTempDir('claude-floor-which-');
   fs.writeFileSync(path.join(finder, 'which'), `#!/bin/sh\nprintf '%s\\n' '${bin}'\n`);
   fs.chmodSync(path.join(finder, 'which'), 0o755);
-  return { ...stub, bin, finder };
+  return { ...stub, bin, finder, entry: { dir: pkgDir } };
 }
-const packageJson = (version) => JSON.stringify({ name: '@anthropic-ai/claude-code', version });
+const packageJson = (version) => JSON.stringify({ name: '@anthropic-ai/claude-code', version, bin: { claude: 'cli.js' } });
 
 describe('a Windows npm launcher is never run: its version is read from the package beside it', { skip: POSIX }, () => {
   test('a claude.cmd whose package says 2.0.58 is refused with the frozen message, and the launcher is never run', async () => {
@@ -801,10 +803,11 @@ describe('a Windows npm launcher is never run: its version is read from the pack
       assert.strictEqual(error.path, npm.bin);
       assert.strictEqual(error.message, noticeFor('2.0.58', npm.bin));
       assert.deepStrictEqual(runsOf(npm), [], 'the launcher was never run, for its version or for the chat');
+      assert.deepStrictEqual(runsOf(npm.entry), [], 'and nor was the package it starts');
     } finally { w.restore(); }
   });
 
-  test('a claude.cmd whose package says 2.0.59 passes and starts, never run for its version', async () => {
+  test('a claude.cmd whose package says 2.0.59 passes, and its entry point starts with Node, the launcher never run', async () => {
     const npm = npmGlobal(packageJson('2.0.59'));
     const rt = freshClaudeRuntime();
     const w = wired(rt, { platform: () => 'win32' });
@@ -813,29 +816,43 @@ describe('a Windows npm launcher is never run: its version is read from the pack
       await withPath([npm.finder], async () => {
         for (let i = 0; i < 2; i++) assert.strictEqual((await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' })).error, null);
       });
-      assert.deepStrictEqual(probesOf(npm), [], 'never run for its version');
-      assert.strictEqual(chatsOf(npm).length, 2, 'and started for both chats');
+      assert.deepStrictEqual(runsOf(npm), [], 'the launcher was never run, for its version or for the chats');
+      assert.deepStrictEqual(chatsOf(npm.entry).map((r) => r.args), [CHAT_ARGS, CHAT_ARGS], 'its entry point started for both chats');
       assert.deepStrictEqual(warn.said.filter((line) => line.includes(npm.bin)), [], 'its version was read, so nothing is logged');
     } finally { warn.restore(); w.restore(); }
   });
 
+  test('a claude.cmd whose package.json names no version is an unknown version: its entry point starts, logged once', async () => {
+    const npm = npmGlobal(JSON.stringify({ name: '@anthropic-ai/claude-code', bin: { claude: 'cli.js' } }));
+    const rt = freshClaudeRuntime();
+    const w = wired(rt, { platform: () => 'win32' });
+    const warn = quietWarn();
+    try {
+      await withPath([npm.finder], async () => {
+        for (let i = 0; i < 2; i++) assert.strictEqual((await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' })).error, null);
+      });
+      assert.deepStrictEqual(runsOf(npm), [], 'the launcher was never run');
+      assert.strictEqual(chatsOf(npm.entry).length, 2, 'both spawns started its entry point');
+      assert.strictEqual(warn.said.filter((line) => line.includes(npm.bin)).length, 1, 'logged once');
+    } finally { warn.restore(); w.restore(); }
+  });
+
+  // With no package to start, nothing is started at all, and no version is
+  // read for it (test/unit/npm-launcher.test.js has a test for each cause).
   for (const [beside, pkg] of [
     ['no package.json', null],
     ['a package.json that does not parse', '{ "name": "@anthropic-ai/claude-code", "version": "2.0.58", '],
-    ['a package.json with no version', JSON.stringify({ name: '@anthropic-ai/claude-code' })],
   ]) {
-    test(`a claude.cmd with ${beside} beside it is an unknown version: it starts, logged once, never run for its version`, async () => {
+    test(`a claude.cmd with ${beside} beside it is not started, and neither is anything else`, async () => {
       const npm = npmGlobal(pkg);
       const rt = freshClaudeRuntime();
       const w = wired(rt, { platform: () => 'win32' });
       const warn = quietWarn();
       try {
-        await withPath([npm.finder], async () => {
-          for (let i = 0; i < 2; i++) assert.strictEqual((await spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' })).error, null);
-        });
-        assert.deepStrictEqual(probesOf(npm), [], 'never run for its version');
-        assert.strictEqual(chatsOf(npm).length, 2, 'both spawns started');
-        assert.strictEqual(warn.said.filter((line) => line.includes(npm.bin)).length, 1, 'logged once');
+        const { error } = await withPath([npm.finder], () => spawnAndSettle(rt, CHAT_ARGS, { stdio: 'ignore' }));
+        assert.deepStrictEqual([error && error.code, error && error.path], ['NPM_PACKAGE_UNREADABLE', npm.bin]);
+        assert.deepStrictEqual([runsOf(npm), runsOf(npm.entry)], [[], []], 'neither the launcher nor the package was run');
+        assert.deepStrictEqual(warn.said.filter((line) => line.includes(npm.bin)), [], 'and no version was asked of it');
       } finally { warn.restore(); w.restore(); }
     });
   }
