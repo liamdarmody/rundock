@@ -483,6 +483,34 @@ describe('the host is asked for the list once each time it opens', () => {
     assert.equal(ed.calls(), 2);
   });
 
+  // A second [[ in the same paragraph opens a new list for the second query.
+  // Typed key by key, the first list closes at the [ in between; arriving in
+  // one change with the keys after it, the open list moves straight to the
+  // second [[. Either way the host is asked once for the new list.
+  test('a second [[ while the list is open asks once for the new list', async () => {
+    const keys = mount();
+    keys.type(' [[one');
+    await tick();
+    assert.equal(keys.calls(), 1);
+    keys.type(' [[two');
+    await tick();
+
+    const moved = mount();
+    moved.type(' [[one');
+    await tick();
+    assert.equal(moved.calls(), 1);
+    const { from } = moved.view.state.selection;
+    moved.view.dispatch(moved.view.state.tr.insertText(' [[two', from, from));
+    await tick();
+    assert.equal(wikilinkSuggestKey.getState(moved.view.state).query, 'two', 'the open list moved to the second [[');
+
+    assert.deepEqual({ typed: keys.calls(), moved: moved.calls() }, { typed: 2, moved: 2 });
+    for (const ed of [keys, moved]) {
+      assert.ok(ed.shown(), 'the list is open on the second query');
+      assert.deepEqual(ed.names(), [], 'filtered by the second query, which matches nothing');
+    }
+  });
+
   test('the suggestion module touches no files, network or storage', () => {
     const src = fs.readFileSync(path.join(HERE, '..', '..', 'public', 'editor', 'plugins', 'wikilink-suggest.js'), 'utf8');
     for (const word of ['fetch(', 'XMLHttpRequest', 'WebSocket', 'require(', 'import(', 'localStorage', 'sessionStorage', 'indexedDB', 'innerHTML', 'insertAdjacentHTML']) {

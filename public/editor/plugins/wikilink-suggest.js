@@ -220,7 +220,10 @@ function createRenderer(editor, listWikilinkTargets) {
 
   return {
     // Suggestion calls these after an await, so a call can arrive after the
-    // list has already closed; each checks the live state first.
+    // list has already closed; each checks the live state first. Only onStart
+    // asks the host for the list: when the open list moves to another [[,
+    // Suggestion calls onExit, onUpdate and then onStart, and an update with
+    // no open list is left for the onStart that follows it.
     onStart(props) {
       if (!current().active) return;
       close();
@@ -229,8 +232,7 @@ function createRenderer(editor, listWikilinkTargets) {
       render();
     },
     onUpdate(props) {
-      if (!current().active) return;
-      if (!session) open();
+      if (!session || !current().active) return;
       last = props;
       selected = 0;
       render();
