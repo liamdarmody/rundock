@@ -105,13 +105,15 @@
   function createKeydownHandler({ doc, modifier, switchNav, blocked, isShown }) {
     const shown = isShown || ((el) => el.getClientRects().length > 0);
     // The item the last shortcut opened, kept until anything else happens on
-    // the page: a pointerdown, an input, or a key other than these shortcuts
-    // and a modifier pressed on its own, which is how each of them starts.
-    // Heard on the way down, so a listener that stops one cannot hide it.
+    // the page: a pointerdown, an input, a wheel (a scroll, or a trackpad
+    // zoom), or a key other than these shortcuts and a modifier pressed on its
+    // own, which is how each of them starts. Heard on the way down, so a
+    // listener that stops one cannot hide it.
     let last = null;
     const forget = () => { last = null; };
     doc.addEventListener('pointerdown', forget, true);
     doc.addEventListener('input', forget, true);
+    doc.addEventListener('wheel', forget, { capture: true, passive: true });
     doc.addEventListener('keydown', (event) => {
       if (last && !BARE_MODIFIERS.includes(event.key) && !match(event, modifier, doc)) forget();
     }, true);

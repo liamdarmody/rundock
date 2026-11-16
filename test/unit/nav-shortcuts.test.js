@@ -79,7 +79,7 @@ function wired(doc, modifier, { blocked = () => false } = {}) {
 // document sees it on the way down and, unless something stops it, back up.
 function fire(doc, type, init = {}, target = doc.body) {
   const win = doc.defaultView;
-  const Kind = { keydown: win.KeyboardEvent, input: win.InputEvent }[type] || win.Event;
+  const Kind = { keydown: win.KeyboardEvent, input: win.InputEvent, wheel: win.WheelEvent }[type] || win.Event;
   const event = new Kind(type, { bubbles: true, cancelable: true, ...init });
   target.dispatchEvent(event);
   return event;
@@ -450,6 +450,23 @@ describe('the handler', () => {
     press(doc, 7);
     press(doc, 7);
     assert.deepStrictEqual(calls, ['map', 'map']);
+  });
+
+  test('a scroll or zoom by wheel or trackpad between two presses lets the second arrive again', () => {
+    // A rail click redraws the view, which can reset a zoom or a scroll
+    // within it, such as the map's.
+    const doc = page();
+    const { calls } = wired(doc, 'Meta');
+    press(doc, 7);
+    press(doc, 7);
+    assert.deepStrictEqual(calls, ['map'], 'the control: nothing done between');
+    // A scroll, then a pinch, which a trackpad sends as a wheel with Ctrl.
+    for (const init of [{ deltaY: 120 }, { deltaY: -8, ctrlKey: true }]) {
+      fire(doc, 'wheel', init, doc.getElementById('view-map'));
+      press(doc, 7);
+      press(doc, 7);
+    }
+    assert.deepStrictEqual(calls, ['map', 'map', 'map']);
   });
 
   test('a shortcut to another item, then back, arrives each time', () => {
