@@ -74,6 +74,53 @@ test('inner code fences in the body are preserved (fences are not delimiters)', 
   assert.ok(actions[0].content.endsWith('End.'));
 });
 
+// A file whose last section is a fenced example: an agent file ending in a
+// sample reply, a skill ending in a template. Only a fence that opens the body
+// marks a wrapper, so the last closing fence here is the file's own.
+const AGENT_ENDING_IN_FENCE = '---\nname: example-helper\n---\nAn example reply:\n\n```markdown\n## Example\n```';
+const SKILL_ENDING_IN_FENCE = '---\nname: example-skill\ndescription: An example skill.\n---\n\nUse this template:\n\n```yaml\nname: alpha\n```';
+const saveAgent = (inner) => `Saved.\n<!-- RUNDOCK:SAVE_AGENT name=example-helper -->\n${inner}<!-- /RUNDOCK:SAVE_AGENT -->`;
+
+test('an agent save whose body ends with its own fenced block keeps its closing fence', () => {
+  const { actions } = scanMarkers(saveAgent(`${AGENT_ENDING_IN_FENCE}\n`));
+  assert.strictEqual(actions[0].content, AGENT_ENDING_IN_FENCE);
+});
+
+test('a skill save whose body ends with its own fenced block keeps its closing fence', () => {
+  const text = `<!-- RUNDOCK:SAVE_SKILL name=example-skill -->\n${SKILL_ENDING_IN_FENCE}\n<!-- /RUNDOCK:SAVE_SKILL -->`;
+  assert.strictEqual(scanMarkers(text).actions[0].content, SKILL_ENDING_IN_FENCE);
+});
+
+test('a body that ends with its own fenced block is still trimmed of leading and trailing whitespace', () => {
+  const { actions } = scanMarkers(saveAgent(`  \n${AGENT_ENDING_IN_FENCE}\n\n  \n`));
+  assert.strictEqual(actions[0].content, AGENT_ENDING_IN_FENCE);
+});
+
+test('a wrapper fence with no language is removed', () => {
+  const { actions } = scanMarkers(saveAgent('```\n---\nname: example-helper\n---\nBody.\n```\n'));
+  assert.strictEqual(actions[0].content, '---\nname: example-helper\n---\nBody.');
+});
+
+test('a wrapper fence with a language is removed', () => {
+  const { actions } = scanMarkers(saveAgent('```markdown\n---\nname: example-helper\n---\nBody.\n```\n'));
+  assert.strictEqual(actions[0].content, '---\nname: example-helper\n---\nBody.');
+});
+
+test('a wrapper fence followed by blank lines and spaces after its closing fence is removed', () => {
+  const { actions } = scanMarkers(saveAgent('```markdown\n---\nname: example-helper\n---\nBody.\n```  \n\n \t\n'));
+  assert.strictEqual(actions[0].content, '---\nname: example-helper\n---\nBody.');
+});
+
+test('a wrapper around a body that ends with its own fenced block loses only the wrapper\'s two fences', () => {
+  const { actions } = scanMarkers(saveAgent(`\`\`\`markdown\n${AGENT_ENDING_IN_FENCE}\n\`\`\`\n`));
+  assert.strictEqual(actions[0].content, AGENT_ENDING_IN_FENCE);
+});
+
+test('an opening wrapper fence with no closing fence is removed and the rest of the body kept', () => {
+  const { actions } = scanMarkers(saveAgent('```markdown\n---\nname: example-helper\n---\nBody.\n'));
+  assert.strictEqual(actions[0].content, '---\nname: example-helper\n---\nBody.');
+});
+
 test('SAVE_SKILL marker produces a save_skill action', () => {
   const text = '<!-- RUNDOCK:SAVE_SKILL name=my-skill -->\nSkill body.\n<!-- /RUNDOCK:SAVE_SKILL -->';
   const { actions } = scanMarkers(text);
