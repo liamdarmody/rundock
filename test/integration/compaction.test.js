@@ -162,3 +162,98 @@ describe('a Codex summary', () => {
     assert.deepStrictEqual(summaryLines(sentFor(convoId, since)), []);
   });
 });
+
+// What the conversation keeps of a summary: its own transcript entry, keyed
+// as the window was sent it, between the person's message and the reply the
+// summary fell inside, since a reply is kept whole when its turn ends.
+const kept = (convoId) => h.internal.loadTranscript(convoId)
+  .map((t) => (t.type === 'compaction' ? ['compaction', t.key, t.text] : [t.role, t.text]));
+const keptSummaries = (convoId) => kept(convoId).filter((t) => t[0] === 'compaction');
+
+describe('what the conversation keeps', () => {
+  test('a Claude Code summary inside a reply is kept between the message and that reply, under the boundary\'s uuid', async () => {
+    const convoId = open('cmp-keep-claude');
+    h.writeScenario([{ match: { promptIncludes: 'CLAUDE-KEEP' }, turn: [{ text: 'Before the summary. ' }, ...SUMMARY_LINES.map((raw) => ({ raw })), { text: 'After it.' }] }]);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'example-writer', content: 'CLAUDE-KEEP go' });
+    await client.waitForEvent('system', 'done', convoId, { since });
+    const out = kept(convoId);
+    assert.deepStrictEqual(out.map((t) => t[0]), ['user', 'compaction', 'agent']);
+    assert.deepStrictEqual(out[1], ['compaction', BOUNDARY.uuid, '']);
+    assert.match(out[2][1], /After it\./);
+  });
+
+  test('a boundary Claude Code repeats is kept once; two summaries are kept twice, in order', async () => {
+    const convoId = open('cmp-keep-twice');
+    const second = { ...BOUNDARY, uuid: '00000000-0000-4000-8000-0b0000000002' };
+    h.writeScenario([
+      { match: { promptIncludes: 'CLAUDE-REPEAT' }, turn: [{ raw: BOUNDARY }, { raw: BOUNDARY }, { text: 'One.' }] },
+      { match: { promptIncludes: 'CLAUDE-AGAIN' }, turn: [{ raw: second }, { text: 'Two.' }] },
+    ]);
+    let since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'example-writer', content: 'CLAUDE-REPEAT go' });
+    await client.waitForEvent('system', 'done', convoId, { since });
+    since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'example-writer', content: 'CLAUDE-AGAIN go' });
+    await client.waitForEvent('system', 'done', convoId, { since });
+    assert.deepStrictEqual(kept(convoId).map((t) => (t[0] === 'compaction' ? t[1] : t[0])),
+      ['user', BOUNDARY.uuid, 'agent', 'user', second.uuid, 'agent']);
+  });
+
+  test('a Codex summary is kept once for both records, between the message and the reply', async () => {
+    const convoId = open('cmp-keep-codex');
+    h.writeCodexScenario([{ match: { promptIncludes: 'CODEX-KEEP' }, deltas: ['Carrying on.'], compaction: { notice: true, duplicate: true } }]);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'example-codex', content: 'CODEX-KEEP go' });
+    await client.waitForEvent('system', 'done', convoId, { since });
+    const boundary = summaryLines(sentFor(convoId, since)).find((m) => m.subtype === 'compact_boundary');
+    const out = kept(convoId);
+    assert.deepStrictEqual(out.map((t) => t[0]), ['user', 'compaction', 'agent']);
+    assert.deepStrictEqual(out[1], ['compaction', boundary.uuid, '']);
+  });
+
+  test('look-alikes in either runtime keep nothing', async () => {
+    const claudeId = open('cmp-keep-look');
+    const codexId = open('cmp-keep-look-cx');
+    h.writeScenario([{ match: { promptIncludes: 'CLAUDE-LOOKALIKE' }, turn: [{ text: LOOK_ALIKE }] }]);
+    h.writeCodexScenario([{ match: { promptIncludes: 'CODEX-LOOKALIKE' }, deltas: [LOOK_ALIKE] }]);
+    let since = client.messages.length;
+    client.send({ type: 'chat', conversationId: claudeId, agent: 'example-writer', content: `CLAUDE-LOOKALIKE ${LOOK_ALIKE}` });
+    await client.waitForEvent('system', 'done', claudeId, { since });
+    since = client.messages.length;
+    client.send({ type: 'chat', conversationId: codexId, agent: 'example-codex', content: `CODEX-LOOKALIKE ${LOOK_ALIKE}` });
+    await client.waitForEvent('system', 'done', codexId, { since });
+    assert.deepStrictEqual(keptSummaries(claudeId), []);
+    assert.deepStrictEqual(keptSummaries(codexId), []);
+  });
+
+  test('a stopped Codex turn\'s summary is not kept', async () => {
+    const convoId = open('cmp-keep-stop');
+    h.writeCodexScenario([{ match: { promptIncludes: 'CODEX-STOPKEEP' }, deltas: ['one ', 'two ', 'three'], holdForInterrupt: true, compaction: { afterDeltas: 2 } }],
+      { zombieInterrupt: { resumeDelayMs: 200 } });
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'example-codex', content: 'CODEX-STOPKEEP go' });
+    await client.waitFor((m) => m.type === 'stream_event' && m._conversationId === convoId, { since, label: 'first delta' });
+    client.send({ type: 'cancel', conversationId: convoId });
+    await client.waitForEvent('system', 'cancelled', convoId, { since });
+    await h.waitUntil(() => h.readInvocations().some((i) => i.mode === 'app-server' && i.method === 'turn/interrupt'), { timeout: 5000 });
+    await h.delay(800);
+    assert.deepStrictEqual(keptSummaries(convoId), []);
+  });
+
+  test('a superseded Codex turn\'s summary is not kept', async () => {
+    const convoId = open('cmp-keep-super');
+    h.writeCodexScenario([
+      { match: { promptIncludes: 'CODEX-FIRSTKEEP' }, deltas: ['one ', 'two ', 'three'], holdForInterrupt: true, compaction: { afterDeltas: 2 } },
+      { match: { promptIncludes: 'CODEX-SECONDKEEP' }, text: 'Second answer.' },
+    ], { zombieInterrupt: { resumeDelayMs: 200 } });
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'example-codex', content: 'CODEX-FIRSTKEEP go' });
+    const { msg: init } = await client.waitForEvent('system', 'init', convoId, { since });
+    await client.waitFor((m) => m.type === 'stream_event' && m._conversationId === convoId, { since, label: 'first delta' });
+    client.send({ type: 'chat', conversationId: convoId, agent: 'example-codex', content: 'CODEX-SECONDKEEP go', sessionId: init._sessionId });
+    await client.waitFor((m) => m.type === 'result' && m._conversationId === convoId, { since, timeout: 15000, label: 'second result' });
+    await h.delay(300);
+    assert.deepStrictEqual(keptSummaries(convoId), []);
+  });
+});
