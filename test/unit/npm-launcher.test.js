@@ -88,7 +88,7 @@ async function notStarted(npm, runtime, why) {
     assert.deepStrictEqual(chat.errors.map((e) => e.message), [refusal], `${why}: and said why`);
     const check = await checkFrom(npm.bin);
     assert.deepStrictEqual(check.calls, [], `${why}: the connection check started nothing`);
-    assert.deepStrictEqual(check.answer, { connected: false, known: false }, `${why}: and could not tell`);
+    assert.deepStrictEqual(check.answer, { connected: false, known: false, code: 'NPM_PACKAGE_UNREADABLE', message: refusal }, `${why}: could not tell, and said why`);
   } else {
     const codex = await startCodex(npm.bin);
     assert.deepStrictEqual(codex.calls, [], `${why}: the Codex app server started nothing`);
@@ -120,6 +120,40 @@ async function checkFrom(bin, { platform = 'win32', electron = false } = {}) {
     return { calls, answer: await checkConnection({ bin, spawn, platform, timeoutMs: 5000 }) };
   } finally {
     if (before === undefined) delete process.env.RUNDOCK_ELECTRON; else process.env.RUNDOCK_ELECTRON = before;
+  }
+}
+
+// The conversation's reconnect card, drawn by the real card code under jsdom,
+// once "I've reconnected" has asked the server and the server has answered
+// with `answer`, as it travels over HTTP. Settles with the card's title and
+// body as the person reads them.
+async function cardAfterCheck(answer) {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<div id="messages"></div>');
+  const stood = {
+    window: dom.window,
+    document: dom.window.document,
+    userScrolledUp: false,
+    activeConversation: { id: 'c1' },
+    fetch: async (url) => ({ ok: true, status: 200, json: async () => (url === '/api/claude/connection' ? JSON.parse(JSON.stringify(answer)) : { ok: true }) }),
+  };
+  const had = Object.keys(stood).map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
+  for (const [name, value] of Object.entries(stood)) Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+  try {
+    require('../../public/views/chat.js').renderAuthErrorCard('c1');
+    const card = dom.window.document.querySelector('.auth-error-card');
+    for (const label of ['Reconnect Claude', 'I\'ve reconnected']) {
+      const button = [...card.querySelectorAll('button')].find((b) => b.textContent.trim() === label);
+      assert.ok(button, `a "${label}" button`);
+      button.click();
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    }
+    return { title: card.querySelector('.auth-error-title').textContent, body: card.querySelector('.auth-error-body').textContent };
+  } finally {
+    for (const [name, descriptor] of had) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+    }
+    dom.window.close();
   }
 }
 
@@ -569,11 +603,24 @@ describe('the connection check', () => {
     }
   });
 
+  test('a package that cannot be read is said in the conversation, naming the claude.cmd and the package beside it, and nothing is started', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const npm = npmFolder(CLAUDE_CODE, { files: { 'cli.js': '' } });
+    const { calls, answer } = await checkFrom(npm.bin);
+    assert.deepStrictEqual(calls, [], 'nothing started');
+    const card = await cardAfterCheck(answer);
+    const refusal = refusalFor('Claude Code', '@anthropic-ai/claude-code', npm.bin);
+    assert.strictEqual(card.body, refusal, 'the refusal, word for word, in the card\'s own words');
+    assert.ok(npm.bin.endsWith('claude.cmd') && card.body.includes(`found Claude Code at ${npm.bin},`), 'naming the claude.cmd it found');
+    assert.match(card.body, /could not read the Claude Code package installed beside it, so it was not started/, 'and the package beside it that could not be read');
+    assert.strictEqual(card.title, 'Waiting for Claude', 'on the card a check that could not run already shows');
+  });
+
   test('fixed after a refusal, the package is checked on the next try, with nothing remembered', async () => {
     const { CLAUDE_CODE } = launcher();
     const npm = npmFolder(CLAUDE_CODE, { pkg: { name: '@anthropic-ai/claude-code' }, files: { 'cli.js': '' } });
     const refused = await checkFrom(npm.bin);
-    assert.deepStrictEqual([refused.calls.length, refused.answer], [0, { connected: false, known: false }]);
+    assert.deepStrictEqual([refused.calls.length, refused.answer.known, refused.answer.code], [0, false, 'NPM_PACKAGE_UNREADABLE']);
     fs.writeFileSync(path.join(npm.folder, 'package.json'), JSON.stringify(claudePackage()));
     const checked = await checkFrom(npm.bin);
     assert.deepStrictEqual(checked.calls.map((c) => [c.file, c.args[0]]), [[process.execPath, npm.entry('cli.js')]]);

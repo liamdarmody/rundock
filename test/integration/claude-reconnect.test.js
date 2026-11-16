@@ -129,6 +129,28 @@ describe('what the routes answer', () => {
       delete process.env.STUB_CLAUDE_CHECK_FAILS;
     }
   });
+
+  test('a check that could not start Claude Code answers why, in the check\'s own words, for the card to show', async () => {
+    // The check is stood in on its own module, which the server calls through,
+    // so no path in it is ever read.
+    const claudeConsole = require('../../lib/runtime/claude-console.js');
+    const real = claudeConsole.checkConnection;
+    const bin = 'C:\\Users\\someone\\AppData\\Roaming\\npm\\claude.cmd';
+    const answer = {
+      connected: false,
+      known: false,
+      code: 'NPM_PACKAGE_UNREADABLE',
+      message: `Rundock found Claude Code at ${bin}, but could not read the Claude Code package installed beside it, so it was not started. `
+        + 'Reinstall Claude Code with npm install -g @anthropic-ai/claude-code, then try again.',
+    };
+    claudeConsole.checkConnection = async () => answer;
+    try {
+      const res = await post('/api/claude/connection', h.authHeaders());
+      assert.deepStrictEqual(JSON.parse(res.text), answer);
+    } finally {
+      claudeConsole.checkConnection = real;
+    }
+  });
 });
 
 async function runtimeStatus() {

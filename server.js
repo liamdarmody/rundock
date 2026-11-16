@@ -734,11 +734,14 @@ httpRouter.wireHttpRouterDeps({
   // out only when its words are a sign-in failure (isAuthError).
   // The version is the one the runtime probe last read (getRuntimeStatus,
   // asked for whenever a workspace loads); never probed, it is unknown, and
-  // the console runs `claude` bare.
+  // the console runs `claude` bare. A check that could not start Claude Code
+  // because its npm package could not be read says so, in the refusal's own
+  // words, for the card to show (lib/runtime/npm-launcher.js).
   openClaudeConsole: () => claudeConsole.openClaudeConsole({ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version, purpose: 'reconnect' }),
   checkClaudeConnection: () => claudeConsole.checkConnection({ bin: resolveClaudeBin(), isAuthFailure: isAuthError }).then((r) => {
     if (r.known) _claudeAuthEvidence = r.connected;
-    return { connected: r.connected, known: r.known };
+    const answer = { connected: r.connected, known: r.known };
+    return r.message ? { ...answer, code: r.code, message: r.message } : answer;
   }),
 });
 
