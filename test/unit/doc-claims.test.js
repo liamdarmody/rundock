@@ -2665,3 +2665,81 @@ describe('rundock-guide.md: when another agent brought Doc in, a change is asked
     assert.ok(!dashes.some((d) => section.includes(d)), 'no em or en dashes');
   });
 });
+
+// ---------------------------------------------------------------------------
+// scaffold/rundock-guide.md: Doc types <, > and & as the characters themselves
+// ---------------------------------------------------------------------------
+
+describe('rundock-guide.md: Doc types <, > and & as the characters themselves', () => {
+  // Rundock shows and saves exactly what Doc types. A draft written with
+  // `&lt;client&gt;` reaches the person as the entities, in text they are asked
+  // to approve, and a marker opened as `&lt;!--` is not a marker, so the change
+  // it asks for never happens. One line in the Formatting list says so.
+  const guide = fs.readFileSync(path.join(ROOT, 'scaffold', 'rundock-guide.md'), 'utf-8');
+  const RULE = '- Type `<`, `>` and `&` as the characters themselves in replies, drafts and marker bodies, never as HTML entities (`&lt;`, `&gt;`, `&amp;`): Rundock shows and saves exactly what you type. Write an entity only where the file itself needs one, such as inside HTML.';
+  const section = (() => {
+    const from = guide.indexOf('## Communication style');
+    const to = guide.indexOf('\n## ', from + 1);
+    return from < 0 ? '' : guide.slice(from, to < 0 ? undefined : to);
+  })();
+  // The items under **Formatting:**, up to the first line that is not one.
+  const formatting = (() => {
+    const lines = section.split('\n');
+    const from = lines.indexOf('**Formatting:**');
+    const items = [];
+    for (let i = from + 1; from >= 0 && i < lines.length && lines[i].startsWith('- '); i++) items.push(lines[i]);
+    return items;
+  })();
+  const rule = formatting.find((item) => item.includes('HTML entities')) || '';
+
+  test('the Formatting list tells Doc to type <, > and & as themselves, never as entities, because Rundock shows and saves what it types', () => {
+    assert.ok(rule, `a Formatting item under Communication style is about HTML entities: ${JSON.stringify(formatting)}`);
+    assert.ok(rule.includes('Type `<`, `>` and `&` as the characters themselves in replies, drafts and marker bodies'), 'the characters as themselves, and where');
+    assert.ok(rule.includes('never as HTML entities (`&lt;`, `&gt;`, `&amp;`)'), 'never as the entities, each one named');
+    assert.ok(rule.includes('Rundock shows and saves exactly what you type'), 'why: what Doc types is what is shown and saved');
+  });
+
+  test('the same line keeps an entity where the file itself needs one, such as inside HTML', () => {
+    assert.ok(rule.includes('Write an entity only where the file itself needs one, such as inside HTML.'), `the exception is in the same line: ${rule}`);
+  });
+
+  test('the line is added once, to the Formatting list, and the rest of Communication style is as it was', () => {
+    assert.deepStrictEqual(section.trimEnd().split('\n'), [
+      '## Communication style',
+      '',
+      '**Tone:** Direct and practical. Say what to do, then do it. Assume competence. Don\'t over-explain unless asked. When something isn\'t possible, say so plainly.',
+      '',
+      '**Formatting:**',
+      '- Never use em dashes or en dashes. Use colons, commas, full stops, or restructure the sentence',
+      '- No markdown headers in chat responses. Use bold for emphasis instead',
+      '- Keep responses short. Lead with the answer, not the reasoning',
+      RULE,
+      '',
+      '**Banned patterns:**',
+      '- No filler openers: "I\'d be happy to help", "Great question!", "Certainly", "Absolutely"',
+      '- No "Let\'s" as a sentence opener',
+      '- No exclamation marks unless genuinely warranted (one per conversation maximum)',
+      '- Never use: "leverage", "streamline", "empower", "utilize", "robust", "seamless", "dive into", "I\'m here to"',
+    ]);
+    assert.strictEqual(guide.split(RULE).length - 1, 1, 'the line is in the guide once');
+    assert.ok(!guide.replace(section, '').includes('HTML entities'), 'no other section says it');
+  });
+
+  test('a workspace still holding Doc without the line is given it on the next sync', () => {
+    // Every existing workspace holds Doc as the last release shipped it, and
+    // Rundock overwrites that copy when it differs from the shipped file.
+    const scaffold = require('../../lib/workspace/scaffold.js');
+    assert.ok(guide.includes(`\n${RULE}\n`), 'the shipped guide carries the line');
+    const dir = makeWorkspace({ agents: { 'rundock-guide': guide.replace(`\n${RULE}\n`, '\n') } });
+    scaffold.scaffoldWorkspace(dir);
+    const deployed = fs.readFileSync(path.join(dir, '.claude', 'agents', 'rundock-guide.md'), 'utf-8');
+    assert.strictEqual(deployed, guide, 'the deployed Doc is the shipped one, byte for byte');
+  });
+
+  test('the line Doc reads and repeats is in UK spelling, with no em or en dashes', () => {
+    assert.ok(rule, 'the line is there to check');
+    const dashes = [0x2013, 0x2014].map((c) => String.fromCharCode(c));
+    assert.ok(!dashes.some((d) => rule.includes(d)), 'no em or en dashes');
+    assert.doesNotMatch(rule, /iz(?:e|es|ed|ing|ation)\b|yz(?:e|es|ed|ing)\b|\b(?:color|behavior|favor|honor|center|catalog|canceled|traveled|license)\b/i, 'UK spelling');
+  });
+});
