@@ -2420,7 +2420,7 @@ const MUTATIONS = [
     ", 'startup_file', 'put_back'];",
     ", 'startup_file'];"],
   [PUTBACK_VIEW, "Put-back card: drawn as an ordinary card",
-    "  if (req.put_back && !RundockPermissions.permissionEnded(endedPermissions, requestId)) { renderPutBackCard(d, convoId, host); return; }",
+    "  if (req.put_back && !ended) { renderPutBackCard(d, convoId, host); return; }",
     ""],
   [PUTBACK_VIEW, "Put-back card: Leave it restored keeps the change",
     "data-perm-action=\"deny\">${esc(copy.leave)}",
