@@ -28,6 +28,8 @@ const UNSAFE_TARGET_RE = /[[\]|#^\u0000-\u001f\u007f-\u009f]/;
 // meta. The vendor bundle does not export closeHistory, so the key is named
 // as the bundle registers it (PluginKey("closeHistory")).
 const CLOSE_HISTORY_META = 'closeHistory$';
+// An undo or redo carries this meta (PluginKey("history") in the bundle).
+const HISTORY_META = 'history$';
 
 const GAP = 4;
 
@@ -49,6 +51,24 @@ function inCode(state, range) {
   if ($to.parent.type.spec.code) return true;
   const before = $to.nodeBefore;
   return !!before && before.marks.some((mark) => mark.type.spec.code);
+}
+
+// Whether this transaction put the character at pos (a position in the new
+// doc) there. Typing often lands one key per transaction, but the browser can
+// hand over several keys at once (typing straight after a link is one case),
+// so "[[" may arrive together with what follows it. An undo or redo only puts
+// old text back, so it never counts.
+function wroteAt(transaction, pos) {
+  if (!transaction.docChanged || transaction.getMeta(HISTORY_META)) return false;
+  const { mapping } = transaction;
+  let inserted = false;
+  mapping.maps.forEach((map, i) => {
+    const later = mapping.slice(i + 1);
+    map.forEach((oldStart, oldEnd, newStart, newEnd) => {
+      if (pos >= later.map(newStart, -1) && pos < later.map(newEnd, 1)) inserted = true;
+    });
+  });
+  return inserted;
 }
 
 function defaultScore(needle, haystack) {
@@ -255,10 +275,11 @@ export function createWikilinkSuggestPlugin(editor, { listWikilinkTargets }) {
       wasActive = isActive;
       return !inCode(state, range);
     },
-    // Opens only as [[ is typed; once open it follows the cursor and the
-    // query. Moving the cursor into an old unclosed [[, or typing after one,
-    // does not open it.
-    shouldShow: ({ query, transaction }) => wasActive || (transaction.docChanged && query === ''),
+    // Opens only in the change that writes the second [ (typed, or pasted
+    // as an unclosed [[); once open it follows the cursor and the query.
+    // Moving the cursor into an old unclosed [[, typing after one, or an
+    // undo that puts one back does not open it.
+    shouldShow: ({ range, transaction }) => wasActive || wroteAt(transaction, range.from + 1),
     render: () => createRenderer(editor, listWikilinkTargets),
   });
 }

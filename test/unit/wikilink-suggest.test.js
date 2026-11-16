@@ -177,6 +177,18 @@ describe('typing [[ lists notes', () => {
     assert.equal(ed.popup(), null, 'typing after an old [[ does not open it either');
     assert.equal(ed.calls(), 0);
   });
+
+  // Straight after a link the browser can hand over several keys in one
+  // change, so [[ arrives together with what follows it.
+  test('[[ arriving in one change with the keys after it opens the list filtered', async () => {
+    const ed = mount('See [[Ideas]]\n');
+    const { from } = ed.view.state.selection;
+    ed.view.dispatch(ed.view.state.tr.insertText(' [[rdmp', from, from));
+    await tick();
+    assert.ok(ed.shown(), 'the list opened');
+    assert.deepEqual(ed.names(), ['Roadmap', 'Roadmap']);
+    assert.equal(ed.calls(), 1);
+  });
 });
 
 describe('choosing a note', () => {
