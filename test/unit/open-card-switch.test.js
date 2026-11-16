@@ -13,6 +13,9 @@
 //   - every kind of card a conversation draws comes back live after a switch,
 //     once, and its one click sends one answer naming its own request and
 //     conversation
+//   - a card answered here comes back once more, settled exactly as it was
+//     answered, and never live; nothing on it sends, and it leaves its
+//     conversation waiting on nothing
 //   - a request that ends while its conversation is in the background comes
 //     back settled, saying why, at most once, and nothing on it sends
 //   - a card is drawn only in its own conversation
@@ -55,6 +58,24 @@ describe('the conversations left waiting on the person', () => {
     const byConvo = new Map();
     P.queuePendingPermission(byConvo, '', 'r1', payload('r1'));
     assert.deepStrictEqual(P.waitingConversations(byConvo, 'convo-a'), []);
+  });
+});
+
+describe('an answer given on a card in this window', () => {
+  test('reads as the answer it was, never as another window\'s', () => {
+    assert.deepStrictEqual(P.endedPermissionCopy('answered-here', true, false), { allowed: true, label: '✓', why: '' });
+    assert.deepStrictEqual(P.endedPermissionCopy('answered-here', true, true), { allowed: true, label: '✓ Always', why: '' });
+    assert.deepStrictEqual(P.endedPermissionCopy('answered-here', false, true), { allowed: false, label: '✕', why: '' });
+  });
+
+  test('is recorded as over, with what its card said, until the server says the click came too late', () => {
+    const ended = new Map();
+    P.markPermissionAnswered(ended, 'r1', false, false, 'Run npm test');
+    assert.deepStrictEqual(P.permissionEnded(ended, 'r1'), { reason: 'answered-here', allow: false, always: false, text: 'Run npm test' });
+    P.markPermissionAnswered(ended, 'r2', true, true, '');
+    assert.deepStrictEqual(P.permissionEnded(ended, 'r2'), { reason: 'answered-here', allow: true, always: true, text: '' });
+    P.markPermissionEnded(ended, 'r1', 'not-pending');
+    assert.deepStrictEqual(P.permissionEnded(ended, 'r1'), { reason: 'not-pending', allow: false });
   });
 });
 
@@ -254,6 +275,79 @@ describe('a card answered after the switch', () => {
     assert.ok(!live(id), 'still not live');
     assert.strictEqual(answers().length, 1, 'one answer, all told');
   });
+
+  // Each answer a card offers, given after a switch and confirmed by the
+  // server: the next return draws the card once more, settled exactly as it
+  // settled under the click, in its own conversation only, and the return
+  // after that draws nothing. An answered card never leaves its conversation
+  // waiting, and nothing on the settled card sends.
+  const ANSWERS = [
+    { name: 'Allow', button: 'allow', allowed: true, label: '✓' },
+    // A command of its own, so the remembered answer touches no other test.
+    { name: 'Always allow', button: 'always', allowed: true, label: '✓ Always', req: { tool_name: 'Bash', input: { command: 'make release' } } },
+    { name: 'Deny', button: 'deny', allowed: false, label: '✕' },
+    {
+      name: 'Allow for the folder', button: 'allow-folder', allowed: true, label: '✓',
+      req: { tool_name: 'Bash', input: { command: 'touch /etc/probe' }, boundary: true, resolved_path: '/etc/probe', grant_dir: '/etc' },
+    },
+    {
+      name: 'leaving a put-back change restored', button: 'deny', allowed: false, label: '✕',
+      req: {
+        tool_name: 'WriteFile', input: { path: '/ws/.rundock/permissions.json', content: '{}\n', approvalKind: 'fileChange' },
+        answer_file: true, resolved_path: '/ws/.rundock/permissions.json', grant_dir: null, crossings: [{ path: '/ws/.rundock/permissions.json', answerFile: true }],
+        put_back: { relative: '.rundock/permissions.json', before: '{}\n', after: '{ "allowedTools": ["Bash"] }\n', runtime: 'claude', outsideTurn: false },
+      },
+    },
+  ];
+  for (const a of ANSWERS) {
+    test(`comes back once, settled as it was answered, then never again: ${a.name}`, () => {
+      open(A);
+      const id = nextId();
+      arrive(id, A, a.req);
+      open(B);
+      open(A);
+      click(id, a.button);
+      const settled = card(id).outerHTML;
+      const shown = card(id).querySelector('.permission-resolved');
+      assert.ok(shown && shown.classList.contains(a.allowed ? 'allowed' : 'denied'), 'settled showing its answer');
+      assert.strictEqual(shown.querySelector('span').textContent, a.label);
+      chat.endPermissionRequest(id, 'answered', a.allowed);
+      const callsBefore = unreadCalls.length;
+      open(B);
+      assert.strictEqual(document.querySelectorAll('#messages .msg-permission').length, 0, 'never drawn in another conversation, which shows no card at all');
+      assert.ok(!unread.isUnread(A), 'answered, it leaves its conversation waiting on nothing');
+      open(A);
+      assert.strictEqual(copies(id), 1, 'drawn once on return');
+      assert.ok(!live(id), 'settled, never live');
+      assert.strictEqual(card(id).outerHTML, settled, 'exactly as it settled when answered');
+      pokeAt(id);
+      assert.strictEqual(answers().length, 1, 'one answer, and nothing on the settled card sends');
+      open(C);
+      assert.strictEqual(document.querySelectorAll('#messages .msg-permission').length, 0, 'nor in a conversation that never asked');
+      open(A);
+      assert.strictEqual(copies(id), 0, 'and a later return draws nothing');
+      assert.ok(!unreadCalls.slice(callsBefore).some(([what, c]) => what === 'mark' && c === A), 'never marked waiting');
+    });
+  }
+
+  test('answered while its conversation is on screen, it comes back once, settled, after leaving and returning', () => {
+    open(A);
+    const id = nextId();
+    arrive(id, A);
+    click(id, 'allow');
+    const settled = card(id).outerHTML;
+    open(B);
+    assert.strictEqual(document.querySelectorAll('#messages .msg-permission').length, 0, 'never drawn in another conversation');
+    assert.ok(!unread.isUnread(A), 'nothing left waiting');
+    open(A);
+    assert.strictEqual(copies(id), 1, 'drawn once on return');
+    assert.strictEqual(card(id).outerHTML, settled, 'exactly as it settled when answered');
+    pokeAt(id);
+    open(B);
+    open(A);
+    assert.strictEqual(copies(id), 0, 'and a later return draws nothing');
+    assert.deepStrictEqual(answers().map(m => [m.requestId, m.conversationId, m.allow]), [[id, A, true]]);
+  });
 });
 
 describe('a request that ends while its conversation is in the background', () => {
@@ -378,6 +472,10 @@ describe('the five sequences', () => {
     open(A);
     assert.strictEqual(copies(id), 1, 'the open card comes back');
     click(id, 'deny');
+    open(B);
+    open(A);
+    assert.strictEqual(copies(id), 1, 'the answered card is shown once more, settled');
+    assert.ok(!live(id));
     open(B);
     open(A);
     assert.strictEqual(document.querySelectorAll('#messages .msg-permission').length, 0, 'with none open, nothing is drawn');

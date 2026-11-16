@@ -634,12 +634,13 @@ function renderSessionHistory(d) {
 // it, so a reload rebuilds rather than forgets.
 const alwaysAllowedTools = new Set();
 
-// Requests that have ended, by id, and the queued copies of background
-// requests that ended before their conversation was opened. View-local for
+// Requests that have ended, by id, and the held copies of requests that ended
+// or were answered before their conversation was next opened. View-local for
 // the reason alwaysAllowedTools is: nothing outside the cards reads them.
 // The first is what makes a late copy of a card render as over instead of
-// answerable; the second is what lets a card that timed out off screen be
-// seen as timed out when its conversation is opened, rather than vanishing.
+// answerable; the second is what lets a card that timed out off screen, or
+// was answered, be seen settled when its conversation is opened, rather than
+// vanishing.
 const endedPermissions = new Map();
 const endedQueuedPermissions = new Map();
 
@@ -978,17 +979,19 @@ function renderPermissionCard(d, convoId, host) {
   // ENDED BEFORE IT WAS SHOWN. Every road to a card passes through here: a
   // live request, one queued for a background conversation, one replayed on
   // reconnect. A request that timed out, was answered, or lost its asker is
-  // drawn settled, saying why, with nothing to click.
+  // drawn settled, saying why, with nothing to click. One answered on a card
+  // here says what that card said when it settled.
   const ended = RundockPermissions.permissionEnded(endedPermissions, requestId);
   if (ended) {
-    const copy = RundockPermissions.endedPermissionCopy(ended.reason, ended.allow);
+    const copy = RundockPermissions.endedPermissionCopy(ended.reason, ended.allow, ended.always);
     const m0 = host || document.getElementById('messages');
     if (!m0) return;
     const done = document.createElement('div');
     done.className = 'msg msg-permission';
     done.id = 'perm-' + requestId;
     m0.appendChild(done);
-    resolvePermissionCard(requestId, copy.allowed, copy.label, false, [summary, copy.why].filter(Boolean).join('. '));
+    resolvePermissionCard(requestId, copy.allowed, copy.label, false,
+      typeof ended.text === 'string' ? ended.text : [summary, copy.why].filter(Boolean).join('. '));
     return;
   }
   // The command, kept beside a crossing path rather than replaced by it.
@@ -1523,10 +1526,9 @@ function renderPendingPermissionCards(convoId) {
   for (const id of waiting) unread.markPermission(id);
   if (waiting.length) updateUnreadBadge();
   if (!document.getElementById('messages')) return;
-  // Requests that ended while this conversation was in the background are
-  // shown once, as ended, so the thread says it asked and why nothing came of
-  // it. Once drawn they are dropped, the way an answered card is not redrawn
-  // when a conversation is reopened.
+  // Requests that ended, or were answered here, since this conversation was
+  // last drawn are shown once, settled, so the thread says it asked and what
+  // came of it. Once drawn they are dropped, and a later return draws none.
   const ended = endedQueuedPermissions.get(convoId);
   if (ended) {
     endedQueuedPermissions.delete(convoId);
@@ -1609,11 +1611,7 @@ function endPermissionRequest(requestId, reason, allow) {
   if (!answeredHere) resolvePermissionCard(requestId, copy.allowed, copy.label, false);
   pendingPermissions.delete(requestId);
   const convoId = RundockPermissions.removePendingPermission(pendingPermissionsByConvo, requestId);
-  if (queued && convoId) {
-    let m = endedQueuedPermissions.get(convoId);
-    if (!m) { m = new Map(); endedQueuedPermissions.set(convoId, m); }
-    m.set(requestId, queued.payload);
-  }
+  if (queued && convoId) keepEndedCard(convoId, requestId, queued.payload);
   // L4: a background card that ended must clear its own contribution to the
   // unread badge. Only once the conversation has no other pending card, and
   // only the permission reason so a co-occurring unread message survives.
@@ -1624,6 +1622,15 @@ function endPermissionRequest(requestId, reason, allow) {
   }
   const t = document.getElementById('thinking-indicator');
   if (t) t.style.display = '';
+}
+
+// A request that ended, or was answered, while its card was held for a
+// conversation, kept to be shown once, settled, the next time that
+// conversation is opened.
+function keepEndedCard(convoId, requestId, payload) {
+  let m = endedQueuedPermissions.get(convoId);
+  if (!m) { m = new Map(); endedQueuedPermissions.set(convoId, m); }
+  m.set(requestId, payload);
 }
 
 // After a reconnect the server names every request still pending. Anything
@@ -1639,8 +1646,9 @@ function respondPermission(requestId, allow, always, allowFolder) {
   if (!pending || !ws) return;
   if (RundockPermissions.permissionEnded(endedPermissions, requestId)) return;
   pendingPermissions.delete(requestId);
-  // Answered: the queued copy (if this card was rendered from the
-  // background store) must never render again.
+  // Answered: the copy held for its conversation must never render live
+  // again. It is kept to be shown once more, settled, on the next return.
+  const held = RundockPermissions.findPendingPermission(pendingPermissionsByConvo, requestId);
   RundockPermissions.removePendingPermission(pendingPermissionsByConvo, requestId);
 
   ws.send(JSON.stringify({
@@ -1665,8 +1673,15 @@ function respondPermission(requestId, allow, always, allowFolder) {
     try { ws.send(JSON.stringify({ type: 'add_tool_allow', key: pending.key })); } catch (e) {}
   }
 
-  // Replace the card with a resolved indicator
-  resolvePermissionCard(requestId, allow, allow ? (always ? '✓ Always' : '✓') : '✕', true);
+  // Replace the card with a resolved indicator. One held for its conversation
+  // is recorded as answered, with what it said, so any later copy of it is
+  // drawn just as settled, and the next return to that conversation shows it.
+  const copy = RundockPermissions.endedPermissionCopy('answered-here', allow, always);
+  const said = resolvePermissionCard(requestId, copy.allowed, copy.label, true);
+  if (held) {
+    RundockPermissions.markPermissionAnswered(endedPermissions, requestId, allow, always, said);
+    keepEndedCard(held.convoId, requestId, held.payload);
+  }
 
   // Resume thinking indicator
   const t = document.getElementById('thinking-indicator');
@@ -1680,7 +1695,8 @@ function respondPermission(requestId, allow, always, allowFolder) {
 //
 // keepSummary decides whether the card's own summary text is carried into the
 // resolved state. The user-answered path keeps it so the thread still reads as
-// a record of what was approved; the timeout path never showed it.
+// a record of what was approved; the timeout path never showed it. Returns
+// the words the settled card shows beside its label.
 function resolvePermissionCard(requestId, allowed, label, keepSummary, text) {
   const card = document.getElementById('perm-' + requestId);
   if (!card) return;
@@ -1697,6 +1713,7 @@ function resolvePermissionCard(requestId, allowed, label, keepSummary, text) {
     setTimeout(() => { card.remove(); updateApprovalsDock(); }, 4000);
     updateApprovalsDock();
   }
+  return summary;
 }
 
 function formatToolName(name) {

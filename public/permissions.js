@@ -732,12 +732,24 @@
     ended.set(requestId, { reason: reason || 'ended', allow: allow === true });
     while (ended.size > ENDED_LIMIT) ended.delete(ended.keys().next().value);
   }
+  // An answer given on a card in this window. Recorded like any other end, so
+  // no copy of the card can be drawn live again, with the words the card
+  // settled on, so a later redraw looks as the card did when it was answered.
+  function markPermissionAnswered(ended, requestId, allow, always, text) {
+    markPermissionEnded(ended, requestId, 'answered-here', allow);
+    const record = ended.get(requestId);
+    if (record) Object.assign(record, { always: always === true, text });
+  }
   function permissionEnded(ended, requestId) {
     return (requestId && ended.get(requestId)) || null;
   }
   // What an ended card says: a short label, whether it reads as allowed, and
-  // one sentence of why. An answer given in another window keeps its answer.
-  function endedPermissionCopy(reason, allow) {
+  // one sentence of why. An answer given in another window keeps its answer;
+  // one given here reads as it did on the card.
+  function endedPermissionCopy(reason, allow, always) {
+    if (reason === 'answered-here') {
+      return { allowed: allow === true, label: allow === true ? (always === true ? '✓ Always' : '✓') : '✕', why: '' };
+    }
     if (reason === 'answered') {
       return { allowed: allow === true, label: allow === true ? '✓ Answered in another window' : '✕ Answered in another window', why: '' };
     }
@@ -946,5 +958,5 @@
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions, waitingConversations,
-    permissionOwner, markPermissionEnded, permissionEnded, endedPermissionCopy, staleRequestIds, findPendingPermission };
+    permissionOwner, markPermissionEnded, markPermissionAnswered, permissionEnded, endedPermissionCopy, staleRequestIds, findPendingPermission };
 }));
