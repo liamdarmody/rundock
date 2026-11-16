@@ -2300,6 +2300,21 @@ document.getElementById('palette-input')?.addEventListener('keydown', (e) => {
   else if (e.key === 'Enter') { e.preventDefault(); openPaletteResult(paletteSel); }
 });
 
+// The nav rail's shortcuts: Cmd/Ctrl with a digit opens the rail's main views
+// by their place in it, and Cmd/Ctrl+, opens Settings (nav-shortcuts.js). The
+// modifier is this client's, read from the navigator, never the server's
+// platform. A key goes through switchNav, the path a click takes, and does
+// nothing while the palette is open. The hints rebuild themselves whenever
+// the rail's main group changes.
+const NAV_SHORTCUT_MODIFIER = RundockNavShortcuts.modifierFor(navigator);
+RundockNavShortcuts.installHints(document, NAV_SHORTCUT_MODIFIER);
+document.addEventListener('keydown', RundockNavShortcuts.createKeydownHandler({
+  doc: document,
+  modifier: NAV_SHORTCUT_MODIFIER,
+  switchNav: (nav) => switchNav(nav),
+  blocked: () => paletteOpen,
+}));
+
 signInFromLink().finally(connect);
 // A link pasted into a tab that is already open on Rundock changes only the
 // fragment, which does not reload the page, so the code would never be read.
