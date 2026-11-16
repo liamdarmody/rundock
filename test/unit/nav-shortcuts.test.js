@@ -309,12 +309,18 @@ describe('the handler', () => {
 
   test('the retry: holding the key or pressing it five times arrives once', () => {
     const doc = page();
-    const { calls, onKey } = wired(doc, 'Meta');
-    const held7 = [digit(7, { metaKey: true }), ...Array.from({ length: 4 }, () => digit(7, { metaKey: true, repeat: true }))];
+    const { calls, onKey, moveTo } = wired(doc, 'Meta');
+    const held7 =[digit(7, { metaKey: true }), ...Array.from({ length: 4 }, () => digit(7, { metaKey: true, repeat: true }))];
     for (const event of held7) onKey(event);
     assert.ok(held7.every((e) => e.prevented === 1), 'every repeat of its own key is still its own');
     for (let i = 0; i < 5; i++) onKey(digit(7, { metaKey: true }));
     assert.deepStrictEqual(calls, ['map']);
+    // A view that finishes loading while the key is still held moves on
+    // under it; the held key is still one press.
+    onKey(digit(2, { metaKey: true }));
+    moveTo('profile');
+    for (let i = 0; i < 4; i++) onKey(digit(2, { metaKey: true, repeat: true }));
+    assert.deepStrictEqual(calls, ['map', 'team']);
   });
 
   test('pressing the same key after moving within the section arrives again, as a click would', () => {
