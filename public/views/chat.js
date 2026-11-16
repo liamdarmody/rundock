@@ -314,7 +314,9 @@ function buildDelegationDivider(agentData, opts = {}) {
 // notice by itself when they have finished: the server learns Claude Code is
 // connected only from a turn that works, so the card waits for "I've
 // reconnected" and runs that one check then. Where no console can be opened it
-// shows the steps to run. Every state is fixed copy, and none says "sign in".
+// shows the steps to run. Every state is fixed copy, and none says "sign in",
+// with one exception: a check that could not start Claude Code because its npm
+// package could not be read shows the server's own words for that, as text.
 const AUTH_DOCS = '<a href="https://docs.rundock.ai/troubleshooting/authentication" target="_blank" rel="noopener">';
 const authTitle = (t, pulse) => `<div class="auth-error-title">${pulse ? '<span class="auth-pulse" aria-hidden="true"></span>' : ''}${t}</div>`;
 const authBody = (t) => `<div class="auth-error-body">${t}</div>`;
@@ -354,10 +356,11 @@ const AUTH_CARD = {
     + `<ol class="auth-error-steps"><li>Open a terminal and run <code>${AUTH_LOGIN_CMD}</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li></ol>`
     + `<div class="auth-error-foot">Then resend your message. ${AUTH_DOCS}Full steps and details &#x2192;</a></div>`],
 };
-function drawAuthCard(el, state) {
+function drawAuthCard(el, state, said) {
   const [tone, html] = AUTH_CARD[state];
   el.className = 'auth-error-card' + (tone ? ` ${tone}` : '');
   el.innerHTML = html;
+  if (said) el.querySelector('.auth-error-body').textContent = said;
   el.querySelectorAll('[data-auth]').forEach(b => b.addEventListener('click', () => authCardAction(el, b.dataset.auth)));
 }
 // Open the console: through the desktop's main process where there is one,
@@ -372,7 +375,8 @@ async function authCardAction(el, action) {
   if (action === 'check') {
     drawAuthCard(el, 'checking');
     const r = await fetch('/api/claude/connection', { method: 'POST' }).then(x => (x.ok ? x.json() : null), () => null);
-    drawAuthCard(el, r && r.connected === true ? 'reconnected' : (!r || r.known === false ? 'unchecked' : 'notyet'));
+    const state = r && r.connected === true ? 'reconnected' : (!r || r.known === false ? 'unchecked' : 'notyet');
+    drawAuthCard(el, state, state === 'unchecked' && r && typeof r.message === 'string' ? r.message : '');
     return;
   }
   const r = await Promise.resolve().then(reconnectClaude).catch(() => null);

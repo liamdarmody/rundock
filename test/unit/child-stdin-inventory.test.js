@@ -59,14 +59,15 @@ const WRITES = [
 // Where a child's stdin is given its handler: straight after the spawn that
 // starts it, in the one function each kind of child is started through.
 const GUARDED_STARTS = [
-  { file: 'lib/runtime/claude.js', fn: 'spawnClaude', spawn: 'spawn(resolveClaudeBin()', starts: 'every Claude agent process' },
-  { file: 'codex-appserver.js', fn: '_spawn', spawn: 'spawn(this._binPath', starts: 'the Codex app-server' },
+  { file: 'lib/runtime/claude.js', fn: 'spawnClaude', spawn: 'deps.spawn(launch.program', starts: 'every Claude agent process' },
+  { file: 'codex-appserver.js', fn: '_spawn', spawn: 'launch.refusal ? unstarted(launch.refusal) : spawn(launch.program', starts: 'the Codex app-server' },
 ];
 
 // Where a stand-in for a process that was never started is handed back in
 // place of one, and guarded the same way, straight after it is made: a
 // caller writes to it as to any process it was handed.
 const GUARDED_STAND_INS = [
+  { file: 'lib/runtime/claude.js', fn: 'spawnClaude', made: 'unstarted(launch.refusal)', name: 'standIn', stands: 'a Claude Code whose npm package could not be read' },
   { file: 'lib/runtime/claude.js', fn: 'spawnClaude', made: 'unstarted(refusal)', name: 'standIn', stands: 'a Claude Code below the version floor' },
 ];
 

@@ -90,11 +90,11 @@ const AGENT_SPAWNS = [
 // processes they start), and the hook decides nothing outside Rundock. Each
 // says why it cannot be driven end to end, and which test here covers it.
 const OTHER_CLAUDE_LAUNCHES = [
-  { at: 'lib/runtime/claude.js | spawnClaude | spawn(resolveClaudeBin())',
-    why: 'the one function every agent spawn above starts through: it passes on the environment it is given and adds nothing, so each agent spawn\'s own test drives it',
+  { at: 'lib/runtime/claude.js | spawnClaude | spawn(launch.program)',
+    why: 'the one function every agent spawn above starts through: it passes on the environment it is given and adds nothing but ELECTRON_RUN_AS_NODE to a start through Node inside the Electron app, so each agent spawn\'s own test drives it',
     testedBy: [ENVIRONMENTS, 'the funnel every agent spawn goes through passes on the environment it is given'] },
-  { at: 'lib/runtime/claude-console.js | checkConnection | spawn(bin)',
-    why: 'the reconnect card\'s check: a one-word turn from the home folder, with no --settings, so none of the workspace\'s hooks are configured for it, and the app\'s own environment',
+  { at: 'lib/runtime/claude-console.js | checkConnection | spawn(launch.program)',
+    why: 'the reconnect card\'s check: a one-word turn from the home folder, with no --settings, so none of the workspace\'s hooks are configured for it, and the app\'s own environment, with only ELECTRON_RUN_AS_NODE added to a start through Node inside the Electron app',
     testedBy: [ENVIRONMENTS, 'the connection check runs from the home folder with no settings and no environment of Rundock\'s'] },
   { at: 'lib/runtime/claude-console.js | openClaudeConsole | spawn(c.command)',
     why: 'opens a terminal window for the person to sign in themselves: no agent of Rundock\'s, no --settings, and no environment of Rundock\'s',
@@ -115,7 +115,7 @@ const OTHER_CLAUDE_LAUNCHES = [
 
 // Everything else the app starts, none of it the Claude CLI.
 const NOT_CLAUDE = [
-  { at: 'codex-appserver.js | _spawn | spawn(this._binPath)', runs: 'the Codex app-server, whose approvals are answered through lib/runtime/codex-glue.js, never through this hook' },
+  { at: 'codex-appserver.js | _spawn | spawn(launch.program)', runs: 'the Codex app-server, whose approvals are answered through lib/runtime/codex-glue.js, never through this hook' },
   { at: 'codex.js | resolveCodexBin | exec(lookupCmd)', runs: 'a lookup of the Codex binary on the PATH' },
   { at: "codex.js | detectCodex | exec(platform === 'win32' ? 'where.exe codex' : 'which codex')", runs: 'a lookup of the Codex binary on the PATH' },
   { at: 'codex.js | detectCodex | exec(`"${bin}" --version`)', runs: "Codex's version" },
