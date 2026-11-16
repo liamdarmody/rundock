@@ -89,6 +89,15 @@ describe('a stalled run ends and names what stalled', { concurrency: true }, () 
       assert.ok(oneLineNames(r.out, `${FIXTURES}/open-handle.js`, 'still open'),
         `no line of the output names the file and says it was still open:\n${r.out}`);
     });
+
+  test('a file that closes on its own two minutes after its tests pass is not stopped',
+    { timeout: OWN_LIMIT_MS }, async (t) => {
+      guard.setLimit(t, OWN_LIMIT_MS);
+      const r = await runFixture('closes-late.js');
+      assert.ok(!r.watchdogFired, `the run was still going after five minutes:\n${r.out}`);
+      assert.ok(!r.out.includes('[stalled test]'), `the run stopped a file that was about to close:\n${r.out}`);
+      assert.strictEqual(r.code, 0, `the run failed a file whose tests all passed:\n${r.out}`);
+    });
 });
 
 test('npm test, the coverage run and CI\'s test job take the limit from the one guard, and set none of their own', () => {

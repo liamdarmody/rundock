@@ -24,9 +24,10 @@ const path = require('node:path');
 // and short enough that a stalled run ends within five minutes.
 const LIMIT_MS = 240 * 1000;
 
-// How long a file may stay open once its tests have finished: time enough for
-// its own after hooks to close what it opened.
-const EXIT_GRACE_MS = 60 * 1000;
+// How long a file may stay open once its tests have finished: as long as one
+// test may run. Some files wait out a two-minute timer of the app's before they
+// close on their own, and must not be mistaken for a file left open.
+const EXIT_GRACE_MS = LIMIT_MS;
 
 const timers = new Map();
 
