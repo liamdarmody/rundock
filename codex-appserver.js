@@ -36,6 +36,8 @@
 //   { type:'usage', usage }                           this turn's token usage
 //   { type:'approval', kind, requestId, params, respond(decision) }
 //   { type:'error', message, kind, willRetry }
+//   { type:'compactionStarted' }                       the thread is being summarised
+//   { type:'compacted', key }                          ...and was, once per summary
 //   { type:'done', status, usage, error }             terminal, exactly once
 
 const { EventEmitter } = require('node:events');
@@ -485,6 +487,7 @@ class CodexAppServer extends EventEmitter {
       startedPromise: null,
       interruptFailsafeTimer: null, // armed by interruptTurn; see _armInterruptFailsafe
       interruptRetryTimer: null,    // one halfway-point interrupt re-send
+      compaction: { started: new Set(), items: new Set(), notices: 0, emitted: 0 },
     };
     this._activeTurns.set(threadId, state);
 
@@ -679,6 +682,7 @@ class CodexAppServer extends EventEmitter {
         if (state && params.item && params.item.type === 'agentMessage') {
           state.agentItemIds.add(params.item.id);
         }
+        if (state && params.item && params.item.type === 'contextCompaction') this._onCompaction(state, 'started', params);
         return;
       }
       case 'item/agentMessage/delta': {
@@ -694,6 +698,11 @@ class CodexAppServer extends EventEmitter {
         if (state && params.item && params.item.type === 'agentMessage') {
           this._emitTurnEvent(state, { type: 'text', text: params.item.text || '' });
         }
+        if (state && params.item && params.item.type === 'contextCompaction') this._onCompaction(state, 'completed', params);
+        return;
+      }
+      case 'thread/compacted': {
+        if (state) this._onCompaction(state, 'notice', params);
         return;
       }
       case 'thread/tokenUsage/updated': {
@@ -729,6 +738,38 @@ class CodexAppServer extends EventEmitter {
       default:
         return; // unknown notifications are expected and ignored
     }
+  }
+
+  // ONE SUMMARY, ONE EVENT. Codex records a summary twice over: the
+  // contextCompaction item (started, then completed) and, on servers that
+  // still send it, the deprecated thread/compacted notice for the same turn.
+  // Each is counted on its own; a turn has had as many summaries as the larger
+  // count, and 'compacted' is emitted only when that number grows, so either
+  // record, both, or a repeat of one gives one event. A record missing its
+  // ids is not a summary. Turn routing above has already dropped records for
+  // any turn but this one.
+  _onCompaction(state, kind, params) {
+    const c = state.compaction;
+    if (kind === 'notice') {
+      if (typeof params.turnId !== 'string' || params.turnId !== state.turnId) return;
+      c.notices += 1;
+    } else {
+      const id = params.item.id;
+      if (typeof id !== 'string' || !id) return;
+      if (kind === 'started') {
+        if (c.started.has(id) || c.items.has(id)) return;
+        c.started.add(id);
+        this._emitTurnEvent(state, { type: 'compactionStarted' });
+        return;
+      }
+      if (c.items.has(id)) return;
+      c.items.add(id);
+    }
+    const seen = Math.max(c.items.size, c.notices);
+    if (seen <= c.emitted) return;
+    c.emitted = seen;
+    const key = kind === 'notice' ? `${state.turnId}:compacted:${c.notices}` : params.item.id;
+    this._emitTurnEvent(state, { type: 'compacted', key });
   }
 
   // ── Server-to-client requests (approvals; RESEARCH.md section 5) ─────────

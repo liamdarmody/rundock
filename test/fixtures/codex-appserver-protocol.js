@@ -263,6 +263,33 @@ function fileChangeApprovalRequest(id, { threadId, turnId, itemId, grantRoot = n
   };
 }
 
+// ── Context compaction (captured against codex-cli 0.156.1) ────────────────
+
+// When a long thread is summarised to make room, the server keeps a
+// contextCompaction item in the thread and announces it like any other item:
+// item/started, then item/completed, both carrying only the type and the id.
+// Shapes copied from test/fixtures/compaction/codex-auto-compact.jsonl.
+function itemStartedContextCompaction(threadId, turnId, itemId) {
+  return {
+    method: 'item/started',
+    params: { item: { type: 'contextCompaction', id: itemId }, threadId, turnId, startedAtMs: Date.now() },
+  };
+}
+
+function itemCompletedContextCompaction(threadId, turnId, itemId) {
+  return {
+    method: 'item/completed',
+    params: { item: { type: 'contextCompaction', id: itemId }, threadId, turnId, completedAtMs: Date.now() },
+  };
+}
+
+// The older notice for the same event (ContextCompactedNotification in the
+// generated schema, deprecated in favour of the item). The 0.156.1 captures
+// carry no such line; its shape is the schema's {threadId, turnId}.
+function threadCompacted(threadId, turnId) {
+  return { method: 'thread/compacted', params: { threadId, turnId } };
+}
+
 // ── Captured failure texts ──────────────────────────────────────────────────
 
 // The quota-exhaustion message the CLI emits when a ChatGPT plan's Codex
@@ -280,4 +307,5 @@ module.exports = {
   itemStartedCommandExecution, itemStartedFileChange,
   tokenUsageUpdated, accountRateLimitsUpdated, turnCompleted,
   errorNotification, commandApprovalRequest, fileChangeApprovalRequest,
+  itemStartedContextCompaction, itemCompletedContextCompaction, threadCompacted,
 };
