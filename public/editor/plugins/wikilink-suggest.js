@@ -248,9 +248,10 @@ function createRenderer(editor, listWikilinkTargets) {
       if (event.key === 'Enter' || event.key === 'Tab') {
         if (rows.length) return choose(selected);
         const state = current();
-        const typed = state.active ? state.query.trim() : '';
         // Nothing listed and nothing typed: the key does what it always does.
-        return typed ? insertWikilink(editor, state.range, typed) : false;
+        if (!state.active || !state.query.trim()) return false;
+        // Otherwise the link holds exactly what was typed, spaces included.
+        return insertWikilink(editor, state.range, state.query);
       }
       return false;
     },

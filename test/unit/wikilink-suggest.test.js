@@ -250,15 +250,17 @@ describe('choosing a note', () => {
     assert.equal(ed.markdown(), 'Intro [[Pla\n');
   });
 
-  test('Enter with no match finishes the link with the typed text', async () => {
-    const ed = mount();
-    ed.type(' [[New idea ');
-    ed.type('zz');
-    await tick();
-    assert.equal(ed.rows().length, 0);
-    assert.ok(ed.press('Enter'));
-    await tick();
-    assert.equal(ed.markdown(), 'Intro [[New idea zz]]\n');
+  test('Enter with no match finishes the link with exactly the typed text, spaces and all', async () => {
+    for (const typed of ['New idea zz', 'Missing note ', ' Missing note', '  Missing  note  ']) {
+      const ed = mount();
+      ed.type(` [[${typed}`);
+      await tick();
+      assert.equal(ed.rows().length, 0, JSON.stringify(typed));
+      assert.ok(ed.press('Enter'));
+      await tick();
+      assert.deepEqual(ed.links(), [typed], 'the link holds every character typed');
+      assert.equal(ed.markdown(), `Intro [[${typed}]]\n`, 'and is saved as typed');
+    }
   });
 
   test('Enter with nothing typed and nothing listed is an ordinary Enter', async () => {
