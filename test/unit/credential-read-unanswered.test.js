@@ -15,6 +15,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { secretsRegistry, runtimeHomes } = require('../../scripts/permission-hook.js');
 const { unansweredNotice, UNATTENDED_NEXT } = require('../../scripts/refusal-notice.js');
@@ -24,6 +25,7 @@ const { closedPort } = require('../helpers/code-mode-fixture.js');
 const HOOK = path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
 
 const UNREACHABLE = 'Rundock server unreachable.';
+const UNPARSED = 'Rundock hook: could not parse server response.';
 const CREDENTIAL = 'This reads or changes a sign-in credential, and it is never done without asking, so it was refused rather than approved on your behalf.';
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'credential-read-unanswered-')));
@@ -55,10 +57,31 @@ const WORDED = {
   code: REGISTRY.filter(underRuntimeHome).flatMap(f => [...fileReads(f), ...(POSIX ? [] : shellReads(f).slice(0, 2))]),
 };
 
+let garbled;
 let closed;
 let runs = 0;
-before(async () => { closed = await closedPort(); });
-after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+// A server that answers card requests with `reply`, and nothing else.
+function listen(reply) {
+  const s = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      if (!req.url.startsWith('/api/permission-request')) { res.statusCode = 404; res.end(); return; }
+      reply(body, res);
+    });
+  });
+  return new Promise(r => s.listen(0, '127.0.0.1', () => r(s)));
+}
+before(async () => {
+  garbled = await listen((body, res) => res.end('this is not a reply'));
+  closed = await closedPort();
+});
+after(async () => {
+  if (garbled) await new Promise(r => garbled.close(r));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+const portOf = s => s.address().port;
 
 // The real hook, given one tool call, as the runtime spawns it. A routine has
 // no conversation id; a conversation has one.
@@ -118,6 +141,23 @@ describe('with Rundock unreachable, every read of a credential file is refused',
     const expected = { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: unansweredNotice(`${UNREACHABLE} ${CREDENTIAL}`, { unattended: true }) };
     cases.forEach((c, i) => assert.deepStrictEqual(said(got[i]), expected, named(c)));
   });
+});
+
+describe('a reply that does not parse refuses every credential read', () => {
+  for (const [label, mode] of MODES) {
+    test(`${label}: refused in the same words as an unreachable server, but the first sentence`, async () => {
+      const cases = REGISTRY.flatMap(everyRead);
+      const unreachable = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode }));
+      const unparsed = await each(cases, ([tool, input]) => run(tool, input, { port: portOf(garbled), mode }));
+      cases.forEach((c, i) => {
+        const a = said(unreachable[i]);
+        const b = said(unparsed[i]);
+        assert.strictEqual(b.permissionDecision, 'deny', `${named(c)}: ${b.permissionDecisionReason}`);
+        assert.ok(a.permissionDecisionReason.startsWith(`${UNREACHABLE} `), named(c));
+        assert.deepStrictEqual(b, { ...a, permissionDecisionReason: UNPARSED + a.permissionDecisionReason.slice(UNREACHABLE.length) }, named(c));
+      });
+    });
+  }
 });
 
 describe('the refusal says a sign-in credential is never touched without asking', () => {
