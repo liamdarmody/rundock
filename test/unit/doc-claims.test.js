@@ -1900,6 +1900,90 @@ describe('ARCHITECTURE.md: a PowerShell command runs with no card only when ever
   });
 });
 
+describe('ARCHITECTURE.md: a saved Always allow for a PowerShell command answers only the command it names', () => {
+  // On Windows the card is the only check under the command, so what the page
+  // says one press of Always allow saves, and what that key then answers, is
+  // asked of the code the page names.
+  const P = require('../../public/permissions.js');
+  const LEAD = '**A saved "Always allow" for a PowerShell command answers only the command it names, with reads beside it.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const graderSrc = fs.readFileSync(path.join(ROOT, 'public', 'permissions.js'), 'utf-8');
+  const decide = (command, saved) => P.decidePermission(P.classifyRisk('PowerShell', { command }),
+    P.toolAllowKey('PowerShell', { command }), new Set(saved), undefined, { toolName: 'PowerShell', input: { command } });
+
+  test('the audit section says how a PowerShell key is derived, what it answers, and that the old catch-all answers nothing', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    for (const said of [
+      'keys a PowerShell command on the one command its parts run besides reads',
+      'Always allow on `Get-Date; npm test` saves `PowerShell:npm`',
+      'There is no key, and the card offers Allow and Deny only, when a part starts with no command name',
+      'A saved key answers a request only when every part is covered',
+      'a part holding anything the reading cannot follow is never covered (`powerShellAllowCovers`)',
+      'is never saved now and answers nothing; it stays listed in Settings, where it can be removed',
+      'a runner is never keyed, so its card offers Allow and Deny only, and no saved key answers it',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+  });
+
+  test('the runners the page names are the list the code reads, and each is never keyed nor answered', () => {
+    const named = /A command runner \(([^)]+)\)/.exec(passage);
+    assert.ok(named, 'the page names the runners');
+    const onPage = [...named[1].matchAll(/`([A-Za-z-]+)`/g)].map(m => m[1].toLowerCase()).filter(n => n !== 'exe').sort();
+    assert.deepStrictEqual(onPage, [...P.POWERSHELL_RUNNERS].sort(), 'the page names exactly the list');
+    assert.ok(Object.isFrozen(P.POWERSHELL_RUNNERS), 'and the list is frozen');
+    for (const runner of onPage) {
+      const command = `${runner.toUpperCase()}.EXE x`;
+      assert.strictEqual(P.toolAllowKey('PowerShell', { command }), null, command);
+      assert.strictEqual(decide(`${runner} x`, [`PowerShell:${runner}`]).action, 'card', runner);
+    }
+  });
+
+  test('the header of public/permissions.js says the same', () => {
+    for (const said of ['A SAVED POWERSHELL KEY ANSWERS ONLY THE COMMAND IT NAMES, WITH READS BESIDE',
+      'Always allow on a PowerShell command saves the one command its parts run',
+      'answers a request only when every part is a read or starts with a command a',
+      'The catch-all `PowerShell:PowerShell` an earlier release',
+      'saved answers nothing.', 'A command runner (POWERSHELL_RUNNERS) is never keyed,']) {
+      assert.ok(graderSrc.includes(said), `the header says: ${said}`);
+    }
+    assert.ok(graderSrc.includes('function powerShellAllowCovers('), 'and the function the page names is there');
+  });
+
+  test('what the page says, the code does', () => {
+    assert.strictEqual(P.toolAllowKey('PowerShell', { command: 'Get-Date; npm test' }), 'PowerShell:npm');
+    for (const command of ['$t = Get-Date', '(Get-Date).ToString("HH:mm")', '[DateTime]::Now']) {
+      assert.strictEqual(P.toolAllowKey('PowerShell', { command }), null, command);
+    }
+    assert.strictEqual(decide('Get-Date -Format "HH:mm"', ['PowerShell:Get-Date']).action, 'allow');
+    assert.strictEqual(decide('Get-Date; Add-Content notes.md x', ['PowerShell:Get-Date']).action, 'card');
+    assert.strictEqual(decide('$t = Get-Date; Add-Content time-log.md $t', ['PowerShell:PowerShell']).action, 'card');
+  });
+
+  test('the server matches its saved answers the same way, and the page, the header and the router say so', () => {
+    const flat = (src) => src.replace(/\n\s*\/\/ ?/g, ' ').replace(/\s+/g, ' ');
+    const routerSrc = fs.readFileSync(path.join(ROOT, 'lib', 'http-router.js'), 'utf-8');
+    const serverSuite = fs.readFileSync(path.join(ROOT, 'test', 'integration', 'saved-answers-without-window.test.js'), 'utf-8');
+    for (const said of [
+      'The server\'s saved answers are matched the same way, part by part: `serverAnswer` in `lib/http-router.js` hands `decidePermission` the request as the window does',
+      'a key that is not a string matches nothing',
+      'through the real hook and server with no window in `test/integration/saved-answers-without-window.test.js`',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+    assert.ok(flat(graderSrc).includes('The server matches its saved answers the same way, handed the request as the window hands it.'), 'the header says it');
+    assert.ok(routerSrc.includes('decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input })'),
+      'the router hands the decision the request');
+    assert.ok(serverSuite.includes("describe('a saved PowerShell key is matched part by part on the server, as the window matches it'"),
+      'and the suite the page names drives it with no window');
+    // What the page says, the decision does: the chain has no key of its own,
+    // a key that is not a string matches nothing, and handed the request, the
+    // chain is answered by the keys of its parts.
+    const chain = 'Set-Content a.md x; npm test';
+    const saved = ['PowerShell:Set-Content', 'PowerShell:npm'];
+    assert.strictEqual(P.toolAllowKey('PowerShell', { command: chain }), null);
+    assert.strictEqual(P.decidePermission('medium', null, new Set([null, ...saved])).action, 'card');
+    assert.strictEqual(decide(chain, saved).action, 'allow');
+  });
+});
+
 describe('ARCHITECTURE.md: sort and date run with no card only in the forms that read', () => {
   // The claim an unattended routine relies on, and the one a person relies on
   // that a writing form still asks. Pinned by asking the shared definition and
@@ -2360,8 +2444,12 @@ describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, wit
 
   test('the audit section, the routines page and the comments say it', () => {
     assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
-    assert.ok(passage.includes('`serverAnswer` gives `decidePermission` those saved answers and the request\'s `code_mode_verdict` exactly as the window gives them'),
+    assert.ok(passage.includes('`serverAnswer` gives `decidePermission` those saved answers, the request\'s `code_mode_verdict` and the request itself exactly as the window gives them'),
       'it says the server makes the window\'s decision');
+    assert.ok(passage.includes('A saved PowerShell key is matched part by part here as in the window (below), so with `PowerShell:Set-Content` and `PowerShell:npm` saved, `Set-Content a.md x; npm test` is answered at once though it has no key of its own.'),
+      'it says a saved PowerShell key is matched part by part on the server');
+    assert.ok(routerSrc.includes('decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input })'),
+      'and the router hands the decision the request');
     assert.ok(passage.includes("answered `{ allow: true, reason: 'always-allowed' }` at once, whether or not a window is connected"), 'it says a window is not needed');
     assert.ok(passage.includes('a high-risk command still cards, ahead of every saved answer in `decidePermission`'), 'it says high risk still cards');
     assert.ok(passage.includes('an Asks-once verdict is answered only by its own saved rule key, never by a binary key such as `Bash:git`'), 'it says what answers an Asks once');
