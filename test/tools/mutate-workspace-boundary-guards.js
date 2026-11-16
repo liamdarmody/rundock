@@ -4667,12 +4667,12 @@ const MUTATIONS = [
   // The verdict decides once it reaches decidePermission, so dropping it from
   // the call is what answers a Keychain line as a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a Keychain line or any other verdict is answered with no card',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace));'],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), undefined, { toolName: data.tool_name, input });'],
   // Only the low-risk answer: a medium command is not a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a medium command is answered as a read',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
-    "    const answer = decision.decidePermission(risk === 'medium' ? 'low' : risk, key, savedAnswers(workspace), verdict);"],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
+    "    const answer = decision.decidePermission(risk === 'medium' ? 'low' : risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });"],
   // Fails closed: an error is the card path, never an allow.
   [READ_ONLY_ANSWER, 'Read-only answer: a request that cannot be graded is allowed',
     "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return null;",
@@ -4706,12 +4706,12 @@ const MUTATIONS = [
     "    console.warn(`[Permission] Could not read the saved answers, so none is applied: ${e && e.message ? e.message : e}`);\n    return new Set(require('./workspace/boundary.js').readToolAllows());"],
   // High risk cards ahead of every saved answer.
   [SAVED_ANSWER, 'Saved answer: a saved key answers a high-risk request',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
-    "    const answer = decision.decidePermission(risk === 'high' ? 'medium' : risk, key, savedAnswers(workspace), verdict);"],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
+    "    const answer = decision.decidePermission(risk === 'high' ? 'medium' : risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });"],
   // The verdict reaches the decision as the window passes it.
   [SAVED_ANSWER, 'Saved answer: the verdict is dropped from the decision',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace));'],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), undefined, { toolName: data.tool_name, input });'],
   // A save or revoke builds on what the guard accepted, never the disk.
   [SAVED_WRITER, 'Saved answer: a save or revoke merges the permissions file as it stands on disk',
     '    const accepted = answerFileToBuildOn(getWorkspace(), file);',

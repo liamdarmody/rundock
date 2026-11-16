@@ -1838,6 +1838,16 @@ describe('a saved PowerShell key answers only the parts it covers', () => {
     } finally { shell.powerShellReadingSeam.beforeReading = kept; }
     assert.deepStrictEqual(decide('npm test', saved), ALLOWED, 'and with the reading back, the key answers again');
   });
+
+  test('a key that is not a string matches nothing, so a command with nothing to save is never answered by its key alone', () => {
+    const chain = 'Set-Content a.md x; npm test';
+    assert.strictEqual(P.toolAllowKey('PowerShell', { command: chain }), null, 'two commands besides reads: no key');
+    for (const key of [null, undefined, 42]) {
+      assert.deepStrictEqual(P.decidePermission('medium', key, new Set([key, 'PowerShell:Set-Content', 'PowerShell:npm'])), CARD, String(key));
+    }
+    // Handed the request, the same chain is matched part by part.
+    assert.deepStrictEqual(decide(chain, new Set(['PowerShell:Set-Content', 'PowerShell:npm'])), ALLOWED);
+  });
 });
 
 // A COMMAND RUNNER IS A CATCH-ALL BY ANOTHER ROUTE. A key saved for

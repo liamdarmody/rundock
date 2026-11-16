@@ -113,20 +113,24 @@ const revoke = (key) => throughWindow({ type: 'remove_tool_allow', key }, (tools
 
 // A request that waits on a card: stored, and sent toward a window nobody has
 // open. Dropped once seen, as an asker that went away is, unless the test
-// waits for its timeout.
+// waits for its timeout. Only a request stored by this call counts, so the
+// same command can be asked again.
 async function waitsForCard(command, convo, extra = {}) {
+  const stored = filedFor(command, convo).length;
   const asked = ask(bash(command, convo, extra), { convo });
   let answered = null;
   asked.reply.then((r) => { answered = r; });
-  assert.ok(await h.waitUntil(() => answered || filedFor(command, convo).length > 0, { timeout: 5000, interval: 5 }), `${command}: answered or stored`);
+  assert.ok(await h.waitUntil(() => answered || filedFor(command, convo).length > stored, { timeout: 5000, interval: 5 }), `${command}: answered or stored`);
   assert.strictEqual(answered, null, `not answered by the server: ${command} ${JSON.stringify(answered && answered.body)}`);
   asked.abort();
   await asked.reply;
 }
 
-// What the window decides for a request, with `saved` as its saved answers.
+// What the window decides for a request, with `saved` as its saved answers,
+// handed the request as the window hands it: a PowerShell command is matched
+// by its parts, never by its key alone.
 const windowSays = (tool, input, saved, verdict) => P.decidePermission(P.classifyRisk(tool, input),
-  P.verdictAllowKey(verdict) || P.toolAllowKey(tool, input), new Set(saved), verdict);
+  P.verdictAllowKey(verdict) || P.toolAllowKey(tool, input), new Set(saved), verdict, { toolName: tool, input });
 
 // ---------------------------------------------------------------------------
 // A saved answer is answered by the server, with no window
@@ -664,6 +668,145 @@ describe('two lines under a saved answer get the window\'s answer', () => {
 });
 
 // ---------------------------------------------------------------------------
+// A saved PowerShell key is matched part by part, as the window matches it
+// ---------------------------------------------------------------------------
+
+// ON WINDOWS THE CARD IS ALL THERE IS, so what a saved PowerShell key answers
+// with no window open is what runs with nobody asked. The window matches a
+// PowerShell command part by part: every part must be a read, or start with a
+// command a saved key names. The server hands decidePermission the request
+// as the window does, so it answers exactly that, no more and no less.
+describe('a saved PowerShell key is matched part by part on the server, as the window matches it', () => {
+  const shell = require('../../public/read-only-shell.js');
+  // Shaped as the hook sends a PowerShell request.
+  const AS_POWERSHELL = { tool_name: 'PowerShell' };
+  const powerShell = (command, convo) => bash(command, convo, AS_POWERSHELL);
+  const CHAIN = 'Set-Content a.md x; npm test';
+  const CHAIN_KEYS = ['PowerShell:Set-Content', 'PowerShell:npm'];
+
+  test('a chain whose every command is saved is answered at once: Set-Content and npm saved answer "Set-Content a.md x; npm test"', async () => {
+    await noWindow();
+    const convo = 'saved-ps-chain';
+    const input = { command: CHAIN };
+    const turn = await holdTurn(convo);
+    try {
+      for (const key of CHAIN_KEYS) await save(key);
+      assert.strictEqual(P.classifyRisk('PowerShell', input), 'medium', 'the chain is not a read');
+      assert.strictEqual(P.toolAllowKey('PowerShell', input), null, 'it runs two commands besides reads, so it has no key of its own');
+      assert.deepStrictEqual(windowSays('PowerShell', input, readToolAllows()), { action: 'allow', reason: 'always-allowed' }, 'the window answers it from the saved keys');
+      const r = await ask(powerShell(CHAIN, convo), { convo }).reply;
+      assert.strictEqual(r.status, 200);
+      assert.deepStrictEqual(r.body, ALWAYS, 'and so does the server, with no window');
+      assert.deepStrictEqual(cardsFor(CHAIN), [], 'no card was broadcast');
+      assert.deepStrictEqual(filedFor(CHAIN), [], 'it never waited on a card');
+      // And through the real hook, as the runtime runs it.
+      const hooked = 'Set-Content b.md y; npm run build';
+      const out = await runHook('PowerShell', { command: hooked }, { convo });
+      assert.strictEqual(out.permissionDecision, 'allow', JSON.stringify(out));
+      assert.deepStrictEqual(filedFor(hooked), [], 'the hook\'s request never waited either');
+      assert.ok(await h.waitUntil(() => savedEvents(convo).length === 2), `both recorded: ${savedEvents(convo).length}`);
+      for (const e of savedEvents(convo)) assert.deepStrictEqual(e.d, { tool: 'PowerShell', decision: 'allow', reason: 'always-allowed' });
+    } finally {
+      turn.release();
+      for (const key of CHAIN_KEYS) await revoke(key);
+    }
+  });
+
+  test('a key saved for a read never covers the write after it: with Get-Date saved, "Get-Date; Add-Content notes.md x" waits for a card', async () => {
+    await noWindow();
+    const convo = 'saved-ps-read-key';
+    const command = 'Get-Date; Add-Content notes.md x';
+    const turn = await holdTurn(convo);
+    try {
+      await save('PowerShell:Get-Date');
+      assert.strictEqual(windowSays('PowerShell', { command }, readToolAllows()).action, 'card', 'the window cards it');
+      await waitsForCard(command, convo, AS_POWERSHELL);
+    } finally {
+      turn.release();
+      await revoke('PowerShell:Get-Date');
+    }
+  });
+
+  test('the catch-all an earlier release saved answers nothing: with PowerShell:PowerShell saved, a part with no command name and a runner both wait for a card', async () => {
+    await noWindow();
+    const convo = 'saved-ps-catch-all';
+    const turn = await holdTurn(convo);
+    try {
+      await save('PowerShell:PowerShell');
+      for (const command of ['$t = Get-Date; Add-Content time-log.md $t', 'powershell -Command "Remove-Item notes.md"']) {
+        assert.strictEqual(P.classifyRisk('PowerShell', { command }), 'medium', `not carded for its risk: ${command}`);
+        assert.strictEqual(windowSays('PowerShell', { command }, readToolAllows()).action, 'card', `the window cards it: ${command}`);
+        await waitsForCard(command, convo, AS_POWERSHELL);
+      }
+      assert.ok(readToolAllows().includes('PowerShell:PowerShell'), 'the key stays saved, so Settings still lists it to remove');
+    } finally {
+      turn.release();
+      await revoke('PowerShell:PowerShell');
+    }
+  });
+
+  test('a command inside brackets is never covered by the key of the command around it: with Write-Output saved, "Write-Output $(Remove-Item notes.md)" waits for a card', async () => {
+    await noWindow();
+    const convo = 'saved-ps-brackets';
+    const turn = await holdTurn(convo);
+    try {
+      await save('PowerShell:Write-Output');
+      // The delete is carded for its risk; the same shape with a write is
+      // carded because the reading cannot follow what the brackets run.
+      for (const command of ['Write-Output $(Remove-Item notes.md)', 'Write-Output $(Add-Content notes.md x)']) {
+        assert.strictEqual(windowSays('PowerShell', { command }, readToolAllows()).action, 'card', `the window cards it: ${command}`);
+        await waitsForCard(command, convo, AS_POWERSHELL);
+      }
+    } finally {
+      turn.release();
+      await revoke('PowerShell:Write-Output');
+    }
+  });
+
+  // The fifth sequence on this path. Each failure is forced while the request
+  // is decided and put back once it waits on a card, and the saved keys then
+  // answer the same chain again.
+  test('the control failing: a saved list that is missing, unreadable or not strings, or a throw while the parts are matched, answers no PowerShell request', async () => {
+    await noWindow();
+    const convo = 'saved-ps-failing';
+    const baseline = (bytes) => () => {
+      const was = guard.answerFileBaseline;
+      guard.answerFileBaseline = () => bytes;
+      return () => { guard.answerFileBaseline = was; };
+    };
+    const FAILURES = [
+      ['missing', baseline(null)],
+      ['with no list', baseline(Buffer.from('{}'))],
+      ['unreadable', baseline(Buffer.from('{"allowedTools": ["PowerShell:Set-Content", '))],
+      ['not strings', baseline(Buffer.from(JSON.stringify({ allowedTools: [['PowerShell:Set-Content'], ['PowerShell:npm'], 42, null, { key: 'PowerShell:npm' }] })))],
+      ['a throw while the parts are matched', () => {
+        const was = shell.powerShellReadingSeam.beforeReading;
+        shell.powerShellReadingSeam.beforeReading = () => { throw new Error('forced: the reading'); };
+        return () => { shell.powerShellReadingSeam.beforeReading = was; };
+      }],
+    ];
+    const turn = await holdTurn(convo);
+    try {
+      for (const key of CHAIN_KEYS) await save(key);
+      assert.deepStrictEqual((await ask(powerShell(CHAIN, convo), { convo }).reply).body, ALWAYS, 'answered while the saved keys can be read');
+      for (const [label, force] of FAILURES) {
+        const restore = force();
+        try {
+          await waitsForCard(CHAIN, convo, AS_POWERSHELL);
+        } finally { restore(); }
+        assert.deepStrictEqual((await ask(powerShell(CHAIN, convo), { convo }).reply).body, ALWAYS, `${label}: answered again once restored`);
+      }
+      assert.ok(await h.waitUntil(() => savedEvents(convo).length >= 1 + FAILURES.length), `the allowed requests recorded: ${savedEvents(convo).length}`);
+      await h.delay(200);
+      assert.strictEqual(savedEvents(convo).length, 1 + FAILURES.length, 'only the requests made with the saved keys readable were allowed');
+    } finally {
+      turn.release();
+      for (const key of CHAIN_KEYS) await revoke(key);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // One decision, no copy
 // ---------------------------------------------------------------------------
 
@@ -711,8 +854,11 @@ describe('the server and the window give the same answer under saved answers', (
         if (got !== expected) disagree.push(`${tool} ${JSON.stringify(input).slice(0, 120)}: window ${expected}, server ${got}`);
       }
       assert.deepStrictEqual(disagree, [], `${disagree.length} of ${ROWS.length} rows disagree`);
-      assert.ok(count['always-allowed'] >= 40 && count.card >= 20 && count['low-risk'] === 0,
-        `under a saved key, what the window allows it allows as saved, and the high-risk rows still card: ${JSON.stringify(count)}`);
+      // A PowerShell command of reads alone is never answered by a key, its
+      // own included: the low-risk policy answers it, as a read.
+      const powerShellReads = ROWS.filter(([tool, input]) => tool === 'PowerShell' && P.classifyRisk(tool, input) === 'low').length;
+      assert.ok(count['always-allowed'] >= 40 && count.card >= 20 && powerShellReads > 0 && count['low-risk'] === powerShellReads,
+        `under a saved key, what the window allows it allows as saved, but for PowerShell reads, and the high-risk rows still card: ${JSON.stringify(count)}, ${powerShellReads} PowerShell reads`);
     } finally {
       turn.release();
       for (const key of keys) removeToolAllow(key);

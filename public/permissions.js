@@ -492,7 +492,9 @@
   //   { action: 'allow', reason: 'low-risk' }        read-only auto-approve policy
   //   { action: 'card' }                             ask the human
   // The request ({ toolName, input }) is what a PowerShell command is matched
-  // by: every part of it, never the key of its first word.
+  // by: every part of it, never the key of its first word. The window and the
+  // server both pass it. A key that is not a string, such as the null a
+  // PowerShell command with nothing to save has, matches nothing.
   function decidePermission(risk, key, alwaysAllowedSet, verdict, request) {
     // THE HOOK'S VERDICT DECIDES, whatever this grader would have painted.
     // Always asks is carded ahead of every standing allow; Asks once is
@@ -518,7 +520,7 @@
     if (risk === 'high') return { action: 'card' };
     if (request && request.toolName === 'PowerShell') {
       if (powerShellAllowCovers(request.input && request.input.command, alwaysAllowedSet)) return { action: 'allow', reason: 'always-allowed' };
-    } else if (alwaysAllowedSet && alwaysAllowedSet.has(key)) return { action: 'allow', reason: 'always-allowed' };
+    } else if (typeof key === 'string' && alwaysAllowedSet && alwaysAllowedSet.has(key)) return { action: 'allow', reason: 'always-allowed' };
     if (risk === 'low') return { action: 'allow', reason: 'low-risk' };
     return { action: 'card' };
   }
