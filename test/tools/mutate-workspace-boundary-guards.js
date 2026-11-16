@@ -72,6 +72,8 @@ const PS_GRADER_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite
 const PS_DISPATCH_FLOW = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/integration/powershell-read-approvals.test.js' };
 // The hook, run as its own process, against a home holding hook scripts.
 const PS_HOOK_REAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/powershell-reads-hook.test.js' };
+// The card a person answers for a PowerShell command, through the real chat view.
+const PS_CARD = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/powershell-read-cards.test.js' };
 // The shared reading of sort and date, through the suites that drive it as a
 // person meets it: the real hook against a home holding hook scripts, the real
 // card code, and the real hook with the reading forced to fail.
@@ -1476,6 +1478,52 @@ const MUTATIONS = [
   [PS_GRADER, 'PowerShell grader: a delete is looked for inside brackets and blocks and after a new line',
     '  var POWERSHELL_COMMAND_START = /(^|[;&|\\r\\n({]\\s*)/.source;',
     '  var POWERSHELL_COMMAND_START = /(^|[;&|]\\s*)/.source;'],
+  // WHAT ALWAYS ALLOW SAVES FOR A POWERSHELL COMMAND, one rule at a time. The
+  // first puts back the catch-all an earlier release saved for a command with
+  // no name to key on; the second keys a chain on its first word again.
+  [PS_GRADER, 'PowerShell key: a command with no command name saves no key, never the catch-all',
+    '      if (!POWERSHELL_COMMAND_NAME.test(names[n])) return null;',
+    "      if (!POWERSHELL_COMMAND_NAME.test(names[n])) return 'PowerShell:PowerShell';"],
+  [PS_GRADER, 'PowerShell key: a chain is keyed on the one command it runs besides reads, not its first word',
+    "    return 'PowerShell:' + (runs.length ? runs[0] : names[0]);",
+    "    return 'PowerShell:' + names[0];"],
+  [PS_GRADER, 'PowerShell key: a chain running two commands besides reads saves no key',
+    '    if (runs.length > 1) return null;\n',
+    ''],
+  // A command runner keyed again: a catch-all by another route.
+  [PS_GRADER, 'PowerShell key: a command runner gets no key',
+    '    if (runs.length && isPowerShellRunner(runs[0])) return null;\n',
+    ''],
+  // A card offering Always allow with nothing to save: the press would save
+  // nothing the next request could be answered by.
+  [PS_CARD, 'PowerShell card: no Always allow when there is no key to save',
+    '!boundary && !answerFile && key && RundockPermissions.offersAlwaysAllow(risk, verdict)',
+    '!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict)'],
+  // WHAT A SAVED POWERSHELL KEY ANSWERS. The first puts back the match on the
+  // command's first word; the rest each let one kind of part count as covered.
+  [PS_GRADER, 'PowerShell key: a request is answered by every part it covers, not by its first word',
+    "      if (powerShellAllowCovers(request.input && request.input.command, alwaysAllowedSet)) return { action: 'allow', reason: 'always-allowed' };",
+    "      if (alwaysAllowedSet && alwaysAllowedSet.has('PowerShell:' + ((String(request.input && request.input.command || '').trim().match(/^[A-Za-z][\\w-]*/) || ['PowerShell'])[0]))) return { action: 'allow', reason: 'always-allowed' };"],
+  [PS_GRADER, 'PowerShell key: a part the reading cannot judge is never covered',
+    '      if (!names) return false;',
+    "      if (!names) names = [String(command || '').trim().split(/\\s+/)[0]];"],
+  [PS_GRADER, 'PowerShell key: a part that starts with no command name is never covered',
+    '        if (!POWERSHELL_COMMAND_NAME.test(names[n])) return false;\n',
+    ''],
+  [PS_GRADER, 'PowerShell key: no saved key covers a command runner, the old catch-all included',
+    '        if (isPowerShellRunner(names[n])) return false;\n',
+    ''],
+  [PS_GRADER, 'PowerShell key: a failure while the parts are matched answers nothing',
+    '    } catch (unanswerable) {\n      return false;',
+    '    } catch (unanswerable) {\n      return true;'],
+  // The card code handing the request to the decision, so a PowerShell
+  // request is matched part by part, in a conversation and in a routine.
+  [PS_CARD, 'PowerShell card: a conversation\'s request is matched part by part',
+    'RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict, { toolName, input });',
+    'RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict);'],
+  [PS_CARD, 'PowerShell card: a routine\'s request is matched part by part',
+    'req.code_mode_verdict || undefined,\n      { toolName, input });',
+    'req.code_mode_verdict || undefined);'],
   // The hook reading a PowerShell command by the Bash rules again: in process,
   // and through the real hook.
   [HOOK, 'the hook reads a PowerShell command with the PowerShell reading',
@@ -4619,12 +4667,12 @@ const MUTATIONS = [
   // The verdict decides once it reaches decidePermission, so dropping it from
   // the call is what answers a Keychain line as a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a Keychain line or any other verdict is answered with no card',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace));'],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), undefined, { toolName: data.tool_name, input });'],
   // Only the low-risk answer: a medium command is not a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a medium command is answered as a read',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
-    "    const answer = decision.decidePermission(risk === 'medium' ? 'low' : risk, key, savedAnswers(workspace), verdict);"],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
+    "    const answer = decision.decidePermission(risk === 'medium' ? 'low' : risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });"],
   // Fails closed: an error is the card path, never an allow.
   [READ_ONLY_ANSWER, 'Read-only answer: a request that cannot be graded is allowed',
     "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return null;",
@@ -4658,12 +4706,18 @@ const MUTATIONS = [
     "    console.warn(`[Permission] Could not read the saved answers, so none is applied: ${e && e.message ? e.message : e}`);\n    return new Set(require('./workspace/boundary.js').readToolAllows());"],
   // High risk cards ahead of every saved answer.
   [SAVED_ANSWER, 'Saved answer: a saved key answers a high-risk request',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
-    "    const answer = decision.decidePermission(risk === 'high' ? 'medium' : risk, key, savedAnswers(workspace), verdict);"],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
+    "    const answer = decision.decidePermission(risk === 'high' ? 'medium' : risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });"],
   // The verdict reaches the decision as the window passes it.
   [SAVED_ANSWER, 'Saved answer: the verdict is dropped from the decision',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
-    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace));'],
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), undefined, { toolName: data.tool_name, input });'],
+  // The request reaches the decision as the window passes it, so a saved
+  // PowerShell key is matched part by part: dropped, a chain whose every
+  // command is saved has no key and waits on a card.
+  [SAVED_ANSWER, 'Saved answer: a PowerShell request is matched by its key alone',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);'],
   // A save or revoke builds on what the guard accepted, never the disk.
   [SAVED_WRITER, 'Saved answer: a save or revoke merges the permissions file as it stands on disk',
     '    const accepted = answerFileToBuildOn(getWorkspace(), file);',
