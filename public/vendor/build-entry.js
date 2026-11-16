@@ -24,6 +24,7 @@ export { Table, TableRow, TableHeader, TableCell } from '@tiptap/extension-table
 export { Markdown } from 'tiptap-markdown';
 export { Plugin, PluginKey } from '@tiptap/pm/state';
 export { Decoration, DecorationSet } from '@tiptap/pm/view';
+export { Suggestion, exitSuggestion, findSuggestionMatch } from '@tiptap/suggestion';
 
 import * as yaml from 'js-yaml';
 export { yaml };
