@@ -91,6 +91,20 @@ describe('a stalled run ends and names what stalled', { concurrency: true }, () 
     });
 });
 
+test('npm test, the coverage run and CI\'s test job take the limit from the one guard, and set none of their own', () => {
+  const requires = (name) => nodeArgs(name).filter((a, i, args) => args[i - 1] === '--require');
+  assert.ok(requires('test').includes('./test/helpers/stall-guard.js'), 'npm test no longer loads the stall guard');
+  assert.deepStrictEqual(requires('test:coverage'), requires('test'),
+    'the coverage run does not load what npm test loads, so it runs without the same limit');
+  const ci = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.match(ci, /^\s+run: npm test\s*$/m, 'CI\'s test job no longer runs npm test, so it may not load the guard');
+  for (const [where, text] of [['npm test', scripts.test], ['test:coverage', scripts['test:coverage']], ['ci.yml', ci]]) {
+    assert.ok(!text.includes('--test-timeout'), `${where} sets a limit of its own with --test-timeout`);
+  }
+  const source = fs.readFileSync(require.resolve('../helpers/stall-guard.js'), 'utf8');
+  assert.ok(!source.includes('process.env'), 'the guard reads the environment, so its limit can be set from outside it');
+});
+
 test('the stall fixtures are never picked up by npm test\'s own glob', () => {
   const files = fs.readdirSync(path.join(ROOT, FIXTURES));
   const globs = fileArgs(nodeArgs('test'));
