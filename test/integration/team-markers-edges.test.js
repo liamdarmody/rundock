@@ -319,6 +319,38 @@ describe('a marker in a turn that does not end with a result is not acted on', (
       unseed('cancel-target');
     }
   });
+
+  test('Doc\'s turn the person cancels changes nothing, even when the cancel lands just after the text', async () => {
+    const convoId = h.freshConvoId('cancelpause');
+    seed('pause-target', 'Before');
+    const before = fs.readFileSync(agentPath('pause-target'));
+    const reply = `Removing it.\n${deleteMarker('pause-target')}\n${'Still finishing. '.repeat(200)}`;
+    // The case above, with the runtime pausing once its text is out, so the
+    // cancel lands in that pause every time rather than by chance.
+    h.writeScenario([{ match: { agent: 'rundock-guide', promptIncludes: 'CANCEL-PAUSE' }, pauseAfterTextMs: 300,
+      holdAfterText: path.join(h.workspaceDir, `never-${convoId}`), finishOnSigterm: true, turn: [{ text: reply }] }]);
+    try {
+      const since = client.messages.length;
+      client.send({ type: 'chat', conversationId: convoId, agent: 'rundock-guide', content: 'CANCEL-PAUSE remove it' });
+      await client.waitFor((m) => m.type === 'stream_event' && m._conversationId === convoId && JSON.stringify(m).includes('pause-target'), { since, label: 'the marker streamed' });
+      const child = h.internal.chatProcesses.get(convoId).process;
+      const closed = new Promise((resolve) => child.once('close', resolve));
+      client.send({ type: 'cancel', conversationId: convoId });
+      await client.waitFor((m) => m.type === 'system' && m.subtype === 'cancelled' && m._conversationId === convoId, { since, label: 'the cancel' });
+      await closed;
+      const out = h.readStubOutputs().find((o) => o.pid === child.pid);
+      assert.ok(out, 'the runtime finished its turn and exited on its own');
+      assert.ok(out.stdoutBytes > 3 * reply.length, 'having written the whole turn, its result included');
+      const asked = client.messages.length;
+      client.send({ type: 'get_runtime_status' });
+      await client.waitFor((m) => m.type === 'runtime_status', { since: asked, label: 'the answer sent after the close' });
+      assert.ok(fs.existsSync(agentPath('pause-target')) && fs.readFileSync(agentPath('pause-target')).equals(before), 'nothing was deleted or changed, byte for byte');
+      assert.deepStrictEqual(linesFor(client.messages.slice(since), convoId), [], 'no confirmation, and no line about the team at all');
+    } finally {
+      h.reapConvo(convoId);
+      unseed('pause-target');
+    }
+  });
 });
 
 describe('when the decision fails, nothing is written and the next turn still works', () => {
