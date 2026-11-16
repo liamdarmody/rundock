@@ -1,6 +1,6 @@
 'use strict';
 // A test that never settles: its promise is never resolved, while a timer keeps
-// the process alive. Run by test/integration/stalled-test-run.test.js through
+// the process alive. Run by stalled-test-run.check.js through
 // the npm test command; npm test's own glob never picks it up.
 const { test } = require('node:test');
 

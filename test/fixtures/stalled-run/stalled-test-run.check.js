@@ -11,14 +11,21 @@
 // run's start-up, and asks the guard for the same. Each also has a watchdog
 // that ends the run it started at five minutes and fails, so a run that never
 // ends is reported here instead of holding this file open.
+//
+// OUTSIDE NPM TEST ON PURPOSE. This file is named so that npm test's glob never
+// matches it: the suite runs, passes and skips the same tests with or without
+// it, and does not wait minutes for these. `npm run test:stall-guard` runs it,
+// and CI's test job runs that as its own step after the suite.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const guard = require('../helpers/stall-guard.js');
+const guard = require('../../helpers/stall-guard.js');
+const { readWorkflow } = require('../../helpers/workflow-text.js');
 
-const ROOT = path.join(__dirname, '..', '..');
+const ROOT = path.join(__dirname, '..', '..', '..');
+const SELF = path.relative(ROOT, __filename).split(path.sep).join('/');
 const FIXTURES = 'test/fixtures/stalled-run';
 const GLOB = 'test/**/*.test.js';
 const CEILING_MS = 5 * 60 * 1000;
@@ -27,6 +34,7 @@ const scripts = require(path.join(ROOT, 'package.json')).scripts;
 
 // The arguments an npm script hands `node`, up to any `&&` that follows it.
 function nodeArgs(name) {
+  assert.ok(scripts[name], `package.json has no ${name} script`);
   const words = scripts[name].split(/\s+/).map((w) => w.replace(/^"|"$/g, ''));
   assert.strictEqual(words[0], 'node', `${name} no longer starts with node`);
   const end = words.indexOf('&&');
@@ -35,6 +43,9 @@ function nodeArgs(name) {
 
 // The arguments that name test files: neither a flag nor a flag's value.
 const fileArgs = (args) => args.filter((a, i) => !a.startsWith('-') && args[i - 1] !== '--require');
+
+// The files an npm script loads into every test file it runs.
+const requiresOf = (name) => nodeArgs(name).filter((a, i, args) => args[i - 1] === '--require');
 
 function runFixture(file) {
   const args = nodeArgs('test');
@@ -100,28 +111,40 @@ describe('a stalled run ends and names what stalled', { concurrency: true }, () 
     });
 });
 
-test('npm test, the coverage run and CI\'s test job take the limit from the one guard, and set none of their own', () => {
-  const requires = (name) => nodeArgs(name).filter((a, i, args) => args[i - 1] === '--require');
-  assert.ok(requires('test').includes('./test/helpers/stall-guard.js'), 'npm test no longer loads the stall guard');
-  assert.deepStrictEqual(requires('test:coverage'), requires('test'),
+test('npm test, the coverage run and CI\'s test job take the limit from the one guard and set none of their own, and the test job runs these proofs after the suite', () => {
+  assert.ok(requiresOf('test').includes('./test/helpers/stall-guard.js'), 'npm test no longer loads the stall guard');
+  assert.deepStrictEqual(requiresOf('test:coverage'), requiresOf('test'),
     'the coverage run does not load what npm test loads, so it runs without the same limit');
   const ci = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
-  assert.match(ci, /^\s+run: npm test\s*$/m, 'CI\'s test job no longer runs npm test, so it may not load the guard');
+  const job = readWorkflow('ci.yml').jobs.test;
+  assert.ok(job, 'ci.yml has no test job');
+  const runs = job.steps.map((s) => s.run);
+  const suite = runs.indexOf('npm test');
+  assert.ok(suite !== -1, 'CI\'s test job no longer runs npm test, so it may not load the guard');
+  const proofs = runs.indexOf('npm run test:stall-guard');
+  assert.ok(proofs > suite,
+    'CI\'s test job does not run npm run test:stall-guard after npm test, so no CI run shows that a stalled run still ends and names what stalled');
+  assert.strictEqual(job.steps[proofs].continueOnError, undefined,
+    'the step that runs these proofs may fail without failing the job');
   for (const [where, text] of [['npm test', scripts.test], ['test:coverage', scripts['test:coverage']], ['ci.yml', ci]]) {
     assert.ok(!text.includes('--test-timeout'), `${where} sets a limit of its own with --test-timeout`);
   }
-  const source = fs.readFileSync(require.resolve('../helpers/stall-guard.js'), 'utf8');
+  const source = fs.readFileSync(require.resolve('../../helpers/stall-guard.js'), 'utf8');
   assert.ok(!source.includes('process.env'), 'the guard reads the environment, so its limit can be set from outside it');
 });
 
-test('the stall fixtures are never picked up by npm test\'s own glob', () => {
-  const files = fs.readdirSync(path.join(ROOT, FIXTURES));
+test('these proofs and their fixtures are never picked up by npm test\'s own glob, and a script of their own runs this file', () => {
+  const files = new Set([SELF, ...fs.readdirSync(path.join(ROOT, FIXTURES)).map((f) => `${FIXTURES}/${f}`)]);
   const globs = fileArgs(nodeArgs('test'));
-  assert.ok(files.length >= 1 && globs.length >= 1, 'nothing to check');
+  assert.ok(files.size >= 2 && globs.length >= 1, 'nothing to check');
   for (const glob of globs) {
     for (const f of files) {
-      assert.ok(!path.matchesGlob(`${FIXTURES}/${f}`, glob),
-        `${FIXTURES}/${f} matches ${glob}, so npm test would run it and fail on it`);
+      assert.ok(!path.matchesGlob(f, glob),
+        `${f} matches ${glob}, so npm test would run it, adding to the suite's count or failing on it`);
     }
   }
+  assert.deepStrictEqual(fileArgs(nodeArgs('test:stall-guard')), [SELF],
+    'npm run test:stall-guard does not run this file, and only this file');
+  assert.ok(requiresOf('test:stall-guard').includes('./test/helpers/account-home-refused.js'),
+    'npm run test:stall-guard does not load what keeps a test out of the account home, as npm test does');
 });

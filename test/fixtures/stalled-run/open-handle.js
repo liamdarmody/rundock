@@ -1,6 +1,6 @@
 'use strict';
 // Every test passes, but a timer left running holds the file open after them.
-// Run by test/integration/stalled-test-run.test.js through the npm test
+// Run by stalled-test-run.check.js through the npm test
 // command; npm test's own glob never picks it up.
 const { test } = require('node:test');
 
