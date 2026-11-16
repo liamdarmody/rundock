@@ -29,6 +29,17 @@ const LIMIT_MS = 240 * 1000;
 // close on their own, and must not be mistaken for a file left open.
 const EXIT_GRACE_MS = LIMIT_MS;
 
+// The same wait is also cut short at this long after the file started, so a
+// file left open ends within five minutes however long its passing tests took.
+// The files that close on their own after the app's two-minute timer do so
+// well inside it.
+const FILE_DEADLINE_MS = 270 * 1000;
+
+// A file whose tests finish close to that deadline, or past it, still gets this
+// long to close on its own. A file whose tests are slow and which then closes
+// promptly is never stopped for being slow.
+const MIN_EXIT_GRACE_MS = 30 * 1000;
+
 const timers = new Map();
 
 function fileName() {
@@ -60,6 +71,13 @@ function clearLimit(t) {
   timers.delete(t);
 }
 
+// How long a file whose tests finished doneAtMs after it started may stay open:
+// the full grace, cut short at the file's deadline, and never less than the
+// shortest grace.
+function exitGraceMs(doneAtMs) {
+  return Math.max(MIN_EXIT_GRACE_MS, Math.min(EXIT_GRACE_MS, FILE_DEADLINE_MS - doneAtMs));
+}
+
 // The process `node --test` itself runs in only hands files out to child
 // processes; the tests run in those, so that is where the hooks go.
 if (!process.execArgv.includes('--test')) {
@@ -70,12 +88,16 @@ if (!process.execArgv.includes('--test')) {
   // can still hold it open with nothing more to report. Ending the file with
   // --test-force-exit would hide that, and pass; this ends it as a failure
   // that names what was still open.
+  // The file's process started when it loaded this, so its uptime is how long
+  // the file has run.
   after(() => {
+    const grace = exitGraceMs(process.uptime() * 1000);
     setTimeout(() => {
       const open = [...new Set(process.getActiveResourcesInfo())].join(', ');
-      stop(`every test finished, but the file was still open ${EXIT_GRACE_MS / 1000} seconds later (open: ${open}).`);
-    }, EXIT_GRACE_MS).unref();
+      stop(`every test finished, but the file was still open ${Math.round(grace / 1000)} seconds later, `
+        + `${Math.round(process.uptime())} seconds after it started (open: ${open}).`);
+    }, grace).unref();
   });
 }
 
-module.exports = { LIMIT_MS, setLimit };
+module.exports = { LIMIT_MS, EXIT_GRACE_MS, FILE_DEADLINE_MS, MIN_EXIT_GRACE_MS, exitGraceMs, setLimit };

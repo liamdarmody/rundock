@@ -101,6 +101,16 @@ describe('a stalled run ends and names what stalled', { concurrency: true }, () 
         `no line of the output names the file and says it was still open:\n${r.out}`);
     });
 
+  test('a file left open after passing tests that took a minute and a half ends the run non-zero within five minutes of its start, naming the file',
+    { timeout: OWN_LIMIT_MS }, async (t) => {
+      guard.setLimit(t, OWN_LIMIT_MS);
+      const r = await runFixture('open-after-slow-tests.js');
+      assert.ok(!r.watchdogFired, `the run was still going five minutes after it started:\n${r.out}`);
+      assert.notStrictEqual(r.code, 0, `the run exited zero with the file still open:\n${r.out}`);
+      assert.ok(oneLineNames(r.out, `${FIXTURES}/open-after-slow-tests.js`, 'still open'),
+        `no line of the output names the file and says it was still open:\n${r.out}`);
+    });
+
   test('a file that closes on its own two minutes after its tests pass is not stopped',
     { timeout: OWN_LIMIT_MS }, async (t) => {
       guard.setLimit(t, OWN_LIMIT_MS);
@@ -109,6 +119,21 @@ describe('a stalled run ends and names what stalled', { concurrency: true }, () 
       assert.ok(!r.out.includes('[stalled test]'), `the run stopped a file that was about to close:\n${r.out}`);
       assert.strictEqual(r.code, 0, `the run failed a file whose tests all passed:\n${r.out}`);
     });
+});
+
+test('a file\'s wait to close is cut short at its deadline, and a file whose tests ran up to or past it still has time to close on its own', () => {
+  const { exitGraceMs, EXIT_GRACE_MS, FILE_DEADLINE_MS, MIN_EXIT_GRACE_MS } = guard;
+  assert.ok(FILE_DEADLINE_MS < CEILING_MS, 'a file left open may still be running five minutes after it started');
+  assert.strictEqual(exitGraceMs(0), EXIT_GRACE_MS, 'a file whose tests end at once no longer has the full wait to close');
+  for (const done of [30, 90, 150, 200, 240].map((s) => s * 1000)) {
+    assert.ok(done + exitGraceMs(done) <= FILE_DEADLINE_MS,
+      `a file whose tests finished after ${done / 1000} seconds may stay open past its deadline`);
+  }
+  for (const done of [FILE_DEADLINE_MS - 10 * 1000, FILE_DEADLINE_MS, 20 * 60 * 1000]) {
+    assert.strictEqual(exitGraceMs(done), MIN_EXIT_GRACE_MS,
+      `a file whose tests finished after ${done / 1000} seconds is not given the shortest wait to close`);
+  }
+  assert.ok(MIN_EXIT_GRACE_MS > 0, 'a file whose tests ran long is stopped the moment they finish');
 });
 
 test('npm test, the coverage run and CI\'s test job take the limit from the one guard and set none of their own, and the test job runs these proofs after the suite', () => {
