@@ -385,21 +385,24 @@ test('the undo: undo after a shortcut acts on the text field as before, and the 
   await page.keyboard.press('Meta+z');
   await expect(paragraph(page)).toHaveText(undone);
   // The composer, whose undo is the browser's. Conversations is reached by a
-  // click so that the key pressed inside the composer is an arrival too.
+  // click so that the key pressed inside the composer is an arrival too. The
+  // browser's own undo follows the machine the test runs on, not the platform
+  // the page is told it has, so its keys are ControlOrMeta; the shortcut stays
+  // the client's.
   await page.locator('.nav-item[data-nav="conversations"]').click();
   await expectSection(page, 'conversations');
   const composer = page.locator('#msg-input');
   await composer.click();
   await page.keyboard.type('words to take back');
-  await page.keyboard.press('Meta+z');
+  await page.keyboard.press('ControlOrMeta+z');
   const taken = await composer.inputValue();
   expect(taken).not.toBe('words to take back');
-  await page.keyboard.press('Meta+Shift+z');
+  await page.keyboard.press('ControlOrMeta+Shift+z');
   await expect(composer).toHaveValue('words to take back');
   await page.keyboard.press('Meta+1');
   await expect(composer).toHaveValue('words to take back');
   await composer.focus();
-  await page.keyboard.press('Meta+z');
+  await page.keyboard.press('ControlOrMeta+z');
   await expect(composer).toHaveValue(taken);
   expect(await arrivals(page)).toEqual(['files', 'conversations', 'conversations']);
   await composer.fill('');
