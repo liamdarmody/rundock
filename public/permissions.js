@@ -23,10 +23,22 @@
 // `Get-*` first), so a write, a send or a delete after a read or inside its
 // brackets ran with no card, on the platform with no sandbox under it.
 //
+// A SAVED POWERSHELL KEY ANSWERS ONLY THE COMMAND IT NAMES, WITH READS BESIDE
+// IT. Always allow on a PowerShell command saves the one command its parts run
+// besides reads, or the first name when every part is a read, and nothing when
+// a part starts with no command name, when the parts run two or more such
+// commands, or when the shared reading cannot follow the command. A saved key
+// answers a request only when every part is a read or starts with a command a
+// saved key names. The catch-all `PowerShell:PowerShell` an earlier release
+// saved answers nothing. A command runner (POWERSHELL_RUNNERS) is never keyed,
+// and no saved key answers it. The server matches its saved answers the same
+// way, handed the request as the window hands it. Bash keys are still the
+// first word.
+//
 // What this module decides (pinned by test/unit/permissions.test.js):
 //   classifyRisk()        low / medium / high per tool request
 //   describeToolRequest() human-readable card copy (summary/context/detail)
-//   toolAllowKey()        the pattern "Always allow" matches on
+//   toolAllowKey()        what "Always allow" saves, or null when nothing can be
 //   decidePermission()    auto-allow (always-allowed or low-risk) vs card
 //   offersAlwaysAllow()   high-risk requests never get a standing allow
 (function (root, factory) {
@@ -43,6 +55,8 @@
   var isReadOnlyShellCommand = RundockReadOnlyShell.isReadOnlyShellCommand;
   var isReadOnlyPowerShellCommand = RundockReadOnlyShell.isReadOnlyPowerShellCommand;
   var isDestructiveShellCommand = RundockReadOnlyShell.isDestructiveShellCommand;
+  var powerShellCommandNames = RundockReadOnlyShell.powerShellCommandNames;
+  var isPowerShellReadName = RundockReadOnlyShell.isPowerShellReadName;
 
   const BASH_DESCRIPTIONS = {
     ls: 'List directory contents', cat: 'Read file contents', head: 'Read start of file',
@@ -394,16 +408,84 @@
     return { summary: `${action[0].toUpperCase()}${action.slice(1)} the ${kind} ${said(i.name)}`, context, detail };
   }
 
-  // Key for always-allow matching.
+  // Key for always-allow matching. Null when there is nothing to save, and
+  // then the card offers Allow and Deny only.
   function toolAllowKey(toolName, input) {
     if (toolName === 'Bash') {
       return 'Bash:' + bashBin((input.command || '').trim());
     }
-    if (toolName === 'PowerShell') {
-      const verb = ((input.command || '').trim().match(/^[A-Za-z][\w-]*/) || ['PowerShell'])[0];
-      return 'PowerShell:' + verb;
-    }
+    if (toolName === 'PowerShell') return powerShellAllowKey(input.command || '');
     return toolName;
+  }
+
+  // ── What Always allow saves for a PowerShell command ──────────────────────
+  // ON WINDOWS THE CARD IS ALL THERE IS, so one press of Always allow decides
+  // every later command its key answers with no card. The key used to be the
+  // command's first word, and `PowerShell:PowerShell` when it had none, so
+  // Always allow on `$t = Get-Date` saved a key that answered every later
+  // command starting with a bracket, `$` or `[`, a write included.
+  //
+  // A KEY NAMES ONE COMMAND, OR THERE IS NO KEY. It is the one command the
+  // parts run besides reads, read by the shared PowerShell reading, or the
+  // first name when every part is a read. There is none, and so no Always
+  // allow, when a part starts with no command name, when the parts run two or
+  // more different commands besides reads, when that command is a runner,
+  // and when the reading cannot follow the command all the way, because no
+  // key could ever answer that command.
+  // A key a chain's first word would give never covers the command after it,
+  // so the person who pressed Always allow would be asked again every time.
+  var POWERSHELL_COMMAND_NAME = /^[A-Za-z][\w.-]*$/;
+  // A COMMAND RUNNER IS A CATCH-ALL BY ANOTHER ROUTE. A key saved for one
+  // answers whatever text it is handed, so a runner is never keyed and no
+  // saved key covers it, one saved before this change included. Compared in
+  // any case, with a `.exe` suffix taken off. This is a list of runners, so
+  // it cannot be complete: a runner left off it is asked about less often
+  // than it should be, and nothing on it is ever asked about more. It also
+  // holds `powershell`, so the catch-all `PowerShell:PowerShell` an earlier
+  // release saved for a command with no name to key on is never derived and
+  // covers nothing.
+  var POWERSHELL_RUNNERS = Object.freeze(['powershell', 'pwsh', 'cmd', 'iex', 'invoke-expression', 'start-process', 'saps', 'start',
+    'invoke-command', 'icm', 'start-job', 'sajb', 'wsl', 'bash', 'sh']);
+  function isPowerShellRunner(name) {
+    return POWERSHELL_RUNNERS.indexOf(String(name).toLowerCase().replace(/\.exe$/, '')) >= 0;
+  }
+  function powerShellAllowKey(command) {
+    var names = powerShellCommandNames(String(command));
+    if (!names || !names.length) return null;
+    var runs = [];
+    for (var n = 0; n < names.length; n++) {
+      if (!POWERSHELL_COMMAND_NAME.test(names[n])) return null;
+      if (!isPowerShellReadName(names[n]) && runs.indexOf(names[n]) < 0) runs.push(names[n]);
+    }
+    if (runs.length > 1) return null;
+    if (runs.length && isPowerShellRunner(runs[0])) return null;
+    return 'PowerShell:' + (runs.length ? runs[0] : names[0]);
+  }
+
+  // A SAVED KEY ANSWERS ONLY WHAT IT COVERS. A key used to answer any request
+  // whose first word it named, so one saved for `Get-Date` answered
+  // `Get-Date; Add-Content notes.md x` with no card. Now every part must be
+  // covered: a read on its own, or a part that starts with a command a saved
+  // key names. A part holding anything the shared reading cannot follow is
+  // never covered, nor is a runner, and nothing is when the reading fails or
+  // the saved keys cannot be read. A command of reads alone is answered by
+  // the low-risk policy, not by a key.
+  function powerShellAllowCovers(command, alwaysAllowedSet) {
+    try {
+      var names = powerShellCommandNames(String(command || ''));
+      if (!names) return false;
+      var keyed = false;
+      for (var n = 0; n < names.length; n++) {
+        if (isPowerShellReadName(names[n])) continue;
+        if (!POWERSHELL_COMMAND_NAME.test(names[n])) return false;
+        if (isPowerShellRunner(names[n])) return false;
+        if (!alwaysAllowedSet.has('PowerShell:' + names[n])) return false;
+        keyed = true;
+      }
+      return keyed;
+    } catch (unanswerable) {
+      return false;
+    }
   }
 
   // The auto-allow decision path. Given the classified risk, the allow key,
@@ -411,7 +493,11 @@
   //   { action: 'allow', reason: 'always-allowed' }  user granted a standing allow
   //   { action: 'allow', reason: 'low-risk' }        read-only auto-approve policy
   //   { action: 'card' }                             ask the human
-  function decidePermission(risk, key, alwaysAllowedSet, verdict) {
+  // The request ({ toolName, input }) is what a PowerShell command is matched
+  // by: every part of it, never the key of its first word. The window and the
+  // server both pass it. A key that is not a string, such as the null a
+  // PowerShell command with nothing to save has, matches nothing.
+  function decidePermission(risk, key, alwaysAllowedSet, verdict, request) {
     // THE HOOK'S VERDICT DECIDES, whatever this grader would have painted.
     // Always asks is carded ahead of every standing allow; Asks once is
     // answered only by a standing allow under its own rule key, never by a
@@ -434,7 +520,9 @@
     // that shares the key. High-risk requests never offer "Always allow"
     // either (offersAlwaysAllow), so nothing legitimate depends on this path.
     if (risk === 'high') return { action: 'card' };
-    if (alwaysAllowedSet && alwaysAllowedSet.has(key)) return { action: 'allow', reason: 'always-allowed' };
+    if (request && request.toolName === 'PowerShell') {
+      if (powerShellAllowCovers(request.input && request.input.command, alwaysAllowedSet)) return { action: 'allow', reason: 'always-allowed' };
+    } else if (typeof key === 'string' && alwaysAllowedSet && alwaysAllowedSet.has(key)) return { action: 'allow', reason: 'always-allowed' };
     if (risk === 'low') return { action: 'allow', reason: 'low-risk' };
     return { action: 'card' };
   }
@@ -953,7 +1041,7 @@
   // reach the same table, and new callers should use alwaysAskCopy.
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
-  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, alwaysAskCopy, answerFileCopy, answerFileSummary, answerFileKind,
+  return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, POWERSHELL_RUNNERS, alwaysAskCopy, answerFileCopy, answerFileSummary, answerFileKind,
     MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend, isTeamCard,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
