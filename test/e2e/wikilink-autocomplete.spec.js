@@ -46,16 +46,16 @@ async function openNote(page, rel) {
   await expect(page.locator('#editor-filename')).toHaveText(rel);
 }
 
-// Writes the fixtures and a fresh draft, opens the draft, and puts the caret
-// at the end of its body line.
-async function openDraft(page, name) {
+// Writes the fixtures, any extra notes and a fresh draft, opens the draft,
+// and puts the caret at the end of its body line.
+async function openDraft(page, name, extra = {}) {
   await boot(page);
   workspace = await page.evaluate(() => currentWorkspacePath);
-  for (const [rel, content] of Object.entries(FIXTURES)) write(rel, content);
+  for (const [rel, content] of Object.entries({ ...FIXTURES, ...extra })) write(rel, content);
   write(draftPath(name), draftText(name));
   await page.reload();
   await expect(page.locator('.convo-item').first()).toBeVisible();
-  const wanted = [draftPath(name), `${FOLDER}/beta/Roadmap.md`, `${FOLDER}/${HOSTILE}.md`];
+  const wanted = [draftPath(name), `${FOLDER}/beta/Roadmap.md`, `${FOLDER}/${HOSTILE}.md`, ...Object.keys(extra)];
   await expect.poll(() => page.evaluate((paths) => {
     const tree = JSON.stringify(typeof cachedFileTree === 'undefined' ? null : cachedFileTree);
     return paths.every((p) => tree.includes(JSON.stringify(p)));
@@ -211,4 +211,26 @@ test('a note named like markup is listed and linked as characters and runs nothi
   expect(await page.evaluate(() => window.__hostileRan)).toBe(false);
   expect(await page.locator('img[src="x"]').count()).toBe(0);
   expect(dialogs).toEqual([]);
+});
+
+test('more notes match than the list holds: it shows exactly 20', async ({ page }) => {
+  const many = {};
+  for (let i = 1; i <= 25; i++) many[`${FOLDER}/many/Overflow ${String(i).padStart(2, '0')}.md`] = `# Overflow ${i}\n`;
+  await openDraft(page, 'Draft five', many);
+  await page.keyboard.type(' [[overflow');
+  await expect(popup(page)).toBeVisible();
+  await expect(rows(page)).toHaveCount(20);
+  await expect(rows(page).filter({ has: page.locator('.wikilink-suggest-title', { hasText: /^Overflow \d\d$/ }) })).toHaveCount(20);
+  await page.keyboard.press('Escape');
+  await expect(popup(page)).toHaveCount(0);
+});
+
+test('Enter with nothing matching finishes the link with the typed text, and the saved file holds exactly that', async ({ page }) => {
+  await openDraft(page, 'Draft six');
+  await page.keyboard.type(' [[Zz new idea ');
+  await expect(popup(page)).toHaveText('No notes found');
+  await page.keyboard.press('Enter');
+  await expect(popup(page)).toHaveCount(0);
+  await expect(body(page).locator('a.wikilink[data-target="Zz new idea "]')).toHaveCount(1);
+  await expect.poll(() => onDisk(draftPath('Draft six'))).toBe('# Draft six\n\nStart here. [[Zz new idea ]]\n');
 });
