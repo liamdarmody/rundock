@@ -377,6 +377,54 @@ describe('a request that ends while its conversation is in the background', () =
   }
 });
 
+// Stopping a conversation reaches the window as two messages: each open
+// request's end, and the conversation's word that it stopped. Both are handed
+// to the client's own dispatch, cut from app.js, so the code under test is
+// the code that ships, and a renamed or missing piece fails here by name.
+const APP_SRC = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf-8');
+function dispatch() {
+  const cut = (pattern, label) => { const m = APP_SRC.match(pattern); assert.ok(m, `the client no longer carries ${label}`); return m[0]; };
+  const stopped = cut(/if\(d\.subtype==='cancelled' && convoId\) \{[\s\S]*?\n {6}\}/, 'the stopped-conversation branch');
+  const ended = cut(/case 'permission_ended': [^\n]*/, 'the permission_ended arm');
+  const effects = [];
+  const handle = new Function('endPermissionRequest', 'RundockConversationState', 'convoState', 'executeEffects',
+    `return function handle(d) { const convoId = d._conversationId; switch (d.type) { case 'system': ${stopped} break; ${ended} } };`)(
+    chat.endPermissionRequest, require('../../public/conversation-state.js'), {}, (c, list) => effects.push(...list.map(ef => ef.type)));
+  return { handle, effects };
+}
+
+describe('a conversation stopped while its open card is in the background', () => {
+  const ORDERS = [
+    { name: 'the request\'s end first, as the server sends them', stoppedFirst: false },
+    { name: 'the word that it stopped first', stoppedFirst: true },
+  ];
+  for (const order of ORDERS) {
+    test(`its card comes back once, settled, saying it was stopped: ${order.name}`, () => {
+      const { handle, effects } = dispatch();
+      open(A);
+      const id = nextId();
+      arrive(id, A);
+      open(B);
+      const stopped = { type: 'system', subtype: 'cancelled', _conversationId: A };
+      const ended = { type: 'permission_ended', requestId: id, reason: 'cancelled', _conversationId: A };
+      for (const d of order.stoppedFirst ? [stopped, ended] : [ended, stopped]) handle(d);
+      assert.ok(effects.includes('remove-permission-cards'), 'handled as a stop');
+      const stillWaiting = unread.isUnread(A);
+      open(A);
+      assert.strictEqual(copies(id), 1, 'shown once');
+      assert.ok(!live(id), 'settled, with nothing to click');
+      assert.ok(!pendingPermissions.has(id), 'and nothing that could send for it');
+      assert.match(card(id).textContent, /Stopped[\s\S]*stopped before this was answered/);
+      pokeAt(id);
+      assert.deepStrictEqual(answers(), [], 'nothing on it sends');
+      assert.ok(!stillWaiting, 'stopped, it left its conversation waiting on nothing');
+      open(B);
+      open(A);
+      assert.strictEqual(copies(id), 0, 'and a later return draws none');
+    });
+  }
+});
+
 // The record of which requests have ended keeps only the latest. A card kept
 // to be shown settled carries how it ended, so it is never drawn live however
 // many other requests end before its conversation is opened again.

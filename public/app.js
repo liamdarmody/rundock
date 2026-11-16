@@ -678,9 +678,10 @@ function handle(d) {
       // Agent was cancelled by user
       if(d.subtype==='cancelled' && convoId) {
         // The server's cancel sweep has already answered every pending
-        // permission request for this conversation, so any queued
-        // background cards are stale and must never render.
-        RundockPermissions.clearPendingPermissions(pendingPermissionsByConvo, convoId);
+        // permission request for this conversation. Each held card ends as
+        // stopped, so none renders live and a return shows it settled once,
+        // whether this or the request's own end arrives first.
+        for (const held of RundockPermissions.pendingPermissionsFor(pendingPermissionsByConvo, convoId)) endPermissionRequest(held.request_id, 'cancelled');
         const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
