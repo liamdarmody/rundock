@@ -48,6 +48,9 @@ function npmFolder(runtime, { pkg, files = {}, name = `${runtime.command}.cmd` }
   return { dir, bin, folder, entry: (file) => fs.realpathSync(path.join(folder, file)) };
 }
 const claudePackage = (bin = { claude: 'cli.js' }) => ({ name: '@anthropic-ai/claude-code', version: '2.1.318', bin });
+// The entry each runtime's package names, and a package naming `entry` for it.
+const ENTRY = { claude: 'cli.js', codex: 'bin/codex.js' };
+const packageFor = (runtime, entry = ENTRY[runtime.command]) => ({ name: runtime.pkg, version: '1.0.0', bin: { [runtime.command]: entry } });
 
 // RUNDOCK_ELECTRON is how the app says it runs inside Electron. Each test sets
 // it as it needs and puts it back.
@@ -75,13 +78,20 @@ function assertRefused(plan, npm, runtime, why) {
 // the refusal, word for word.
 async function notStarted(npm, runtime, why) {
   assertRefused(launcher().launchPlan(npm.bin, runtime, WIN), npm, runtime, why);
+  const refusal = refusalFor(runtime.label, runtime.pkg, npm.bin);
   if (runtime.command === 'claude') {
     const chat = await startChat(npm.bin);
     assert.deepStrictEqual(chat.calls, [], `${why}: the chat started nothing`);
-    assert.deepStrictEqual(chat.errors.map((e) => e.message), [refusalFor(runtime.label, runtime.pkg, npm.bin)], `${why}: and said why`);
+    assert.deepStrictEqual(chat.errors.map((e) => e.message), [refusal], `${why}: and said why`);
     const check = await checkFrom(npm.bin);
     assert.deepStrictEqual(check.calls, [], `${why}: the connection check started nothing`);
     assert.deepStrictEqual(check.answer, { connected: false, known: false }, `${why}: and could not tell`);
+  } else {
+    const codex = await startCodex(npm.bin);
+    assert.deepStrictEqual(codex.calls, [], `${why}: the Codex app server started nothing`);
+    assert.ok(codex.failure, `${why}: and its start failed`);
+    assert.deepStrictEqual([codex.failure.code, codex.failure.message], ['NPM_PACKAGE_UNREADABLE', `codex app-server failed to start: ${refusal}`], `${why}: saying why`);
+    assert.strictEqual(codex.failure.cause && codex.failure.cause.message, refusal, `${why}: with the refusal as it was made`);
   }
 }
 
@@ -108,6 +118,50 @@ async function checkFrom(bin, { platform = 'win32', electron = false } = {}) {
   } finally {
     if (before === undefined) delete process.env.RUNDOCK_ELECTRON; else process.env.RUNDOCK_ELECTRON = before;
   }
+}
+
+// ── Starting the Codex app server ──
+
+const APP_SERVER_KEY = require.resolve('../../codex-appserver.js');
+
+// A private copy of the app server client with spawn recorded. The client
+// takes spawn from node:child_process as it loads, so the recorder is put
+// there for the load only, and every other copy keeps the real one.
+function recordedCodex() {
+  const childProcess = require('node:child_process');
+  const recorded = recordedSpawn();
+  const real = childProcess.spawn;
+  const cached = require.cache[APP_SERVER_KEY];
+  childProcess.spawn = recorded.spawn;
+  try {
+    delete require.cache[APP_SERVER_KEY];
+    return { lib: require(APP_SERVER_KEY), calls: recorded.calls };
+  } finally {
+    childProcess.spawn = real;
+    delete require.cache[APP_SERVER_KEY];
+    if (cached) require.cache[APP_SERVER_KEY] = cached;
+  }
+}
+
+// One start of the Codex app server on a private client, with the platform
+// stood in and spawn recorded, inside the Electron app or under node
+// server.js. Each child it starts closes before answering. Settles with what
+// it handed spawn and why the start failed (null if it did not).
+async function startCodex(bin, { platform = 'win32', env = { ...process.env, MARKER: 'given' }, electron = false, codex = recordedCodex(), server } = {}) {
+  const cwd = makeTempDir('npm-launcher-codex-');
+  server = server || codex.lib.createCodexAppServer({ binPath: bin, cwd, env, platform, requestTimeoutMs: 5000 });
+  const before = process.env.RUNDOCK_ELECTRON;
+  const from = codex.calls.length;
+  let started;
+  try {
+    if (electron) process.env.RUNDOCK_ELECTRON = '1'; else delete process.env.RUNDOCK_ELECTRON;
+    started = server.start().then(() => null, (err) => err);
+  } finally {
+    if (before === undefined) delete process.env.RUNDOCK_ELECTRON; else process.env.RUNDOCK_ELECTRON = before;
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const c of codex.calls.slice(from)) c.child.emit('close', 0, null);
+  return { calls: codex.calls.slice(from), cwd, env, server, failure: await started };
 }
 
 // ── Starting a chat through spawnClaude ──
@@ -282,16 +336,21 @@ describe('a package that cannot be read is refused, and nothing is started', () 
   });
 
   test('its package.json is missing', async () => {
-    const { CLAUDE_CODE } = launcher();
-    const npm = npmFolder(CLAUDE_CODE, { files: { 'cli.js': '' } });
-    await notStarted(npm, CLAUDE_CODE, 'no package.json');
+    const { CLAUDE_CODE, CODEX } = launcher();
+    for (const runtime of [CLAUDE_CODE, CODEX]) {
+      const npm = npmFolder(runtime, { files: { [ENTRY[runtime.command]]: '' } });
+      await notStarted(npm, runtime, `${runtime.label}: no package.json`);
+    }
   });
 
   test('its package.json does not parse', async () => {
-    const { CLAUDE_CODE } = launcher();
-    for (const text of ['{ "bin": { "claude": "cli.js" }, ', '', 'not json']) {
-      const npm = npmFolder(CLAUDE_CODE, { pkg: text, files: { 'cli.js': '' } });
-      await notStarted(npm, CLAUDE_CODE, JSON.stringify(text));
+    const { CLAUDE_CODE, CODEX } = launcher();
+    for (const runtime of [CLAUDE_CODE, CODEX]) {
+      const entry = ENTRY[runtime.command];
+      for (const text of [`{ "bin": { "${runtime.command}": "${entry}" }, `, '', 'not json']) {
+        const npm = npmFolder(runtime, { pkg: text, files: { [entry]: '' } });
+        await notStarted(npm, runtime, `${runtime.label}: ${JSON.stringify(text)}`);
+      }
     }
   });
 
@@ -305,29 +364,34 @@ describe('a package that cannot be read is refused, and nothing is started', () 
       [CLAUDE_CODE, claudePackage(['cli.js']), 'a list'],
       [CLAUDE_CODE, null, 'a package.json that is null'],
       [CODEX, { name: '@openai/codex', bin: { claude: 'cli.js' } }, 'Claude Code\'s entry in the Codex package'],
+      [CODEX, { name: '@openai/codex', version: '1.0.0' }, 'no bin at all in the Codex package'],
+      [CODEX, packageFor(CODEX, ''), 'an empty Codex entry'],
+      [CODEX, { name: '@openai/codex', bin: ['bin/codex.js'] }, 'a list in the Codex package'],
     ];
     for (const [runtime, pkg, why] of cases) {
-      const npm = npmFolder(runtime, { pkg, files: { 'cli.js': '' } });
+      const npm = npmFolder(runtime, { pkg, files: { 'cli.js': '', 'bin/codex.js': '' } });
       await notStarted(npm, runtime, why);
     }
   });
 
   test('the entry is not a file inside the folder', async () => {
-    const { CLAUDE_CODE } = launcher();
+    const { CLAUDE_CODE, CODEX } = launcher();
     const outside = makeTempDir('npm-launcher-outside-');
     fs.writeFileSync(path.join(outside, 'evil.js'), '');
     const cases = [
-      [{ claude: '../../evil.js' }, (npm) => fs.writeFileSync(path.join(npm.dir, 'node_modules', 'evil.js'), ''), 'a relative path out of the folder'],
-      [{ claude: path.join(outside, 'evil.js') }, () => {}, 'an absolute path elsewhere'],
-      [{ claude: 'cli.js' }, (npm) => fs.symlinkSync(path.join(outside, 'evil.js'), path.join(npm.folder, 'cli.js')), 'a link inside that leads out'],
-      [{ claude: 'cli.js' }, () => {}, 'an entry that is not there'],
-      [{ claude: 'bin' }, (npm) => fs.mkdirSync(path.join(npm.folder, 'bin')), 'a folder'],
-      [{ claude: '.' }, () => {}, 'the package folder itself'],
+      ['../../evil.js', (npm) => fs.writeFileSync(path.join(npm.dir, 'node_modules', 'evil.js'), ''), 'a relative path out of the folder'],
+      [path.join(outside, 'evil.js'), () => {}, 'an absolute path elsewhere'],
+      ['run.js', (npm) => fs.symlinkSync(path.join(outside, 'evil.js'), path.join(npm.folder, 'run.js')), 'a link inside that leads out'],
+      ['run.js', () => {}, 'an entry that is not there'],
+      ['bin', (npm) => fs.mkdirSync(path.join(npm.folder, 'bin')), 'a folder'],
+      ['.', () => {}, 'the package folder itself'],
     ];
-    for (const [bin, lay, why] of cases) {
-      const npm = npmFolder(CLAUDE_CODE, { pkg: claudePackage(bin) });
-      lay(npm);
-      await notStarted(npm, CLAUDE_CODE, why);
+    for (const runtime of [CLAUDE_CODE, CODEX]) {
+      for (const [entry, lay, why] of cases) {
+        const npm = npmFolder(runtime, { pkg: packageFor(runtime, entry) });
+        lay(npm);
+        await notStarted(npm, runtime, `${runtime.label}: ${why}`);
+      }
     }
   });
 
@@ -511,5 +575,141 @@ describe('the connection check', () => {
     const checked = await checkFrom(npm.bin);
     assert.deepStrictEqual(checked.calls.map((c) => [c.file, c.args[0]]), [[process.execPath, npm.entry('cli.js')]]);
     assert.deepStrictEqual(checked.answer, { connected: true, known: true });
+  });
+});
+
+// One Codex turn through the host's own path (startCodexTurn), on a private
+// copy of the host, with the lookup finding `bin` and the app server planned
+// for Windows. Settles once the conversation is told the turn is done, with
+// everything said to it.
+const GLUE_KEY = require.resolve('../../lib/runtime/codex-glue.js');
+function freshGlue() {
+  const cached = require.cache[GLUE_KEY];
+  delete require.cache[GLUE_KEY];
+  const mod = require(GLUE_KEY);
+  delete require.cache[GLUE_KEY];
+  if (cached) require.cache[GLUE_KEY] = cached;
+  return mod;
+}
+
+async function codexTurn(bin, { glue = freshGlue(), codex = recordedCodex() } = {}) {
+  const shared = require('../../codex-appserver.js');
+  const realCreate = shared.createCodexAppServer;
+  const previousWs = config.getWorkspace();
+  const previousPath = process.env.PATH;
+  const said = [];
+  const convo = `npm-launcher-codex-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  let done;
+  const ended = new Promise((resolve) => { done = resolve; });
+  const chats = new Map();
+  const spawnErrors = new Map();
+  const prev = glue.wireCodexGlueDeps({
+    chatProcesses: () => chats,
+    safeSend: (raw) => { const m = JSON.parse(raw); said.push(m); if (m._conversationId === convo && m.subtype === 'done') done(); },
+    recentSpawnErrors: () => spawnErrors,
+    getActualPort: () => 0,
+    getPermissionTimeoutMs: () => 1000,
+    registerChildPid: () => null,
+    unregisterChildPid: () => {},
+    endConvoTransition: () => {},
+    appendTranscript: () => {},
+    killProcessTree: () => {},
+  });
+  const from = codex.calls.length;
+  try {
+    config.setWorkspace(makeTempDir('npm-launcher-ws-'));
+    shared.createCodexAppServer = (opts) => codex.lib.createCodexAppServer({ ...opts, platform: 'win32' });
+    process.env.PATH = [finderFor(bin), '/usr/bin', '/bin'].join(path.delimiter);
+    glue.startCodexTurn(convo, { content: 'Tidy the notes & echo x > y.txt' }, { id: 'writer' });
+    await new Promise((resolve) => setImmediate(resolve));
+    for (const c of codex.calls.slice(from)) c.child.emit('close', 0, null);
+    await Promise.race([ended, new Promise((resolve, reject) => setTimeout(() => reject(new Error('the turn never ended')), 5000))]);
+    return { said: said.filter((m) => m._conversationId === convo), calls: codex.calls.slice(from) };
+  } finally {
+    process.env.PATH = previousPath;
+    shared.createCodexAppServer = realCreate;
+    glue.wireCodexGlueDeps(prev);
+    config.setWorkspace(previousWs);
+  }
+}
+
+describe('the Codex app server', () => {
+  test('with only an npm codex.cmd found on Windows, it starts this Node with the entry point, then app-server, and no shell', async () => {
+    const { CODEX } = launcher();
+    const npm = npmFolder(CODEX, { pkg: packageFor(CODEX), files: { 'bin/codex.js': '' } });
+    const { calls, cwd, env } = await startCodex(npm.bin);
+    assert.strictEqual(calls.length, 1, 'one start');
+    const [{ file, args, options }] = calls;
+    assert.strictEqual(file, process.execPath, 'the Node Rundock runs on');
+    assert.deepStrictEqual(args, [npm.entry('bin/codex.js'), 'app-server'], 'the entry point, then app-server');
+    assert.deepStrictEqual(options, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] }, 'the options it is always started with');
+    assert.strictEqual('shell' in options, false, 'no shell');
+    assert.strictEqual(options.env, env, 'the very environment the host built');
+  });
+
+  test('inside the Electron app the Node start carries ELECTRON_RUN_AS_NODE, and under node server.js nothing is added', async () => {
+    const { CODEX } = launcher();
+    const npm = npmFolder(CODEX, { pkg: packageFor(CODEX), files: { 'bin/codex.js': '' } });
+    const app = await startCodex(npm.bin, { electron: true });
+    assert.deepStrictEqual(app.calls[0].options.env, { ...app.env, ELECTRON_RUN_AS_NODE: '1' }, 'the host\'s environment, and the one variable');
+    assert.strictEqual('ELECTRON_RUN_AS_NODE' in app.env, false, 'the host\'s own object is left as it was');
+    const server = await startCodex(npm.bin, { electron: false });
+    assert.strictEqual(server.calls[0].options.env, server.env, 'under node server.js, the very environment given');
+  });
+
+  test('a .exe on Windows, and any copy on macOS or Linux, is started as before: the same program, arguments and options, field by field', async () => {
+    const cases = [['win32', '/opt/example/codex.exe'], ['darwin', '/opt/example/codex'], ['linux', '/opt/example/codex'], ['linux', '/opt/example/codex.cmd']];
+    for (const [platform, bin] of cases) {
+      for (const electron of [false, true]) {
+        const why = `${path.basename(bin)} on ${platform}${electron ? ' inside the Electron app' : ''}`;
+        const { calls, cwd, env } = await startCodex(bin, { platform, electron });
+        assert.strictEqual(calls.length, 1, why);
+        const [{ file, args, options }] = calls;
+        assert.strictEqual(file, bin, `${why}: the program`);
+        assert.deepStrictEqual(args, ['app-server'], `${why}: the arguments`);
+        assert.deepStrictEqual(Object.keys(options), ['cwd', 'env', 'stdio'], `${why}: the option names`);
+        assert.strictEqual(options.cwd, cwd, `${why}: cwd`);
+        assert.strictEqual(options.env, env, `${why}: env, the very object`);
+        assert.deepStrictEqual(options.stdio, ['pipe', 'pipe', 'pipe'], `${why}: stdio`);
+      }
+    }
+  });
+
+  test('an entry ending in .exe is started directly, with nothing added, inside the Electron app too', async () => {
+    const { CODEX } = launcher();
+    const npm = npmFolder(CODEX, { pkg: packageFor(CODEX, 'bin/codex.exe'), files: { 'bin/codex.exe': '' } });
+    for (const electron of [false, true]) {
+      const { calls, env } = await startCodex(npm.bin, { electron });
+      assert.deepStrictEqual(calls.map((c) => [c.file, c.args, c.options.env === env]), [[npm.entry('bin/codex.exe'), ['app-server'], true]], `electron ${electron}`);
+    }
+  });
+
+  test('a package that cannot be read is said in the conversation, word for word, as a Codex that cannot start, and nothing is started', async () => {
+    const { CODEX } = launcher();
+    const npm = npmFolder(CODEX);
+    const turn = await codexTurn(npm.bin);
+    assert.deepStrictEqual(turn.calls, [], 'nothing started');
+    const info = turn.said.filter((m) => m.subtype === 'info');
+    assert.deepStrictEqual(info.map((m) => m.content), [refusalFor('Codex', '@openai/codex', npm.bin)], 'the refusal, and only it');
+    assert.deepStrictEqual(turn.said.filter((m) => m.subtype === 'done').map((m) => m.code), [-1], 'and the conversation stops waiting');
+    assert.deepStrictEqual(turn.said.filter((m) => /codex_/.test(m.subtype)), [], 'with no runtime error card besides');
+  });
+
+  test('fixed after a refusal, the package starts on the next turn and the next start, with no restart', async () => {
+    const { CODEX } = launcher();
+    const npm = npmFolder(CODEX, { pkg: 'not json', files: { 'bin/codex.js': '' } });
+    const codex = recordedCodex();
+    const server = codex.lib.createCodexAppServer({ binPath: npm.bin, cwd: makeTempDir('npm-launcher-codex-'), platform: 'win32', requestTimeoutMs: 5000 });
+    const refused = await startCodex(npm.bin, { codex, server });
+    assert.deepStrictEqual([refused.calls.length, refused.failure.code], [0, 'NPM_PACKAGE_UNREADABLE']);
+    const glue = freshGlue();
+    const turnRefused = await codexTurn(npm.bin, { glue, codex });
+    assert.deepStrictEqual(turnRefused.calls, [], 'a turn refused as well');
+    fs.writeFileSync(path.join(npm.folder, 'package.json'), JSON.stringify(packageFor(CODEX)));
+    const started = await startCodex(npm.bin, { codex, server });
+    assert.deepStrictEqual(started.calls.map((c) => [c.file, c.args]), [[process.execPath, [npm.entry('bin/codex.js'), 'app-server']]], 'the same client starts it');
+    const turn = await codexTurn(npm.bin, { glue, codex });
+    assert.deepStrictEqual(turn.calls.map((c) => [c.file, c.args]), [[process.execPath, [npm.entry('bin/codex.js'), 'app-server']]], 'and so does the next turn');
+    assert.ok(!turn.said.some((m) => m.subtype === 'info' && /could not read/.test(m.content)), 'with no refusal said');
   });
 });

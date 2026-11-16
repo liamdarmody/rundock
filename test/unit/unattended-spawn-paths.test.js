@@ -115,7 +115,7 @@ const OTHER_CLAUDE_LAUNCHES = [
 
 // Everything else the app starts, none of it the Claude CLI.
 const NOT_CLAUDE = [
-  { at: 'codex-appserver.js | _spawn | spawn(this._binPath)', runs: 'the Codex app-server, whose approvals are answered through lib/runtime/codex-glue.js, never through this hook' },
+  { at: 'codex-appserver.js | _spawn | spawn(launch.program)', runs: 'the Codex app-server, whose approvals are answered through lib/runtime/codex-glue.js, never through this hook' },
   { at: 'codex.js | resolveCodexBin | exec(lookupCmd)', runs: 'a lookup of the Codex binary on the PATH' },
   { at: "codex.js | detectCodex | exec(platform === 'win32' ? 'where.exe codex' : 'which codex')", runs: 'a lookup of the Codex binary on the PATH' },
   { at: 'codex.js | detectCodex | exec(`"${bin}" --version`)', runs: "Codex's version" },
