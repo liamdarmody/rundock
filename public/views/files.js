@@ -137,6 +137,9 @@ async function initTiptapEditor(path, content) {
     onCreateWikilink: (target) => createNoteFromLink(target),
     // Wikilinks that match no file render as missing, and a click makes them.
     resolveWikilink: (target) => wikilinkResolves(cachedFileTree, target, currentFilePath),
+    // Typing [[ lists the notes the Files tree shows, each with the target
+    // that opens it from this note. Read from the tree already loaded.
+    listWikilinkTargets: () => wikilinkCandidates(cachedFileTree, currentFilePath),
     // Review identity: workspace profile name -> 'me' fallback; the agent
     // roster lets review attribution render known agents as agent chips.
     author: (workspaceAnalysis && workspaceAnalysis.userProfile && workspaceAnalysis.userProfile.fields && workspaceAnalysis.userProfile.fields.name)
