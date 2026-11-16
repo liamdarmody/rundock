@@ -19,9 +19,10 @@
 // when the limit passes is.
 const path = require('node:path');
 
-// The longest one test may run before its file is stopped. Well above the
-// slowest test the suite has, so a slow machine is not mistaken for a stall,
-// and short enough that a stalled run ends within five minutes.
+// The longest one test may run before its file is stopped. The slowest single
+// test in a green Node 22 CI run took 51 seconds, and this is more than three
+// times that, so a slow machine is not mistaken for a stall. It is also short
+// enough that a stalled run ends within five minutes.
 const LIMIT_MS = 240 * 1000;
 
 // How long a file may stay open once its tests have finished: as long as one
