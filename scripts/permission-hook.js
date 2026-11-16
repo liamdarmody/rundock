@@ -4848,7 +4848,16 @@ fetchAgentNotice((agentNotice) => {
   // would otherwise send with nobody having seen it. Only Notes mode reaches here with one: Code mode has already
   // answered every connector action above.
   const connectorAlwaysAsks = isMcpSendTool(data.tool_name) || isMcpDeleteTool(data.tool_name);
-  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;
+  // AND A SIGN-IN CREDENTIAL, in both modes. The files the secrets registry
+  // names hold the runtimes' own sign-in, and nothing under a read of one
+  // stops it: the sandbox denies writes to them, not reads, and the file
+  // tools do not run in the sandbox. The `secret` tag is read the way the
+  // crossing check above reads its tags, so a file added to the registry is
+  // covered with no path of its own. The tag does not tell a read from a
+  // write, so a write is refused too. Its sentence comes last, so an access an
+  // earlier case already refuses keeps that case's words.
+  const credentialAccess = boundaryCrossingsFor(access).some(c => c && c.secret);
+  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;
   function unanswered(reason) {
     let why;
     if (answerFile) why = 'This file records your own permission answers or decides what runs, and it is never changed without asking, so it was refused rather than approved on your behalf.';
@@ -4858,6 +4867,7 @@ fetchAgentNotice((agentNotice) => {
     else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
     else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';
     else if (connectorAlwaysAsks) why = 'A connector action that sends, replies, forwards, deletes or archives is never done without asking, so with no way to ask it was refused rather than approved on your behalf.';
+    else if (credentialAccess) why = 'This reads or changes a sign-in credential, and it is never done without asking, so it was refused rather than approved on your behalf.';
     writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',

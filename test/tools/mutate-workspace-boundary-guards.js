@@ -1708,8 +1708,8 @@ const MUTATIONS = [
     "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? verdict.rule : null;",
     "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? 'Bash:git' : null;"],
   [CM_HOOK, "M17: Asks once fails open when nobody can be asked",
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;",
-    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;"],
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;",
+    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;"],
   [CM_HOOK, "M18: the Code-mode branch answers before the boundary classification",
     "      && !(access && (access.where === 'outside' || access.answerFile))\n      && (!verdict || verdict.verdict === 'runs')) {",
     "      && (!verdict || verdict.verdict === 'runs')) {"],
@@ -2681,8 +2681,8 @@ const MUTATIONS = [
   // Let a connector send or delete through when nobody can be asked and an
   // agent still running after Rundock has stopped sends with nobody seeing it.
   [CONNECTOR_HOOK_FLOW, 'Connector send: a send or delete is allowed when Rundock cannot be asked',
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;",
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks;"],
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;",
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || credentialAccess;"],
   [CONNECTOR_HOOK_FLOW, 'Connector delete: a delete is allowed when Rundock cannot be asked',
     '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name) || isMcpDeleteTool(data.tool_name);',
     '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name);'],
