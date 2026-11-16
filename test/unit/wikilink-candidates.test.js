@@ -68,13 +68,43 @@ describe('the target a chosen note is inserted with', () => {
     }
   });
 
-  test('a note no link from here can reach is left out rather than offered with a target that opens another', () => {
+  test('a root note and a nearer note with the same name are both offered, and each opens itself', () => {
     // A root-level note has no folder to qualify it with, so from a folder
-    // holding a note of the same name every spelling resolves to the nearer one.
-    const t = treeOf(['Roadmap.md', 'example/alpha/Roadmap.md']);
-    assert.strictEqual(wikilinkTargetFor(t, 'Roadmap.md', 'example/alpha/Plan.md'), null);
-    assert.deepStrictEqual(wikilinkCandidates(t, 'example/alpha/Plan.md').map((c) => c.path), ['example/alpha/Roadmap.md']);
-    assert.strictEqual(wikilinkCandidates(t, null).length, 2);
+    // holding a note of the same name every bare spelling reaches the nearer
+    // one. A leading / names the root note's path from the workspace root.
+    for (const folder of ['sub', 'example/alpha']) {
+      const t = treeOf(['Roadmap.md', `${folder}/Roadmap.md`, `${folder}/Plan.md`, 'Plan.md']);
+      for (const from of [`${folder}/Plan.md`, 'Plan.md', null]) {
+        const list = wikilinkCandidates(t, from);
+        assert.deepStrictEqual(list.map((c) => c.path).filter((p) => p.endsWith('Roadmap.md')).sort(),
+          ['Roadmap.md', `${folder}/Roadmap.md`], `both offered from ${from}`);
+        for (const c of list) assert.strictEqual(opens(t, c.target, from), c.path, `${c.target} from ${from}`);
+      }
+    }
+    const t = treeOf(['Roadmap.md', 'sub/Roadmap.md']);
+    assert.strictEqual(wikilinkTargetFor(t, 'Roadmap.md', 'sub/Plan.md'), '/Roadmap');
+    assert.strictEqual(wikilinkTargetFor(t, 'sub/Roadmap.md', 'sub/Plan.md'), 'Roadmap');
+    assert.strictEqual(wikilinkTargetFor(t, 'Roadmap.md', 'Plan.md'), 'Roadmap', 'from the root the bare name is enough');
+    assert.strictEqual(wikilinkTargetFor(t, 'sub/Roadmap.md', 'Plan.md'), 'sub/Roadmap');
+  });
+});
+
+describe('a target that starts with /', () => {
+  const t = treeOf(['Roadmap.md', 'sub/Roadmap.md', 'sub/deep/Roadmap.md', 'sub/deep/Plan.md']);
+
+  test('names one path from the workspace root, whichever note holds the link', () => {
+    for (const from of ['sub/deep/Plan.md', 'sub/Plan.md', 'Plan.md', null]) {
+      assert.strictEqual(opens(t, '/Roadmap', from), 'Roadmap.md', `from ${from}`);
+      assert.strictEqual(opens(t, '/sub/Roadmap', from), 'sub/Roadmap.md', `from ${from}`);
+      assert.strictEqual(opens(t, '/sub/deep/Roadmap.md', from), 'sub/deep/Roadmap.md', `from ${from}`);
+    }
+    assert.strictEqual(opens(t, '/ROADMAP', 'sub/Plan.md'), 'Roadmap.md', 'case is ignored, as for any path');
+  });
+
+  test('never falls back to a note of the same name somewhere else', () => {
+    assert.strictEqual(opens(treeOf(['sub/Roadmap.md']), '/Roadmap', 'sub/Plan.md'), null);
+    assert.strictEqual(opens(t, '/deep/Roadmap', 'sub/Plan.md'), null);
+    assert.strictEqual(opens(t, '/Plan', 'sub/deep/Plan.md'), null);
   });
 });
 
@@ -93,9 +123,15 @@ describe('which notes are offered', () => {
   });
 
   test('a name a link cannot carry intact is never offered', () => {
-    const unusable = ['a]]b.md', 'a[b.md', 'a|b.md', 'a#b.md', 'a^b.md', 'a\nb.md', 'a\u0007b.md', ' Lead.md'];
+    const unusable = ['a]]b.md', 'a[b.md', 'a|b.md', 'a#b.md', 'a^b.md', 'a\nb.md', 'a\u0007b.md'];
     const t = treeOf([...unusable, 'Roadmap.md']);
     assert.deepStrictEqual(wikilinkCandidates(t, null).map((c) => c.path), ['Roadmap.md']);
+  });
+
+  test('a root name starting with a space is offered from the root, the one spelling a link does not trim', () => {
+    const t = treeOf([' Lead.md']);
+    assert.deepStrictEqual(wikilinkCandidates(t, null), [{ path: ' Lead.md', name: ' Lead', target: '/ Lead' }]);
+    assert.strictEqual(opens(t, '/ Lead', null), ' Lead.md');
   });
 
   test('a name ending in a space is offered with its .md kept, the one spelling a link does not trim', () => {

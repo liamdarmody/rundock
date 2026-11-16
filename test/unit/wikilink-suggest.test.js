@@ -400,6 +400,52 @@ describe('two notes with the same name', () => {
   }
 });
 
+describe('a root note and a nearer note with the same name', () => {
+  const tree = [
+    { type: 'file', name: 'Roadmap.md', path: 'Roadmap.md' },
+    { type: 'file', name: 'Plan.md', path: 'Plan.md' },
+    { type: 'folder', name: 'sub', path: 'sub', children: [
+      { type: 'file', name: 'Roadmap.md', path: 'sub/Roadmap.md' },
+      { type: 'file', name: 'Plan.md', path: 'sub/Plan.md' },
+    ] },
+  ];
+  // A root note is listed with no folder under its name.
+  const folderOf = (row) => row.querySelector('.wikilink-suggest-meta')?.textContent ?? '';
+
+  for (const from of ['sub/Plan.md', 'Plan.md']) {
+    for (const chosen of ['Roadmap.md', 'sub/Roadmap.md']) {
+      test(`from ${from}, both are listed, and choosing ${chosen} saves a link that opens it`, async () => {
+        const ed = mount('Intro\n', () => wikilinkCandidates(tree, from));
+        ed.type(' [[road');
+        await tick();
+        assert.deepEqual(ed.rows().map(folderOf).sort(), ['', 'sub'], 'both notes are listed');
+        const at = ed.rows().findIndex((r) => folderOf(r) === (chosen.includes('/') ? 'sub' : ''));
+        while (ed.selectedIndex() !== at) ed.press('ArrowDown');
+        ed.press('Enter');
+        await tick();
+        const [target] = ed.links();
+        assert.equal(findFileInTree(tree, wikilinkSearchName(target), from), chosen);
+        const saved = ed.markdown();
+        assert.equal(saved, `Intro [[${target}]]\n`);
+        const reopened = mount(saved, null);
+        assert.deepEqual(reopened.links(), [target], 'the saved file reads back as the same link');
+        assert.equal(reopened.markdown(), saved, 'and saves again as the same bytes');
+      });
+    }
+  }
+
+  test('a link starting with / typed in full is saved and reopened as the same bytes', async () => {
+    const ed = mount();
+    ed.type(' see [[/Roadmap]] and [[/sub/Roadmap]] today');
+    await tick();
+    const saved = ed.markdown();
+    assert.equal(saved, 'Intro see [[/Roadmap]] and [[/sub/Roadmap]] today\n');
+    const reopened = mount(saved, null);
+    assert.deepEqual(reopened.links(), ['/Roadmap', '/sub/Roadmap']);
+    assert.equal(reopened.markdown(), saved);
+  });
+});
+
 describe('where the list never opens', () => {
   test('inside a code block', async () => {
     const ed = mount('Intro\n\n```\nlet a = 1\n```\n');

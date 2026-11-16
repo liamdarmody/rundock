@@ -1,9 +1,10 @@
 'use strict';
 // Where a note created from a link to a missing note goes, and what is
 // refused. A bare name goes beside the note the link was written in; a name
-// with a folder in it counts from the workspace root. The created path has to
-// be the path the resolver then finds for the same link, or the link would
-// stay missing after the note exists. Every name here is made up.
+// with a folder in it, or starting with /, counts from the workspace root. The
+// created path has to be the path the resolver then finds for the same link,
+// or the link would stay missing after the note exists. Every name here is
+// made up.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -48,8 +49,15 @@ describe('where a note made from a link goes', () => {
     assert.deepStrictEqual(linkCreatePath('Release 1.5', FROM), { path: 'Projects/Alpha/Release 1.5.md' });
   });
 
+  test('a name starting with / goes at the workspace root, whichever note holds the link', () => {
+    assert.deepStrictEqual(linkCreatePath('/Roadmap', FROM), { path: 'Roadmap.md' });
+    assert.deepStrictEqual(linkCreatePath('/Roadmap#Risks', FROM), { path: 'Roadmap.md' });
+    assert.deepStrictEqual(linkCreatePath('/Archive/Old plan', FROM), { path: 'Archive/Old plan.md' });
+    assert.deepStrictEqual(linkCreatePath('/ Lead', FROM), { path: ' Lead.md' }, 'what follows the / is the name as written');
+  });
+
   test('the created note is the one the same link then resolves to', () => {
-    for (const target of ['Roadmap', 'Roadmap#Risks', 'Archive/Old plan', 'Notes/Plan.md', 'Release 1.5']) {
+    for (const target of ['Roadmap', 'Roadmap#Risks', 'Archive/Old plan', 'Notes/Plan.md', 'Release 1.5', '/Roadmap', '/Archive/Old plan', '/ Lead']) {
       const { path } = linkCreatePath(target, FROM);
       assert.strictEqual(findFileInTree(treeWith(path), wikilinkSearchName(target), FROM), path, target);
     }
@@ -88,7 +96,7 @@ describe('what a link cannot create, said in plain words', () => {
   });
 
   test('anything that leaves the workspace or its own folder', () => {
-    for (const target of ['../elsewhere', 'Archive/../../elsewhere', '..', '.', 'a/./b']) {
+    for (const target of ['../elsewhere', 'Archive/../../elsewhere', '..', '.', 'a/./b', '/../elsewhere', '/..', '/.']) {
       assert.match(refused(target), /outside this workspace/, target);
     }
   });
@@ -97,7 +105,9 @@ describe('what a link cannot create, said in plain words', () => {
     assert.match(refused('.hidden'), /start with a dot/);
     assert.match(refused('Archive/.drafts/x'), /start with a dot/);
     assert.match(refused('Archive//x'), /no name/);
-    assert.match(refused('/Roadmap'), /no name/);
+    assert.match(refused('//Roadmap'), /no name/);
+    assert.match(refused('/'), /no note name/);
+    assert.match(refused('/#Risks'), /no note name/);
     assert.match(refused('#Risks'), /no note name/);
     assert.match(refused('   '), /no note name/);
   });
@@ -109,7 +119,7 @@ describe('what a link cannot create, said in plain words', () => {
   });
 
   test('no input of any shape yields a path outside the workspace', () => {
-    for (const target of ['../x', '..\\x', '/etc/x', 'a/../../x', '~/x', 'C:\\x', '\\\\server\\x']) {
+    for (const target of ['../x', '..\\x', '/etc/x', '//etc/x', '/../x', 'a/../../x', '~/x', 'C:\\x', '\\\\server\\x']) {
       const r = linkCreatePath(target, FROM);
       if (r.path) {
         assert.ok(!r.path.startsWith('/') && !r.path.split('/').includes('..'), `${target} -> ${r.path}`);

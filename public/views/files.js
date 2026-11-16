@@ -2211,6 +2211,11 @@ function highlightFileInSidebar(filePath) {
 //      other tie-break ever ran, which is the shape the reported bug actually
 //      took: a bare link short-circuited straight to root, tie-break rules
 //      notwithstanding.
+//      A search starting with '/' names a path from the workspace root and
+//      nothing else: rule 1 compares the rest of it, and rule 2 never runs.
+//      It is the one spelling that reaches a root-level note from a folder
+//      holding a note of the same name, which every bare spelling resolves
+//      to instead.
 //   2. Basename match, tied by PROXIMITY TO fromPath first, then SHORTEST
 //      PATH, then TREE ORDER. `fromPath` is the file the link was read from
 //      (optional; every caller that knows its source passes it). A bare
@@ -2227,9 +2232,10 @@ function highlightFileInSidebar(filePath) {
 // and for a name carrying '.md' mid-string it could match a file the link
 // never named. Nothing may match under a rule a reader cannot predict.
 function findFileInTree(items, searchName, fromPath) {
-  const searchLower = String(searchName).toLowerCase();
+  const rooted = String(searchName).startsWith('/');
+  const searchLower = String(searchName).slice(rooted ? 1 : 0).toLowerCase();
   const searchBase = searchLower.split('/').pop();
-  const searchIsQualified = searchLower.includes('/');
+  const searchIsQualified = rooted || searchLower.includes('/');
   const fromSegments = fromPath ? dirSegments(fromPath) : null;
   let best = null;
   let order = 0;
@@ -2239,7 +2245,7 @@ function findFileInTree(items, searchName, fromPath) {
         const at = order++;
         if (searchIsQualified && item.path.toLowerCase() === searchLower) {
           if (!best || !best.exact) best = { path: item.path, exact: true };
-        } else if (!(best && best.exact) && item.name.toLowerCase() === searchBase) {
+        } else if (!rooted && !(best && best.exact) && item.name.toLowerCase() === searchBase) {
           const depth = item.path.split('/').length;
           const shared = fromSegments ? commonPrefixLen(fromSegments, dirSegments(item.path)) : 0;
           if (!best || shared > best.shared ||
@@ -2303,7 +2309,8 @@ function wikilinkResolves(tree, target, fromPath) {
 // Read from the tree the Files sidebar draws, skipping what the server's walk
 // hides (dot names, node_modules) in case a tree ever arrives with them, so
 // the popup can never list a file the sidebar would not show. Notes only
-// (.md), and only those some link spelling reaches: see wikilinkTargetFor.
+// (.md), each with the link spelling that reaches it: see wikilinkTargetFor.
+// A note none reaches (a name a link cannot carry intact) is left out.
 function wikilinkCandidates(tree, fromPath) {
   const out = [];
   (function walk(list) {
@@ -2323,7 +2330,10 @@ function wikilinkCandidates(tree, fromPath) {
 // The link target that opens exactly the note at `path` when written in the
 // note at fromPath, or null when none does. The shortest spelling first: the
 // bare name, then the path without .md, then each with .md kept (for a name
-// like "chart.png.md", whose bare form names another file). Each spelling is
+// like "chart.png.md", whose bare form names another file), and last the path
+// from the workspace root with a leading '/', only when nothing shorter
+// reaches the note (a root-level note beside a nearer note of the same name,
+// or a root name that starts with a space). Each spelling is
 // checked through the same resolver a click uses, so two notes sharing a name
 // get different targets and each opens its own note. A spelling with a
 // character that ends or splits a link ([ ] | # ^) or a control character is
@@ -2333,7 +2343,7 @@ function wikilinkTargetFor(tree, path, fromPath) {
   const p = String(path);
   const name = p.split('/').pop();
   const bare = name.replace(/\.md$/i, '');
-  const spellings = [bare, p.replace(/\.md$/i, ''), name, p];
+  const spellings = [bare, p.replace(/\.md$/i, ''), name, p, '/' + p.replace(/\.md$/i, ''), '/' + p];
   for (const s of spellings) {
     if (!s || WIKILINK_UNSAFE_TARGET_RE.test(s) || s !== s.trim()) continue;
     if (findFileInTree(tree, wikilinkSearchName(s), fromPath) === p) return s;
@@ -2343,24 +2353,30 @@ function wikilinkTargetFor(tree, path, fromPath) {
 
 // Where a note made from a link to a missing note goes, as { path }, or why it
 // cannot be made, as { refusal } in plain words. A bare name goes beside the
-// note the link was written in (fromPath); a name with a folder in it counts
-// from the workspace root, as the resolver above reads it, so the note made
-// is the note the same link then finds. Nothing here can name a place outside
-// the workspace: '.' and '..' are refused, as is any name the file tree would
-// hide, and the server's create guard checks the same again.
+// note the link was written in (fromPath); a name with a folder in it, or one
+// starting with '/', counts from the workspace root, as the resolver above
+// reads it, so the note made is the note the same link then finds. Nothing
+// here can name a place outside the workspace: the leading '/' is dropped
+// rather than read as the disk's root, '.' and '..' are refused, as is any
+// name the file tree would hide, and the server's create guard checks the
+// same again.
 // Control characters are refused with the rest (C0, DEL and C1), so a NUL
 // never reaches the server's file calls.
 const LINK_NAME_FORBIDDEN_RE = /[:*?"<>|\\\u0000-\u001f\u007f-\u009f]/;
 function linkCreatePath(target, fromPath) {
   const name = String(target == null ? '' : target).split('#')[0].trim();
-  if (!name) return { refusal: 'That link has no note name.' };
+  const rooted = name.startsWith('/');
+  const rest = rooted ? name.slice(1) : name;
+  if (!rest) return { refusal: 'That link has no note name.' };
   if (LINK_NAME_FORBIDDEN_RE.test(name)) return { refusal: 'Note and folder names cannot contain : * ? " < > |, a backslash or a control character.' };
-  const segments = name.split('/');
+  const segments = rest.split('/');
   if (segments.some((s) => s === '.' || s === '..')) return { refusal: 'That link points outside this workspace.' };
   if (segments.some((s) => !s.trim())) return { refusal: 'A folder in that link has no name.' };
   if (segments.some((s) => s.startsWith('.'))) return { refusal: 'Note and folder names cannot start with a dot.' };
-  const file = wikilinkSearchName(name);
+  // From the whole name, so a space after the '/' is kept, as the resolver keeps it.
+  const file = wikilinkSearchName(name).slice(rooted ? 1 : 0);
   if (!/\.md$/i.test(file)) return { refusal: 'Only notes can be made from a link, and this one names another kind of file.' };
+  if (rooted) return { path: file };
   const folder = segments.length > 1 || !fromPath ? '' : String(fromPath).split('/').slice(0, -1).join('/');
   return { path: folder ? folder + '/' + file : file };
 }
