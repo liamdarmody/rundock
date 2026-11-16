@@ -2425,9 +2425,11 @@ const MUTATIONS = [
   [PUTBACK_VIEW, "Put-back card: Leave it restored keeps the change",
     "data-perm-action=\"deny\">${esc(copy.leave)}",
     "data-perm-action=\"allow\">${esc(copy.leave)}"],
+  // The summarised divider moves the reply below itself with the same line,
+  // so the put-back card's copy is told apart by the else that follows it.
   [PUTBACK_VIEW, "Put-back card: the reply is not moved below the card",
-    "    state.currentStreamingMsg = next;",
-    ""],
+    "    state.currentStreamingMsg = next;\n  } else {",
+    "  } else {"],
   [PUTBACK_COPY, "Put-back card: a whitespace-only change is invisible",
     "    return m ? line.slice(0, m.index) + m[0].replace(/./g, '\u00b7') : line;",
     "    return line;"],
