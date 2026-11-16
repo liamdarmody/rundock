@@ -16,9 +16,17 @@ In scope: Rundock itself. The desktop app, the Node.js server, the WebSocket pro
 
 Out of scope: vulnerabilities in third-party tools that Rundock invokes (Claude Code and Anthropic's API, the Codex CLI and OpenAI's API, Node.js, Electron). Report those upstream.
 
+[What protects what](#what-protects-what) says which ways past the permission checks are vulnerabilities.
+
 ## What protects what
 
-Cards guard against ordinary agent behaviour; the sandbox guards against a determined one.
+The permission checks guard against two classes of risk.
+
+The first is mistakes by an honest agent, which is all the checks assume outside the second class. Cards guard against these, with the sandbox beneath them where it is on.
+
+The second is reading credentials and taking actions that cannot be undone. Here the checks assume an agent may be steered by text it reads, such as a web page, a file or a connector's result. They rely on the sandbox's deny rules, which stop writes but not reads, and on refusing when Rundock is unsure or cannot ask. Refusing is the standard the checks are held to: where a check falls short of it, that is a bug.
+
+Outside the second class, a command spelled in a way an honest agent would not write, so that a check misreads it, is not treated as a vulnerability. Inside it, a way past the checks is a vulnerability, unless this file already names it as a known limit, as the Keychain paragraph below does. Report it privately, as [Reporting a vulnerability](#reporting-a-vulnerability) asks.
 
 One secret the sandbox cannot guard is the Mac's Keychain, where Claude Code keeps its live sign-in token. The sandbox lets every command reach the Keychain service, because the runtime signs in through it, so a command running inside the sandbox can still read an item. A command that reads or changes a Keychain item through `security` therefore asks every time, in both Notes and Code mode, with Allow and Deny only; no saved "Always allow" answers it, and when Rundock cannot be asked it is refused. Here the card is the only guard, and it reads the command as typed: a program that calls the Keychain itself, such as a script or an interpreter given code to run, and `security` run under another name, are not recognised as Keychain reads, and in Code mode they can run without a card. ARCHITECTURE.md lists what asks and what does not.
 
@@ -26,7 +34,7 @@ Only Rundock's own window can drive Rundock's local server. The desktop app's wi
 
 Some files in a workspace decide what agents may do or what runs: the files that hold your permission answers, the launcher the runtime starts Rundock's permission checks through (`.rundock/permission-hook.sh`, `.cmd` on Windows), `.mcp.json`, the per-user connector file `.rundock/mcp-secrets.json`, the project's `.claude/settings.json` and the scripts under `.claude/hooks/`. An agent's change to any of them asks every time, in both modes, with no option to stop being asked, and is refused when Rundock cannot ask. A change to the launcher is refused outright, with no card: Rundock writes that file itself. A connector an agent asks Rundock to add or remove is written only after you allow it on a card that shows exactly what it would run. On the Mac with "Keep agents inside this workspace" on, the operating system also refuses a sandboxed command's write to the launcher, `.mcp.json`, the per-user connector file, the project settings and the permission answers, however the write is made. Elsewhere, and for a write made inside a script rather than by a command Rundock can read, the card is the line, so against a determined program it guards only as far as the table below says.
 
-A routine runs unattended only where you approved it. Rundock keeps that record in its own folder, outside every workspace. On the Mac in the default mode, agents cannot write there. On Windows, and in Code mode, a program running as you can, so there the record, like the cards, guards against ordinary agent behaviour rather than a determined program.
+A routine runs unattended only where you approved it. Rundock keeps that record in its own folder, outside every workspace. On the Mac in the default mode, agents cannot write there. On Windows, and in Code mode, a program running as you can, so there the record guards against ordinary agent behaviour rather than a determined program.
 
 How strong that is depends on how you run Rundock, because a program running as you can do what your operating system lets it:
 
