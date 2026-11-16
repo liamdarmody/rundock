@@ -333,9 +333,16 @@ for (const client of ['mac', 'windows']) {
     await expect(page.locator('#palette-input')).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(page.locator('#palette-overlay')).toBeHidden();
-    // Save, in the note.
+    // Save, in the note. The edit's own autosave is held back, so only the
+    // save shortcut can write the file.
     await page.locator('.nav-item[data-nav="files"]').click();
+    await page.evaluate(() => {
+      window.autosavesAsked = 0;
+      fileSaves.schedule = () => { window.autosavesAsked++; };
+    });
     await typeAtEndOfNote(page, ' saved now');
+    await expect.poll(() => page.evaluate(() => window.autosavesAsked), { message: 'the edit asked for its autosave' }).toBeGreaterThan(0);
+    expect(readNote(), 'nothing has saved the edit yet').not.toContain('saved now');
     await page.keyboard.press(`${mod}+s`);
     expect((await lastKey(page)).prevented, 'the save shortcut ran').toBe(true);
     await expect.poll(readNote).toContain('saved now');
