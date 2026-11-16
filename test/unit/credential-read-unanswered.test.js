@@ -13,11 +13,12 @@
 //
 // Everything else keeps its answer. Those cases, the credential reads that were
 // already refused for another reason, and the card a credential read draws when
-// the server answers are compared field by field with what main's hook returns:
+// the server answers are compared field by field with what main's hook returned
+// before this change, which also records where it started:
 // test/fixtures/credential-read-on-main.json, recorded by running this file
-// against main's hook:
+// against the hook as it was in v0.15.8:
 //
-//   git show origin/main:scripts/permission-hook.js > scripts/.main-hook.js
+//   git show v0.15.8:scripts/permission-hook.js > scripts/.main-hook.js
 //   RUNDOCK_RECORD_HOOK="$PWD/scripts/.main-hook.js" node --test test/unit/credential-read-unanswered.test.js
 //
 // Paths under the temporary folder are written as `<root>`, and each card
@@ -232,6 +233,28 @@ describe('the refusal says a sign-in credential is never touched without asking'
         cases.forEach((c, i) => assert.deepStrictEqual(said(got[i]), { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason }, named(c)));
       });
     }
+  }
+});
+
+// Where this started: with nobody to ask, main's hook allowed a Read of every
+// credential file in Notes mode, and in Code mode of the files under a runtime
+// home, on the reason alone.
+describe('on main, a credential read with nobody to ask was allowed', { skip: POSIX }, () => {
+  for (const [label, mode] of MODES) {
+    test(`${label}: main's hook allowed a Read of each credential file it did not refuse for another reason`, async () => {
+      const cases = REGISTRY.map(f => ['Read', { file_path: f }]);
+      if (RECORD) {
+        const got = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode }));
+        cases.forEach((c, i) => { recorded[keyOf(label, 'unreachable', c)] = got[i]; });
+        return;
+      }
+      const answers = cases.map(c => said(onMain[keyOf(label, 'unreachable', c)]));
+      const allowed = cases.filter((c, i) => answers[i].permissionDecision === 'allow');
+      const expected = mode === 'notes' ? cases : cases.filter(([, input]) => underRuntimeHome(input.file_path));
+      assert.ok(expected.length > 0, 'main allowed some');
+      assert.deepStrictEqual(allowed.map(named), expected.map(named), 'allowed on main');
+      answers.filter(a => a.permissionDecision === 'allow').forEach(a => assert.strictEqual(a.permissionDecisionReason, UNREACHABLE));
+    });
   }
 });
 
