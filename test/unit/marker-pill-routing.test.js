@@ -168,16 +168,6 @@ describe('the client sends what the server needs to route', () => {
     }
   });
 
-  test('the frontmatter fallback sends the id too', () => {
-    // The fallback path that extracts raw YAML agents ran without a
-    // conversation id while the marker loop beside it carried one, so a save
-    // that arrived by this route announced itself in the wrong place.
-    const at = src.indexOf('extractFrontmatterAgents(textToScan)');
-    assert.ok(at > -1, 'the fallback still exists');
-    const block = src.slice(at, at + 400);
-    assert.match(block, /conversationId: convoId/,
-      'the fallback save must route like the primary one');
-  });
 });
 
 describe('a refusal routes the same way a success does', () => {

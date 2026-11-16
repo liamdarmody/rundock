@@ -24,11 +24,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -58,6 +58,31 @@ const SERVER_STOPPED = { src: path.join(ROOT, 'server.js'), suite: STOPPED };
 const CODEX_STDIN = { src: path.join(ROOT, 'codex-appserver.js'), suite: 'test/unit/codex-appserver-stdin.test.js' };
 const STDIN_UNIT = { src: path.join(ROOT, 'lib', 'runtime', 'child-stdin.js'), suite: 'test/unit/child-stdin.test.js' };
 const STDIN_INVENTORY = { src: path.join(ROOT, 'test', 'unit', 'child-stdin-inventory.test.js'), suite: 'test/unit/child-stdin-inventory.test.js' };
+// A catch-up held for the next message, kept with the conversation through a
+// reap or a restart, and given once.
+const HELD = 'test/integration/held-catch-up.test.js';
+const ENGINE_HELD = { src: ENGINE.src, suite: HELD };
+const SERVER_HELD = { src: SERVER.src, suite: HELD };
+const SAVE_HELD = { src: SAVE.src, suite: HELD };
+const RULES_HELD = { src: RULES.src, suite: HELD };
+// What Rundock did with a reply's agent and skill markers, kept with the
+// conversation and told to its next turn once (lib/agents/team-notes.js).
+const TEAM_NOTES = 'test/integration/team-notes.test.js';
+const TEAM_NOTES_UNIT = 'test/unit/team-notes.test.js';
+const NOTES = { src: path.join(ROOT, 'lib', 'agents', 'team-notes.js'), suite: TEAM_NOTES_UNIT };
+const ENGINE_NOTES = { src: ENGINE.src, suite: TEAM_NOTES };
+const CATCHUP_NOTES = { src: CATCHUP.src, suite: TEAM_NOTES };
+const SERVER_NOTES = { src: SERVER.src, suite: TEAM_NOTES };
+const LINES_NOTES = { src: path.join(ROOT, 'lib', 'delegation', 'rundock-lines.js'), suite: TEAM_NOTES_UNIT };
+const CATCHUP_NOTES_UNIT = { src: CATCHUP.src, suite: TEAM_NOTES_UNIT };
+// A card for each agent or skill change Doc makes while another agent brought
+// it in, written only on an Allow given on that card (lib/agents/team-markers.js).
+const CARDS = 'test/integration/team-handoff-cards.test.js';
+const TEAM_MARKERS_SRC = path.join(ROOT, 'lib', 'agents', 'team-markers.js');
+const MARKERS_CARDS = { src: TEAM_MARKERS_SRC, suite: CARDS };
+const MARKERS_TURN = { src: TEAM_MARKERS_SRC, suite: 'test/unit/team-markers-turn.test.js' };
+const ENGINE_CARDS = { src: ENGINE.src, suite: CARDS };
+const GRADING_CARDS = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/team-change-card.test.js' };
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. The whole
 // stale-session suite takes some twenty seconds unbroken, and a broken guard
@@ -82,8 +107,8 @@ const MUTATIONS = [
     '    const expired = refusedResume(entry.process, stderrBuf.value);',
     '    const expired = null;'],
   [only(ENGINE, 'the legacy spawn names the expired session too'), 'the raw refusal never reaches the window',
-    '      forgetExpiredSession(convoId, expired);\n      return;\n    }',
-    '      forgetExpiredSession(convoId, expired);\n    }'],
+    '      putBack(convoId, entry.process);\n      return;\n    }',
+    '      putBack(convoId, entry.process);\n    }'],
   [only(ENGINE, 'is still recognized, nothing of it is shown, and it is forgotten once'), 'a refusal is matched on everything the process wrote, not one chunk',
     '    const expired = refusedResume(entry.process, stderrBuf.value);',
     '    const expired = refusedResume(entry.process, text);'],
@@ -178,6 +203,45 @@ const MUTATIONS = [
   [RULES, 'a catch-up is held for the next message',
     '  if (entry && prefix) entry.freshCatchUp = prefix;',
     ''],
+  [only(ENGINE_HELD, 'reaches the next message once after the idle reaper ends the fresh start'), 'a held catch-up is stored with the conversation',
+    '  storeHeldCatchUp(convoId, entry);\n  wireProcessHandlers(entry, convoId, null, wireOptions);',
+    '  wireProcessHandlers(entry, convoId, null, wireOptions);'],
+  [only(SAVE_HELD, 'reaches the next message once after the idle reaper ends the fresh start'), 'a save from the window keeps the stored catch-up',
+    '  if (stored && stored.freshCatchUp !== undefined) entry.freshCatchUp = stored.freshCatchUp;\n',
+    ''],
+  [only(SERVER_HELD, 'reaches the next message once after a restart'), 'a new process gives the stored catch-up to its first message',
+    '            const heldCatchUp = takeStoredCatchUp(convoId, entry.agentId);',
+    "            const heldCatchUp = '';"],
+  [only(RULES_HELD, 'reaches the next message once after the idle reaper ends the fresh start'), 'a stored catch-up is removed once a new process is given it',
+    "  storeCatchUp(convoId, null);\n  return readable ? held.text : '';",
+    "  return readable ? held.text : '';"],
+  [only(RULES_HELD, 'given by the live process, it is not given again after a reap or a restart'), 'a stored catch-up is removed once the live process gives it',
+    '  if (prefix && entry.catchUpStoredIn) storeCatchUp(entry.catchUpStoredIn, null);\n',
+    ''],
+  [only(SERVER_HELD, 'a stored catch-up the resume it was given to never read goes to the fresh start, once'), 'a catch-up given to a refused resume goes to the fresh start',
+    '                entry.freshCatchUp = heldCatchUp;\n',
+    ''],
+  [only(SAVE_HELD, 'the conversation list a window is sent leaves it out, and the store keeps it'), 'the conversation list leaves the stored catch-up out',
+    '    delete c.freshCatchUp;\n',
+    ''],
+  [only(SERVER_HELD, 'gives a stored catch-up to its first message, once'), 'the legacy chat path gives the stored catch-up to its first message',
+    '          const legacyCatchUp = takeStoredCatchUp(convoId, entry.agentId);',
+    "          const legacyCatchUp = '';"],
+  [only(SERVER_HELD, 'hands a stored catch-up on from a refused resume to the fresh start, once'), 'the legacy chat path hands a refused resume\'s catch-up to the fresh start',
+    '              entry.freshCatchUp = legacyCatchUp; // never read: it goes to the fresh start\n',
+    ''],
+  [only(ENGINE_HELD, 'with no session to resume, takes the stored catch-up in front of the handback, and it is not given again'), 'a handback start settles a stored catch-up',
+    '  const storedCatchUp = takeStoredCatchUp(convoId, orchestrator.id);',
+    "  const storedCatchUp = '';"],
+  [only(ENGINE_HELD, 'with no session to resume, takes the stored catch-up in front of the handback, and it is not given again'), 'a handback start with no session gives the catch-up with the handback',
+    '      const prompt = coldCatchUp + buildScopeReturnPrompt({',
+    '      const prompt = buildScopeReturnPrompt({'],
+  [only(ENGINE_HELD, 'resuming a session, spends the stored catch-up without repeating it'), 'a resumed handback start only spends the catch-up',
+    "  const coldCatchUp = orchestratorSession ? '' : storedCatchUp;",
+    '  const coldCatchUp = storedCatchUp;'],
+  [only(ENGINE_HELD, 'paused again by the circuit breaker, holds what it took for the message that drives it'), 'a paused handback start holds what it took for the next message',
+    '    holdFreshCatchUp(orchEntry, coldCatchUp);\n',
+    ''],
   [only(CATCHUP, 'in continue mode too, the fresh orchestrator is told the request it never saw'), 'a handback prompt honors the arrival heading it is asked for',
     '  const catchUp = catchUpPrefix(orchMissed, arriving);',
     '  const catchUp = catchUpPrefix(orchMissed);'],
@@ -204,8 +268,8 @@ const MUTATIONS = [
   [only(SERVER, 'a handback paused by the circuit breaker gives the next message the catch-up instead'), 'a message sent to a fresh start with no prompt carries the catch-up',
     '            const followUp = withFreshCatchUp(existing, msg.content);',
     '            const followUp = msg.content;'],
-  [RULES, 'nothing is kept once the session has started',
-    '  if (!entry || entry.sessionId) return;',
+  [RULES, 'nothing is kept once a turn has answered',
+    '  if (!entry || entry.answered) return;',
     '  if (!entry) return;'],
   [RULES, 'what is kept is handed over once',
     '  if (entry) entry.unstartedWrites = [];\n',
@@ -275,9 +339,9 @@ const MUTATIONS = [
   [only(SERVER, 'the legacy spawn starts a refusal that came after an init again fresh too'), 'the legacy path retries a refusal after an init too',
     '(!entry.sessionId || entry.missingSession) &&\n              (legacyStderrRef',
     '!entry.sessionId &&\n              (legacyStderrRef'],
-  [ENGINE_UNIT, 'once the session starts, nothing kept for a refused start is kept',
-    '          // this point, they could be sent a second time.\n          takeUnstartedWrites(entry);\n',
-    '          // this point, they could be sent a second time.\n'],
+  [ENGINE_UNIT, 'the kept list is cleared on the first result',
+    '          noteAnswered(entry);\n',
+    ''],
   [only(SERVER, 'forgets exactly that session: the orchestrator\'s live primary survives, and the window says why'), 'the chat path\'s own retry counts as starting again',
     '\n                entry.missingSessionRecovered = true; // started again below',
     ''],
@@ -386,6 +450,58 @@ const MUTATIONS = [
     'a failed write after the first is only logged: one that ended the delegation again would end it twice',
     '      if (err) report(err);\n',
     "      if (err) { report(err); if (stdin.rundockFailedBefore) proc.emit('close', 1, null); stdin.rundockFailedBefore = true; }\n"],
+
+  // ===== THE NEXT TURN IS TOLD WHAT RUNDOCK DID WITH THE MARKERS, ONCE =====
+  [NOTES, 'the team note is told on every later turn, not once',
+    "  try { persist(convoId, null); } catch (e) { log(convoId, 'could not remove the outcomes told from the record', e); return input; }\n  waiting.delete(convoId);\n",
+    ''],
+  [NOTES, 'the team note is dropped',
+    '    told = seams.deliver(input, seams.build(list));',
+    '    told = input;'],
+  [only(ENGINE_NOTES, 'instruction-shaped text in a marker\'s body or attributes gives a note of fixed fields only, byte for byte'), 'the team note is built from the reply\'s text, not from the outcomes',
+    '          keepOutcomes(convoId, teamOutcomes);',
+    "          keepOutcomes(convoId, teamOutcomes.map((o) => ({ ...o, outcome: 'error', message: entry.responseText })));"],
+  [only(CATCHUP_NOTES, 'Doc\'s save was refused and another failed: the orchestrator is told so, never that it was saved, and the conversation keeps both lines'), 'the hand-back tells the orchestrator a refused change was saved',
+    "    if (o.outcome === 'saved' || o.outcome === 'updated') return",
+    "    if (o.outcome === 'saved' || o.outcome === 'updated' || o.outcome === 'refused') return"],
+  [only(SERVER_NOTES, 'stored once with two windows open, after the reply that asked, and given back by the history'), 'the team line is stored once for every open window',
+    'teamNotes.wireTeamNotes({ appendTranscript: (...args) => appendTranscript(...args) });',
+    'teamNotes.wireTeamNotes({ appendTranscript: (...args) => { for (const client of connectedClients) appendTranscript(...args); } });'],
+  [LINES_NOTES, 'the team note\'s heading is left out of Rundock\'s own headings',
+    '  ...Object.values(CATCH_UP_HEADINGS),\n',
+    '  ...Object.values(CATCH_UP_HEADINGS).filter((heading) => heading !== CATCH_UP_HEADINGS.outcomes),\n'],
+
+  // ===== IN A HAND-OFF, EACH CHANGE DOC MAKES IS WRITTEN ONLY ON AN ALLOW GIVEN ON ITS CARD =====
+  [MARKERS_TURN, 'whether Doc was brought in is read from the reply, not the process entry',
+    "  try { by = entry.delegation ? String(entry.delegation.originalAgentId || '') : null; } catch (e) { by = ''; }",
+    "  try { by = /brought me in|delegated by/i.test(text) ? 'chief-of-staff' : null; } catch (e) { by = ''; }"],
+  [only(MARKERS_CARDS, 'An allow that did not come from a card writes nothing'), 'a change is written on an allow that did not come from its card',
+    'allow === true && how && how.card === true ?',
+    'allow === true ?'],
+  [only(MARKERS_CARDS, 'No answer before the timeout, with every window closed: nothing is written, and the outcome is refused, saying nobody answered'), 'a change is written when its card times out',
+    'allow === true && how && how.card === true ?',
+    "(allow === true && how && how.card === true) || reason === 'timeout' ?"],
+  [only(MARKERS_CARDS, 'Doc brought in by an orchestrator\'s Agent call: one card per change, five in one reply, and nothing written while they wait'), 'only the first change in a reply raises a card, and the rest are written',
+    '      if (by !== null) {',
+    '      if (by !== null && action === actions[0]) {'],
+  [GRADING_CARDS, 'the four names of Doc\'s hand-off changes are not graded high',
+    "    if (isTeamCard(toolName)) return 'high';\n",
+    ''],
+  [only(ENGINE_CARDS, 'Doc is not ended while its card waits; once allowed, the orchestrator is told it was saved, and the conversation keeps the line'), 'Doc\'s hand-back fires before its cards are answered',
+    '        afterTeamCards(e, () => { if (e.pendingKill && !e.exited) scheduleScopeReturnKill(e, convoId); });',
+    '        scheduleScopeReturnKill(e, convoId);'],
+  [only(MARKERS_CARDS, 'a new agent is written with the order its card showed, though another agent joined the team while the card waited'), 'an allowed change is written from the marker, not from what its card showed',
+    '  const result = write({ ...action, content }, conversationId);',
+    '  const result = write(action, conversationId);'],
+  [MARKERS_TURN, 'a card is raised when the person is talking to Doc directly',
+    "  try { by = entry.delegation ? String(entry.delegation.originalAgentId || '') : null; } catch (e) { by = ''; }",
+    "  try { by = String((entry.delegation && entry.delegation.originalAgentId) || ''); } catch (e) { by = ''; }"],
+  [CATCHUP_NOTES_UNIT, 'a card that wrote nothing is told with its outcome\'s message, not Rundock\'s sentence for its code',
+    "      const card = o.author === DOC_ID && isCardEnd(o.reason) ? `${CARD_ENDS[o.reason](change[1])}, so nothing was ${change[2]}.` : '';",
+    "      const card = o.author === DOC_ID && isCardEnd(o.reason) ? flat(o.message) : '';"],
+  [CATCHUP_NOTES_UNIT, 'a code the server never sets is given a card\'s sentence',
+    "      const card = o.author === DOC_ID && isCardEnd(o.reason) ? `${CARD_ENDS[o.reason](change[1])}, so nothing was ${change[2]}.` : '';",
+    "      const card = o.author === DOC_ID && o.reason ? `${(CARD_ENDS[o.reason] || CARD_ENDS.unanswered)(change[1])}, so nothing was ${change[2]}.` : '';"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
@@ -393,7 +509,7 @@ const REPORTER = ['--test-reporter', 'spec'];
 // The exact name, as a pattern node --test can match and nothing else can.
 const exactly = (name) => `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   const [file, testName] = String(suite).split('#');
@@ -404,11 +520,13 @@ function redTests(suite) {
   delete env.NODE_TEST_CONTEXT;
   try {
     // Bounded twice over: each test by node's own timeout, and the whole
-    // suite by a kill, so a broken guard that leaves a run waiting costs
-    // minutes and reports, rather than holding the harness for hours.
-    out = execFileSync('node', ['--test', '--test-timeout=120000', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
-      { cwd: ROOT, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 280000, killSignal: 'SIGKILL' });
+    // suite by the runner's limit, so a broken guard that leaves a run
+    // waiting costs minutes and reports, rather than holding the harness for
+    // hours.
+    out = await runSuite('node', ['--test', '--test-timeout=120000', ...REPORTER, ...(testName ? ['--test-name-pattern', exactly(testName)] : []), file],
+      { cwd: ROOT, env });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -438,18 +556,18 @@ function redTests(suite) {
 // verdict. Returns what it read wrong, or null.
 const FIXTURE_GREEN = 'passes with nothing broken';
 const FIXTURE_RED = 'fails when broken';
-function invocationProblem(runTests = redTests) {
+async function invocationProblem(runTests = redTests) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-session-harness-'));
   const file = path.join(dir, 'invocation.test.js');
   try {
     fs.writeFileSync(file, "'use strict';\nconst { test } = require('node:test');\n"
       + `test(${JSON.stringify(FIXTURE_GREEN)}, () => {});\n`
       + `test(${JSON.stringify(FIXTURE_RED)}, () => { throw new Error('broken'); });\n`);
-    const green = runTests(`${file}#${FIXTURE_GREEN}`);
+    const green = await runTests(`${file}#${FIXTURE_GREEN}`);
     if (!Array.isArray(green) || green.length !== 0) {
       return `a run of a passing test read as ${JSON.stringify(green)}, not green`;
     }
-    const red = runTests(`${file}#${FIXTURE_RED}`);
+    const red = await runTests(`${file}#${FIXTURE_RED}`);
     if (!Array.isArray(red) || red.length !== 1 || red[0] !== FIXTURE_RED) {
       return `a run of a failing test read as ${JSON.stringify(red)}, not that test red`;
     }
@@ -459,7 +577,7 @@ function invocationProblem(runTests = redTests) {
   }
 }
 
-function run() {
+async function run() {
   const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: [...new Set(targets.map((target) => target.src))] });
   const originals = new Map();
@@ -482,9 +600,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
-        ? { label, applied: true, unparsable: true, red: [] }
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
@@ -497,7 +616,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -551,18 +676,20 @@ function requireSaneTempRoot() {
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const problem = invocationProblem();
-  if (problem) {
-    console.error(`Refusing to start a mutation run: the run every row is read through misreads a result: ${problem}.`);
-    process.exit(NO_VERDICT);
-  }
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
-      + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(exitCodeFor(failed, results));
-  }
+  invocationProblem().then((problem) => {
+    if (problem) {
+      console.error(`Refusing to start a mutation run: the run every row is read through misreads a result: ${problem}.`);
+      process.exit(NO_VERDICT);
+    }
+    return run();
+  }).then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+        + ' and a mutation that could break more than one place proves nothing about either.');
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run, redTests, invocationProblem };

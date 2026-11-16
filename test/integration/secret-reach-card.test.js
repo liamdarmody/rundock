@@ -25,7 +25,9 @@ const { canonicalize } = require('../../scripts/permission-hook.js');
 const HOOK = path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
 const CONVO = 'secret-reach';
 const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
-const SPELLINGS = ['cd ~/.claude && cat .credentials.json', 'cat ~/.claude/.cred*'];
+const SPELLINGS = ['cd ~/.claude && cat .credentials.json', 'cat ~/.claude/.cred*',
+  // The folder that holds it, handed to a program that reads all of it.
+  'grep -r token ~/.claude', 'cd ~/.claude && tar czf - .'];
 const POSIX = { skip: process.platform === 'win32' && 'the home folder is read from HOME here' };
 
 let client;
@@ -176,23 +178,13 @@ describe('the sequences that need the real server', () => {
 
       const since = client.messages.length;
       const pending = runHook('cd ~/.claude && ls', env);
-      if (env.RUNDOCK_CODE_MODE) {
-        // Code mode runs it without asking the server at all.
-        assert.strictEqual(decisionOf(await pending), 'allow');
-        await h.delay(200);
-        assert.ok(!client.messages.slice(since).some(isCard), 'nothing was asked');
-        return;
-      }
-      // Notes mode hands every shell command to the browser, which answers a
-      // read like this one itself, without drawing a card.
-      const { msg } = await client.waitFor(isCard, { since, label: `${label}: the free read` });
-      assert.ok(!secretOf(msg.request), 'not a secret card');
-      const html = draw(msg);
-      assert.strictEqual(html, '', 'no card is drawn');
-      assert.strictEqual(sent.length, 1, 'the browser answered it');
-      assert.strictEqual(sent[0].allow, true);
-      client.send(sent[0]);
+      // Code mode runs it without asking the server at all. Notes mode hands
+      // every shell command to the server, which answers a read like this one
+      // itself, from the decision the window makes, so it never reaches the
+      // browser either.
       assert.strictEqual(decisionOf(await pending), 'allow');
+      await h.delay(200);
+      assert.ok(!client.messages.slice(since).some(isCard), 'nothing was asked');
     });
   }
 });
@@ -253,6 +245,46 @@ describe('a credential file that is a link, against a grant on where it leads', 
   }
 });
 
+// A STORED GRANT OVER THE RUNTIME FOLDER DOES NOT ANSWER A READ OF ALL OF IT.
+// The grant is kept as the server keeps any, over `~/.claude` and over home
+// itself, and the real hook asks the real server. A recursive read of the
+// folder still reaches the browser as a secret card rather than being let
+// through, and the same command sent again is not answered by the grant
+// either.
+describe('a stored grant over a runtime folder, against a read of everything in it', () => {
+  const READS = ['grep -r token ~/.claude', 'cd ~/.claude && rg -e token', 'find -L ~/.claude -exec cat {} +', 'env -u FOO rg token ~/.claude',
+    // A copy into it, which can replace the credential file.
+    'echo .credentials.json | cpio -pu ~/.claude'];
+  for (const [label, env] of MODES) {
+    test(`${label}: the grant answers neither the read nor the same read again`, POSIX, async () => {
+      const answers = boundary.boundaryPermissionsPath();
+      const kept = fs.existsSync(answers) ? fs.readFileSync(answers) : null;
+      try {
+        boundary.addBoundaryGrant(path.join(home, '.claude'));
+        boundary.addBoundaryGrant(home);
+        const grants = boundary.readBoundaryGrants();
+        assert.ok(boundary.boundaryGrantCovers(credentials), 'sanity: the stored grant reaches the credential file');
+        for (const command of READS) {
+          for (const attempt of ['asked', 'asked again']) {
+            const since = client.messages.length;
+            const pending = runHook(command, env);
+            const first = await Promise.race([pending.then(out => ({ out })), client.waitFor(isCard, { since, timeout: 4000, label: `${label}: ${command}` }).catch(() => null)]);
+            assert.ok(first && first.msg, `${command}, ${attempt}: the browser is asked, not answered from the grant`);
+            assert.ok(secretOf(first.msg.request), `${command}, ${attempt}: the card names the credential file as a secret`);
+            assert.strictEqual(first.msg.request.grant_dir, null, `${command}, ${attempt}: no folder is offered to remember`);
+            assert.match(draw(first.msg), /credential file for your Claude account/, `${command}, ${attempt}: drawn as a secret card`);
+            answer(first.msg, { allow: false });
+            assert.strictEqual(decisionOf(await pending), 'deny', `${command}, ${attempt}: refused, as the card was`);
+          }
+        }
+        assert.deepStrictEqual(boundary.readBoundaryGrants(), grants, 'the stored grants are as they were');
+      } finally {
+        if (kept === null) fs.rmSync(answers, { force: true }); else fs.writeFileSync(answers, kept);
+      }
+    });
+  }
+});
+
 // NOTHING ELSE GAINS A CARD, AS A PERSON SEES IT. Each command that must keep
 // its answer goes from the real hook through the real server to the browser's
 // card code, and what happens is compared with what happens to main's hook's
@@ -267,8 +299,17 @@ describe('a credential file that is a link, against a grant on where it leads', 
 //
 //   git show origin/main:scripts/permission-hook.js > scripts/.main-hook.js
 //   RUNDOCK_RECORD_HOOK="$PWD/scripts/.main-hook.js" node --test --test-name-pattern "as a person sees it" test/integration/secret-reach-card.test.js
+//
+// The fixture was recorded while the browser still answered a low-risk read
+// itself. The server now answers one first, from the same decision, so such a
+// request never reaches the browser; asNow reads the recorded answer that way.
+// What the person sees is unchanged: no card, and the command allowed.
 const RECORD = process.env.RUNDOCK_RECORD_HOOK || '';
 const CARD_FIXTURE = path.join(__dirname, '..', 'fixtures', 'secret-reach-card-on-main.json');
+function asNow(recorded) {
+  if (!recorded || !recorded.asked || recorded.drawn || recorded.browserAnswer !== true) return recorded;
+  return { asked: false, drawn: false, secretWording: false, folderOffer: false, alwaysOffer: false, browserAnswer: null, decision: recorded.decision };
+}
 const CONTROLS = [
   'cat notes.md', 'ls dist', 'cat auth.json', 'cat sub/auth.json', 'cd sub && cat auth.json',
   'cd ~/.claude && ls', 'cd ~/.claude && ls projects', 'cd ~/.claude && cat settings.json', 'cat ~/.claude/settings.json',
@@ -319,7 +360,7 @@ describe('nothing else gains a card, as a person sees it', () => {
         const key = `${label} | ${command}`;
         if (RECORD) { seen[key] = got; return; }
         assert.ok(onMain[key], 'measured on main');
-        assert.deepStrictEqual(got, onMain[key], 'what the person sees, as on main');
+        assert.deepStrictEqual(got, asNow(onMain[key]), 'what the person sees, as on main');
       });
     }
   }

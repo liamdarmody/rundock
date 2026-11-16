@@ -104,7 +104,13 @@ async function attachArtifactReviewForCurrentFile(paneEl) {
       },
     });
   };
-  if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete' && iframe.contentDocument.body) wire();
+  // Until the srcdoc commits, the frame holds the browser's initial empty
+  // document, which reads as complete, with a body. The fetch above can
+  // finish first, and wiring then would attach the review to a document about
+  // to be replaced: the comments list, but no mark is ever drawn in the
+  // artifact. Only the artifact's own document, about:srcdoc, is ready.
+  const doc = iframe.contentDocument;
+  if (doc && doc.URL === 'about:srcdoc' && doc.readyState === 'complete' && doc.body) wire();
   else iframe.addEventListener('load', wire, { once: true });
 }
 async function initTiptapEditor(path, content) {

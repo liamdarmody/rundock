@@ -17,7 +17,7 @@ const {
   harnessFiles, loadHarnesses, pathReferences, makeReaderIndex, selectHarnesses, resolveBase,
   changedFiles, dependencyChangeIn, planShards, outcomeOf, combine, aggregate, decide, buildPlan,
   RUN_EVERYTHING_WHEN_TOUCHED, SECONDS_PER_SHARD, MAX_SHARDS, readCosts, PASS, FAIL, NO_VERDICT,
-  unstagedTargets,
+  unstagedTargets, aggregateCommand,
 } = require('../../scripts/mutation-scope.js');
 
 const REPO = path.join(__dirname, '..', '..');
@@ -87,6 +87,9 @@ function fixtureRepo() {
 
 const tools = (root) => path.join(root, 'test', 'tools');
 const explain = (root, argv) => decide(argv, { root, toolsDir: tools(root) });
+// How GitHub records a plan job and shard jobs that both ended well. The
+// aggregate defaults neither to success, so a test that means it says so.
+const SUCCEEDED = { planResult: 'success', shardsResult: 'success' };
 
 describe('what a harness guards comes from its rows', () => {
   test('every real harness loads, and names the files it mutates and the suites it reads', () => {
@@ -310,6 +313,51 @@ describe('shards are planned by time, not rows', () => {
     assert.deepStrictEqual(covered, [...Array(rowLabels.length).keys()], 'every row once, in order');
   });
 
+  test('a slow row just past a slice\'s share starts the next slice rather than stretching this one', () => {
+    // A slice used to end at the first row that took it past its share, so a
+    // slow row whose start sat just short of the share was taken whole and the
+    // slice ran on by nearly that row's cost. Ending each slice at whichever
+    // boundary is nearer its share keeps it within a row's half of the share.
+    const rowLabels = Array.from({ length: 100 }, (_, i) => `row ${i}`);
+    const lumpy = { tool: 'lumpy', rows: rowLabels.length, rowLabels };
+    const weighted = { ...costs, perLabel: { lumpy: { 'row 85': 400 } } };
+    const { shards, seconds } = planShards([lumpy], { costs: weighted });
+    assert.strictEqual(seconds, 99 * 5 + 400, 'sanity: one row of 400s among rows at the 5s rate');
+    const units = shards.flatMap((s) => s.units).sort((a, b) => a.start - b.start);
+    assert.deepStrictEqual(units.map((u) => [u.start, u.end, u.seconds]), [[0, 85, 425], [85, 100, 470]],
+      'the slow row opens the second slice; taken into the first, that slice would be 825s');
+    for (const u of units) assert.ok(u.seconds <= SECONDS_PER_SHARD, `rows ${u.start}:${u.end} are planned at ${u.seconds}s`);
+  });
+
+  // Slices of one lumpy harness, as [start, end, seconds], in row order.
+  const lumpySlices = (perLabel) => {
+    const rowLabels = Array.from({ length: 100 }, (_, i) => `row ${i}`);
+    const lumpy = { tool: 'lumpy', rows: rowLabels.length, rowLabels };
+    const { shards } = planShards([lumpy], { costs: { ...costs, perLabel: { lumpy: perLabel } } });
+    return shards.flatMap((s) => s.units).sort((a, b) => a.start - b.start).map((u) => [u.start, u.end, u.seconds]);
+  };
+
+  test('a first row that crosses its slice\'s share is taken into that slice, never left an empty one', () => {
+    // 1200s, then 99 rows at 5s: three slices of 565s. The first row starts at
+    // nothing spent, so ending the slice before it would leave the slice empty.
+    const slices = lumpySlices({ 'row 0': 1200 });
+    assert.ok(slices.every(([start, end]) => end > start), `no slice is empty: ${JSON.stringify(slices)}`);
+    assert.deepStrictEqual(slices[0].slice(0, 2), [0, 1], 'the first slice starts at row 0 and takes the slow row');
+    assert.deepStrictEqual(slices.flatMap(([start, end]) => Array.from({ length: end - start }, (_, k) => start + k)),
+      [...Array(100).keys()], 'every row once, in order');
+  });
+
+  test('a share exactly midway through a row keeps the row, and so does one nearer its end', () => {
+    // 100s at row 60 and a last row that sets the share: rows 0 to 59 spend
+    // 300s, so row 60 runs from 300s to 400s. A 110s last row puts the share
+    // at 350s, exactly midway; a 150s one puts it at 370s, nearer the end.
+    // Either way the slice takes the row, as it did before the nearer-side cut.
+    assert.deepStrictEqual(lumpySlices({ 'row 60': 100, 'row 99': 110 }), [[0, 61, 400], [61, 100, 300]],
+      'at a tie the row is taken; cut before it, the slices would be 300s and 400s');
+    assert.deepStrictEqual(lumpySlices({ 'row 60': 100, 'row 99': 150 }), [[0, 61, 400], [61, 100, 340]],
+      'nearer its end the row is taken; cut before it, the slices would be 300s and 440s');
+  });
+
   test('an integration row with no cost of its own is planned at its harness\'s integration rate', () => {
     // Integration rows start a server and run several times slower than the
     // rest, so a new one planned at the harness's average was planned short.
@@ -404,7 +452,184 @@ describe('shards are planned by time, not rows', () => {
   test('the full set, planned with the real costs, keeps every shard well under its limit', () => {
     const tools = path.join(REPO, 'test', 'tools');
     const plan = buildPlan(decide(['--all'], { root: REPO, toolsDir: tools }), { toolsDir: tools });
-    for (const s of plan.shards) assert.ok(s.seconds <= 15 * 60, `shard ${s.index} is planned at ${s.seconds}s`);
+    // The costs come from CI shard logs, so a red here is the cap, not a
+    // cost: the full set has outgrown MAX_SHARDS. Raise it in a change of its
+    // own rather than lowering a cost to fit.
+    for (const s of plan.shards) {
+      assert.ok(s.seconds <= 15 * 60, `shard ${s.index} is planned at ${s.seconds}s, past ${15 * 60}s. `
+        + 'The costs in test/tools/mutation-costs.json are taken from CI, so this means the full set needs more shards: '
+        + 'raise MAX_SHARDS in scripts/mutation-scope.js in a separate change, and do not lower a cost to make it fit.');
+    }
+  });
+
+  // Every slice of the boundary harness that CI ran on main at 2ac7cce6, run
+  // 42640417868, from the first row's label to the last, and the seconds the
+  // slice took. Between them they held every row the harness had.
+  const BOUNDARY = 'mutate-workspace-boundary-guards.js';
+  const TIMED = [
+      { first: "file targets are canonicalised before the comparison",
+        last: "M2: \"inside a git working tree\" always false", seconds: 721 },
+      { first: "M3a: the unsaved-work check on a delete always reports clean",
+        last: "Answer-file writes: code: Perl's write arrows are not a mode that writes", seconds: 541 },
+      { first: "Answer-file writes: code: A name's uses are not followed",
+        last: "Connector send: a tool that is not a connector is taken for a send", seconds: 1040 },
+      { first: "Connector send: a send or delete is allowed when Rundock cannot be asked",
+        last: "Keychain: Notes mode is handed every verdict", seconds: 160 },
+      { first: "Keychain: Notes mode finds nothing",
+        last: "Stop and ask: a Codex without turn/steer is never told", seconds: 1244 },
+      { first: "Stop and ask: the approval event carries no way to steer",
+        last: "Hook crash: a rejection is left to whatever the runtime was told to do with one", seconds: 1037 },
+      { first: "Hook crash: a failure after the answer prints a second one",
+        last: "Folder reads: a keyword before the program is taken as the program", seconds: 1321 },
+      { first: "Folder reads: xargs behind a program that runs it is not seen",
+        last: "Folder reads: the folder a cpio pass-through copies into is not counted", seconds: 436 },
+      { first: "Folder reads: the folder a cpio pass-through copies into is not counted, against the real server",
+        last: "Workspace switch: a Codex app-server that exits after a switch is taken off the pid file it was registered in", seconds: 996 },
+  ];
+  // Two slices CI ran past their plan, each in one shard. A third of their
+  // rows had no cost of their own and were planned at the harness's average,
+  // a fraction of what their suites take on CI, and the rest had costs
+  // inferred from older runs or timed on a developer machine, so the plan put
+  // each at about nine minutes: the first took twenty-eight, and the second
+  // ran to the job's thirty-minute limit and was cancelled.
+  const OVERRUNS = [
+    { run: 42625901207, first: 'Connector card: a well-known key makes the card warn',
+      last: 'Credential reads: a cd that may not last is not taken as where the shell is', seconds: 1704 },
+    { run: 42626462142, first: 'Connector card: the fields past those shown are not drawn',
+      last: 'Shell code: a route-shaped literal whose first folder is not on this machine is a place', seconds: 1788 },
+  ];
+
+  // What the boundary harness's plan gets wrong against CI, as a list of
+  // problems. Every planned shard is held to the margin. A shard planned under
+  // it still runs long when its rows are costed short, so each slice CI timed
+  // must also be planned at three quarters or more of what it took, and each
+  // overrun slice must span at least two shards. A slice is found by its first
+  // and last row's labels; one whose endpoint was renamed or removed is
+  // skipped rather than failed, as long as most slices are still found.
+  function boundaryPlanProblems(h, costs, { timed, overruns, margin = 15 * 60, found = 0.75 }) {
+    const problems = [];
+    const { shards } = planShards([h], { costs });
+    for (const s of shards) if (s.seconds > margin) problems.push(`shard ${s.index} is planned at ${s.seconds}s, past ${margin}s`);
+    const rowsOf = (o) => {
+      const from = h.rowLabels.indexOf(o.first);
+      const to = h.rowLabels.indexOf(o.last);
+      return from !== -1 && to > from ? { from, to } : null;
+    };
+    const slices = [...timed.map((t) => ({ ...t, overrun: false })), ...overruns.map((o) => ({ ...o, overrun: true }))];
+    let resolved = 0;
+    for (const o of slices) {
+      const at = rowsOf(o);
+      if (!at) continue;
+      resolved++;
+      const { from, to } = at;
+      const slice = { tool: h.tool, rows: to + 1 - from, rowLabels: h.rowLabels.slice(from, to + 1), rowSuites: h.rowSuites.slice(from, to + 1) };
+      const planned = planShards([slice], { costs, target: Infinity }).seconds;
+      if (planned < o.seconds * 0.75) problems.push(`rows ${from}:${to + 1} are planned at ${planned}s; CI run ${o.run} took ${o.seconds}s over them`);
+      if (o.overrun) {
+        const holding = shards.filter((s) => s.units.some((u) => u.tool === h.tool && (u.start ?? 0) <= to && (u.end ?? h.rows) > from));
+        if (holding.length < 2) problems.push(`rows ${from}:${to + 1} are planned in ${holding.length} shard(s)`);
+      }
+    }
+    if (resolved < Math.ceil(found * slices.length)) {
+      problems.push(`only ${resolved} of the ${slices.length} slices CI timed are still found by their labels: `
+        + 'time the harness again from a recent CI run and name its slices here');
+    }
+    return problems;
+  }
+
+  const boundary = () => {
+    const tools = path.join(REPO, 'test', 'tools');
+    const h = loadHarnesses({ toolsDir: tools, root: REPO }).find((x) => x.tool === BOUNDARY);
+    return { h, costs: readCosts(tools) };
+  };
+  const SLICES = { timed: TIMED.map((t) => ({ ...t, run: 42640417868 })), overruns: OVERRUNS };
+  const renamed = (h, labels) => ({ ...h, rowLabels: h.rowLabels.map((l) => (labels.includes(l) ? `${l} (renamed)` : l)) });
+
+  test('the boundary harness is planned at what CI measured: every shard within the margin, every slice CI timed planned near its time, and no overrun slice in one shard', () => {
+    const { h, costs } = boundary();
+    const problems = boundaryPlanProblems(h, costs, SLICES);
+    assert.ok(problems.length === 0, problems.join('\n'));
+  });
+
+  test('a timed slice whose endpoint is renamed is skipped, and the rest are still held to what CI took', () => {
+    const { h, costs } = boundary();
+    assert.deepStrictEqual(boundaryPlanProblems(renamed(h, [TIMED[3].last]), costs, SLICES), []);
+    // The checks that remain still bite: the same rename with every row
+    // costed at a tenth of a second fails on the slices still found.
+    const cheap = { ...costs, perLabel: { ...costs.perLabel, [BOUNDARY]: Object.fromEntries(h.rowLabels.map((l) => [l, 0.1])) } };
+    const problems = boundaryPlanProblems(renamed(h, [TIMED[3].last]), cheap, SLICES);
+    assert.ok(problems.some((p) => /CI run 42640417868 took/.test(p)), problems.join('\n'));
+    assert.ok(!problems.some((p) => /still found/.test(p)), problems.join('\n'));
+  });
+
+  test('when too few timed slices are found by their labels, the check fails and says to time them again', () => {
+    const { h, costs } = boundary();
+    const gone = TIMED.slice(0, 3).map((t) => t.first);
+    const problems = boundaryPlanProblems(renamed(h, gone), costs, SLICES);
+    assert.ok(problems.some((p) => /^only 8 of the 11 slices CI timed are still found/.test(p)), problems.join('\n'));
+  });
+});
+
+describe('every harness, asked for and none found, is refused rather than planned as nothing to do', () => {
+  test('--all with no harnesses found exits non-zero, says so, and writes no plan', () => {
+    // Zero shards skips every shard job, and the aggregate reads a plan of no
+    // shards as nothing to fail. The tool is copied into a fixture whose tools
+    // folder holds the envelope and no harness, and run there.
+    const root = tempDir('mutation-scope-no-harnesses-');
+    for (const rel of ['scripts/mutation-scope.js', 'scripts/lib/run-record.js', 'test/tools/mutation-run.js']) {
+      write(root, rel, fs.readFileSync(path.join(REPO, rel), 'utf8'));
+    }
+    assert.deepStrictEqual(harnessFiles(tools(root)), [], 'sanity: the tools folder holds no harness');
+    const env = { ...process.env };
+    for (const k of ['GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY', 'GITHUB_OUTPUT']) delete env[k];
+    const out = path.join(root, 'mutation-plan.json');
+    for (const argv of [['--all', '--plan', '--out', out], ['--all', '--explain']]) {
+      const r = spawnSync(process.execPath, [path.join(root, 'scripts', 'mutation-scope.js'), ...argv], { cwd: root, encoding: 'utf8', env });
+      assert.notStrictEqual(r.status, 0, `${argv.join(' ')}: refused\n${r.stdout}${r.stderr}`);
+      assert.ok(r.stderr.includes('found no harnesses'), `${argv.join(' ')}: and says why\n${r.stderr}`);
+    }
+    assert.ok(!fs.existsSync(out), 'no plan is written for the shards to read as nothing to do');
+  });
+
+  test('no harnesses found is refused without --all as well, as the scoped plan CI runs', () => {
+    // CI's plan has no --all. A change that removed or renamed every harness
+    // planned zero shards there, the shard job was skipped, and the aggregate
+    // read a plan of nothing as a pass.
+    const root = tempDir('mutation-scope-no-harnesses-scoped-');
+    for (const rel of ['scripts/mutation-scope.js', 'scripts/lib/run-record.js', 'test/tools/mutation-run.js']) {
+      write(root, rel, fs.readFileSync(path.join(REPO, rel), 'utf8'));
+    }
+    assert.deepStrictEqual(harnessFiles(tools(root)), [], 'sanity: the tools folder holds no harness');
+    const env = { ...process.env };
+    for (const k of ['GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY', 'GITHUB_OUTPUT']) delete env[k];
+    const out = path.join(tempDir('mutation-scope-no-harnesses-out-'), 'mutation-plan.json');
+    for (const argv of [['--plan', '--out', out, '--base', 'HEAD^1'], ['--plan', '--out', out], ['--explain']]) {
+      const r = spawnSync(process.execPath, [path.join(root, 'scripts', 'mutation-scope.js'), ...argv], { cwd: root, encoding: 'utf8', env });
+      assert.strictEqual(r.status, 3, `${argv.join(' ')}: refused as no verdict\n${r.stdout}${r.stderr}`);
+      assert.ok(r.stderr.includes('found no harnesses'), `${argv.join(' ')}: and says why\n${r.stderr}`);
+    }
+    assert.ok(!fs.existsSync(out), 'no plan is written for the shards to read as nothing to do');
+  });
+
+  test('harnesses found and none selected is still a plan of nothing to do, and green', () => {
+    // The legitimate zero: a change that touches nothing any harness guards.
+    const { root, commit } = fixtureRepo();
+    for (const rel of ['scripts/mutation-scope.js', 'scripts/lib/run-record.js', 'test/tools/mutation-run.js']) {
+      write(root, rel, fs.readFileSync(path.join(REPO, rel), 'utf8'));
+    }
+    commit('the tool');
+    write(root, 'notes.md', 'guarded by nothing\n');
+    commit('a change no harness guards');
+    const outDir = tempDir('mutation-scope-none-selected-out-');
+    const out = path.join(outDir, 'mutation-plan.json');
+    const githubOutput = path.join(outDir, 'github-output');
+    const env = { ...process.env, GITHUB_OUTPUT: githubOutput };
+    for (const k of ['GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY']) delete env[k];
+    const r = spawnSync(process.execPath, [path.join(root, 'scripts', 'mutation-scope.js'), '--plan', '--out', out, '--base', 'HEAD^1'],
+      { cwd: root, encoding: 'utf8', env });
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.strictEqual(JSON.parse(fs.readFileSync(out, 'utf8')).shards.length, 0, 'a plan of no shards is written');
+    assert.match(fs.readFileSync(githubOutput, 'utf8'), /^count=0$/m);
   });
 });
 
@@ -519,6 +744,17 @@ describe('three outcomes: pass, fail, no verdict', () => {
     assert.match(outcomeOf(null, 'SIGKILL').cause, /signal SIGKILL/);
   });
 
+  test('a harness\'s no verdict names a row whose suite did not finish among its causes, and never reads as a lost runner', () => {
+    // Exit 3 now also means a row whose suite ran past the runner's limit, so
+    // the cause a reader is shown has to say so. CI re-runs a no-verdict
+    // annotation that mentions a signal, as a runner that was lost; a row that
+    // ran out of time is a test to fix, and a re-run would only repeat it.
+    const { outcome, cause } = outcomeOf(3, null);
+    assert.strictEqual(outcome, NO_VERDICT);
+    assert.match(cause, /a suite that did not finish in its limit/);
+    assert.doesNotMatch(cause, /signal/i);
+  });
+
   test('any fail is fail; otherwise any no verdict is no verdict', () => {
     assert.strictEqual(combine([PASS, NO_VERDICT, FAIL]), FAIL);
     assert.strictEqual(combine([PASS, NO_VERDICT]), NO_VERDICT);
@@ -528,18 +764,29 @@ describe('three outcomes: pass, fail, no verdict', () => {
   test('the aggregator reads a missing verdict file as no verdict for that shard', () => {
     const plan = { id: 'p1', shards: [{ index: 1 }, { index: 2 }] };
     const one = [{ plan: 'p1', shard: 1, outcome: PASS, results: [] }];
-    const r = aggregate(plan, one);
+    const r = aggregate(plan, one, SUCCEEDED);
     assert.strictEqual(r.outcome, NO_VERDICT);
     assert.match(r.causes[0], /shard 2 wrote no verdict/);
-    assert.strictEqual(aggregate(plan, [...one, { plan: 'p1', shard: 2, outcome: PASS }]).outcome, PASS);
-    assert.strictEqual(aggregate(plan, [...one, { plan: 'other', shard: 2, outcome: PASS }]).outcome, NO_VERDICT);
-    assert.strictEqual(aggregate(plan, [...one, { plan: 'p1', shard: 2, outcome: FAIL }]).outcome, FAIL);
+    assert.strictEqual(aggregate(plan, [...one, { plan: 'p1', shard: 2, outcome: PASS }], SUCCEEDED).outcome, PASS);
+    assert.strictEqual(aggregate(plan, [...one, { plan: 'other', shard: 2, outcome: PASS }], SUCCEEDED).outcome, NO_VERDICT);
+    assert.strictEqual(aggregate(plan, [...one, { plan: 'p1', shard: 2, outcome: FAIL }], SUCCEEDED).outcome, FAIL);
   });
 
   test('a failed plan job is a failure; a cancelled one is no verdict', () => {
-    assert.strictEqual(aggregate(null, [], { planResult: 'failure' }).outcome, FAIL);
-    assert.strictEqual(aggregate(null, [], { planResult: 'cancelled' }).outcome, NO_VERDICT);
-    assert.strictEqual(aggregate({ id: 'x', shards: [] }, []).outcome, PASS, 'an empty plan has nothing to fail');
+    assert.strictEqual(aggregate(null, [], { planResult: 'failure', shardsResult: 'skipped' }).outcome, FAIL);
+    assert.strictEqual(aggregate(null, [], { planResult: 'cancelled', shardsResult: 'skipped' }).outcome, NO_VERDICT);
+    assert.strictEqual(aggregate({ id: 'x', shards: [] }, [], { planResult: 'success', shardsResult: 'skipped' }).outcome, PASS,
+      'an empty plan has nothing to fail');
+  });
+
+  test('a failed plan is titled as one, and names no step only one workflow has', () => {
+    // Both workflows read this message. The nightly's plan job runs no fixture
+    // check, so naming one there sent a reader looking for a step that is not
+    // there; the plan job's own log names the step that failed.
+    const r = aggregate(null, [], { planResult: 'failure', shardsResult: 'skipped' });
+    assert.strictEqual(r.outcome, FAIL);
+    assert.strictEqual(r.title, 'The plan failed: see its job');
+    assert.ok(!r.causes.join(' ').includes('fixture'), r.causes.join('; '));
   });
 
   test('a harness exiting 3, or killed, is no verdict from the run and from the aggregator', () => {
@@ -553,7 +800,7 @@ describe('three outcomes: pass, fail, no verdict', () => {
     assert.deepStrictEqual(outcomes.map((o) => o.outcome), [NO_VERDICT, NO_VERDICT]);
     const plan = { id: 'p', shards: [{ index: 1 }, { index: 2 }] };
     const verdicts = outcomes.map((o, i) => ({ plan: 'p', shard: i + 1, outcome: combine([o.outcome]), results: [{ unit: 'u', ...o }] }));
-    const r = aggregate(plan, verdicts);
+    const r = aggregate(plan, verdicts, { planResult: 'success', shardsResult: 'failure' });
     assert.strictEqual(r.outcome, NO_VERDICT);
     assert.ok(r.causes.some((c) => /signal SIGTERM/.test(c)), 'the cause names the signal');
   });
@@ -566,9 +813,179 @@ describe('three outcomes: pass, fail, no verdict', () => {
     delete env.GITHUB_ACTIONS;
     delete env.GITHUB_STEP_SUMMARY;
     const r = spawnSync(process.execPath, [path.join(REPO, 'scripts', 'mutation-scope.js'), '--aggregate',
-      '--plan-file', path.join(dir, 'plan.json'), '--verdicts', dir], { encoding: 'utf8', env });
+      '--plan-file', path.join(dir, 'plan.json'), '--verdicts', dir, '--plan-result', 'success', '--shards-result', 'success'],
+    { encoding: 'utf8', env });
     assert.strictEqual(r.status, 3, r.stdout + r.stderr);
     assert.match(r.stdout, /No verdict: shard 2 wrote no verdict/);
     assert.doesNotMatch(r.stdout, /failed/i, 'no verdict is never titled a failure');
+  });
+});
+
+// A verdict is a file the shard writes and uploads itself, and the upload runs
+// whether or not the steps after the verdict passed. So a shard whose harness
+// left a file modified failed its own job at the diff check and still uploaded
+// a passing verdict. How GitHub recorded the shard jobs ending is set by the
+// runner from how their steps ended, and nothing a shard uploads can rewrite
+// it afterwards, so the aggregate reads it.
+const SCOPE = path.join(REPO, 'scripts', 'mutation-scope.js');
+const SHARD_FAILED = 'A shard failed: see its job';
+const PLAN_2 = { id: 'p2', shards: [{ index: 1 }, { index: 2 }] };
+const passed = (shard) => ({ plan: 'p2', shard, outcome: PASS, results: [{ unit: `mutate-${shard}-guards.js`, outcome: PASS }] });
+const PASSING = [passed(1), passed(2)];
+
+// A plan and its verdicts on disk, as the aggregate job downloads them.
+function verdictDir(plan, verdicts) {
+  const dir = tempDir('mutation-aggregate-');
+  fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan));
+  for (const v of verdicts) fs.writeFileSync(path.join(dir, `verdict-${v.shard}.json`), JSON.stringify(v));
+  return dir;
+}
+
+// The aggregate step as CI runs it, from this checkout. It reads files and
+// runs no harness.
+function aggregateCli(dir, extra = [], env = {}) {
+  const clean = { ...process.env };
+  for (const k of ['GITHUB_ACTIONS', 'GITHUB_STEP_SUMMARY', 'GITHUB_OUTPUT', 'NODE_OPTIONS']) delete clean[k];
+  return spawnSync(process.execPath, [SCOPE, '--aggregate', '--plan-file', path.join(dir, 'plan.json'), '--verdicts', dir, ...extra],
+    { encoding: 'utf8', env: { ...clean, ...env } });
+}
+
+describe('the shard jobs\' result is a witness nothing a shard uploads can rewrite', () => {
+  test('a shard job that did not succeed is not green, even when every verdict passes', () => {
+    for (const shardsResult of ['failure', 'cancelled', 'skipped']) {
+      const r = aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult });
+      assert.notStrictEqual(r.outcome, PASS, `shards ${shardsResult}: never a pass`);
+      assert.strictEqual(r.title, SHARD_FAILED, `shards ${shardsResult}: titled for what happened`);
+      assert.ok(r.causes.some((c) => c.includes(shardsResult)), `shards ${shardsResult}: the cause names the result`);
+
+      const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', '--shards-result', shardsResult]);
+      assert.notStrictEqual(cli.status, 0, `shards ${shardsResult}: the step exits non-zero\n${cli.stdout}${cli.stderr}`);
+      assert.ok(cli.stdout.includes(SHARD_FAILED), `shards ${shardsResult}: the step says so\n${cli.stdout}`);
+    }
+  });
+
+  test('the inverse: clean shards with passing verdicts are still green', () => {
+    const r = aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult: 'success' });
+    assert.strictEqual(r.outcome, PASS);
+    assert.strictEqual(r.title, 'Mutation guards passed');
+    const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', '--shards-result', 'success']);
+    assert.strictEqual(cli.status, 0, cli.stdout + cli.stderr);
+    assert.ok(cli.stdout.includes('Mutation guards passed'), cli.stdout);
+    // A plan with no shards runs no shard job, so GitHub records it skipped.
+    const none = { id: 'p0', shards: [] };
+    assert.strictEqual(aggregate(none, [], { planResult: 'success', shardsResult: 'skipped' }).outcome, PASS, 'nothing planned, nothing to fail');
+    assert.strictEqual(aggregateCli(verdictDir(none, []), ['--plan-result', 'success', '--shards-result', 'skipped']).status, 0);
+  });
+
+  test('the retry: a re-run that comes back clean is green, one still dirty stays red', () => {
+    // "Re-run failed jobs" re-runs the failed shard and the aggregate that
+    // needs it; the verdicts are the same files, and only the result moves.
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult: 'failure' }).outcome, FAIL, 'the first attempt');
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult: 'success' }).outcome, PASS, 'a clean re-run');
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult: 'failure' }).title, SHARD_FAILED, 'a re-run still dirty');
+  });
+
+  test('a guard that survived is still reported as one, naming where, though its shard job failed too', () => {
+    // A surviving guard fails its shard step, so the shard jobs' result is
+    // failure here as well. The verdict explains it, and its title says so.
+    const survived = { plan: 'p2', shard: 2, outcome: FAIL, results: [
+      { unit: 'mutate-x-guards.js rows 0:3', outcome: PASS },
+      { unit: 'mutate-x-guards.js rows 3:9', outcome: FAIL, cause: 'exit 1' },
+    ] };
+    const r = aggregate(PLAN_2, [passed(1), survived], { planResult: 'success', shardsResult: 'failure' });
+    assert.strictEqual(r.outcome, FAIL);
+    assert.strictEqual(r.title, 'A guard survived');
+    assert.deepStrictEqual(r.causes, ['shard 2: mutate-x-guards.js rows 3:9 fail (exit 1)']);
+    const cli = aggregateCli(verdictDir(PLAN_2, [passed(1), survived]), ['--plan-result', 'success', '--shards-result', 'failure']);
+    assert.strictEqual(cli.status, 1, cli.stdout + cli.stderr);
+    assert.ok(cli.stdout.includes('A guard survived'), cli.stdout);
+    assert.ok(cli.stdout.includes('mutate-x-guards.js rows 3:9'), 'the step names the slice that let a guard through');
+    assert.ok(!cli.stdout.includes(SHARD_FAILED), 'and does not send the reader to a job for a reason the verdict already gives');
+  });
+
+  test('a verdict with no outcome that can be read is no verdict, never a pass', () => {
+    for (const odd of [{ plan: 'p2', shard: 2 }, { plan: 'p2', shard: 2, outcome: 'passed', results: [] }]) {
+      const r = aggregate(PLAN_2, [passed(1), odd], { planResult: 'success', shardsResult: 'success' });
+      assert.strictEqual(r.outcome, NO_VERDICT, JSON.stringify(odd));
+      assert.ok(r.title.startsWith('No verdict: shard 2'), `the title names the shard: ${r.title}`);
+    }
+    assert.strictEqual(combine([PASS, undefined]), NO_VERDICT, 'an outcome nobody wrote is not a pass');
+    assert.strictEqual(combine([PASS, 'passed']), NO_VERDICT, 'nor is one spelled wrong');
+    assert.strictEqual(combine([PASS, PASS]), PASS);
+  });
+
+  test('the control failing: a truncated verdict file leaves the step non-green', () => {
+    const dir = verdictDir(PLAN_2, PASSING);
+    const file = path.join(dir, 'verdict-2.json');
+    const whole = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, whole.slice(0, Math.floor(whole.length / 2)));
+    const cli = aggregateCli(dir, ['--plan-result', 'success', '--shards-result', 'success']);
+    assert.strictEqual(cli.status, 3, cli.stdout + cli.stderr);
+    assert.ok(cli.stdout.includes('No verdict: shard 2'), cli.stdout);
+  });
+
+  test('the control failing: a reader that throws leaves the step non-green', () => {
+    const dir = verdictDir(PLAN_2, PASSING);
+    const argv = ['--aggregate', '--plan-file', path.join(dir, 'plan.json'), '--verdicts', dir,
+      '--plan-result', 'success', '--shards-result', 'success'];
+    const quiet = { log: () => {}, env: {} };
+    const real = (f) => fs.readFileSync(f, 'utf8');
+    assert.strictEqual(aggregateCommand(argv, quiet), 0, 'sanity: the same files, read, pass');
+    const throws = () => { throw new Error('EIO: the disk went away'); };
+    assert.strictEqual(aggregateCommand(argv, { ...quiet, readFile: throws }), 3, 'no file could be read');
+    assert.strictEqual(aggregateCommand(argv, { ...quiet, listDir: throws }), 3, 'the verdicts could not be listed');
+    assert.strictEqual(aggregateCommand(argv, { ...quiet, readFile: (f) => (f.endsWith('verdict-1.json') ? throws() : real(f)) }), 3,
+      'one verdict could not be read');
+  });
+
+  test('the control failing: a crash in the step exits non-zero, however Node is told to treat it', () => {
+    // A summary that cannot be written throws after the title is printed.
+    // Left to Node, an unhandled rejection under --unhandled-rejections=warn
+    // ends the process 0, which a runner reads as green.
+    const summary = tempDir('mutation-summary-is-a-directory-');
+    for (const NODE_OPTIONS of ['', '--unhandled-rejections=warn']) {
+      const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', '--shards-result', 'success'],
+        { GITHUB_STEP_SUMMARY: summary, NODE_OPTIONS });
+      assert.notStrictEqual(cli.status, 0, `NODE_OPTIONS=${NODE_OPTIONS}: a crash is never green\n${cli.stdout}${cli.stderr}`);
+      assert.ok(cli.stderr.includes('EISDIR'), `and the crash is shown\n${cli.stderr}`);
+    }
+  });
+
+  test('a shard jobs\' result that was not given, or is empty, is no verdict, never a pass', () => {
+    // An empty value is what a mistyped needs expression gives.
+    for (const extra of [[], ['--shards-result', '']]) {
+      const cli = aggregateCli(verdictDir(PLAN_2, PASSING), ['--plan-result', 'success', ...extra]);
+      assert.strictEqual(cli.status, 3, `${JSON.stringify(extra)}\n${cli.stdout}${cli.stderr}`);
+      assert.ok(cli.stdout.includes('No verdict: the shard jobs\' result was not given'), cli.stdout);
+    }
+  });
+
+  test('a plan job\'s result that was not given, or is empty, is no verdict, never a pass', () => {
+    // The same class of input as the shard jobs' result, and the same mistyped
+    // needs expression empties it.
+    for (const extra of [[], ['--plan-result', '']]) {
+      const cli = aggregateCli(verdictDir(PLAN_2, PASSING), [...extra, '--shards-result', 'success']);
+      assert.strictEqual(cli.status, 3, `${JSON.stringify(extra)}\n${cli.stdout}${cli.stderr}`);
+      assert.ok(cli.stdout.includes('No verdict: the plan job\'s result was not given'), cli.stdout);
+    }
+  });
+
+  test('the function defaults neither job\'s result to success: a caller that means success says so', () => {
+    const cases = [
+      [undefined, 'plan job\'s'],
+      [{}, 'plan job\'s'],
+      [{ shardsResult: 'success' }, 'plan job\'s'],
+      [{ planResult: '', shardsResult: 'success' }, 'plan job\'s'],
+      [{ planResult: 'success' }, 'shard jobs\''],
+      [{ planResult: 'success', shardsResult: '' }, 'shard jobs\''],
+      [{ planResult: 'success', shardsResult: null }, 'shard jobs\''],
+    ];
+    for (const [given, missing] of cases) {
+      const r = aggregate(PLAN_2, PASSING, given);
+      assert.strictEqual(r.outcome, NO_VERDICT, `${JSON.stringify(given)}: never a pass`);
+      assert.ok(r.title.startsWith(`No verdict: the ${missing} result was not given`), `${JSON.stringify(given)}: ${r.title}`);
+    }
+    assert.strictEqual(aggregate(PLAN_2, PASSING, { planResult: 'success', shardsResult: 'success' }).outcome, PASS,
+      'the inverse: both given as success, with passing verdicts, is green');
   });
 });

@@ -437,7 +437,10 @@ describe('the approve message, driven through the real dispatch', () => {
 describe('a routine reaching a file through save_agent meets the step, not the grandfather', () => {
   const config = require('../../lib/config.js');
   const { invalidateAgentCache, discoverAgents } = require('../../lib/agents/discovery.js');
-  const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
+  // The save handler itself, called in-process: a window's save_agent message
+  // is refused, and Doc's SAVE_AGENT marker reaches this same handler from the
+  // server (lib/agents/team-markers.js).
+  const { handleSaveAgent } = require('../../lib/protocol/handlers/team.js');
 
   function saveAgentFixture() {
     const dir = makeWorkspace({ agents: {} });
@@ -456,7 +459,7 @@ describe('a routine reaching a file through save_agent meets the step, not the g
     const file = path.join(dir, '.claude', 'agents', 'piper.md');
     return {
       dir, sent, file,
-      save: (content) => buildDispatch().save_agent(ctx, ws, { type: 'save_agent', name: 'piper', content }),
+      save: (content) => handleSaveAgent(ctx, ws, { type: 'save_agent', name: 'piper', content }),
       restore: () => { config.setWorkspace(original); invalidateAgentCache(); },
     };
   }

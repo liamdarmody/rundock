@@ -56,7 +56,7 @@ const persist = (() => {
 const sunIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
 const moonIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
 
-let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath, rosterWorkspacePath, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='notes', sandboxManaged=true, setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
+let ws=null, agents=[], conversations=[], activeConversation=null, currentView='home', currentFilePath=null, skills=[], skillsLoaded=false, currentWorkspacePath=null, servingWorkspacePath, rosterWorkspacePath, rosterRoutinesHere=null, workspaceAnalysis=null, workspaceIsEmpty=false, workspaceMode='notes', sandboxManaged=true, setupComplete=true, conversationsLoaded=false, activeSidebarPill='all', convoLists=[];
 let runtimeStatus = null; // { defaultRuntime, claude: {installed, authenticated, version}, codex: {...} }
 const agentLastActivity = {}; // { agentId: { time: Date, label: string } }
 // Per-conversation state: { convoId: { isProcessing, currentStreamingMsg, latestText } }
@@ -74,6 +74,10 @@ const fileSaves = RundockSaveScheduler.create();
 // The server's OS, learned from the server_info handshake. Gates OS-specific
 // affordances (e.g. Reveal in Finder) so a dead row never shows off macOS.
 let serverPlatform = null;
+// The zone the server reads a schedule in, as it reported it beside the last
+// roster, or null when it reported none. Never this window's own zone, which
+// can differ when the server is on another computer.
+let serverZone = null;
 // File-type registry: non-markdown views live in public/viewers/.
 // Loaded on demand, same pattern as the editor module above.
 let _viewersModule = null, _viewersModuleResolved = null, activeFileViewer = null;
@@ -580,8 +584,9 @@ function handle(d) {
     //
     // THE WORKSPACE THE ROSTER WAS READ FROM ARRIVES WITH IT, on the same
     // message, so the routines list can never compare rows against a workspace
-    // value that moved after they did. Assigned before anything draws.
-    case 'agents': agents=d.agents; setRosterWorkspace(d.workspace); renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); runDetailRosterUpdated(); break;
+    // value that moved after they did. Assigned before anything draws, and so
+    // is the zone the server reads every schedule in.
+    case 'agents': agents=d.agents; rosterRoutinesHere=d.routinesHere||null; setRosterWorkspace(d.workspace); serverZone=d.zone||null; renderAgentList(); renderOrgChart(); renderRoutinesPanel(); renderRoutines(); renderConvoList(); runDetailRosterUpdated(); break;
     // renderRoutines as well as renderSkills: the routines empty state asks
     // whether the workspace has a skill, so the reply that answers that
     // question is the reply that has to redraw it. Without this the list sits
@@ -760,6 +765,8 @@ function handle(d) {
       // it, and it only ever hid the cheap case.
       cachedFileTree = d.tree;
       renderFileTree(d.tree);
+      // Which of a run's changed files open is decided against this tree.
+      runDetailTreeUpdated();
       break;
     }
     case 'pins': handlePinsReply(d.pins); break;
@@ -819,23 +826,23 @@ function handle(d) {
     case 'agent_saved':
       if (!d.updated) setupComplete = true;
       // Non-default runtimes are worth calling out on the confirmation pill.
-      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''), d.conversationId, false);
+      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" ' + (d.updated ? 'updated' : 'created') + (d.runtime === 'codex' ? ' · runs on Codex' : ''), d.conversationId, false, true);
       break;
     case 'runtime_status':
       runtimeStatus = d;
       renderRuntimesCard();
       break;
     case 'agent_error':
-      addSystemMsgToConvo(d.message || 'Agent operation failed', d.conversationId, false);
+      addSystemMsgToConvo(d.message || 'Agent operation failed', d.conversationId, false, true);
       break;
     case 'agent_deleted':
-      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" removed', d.conversationId, false);
+      addSystemMsgToConvo('Agent "' + (d.agentId || '') + '" removed', d.conversationId, false, true);
       break;
     case 'skill_saved':
-      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'), d.conversationId, false);
+      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" ' + (d.updated ? 'updated' : 'created'), d.conversationId, false, true);
       break;
     case 'skill_error':
-      addSystemMsgToConvo(d.message || 'Skill operation failed', d.conversationId, false);
+      addSystemMsgToConvo(d.message || 'Skill operation failed', d.conversationId, false, true);
       break;
     // A routine write is the one save in this client the user waits on: the
     // editor stays on screen until the server answers, so a refusal has
@@ -858,6 +865,11 @@ function handle(d) {
       routinesActionCleared();
       addSystemMsg('Routine "' + (d.name || '') + '" now runs ' + (d.schedule || ''));
       routineEditorSaved();
+      break;
+    case 'routines_here_failed':
+      // The switch that turns routines off on this computer could not be
+      // saved. Said under the switch, which stays as the record has it.
+      routinesHereFailed(d);
       break;
     case 'routine_action_error':
       // The routines list asked, so the routines list is told. Deliberately
@@ -885,7 +897,7 @@ function handle(d) {
       // second answer to a question the list already answers.
       break;
     case 'skill_deleted':
-      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" removed', d.conversationId, false);
+      addSystemMsgToConvo('Skill "' + (d.skillId || '') + '" removed', d.conversationId, false, true);
       break;
     case 'active_processes':
       // Defer until workspace is ready and conversations are loaded
@@ -1175,34 +1187,30 @@ function handleResult(d, convoId) {
   let reduced = null;
 
   try {
-  // Detect agent and skill definitions in responses and route to server.
-  // SAVE markers (upsert): RUNDOCK:SAVE_AGENT, RUNDOCK:SAVE_SKILL
-  // Legacy CREATE markers also supported for backward compatibility.
+  // Route the reply's connector, delegation and return markers to the server.
   // Prefer streamingRawText: it contains the raw text with HTML comment markers intact.
   // d.result from stream-json is often empty or may strip HTML comments.
+  //
+  // AGENT AND SKILL MARKERS ARE NOT SENT FROM HERE. The server acts on them at
+  // the end of the turn, from the text it collected from the agent's own
+  // process, and only when that agent is Doc; every window open on the
+  // conversation receives the confirmation or the refusal. A window cannot
+  // say who wrote a reply, and every open window used to act on the same one.
   const textToScan = state.streamingRawText || d.result || state.latestText || '';
   if(textToScan && ws) {
-    let filesCreated = 0;
-
     // Marker scanning is pure logic in markers.js (unit-tested); this block
-    // owns the WebSocket sends. Action order preserves the historical send
-    // order: agent saves, skill saves, skill deletes, agent deletes.
+    // owns the WebSocket sends.
     const scan = RundockMarkers.scanMarkers(textToScan);
     const MARKER_SENDS = {
-      save_agent:   a => ({ type: 'save_agent', name: a.name, content: a.content }),
-      save_skill:   a => ({ type: 'save_skill', name: a.name, content: a.content }),
       save_connector:   a => ({ type: 'save_connector', name: a.name, content: a.content }),
       delete_connector: a => ({ type: 'delete_connector', name: a.name }),
-      delete_skill: a => ({ type: 'delete_skill', name: a.name }),
-      delete_agent: a => ({ type: 'delete_agent', agentId: a.name }),
     };
     for (const action of scan.actions) {
+      if (!MARKER_SENDS[action.kind]) continue;
       // THE CONVERSATION THAT PRODUCED THE MARKER, SENT WITH IT. Without this
       // the reply has nothing to route by, and its confirmation pill lands in
-      // whichever conversation happens to be on screen: a skill created in one
-      // thread announcing itself in another.
+      // whichever conversation happens to be on screen.
       ws.send(JSON.stringify({ ...MARKER_SENDS[action.kind](action), conversationId: convoId }));
-      filesCreated++;
       console.log('[Marker]', action.kind + ':', action.name);
     }
 
@@ -1220,25 +1228,9 @@ function handleResult(d, convoId) {
       ws.send(JSON.stringify({ type: 'end_delegation', conversationId: convoId }));
     }
 
-    // Fallback: raw YAML frontmatter agent definitions without the marker
-    // wrapper. Only when the marker scan produced no save/delete actions.
-    if(filesCreated === 0) {
-      for (const fm of RundockMarkers.extractFrontmatterAgents(textToScan)) {
-        ws.send(JSON.stringify({ type: 'save_agent', name: fm.name, content: fm.content, conversationId: convoId }));
-        filesCreated++;
-        console.log('[Agent] Fallback extraction:', fm.name);
-      }
-    }
-
-    if(filesCreated > 0) {
-      console.log('[Rundock] Saved', filesCreated, 'file(s)');
-      setTimeout(() => {
-        if(ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'get_agents' }));
-          ws.send(JSON.stringify({ type: 'get_skills' }));
-        }
-      }, 500);
-    }
+    // Nothing else here asks for a file write: an agent file shown without a
+    // marker is a preview, and saving it would write it before the yes. The
+    // roster and skills arrive from the server after any change it makes.
   }
 
   // Everything from here (silent-park heuristic, message finalisation,
@@ -1273,7 +1265,13 @@ function handleResult(d, convoId) {
   }
 }
 
-function addSystemMsgToConvo(text, convoId, isError = true) {
+// `keep`: a line about an agent or skill change, which the server also
+// stores in the conversation's history (lib/agents/team-notes.js). It is kept
+// with its own conversation when that one's messages are loaded, so coming
+// back to it draws it again; one not loaded yet brings it with its history.
+function addSystemMsgToConvo(text, convoId, isError = true, keep = false) {
+  const c = keep && convoId ? conversations.find(x => x.id === convoId) : null;
+  if (c && c.messages.length) c.messages.push({ role: 'system', content: text });
   if(!convoId || activeConversation?.id === convoId) addSystemMsg((isError ? 'Error: ' : '') + text);
 }
 

@@ -257,7 +257,7 @@ describe('server-side regressions', () => {
     // discoverSkills gains a TTL cache; saving a skill must
     // still surface it in the palette without waiting out the TTL.
     const since = client.messages.length;
-    client.send({ type: 'save_skill', name: 'flash-skill', content: '---\nname: Flash Skill\ndescription: Instant cache invalidation check.\n---\nBody.' });
+    h.asDoc({ type: 'save_skill', name: 'flash-skill', content: '---\nname: Flash Skill\ndescription: Instant cache invalidation check.\n---\nBody.' });
     await client.waitFor(m => m.type === 'skill_saved', { since, label: 'skill_saved' });
     const reply = await search({ query: 'flash skill' });
     assert.ok(reply.groups.skills.find(s => s.id === 'flash-skill'), 'fresh skill found despite skills cache');

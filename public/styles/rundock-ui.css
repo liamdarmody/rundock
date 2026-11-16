@@ -30,8 +30,7 @@
    --chart-1 in a chart's palette). test/unit/rundock-ui-contrast.test.js
    holds every fill to its side of the rule.
 
-   Design decisions and the contrast behind every colour: docs/RUNDOCK-UI.md,
-   and the design review's BUILD-SPEC. */
+   Design decisions and the contrast behind every colour: docs/RUNDOCK-UI.md. */
 
 .rui-visually-hidden {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;

@@ -122,7 +122,7 @@ function buildSteps() {
           ws.addEventListener('message', h); ws.send(JSON.stringify({ type: 'get_runtime_status' }));
         }));
         const version = status && status.claude && status.claude.version;
-        check(String(version).startsWith('0.0.0-stub'), `the server resolved claude ${version}, not the stub, so nothing may run`);
+        check(String(version).endsWith('-stub'), `the server resolved claude ${version}, not the stub, so nothing may run`);
       } },
     { id: 'repo-team', name: `${LEAN_TEAM.repo} at ${LEAN_TEAM.tag} meets the stated expectations`, precondition: reachable(LEAN_TEAM),
       run: async (ctx, check) => {

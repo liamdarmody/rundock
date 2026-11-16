@@ -64,8 +64,9 @@ function upgrade(headers) {
 const loopbackHosts = () => [`localhost:${h.port}`, `127.0.0.1:${h.port}`, `[::1]:${h.port}`];
 const appOrigins = () => [`http://localhost:${h.port}`, `http://127.0.0.1:${h.port}`, `http://[::1]:${h.port}`];
 
+// A command that cards: a low-risk read is answered by the server itself.
 function cardBody(conversationId) {
-  return JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'echo hi' }, conversation_id: conversationId });
+  return JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'npm run build' }, conversation_id: conversationId });
 }
 
 function pendingFor(conversationId) {

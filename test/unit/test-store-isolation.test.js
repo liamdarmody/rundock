@@ -13,7 +13,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', '..');
-const CHECKOUT_STORES = ['.routine-approvals.json', '.browser-sessions.json'].map((f) => path.join(ROOT, f));
+const CHECKOUT_STORES = ['.routine-approvals.json', '.browser-sessions.json', '.routines-here.json'].map((f) => path.join(ROOT, f));
 // Any record at all: a non-empty list, or an object with keys, below the top.
 const holdsRecords = (value) => Object.values(value || {}).some((v) =>
   (Array.isArray(v) ? v.length > 0 : (v && typeof v === 'object' ? Object.keys(v).length > 0 : false)));
@@ -49,6 +49,9 @@ test('loading the server and making fixtures leaves the checkout\'s stores untou
     try { held = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { held = { unreadable: [String(e.message)] }; }
     assert.ok(!holdsRecords(held), `${path.basename(file)} was created holding records the suite made`);
   });
+  const offRecord = require('../../lib/agents/routines-here.js').storePath();
+  assert.ok(offRecord === null || offRecord.startsWith(fs.realpathSync(os.tmpdir())) || offRecord.startsWith(os.tmpdir()),
+    'the record of routines off on this computer is in the temporary folder');
   const store = require('../../lib/agents/approval-store.js');
   assert.ok(store.storePath() === null || store.storePath().startsWith(fs.realpathSync(os.tmpdir())) || store.storePath().startsWith(os.tmpdir()),
     'the approval store is in the temporary folder');

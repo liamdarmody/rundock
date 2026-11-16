@@ -5,6 +5,7 @@ node_modules/
 .recent-workspaces.json
 .browser-sessions.json
 .routine-approvals.json
+.routines-here.json
 .vscode/
 .idea/
 *.swp

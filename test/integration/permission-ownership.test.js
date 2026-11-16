@@ -60,7 +60,7 @@ test('a request from a routine run is attributed to the run, never to a conversa
   client.send({ type: 'run_routine_now', agentId: AGENT, name: ROUTINE, occurrence: 0 });
   const { msg: card } = await client.waitFor(m => m.type === 'control_request', { since, label: 'the routine card' });
   const run = records().find(r => r.status === 'running');
-  assert.deepStrictEqual(scheduler.runById(run.id), { id: run.id, routine: ROUTINE, agent: AGENT }, 'the scheduler names the live run');
+  assert.deepStrictEqual(scheduler.runById(run.id), { id: run.id, routine: ROUTINE, agent: AGENT, workspace: require('../../lib/config.js').getWorkspace() }, 'the scheduler names the live run and the folder it started in');
   assert.strictEqual(card._conversationId, '', 'it borrows no conversation');
   assert.deepStrictEqual(card._run, { id: run.id, routine: ROUTINE, agent: AGENT }, 'it names the run, the routine and the agent');
 

@@ -33,7 +33,7 @@ const { JSDOM } = require('jsdom');
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
 const INDEX_SRC = read('public', 'index.html');
-const EDITOR_MODEL_SRC = read('public', 'routine-editor-model.js');
+const EDITOR_MODEL_SRC = read('public', 'schedule-days.js') + read('public', 'routine-editor-model.js');
 const SKILLS_MODEL_SRC = read('public', 'skills-model.js');
 const SKILLS_SRC = read('public', 'views', 'skills.js');
 // The real handler behind the button, not a stub. The offer this pane makes

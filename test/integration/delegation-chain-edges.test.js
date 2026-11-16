@@ -290,7 +290,7 @@ test('agent CRUD while a delegation is live flags the delegate AND the parked pa
   client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'crudflag task' });
   await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { label: 'delegate result' });
 
-  client.send({ type: 'save_agent', name: 'crudflag-agent', content: '---\nname: crudflag-agent\ndisplayName: Cf\nrole: Temp\ndescription: Temporary test agent\ntype: specialist\norder: 9\nreportsTo: chief-of-staff\n---\nTemp.\n' });
+  h.asDoc({ type: 'save_agent', name: 'crudflag-agent', content: '---\nname: crudflag-agent\ndisplayName: Cf\nrole: Temp\ndescription: Temporary test agent\ntype: specialist\norder: 9\nreportsTo: chief-of-staff\n---\nTemp.\n' });
   await client.waitFor(m => m.type === 'agent_saved' && m.agentId === 'crudflag-agent', { label: 'agent_saved' });
 
   const delegateEntry = h.internal.chatProcesses.get(convoId);

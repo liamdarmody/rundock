@@ -97,6 +97,11 @@
      where --attention as text measured about 2:1. Borders and glows stay on
      --attention. Pinned by test/unit/attention-token.test.js. */
   --attention-text: #E8A84C;
+  /* The working hue as TEXT, following --attention-text: the hue itself in
+     dark (4.91:1 on --card), darker in light (see body.light), where
+     --working as text measured 2.20:1 on the card. Dots and fills stay on
+     --working. Pinned by test/unit/routine-screens-contrast.test.js. */
+  --working-text: #7AA2E8;
   /* The status set had no red, so every destructive and error surface reached
      for a hex of its own and they drifted: three near-identical reds were in
      the stylesheets when this token was added. This is the one, and it is TWO
@@ -117,6 +122,11 @@
      which also recomputes every ratio above from these values. */
   --danger: #D42C2A;
   --danger-text: #F0706E;
+  /* Danger text on --card, where --danger-text misses 4.5:1 by a hair. The
+     recipe Settings uses (--settings-danger-text), as a token, declared again
+     on body.light so it mixes the light values there. Measured by
+     test/unit/danger-text-card-contrast.test.js. */
+  --danger-text-card: color-mix(in srgb, var(--danger-text) 85%, var(--text-1));
 
   /* The permission card's quieter buttons, which must still read as buttons.
      --border-strong is a control EDGE (the Deny outline), held to 3:1;
@@ -130,6 +140,9 @@
   --border-strong: #808080;
   --text-2-strong: #A29D97;
   --success-text: var(--success);
+  /* The permission card's own surface: the plain card in dark, and a color of
+     its own in light (see body.light). */
+  --permission-card: var(--card);
 
   /* Map canvas. A canvas resolves no CSS variables: every fill and stroke is
      a literal read out of the computed style at paint time, so a value the
@@ -259,9 +272,12 @@ body.light {
   --attention-glow: rgba(232,168,76,0.14);
   /* 4.78:1 on --base, 5.03 on --surface, 5.33 on --elevated, 4.57 on --card. */
   --attention-text: #94600C;
+  /* 5.01:1 on --card. */
+  --working-text: #3A63B0;
   /* Danger text in light is the fill value itself, which reads on every light
      surface. The dark theme's lifted value would wash out here. */
   --danger-text: #D42C2A;
+  --danger-text-card: color-mix(in srgb, var(--danger-text) 85%, var(--text-1));
   /* The brand hue as TEXT, light theme only, following --danger-text: plain
      --accent as text measured 2.44 to 2.85:1 on the light surfaces. This
      clears 4.5:1 on all four (--elevated 5.30, --surface 5.00, --base 4.74,
@@ -269,7 +285,7 @@ body.light {
      unchanged. --accent itself, the brand, does not move. */
   --accent-text: #BF401B;
   /* The permission card's quieter buttons in light, following the dark note:
-     measured on the light permission card (#E8E3DB), --border-strong 3.58:1
+     measured on the light permission card (--permission-card), --border-strong 3.58:1
      as the Deny outline, --text-2-strong 4.59:1 as Deny's label, and
      --success-text 5.14:1 as Always allow's and Allow once's label and edge
      (4.84:1 on their hover tint). Plain --success as text measures 1.64:1
@@ -277,17 +293,33 @@ body.light {
   --border-strong: #7A756E;
   --text-2-strong: #69645D;
   --success-text: #266A36;
+  /* The permission card in light, darker than the code block inside it
+     (which stays --elevated, pure white) rather than sharing that white and
+     merging with it: 1.28:1 of separation, where --elevated gave 1.00:1. */
+  --permission-card: #E8E3DB;
   /* Control orange in light: clears 3:1 on all four light surfaces
      (elevated 3.83, surface 3.61, base 3.43, card 3.28). */
   --accent-control: #DB5933; --accent-control-hover: #DD6440;
   --graph-edge: rgba(122,117,110,0.30); --graph-dim: 0.22;
 }
 
+/* The brand hue as LINK TEXT: --accent-text mixed 85% with --text-1, the
+   recipe the Settings pane uses for its own links. 5.06:1 on --card in dark,
+   5.53:1 in light.
+
+   ONE RULE FOR BOTH THEMES, and it has to name both. A custom property is
+   computed on the element that declares it, so declared on :root alone it
+   would be mixed once from the dark pair and body.light would inherit that
+   dark mix unchanged. Pinned by test/unit/routine-screens-contrast.test.js. */
+:root, body.light {
+  --link-text: color-mix(in srgb, var(--accent-text) 85%, var(--text-1));
+}
+
 /* The window chrome reserves an inset on each side and the platform supplies
    the values: macOS traffic lights sit left, Windows caption buttons sit
    right. Both are 0 in a browser and on Linux, which is the same path.
    There is deliberately NO per-platform CSS anywhere; chrome-insets.js is the
-   only platform-aware code. See Window-Chrome-Topbar-Spec. */
+   only platform-aware code. */
 /* The bar is as tall as the rail is wide, so the chrome's corner is a true
    square rather than an arbitrary rectangle, and the rail's icons sit on the
    same rhythm as the bar above them. */

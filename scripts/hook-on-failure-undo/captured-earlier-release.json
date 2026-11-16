@@ -1,0 +1,226 @@
+{
+  "about": "What the v0.15.7 release leaves in .claude/settings.local.json when it opens a workspace a later release wrote, captured from that release's own code by scripts/hook-on-failure-undo/capture.js. test/unit/hook-on-failure.test.js reopens it with this release.",
+  "release": "v0.15.7",
+  "regenerate": "node scripts/hook-on-failure-undo/capture.js --write, in a clone that has the release tags",
+  "method": "This checkout's scaffold opened a new workspace and wrote the settings file (\"written\"). The v0.15.7 release's files, taken from its git tag with git archive, then opened the same workspace with that release's own scaffold (\"leftByRelease\"), and opened a second, new workspace (\"createdByRelease\"). Each open ran in a node process of its own, as a workspace open runs it (scaffoldWorkspace), with the platform given as linux and HOME and TMPDIR set to fresh, empty folders. The workspace's path is written as <workspace>.",
+  "platform": "linux",
+  "releaseChangedTheFile": false,
+  "written": {
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Bash",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300,
+              "onFailure": "block"
+            }
+          ]
+        },
+        {
+          "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300,
+              "onFailure": "block"
+            }
+          ]
+        },
+        {
+          "matcher": "PowerShell",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300,
+              "onFailure": "block"
+            }
+          ]
+        },
+        {
+          "matcher": "mcp__.*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300,
+              "onFailure": "block"
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 10
+            }
+          ]
+        }
+      ],
+      "PostToolUseFailure": [
+        {
+          "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 10
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "leftByRelease": {
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Bash",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300,
+              "onFailure": "block"
+            }
+          ]
+        },
+        {
+          "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300,
+              "onFailure": "block"
+            }
+          ]
+        },
+        {
+          "matcher": "PowerShell",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300,
+              "onFailure": "block"
+            }
+          ]
+        },
+        {
+          "matcher": "mcp__.*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300,
+              "onFailure": "block"
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 10
+            }
+          ]
+        }
+      ],
+      "PostToolUseFailure": [
+        {
+          "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 10
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "createdByRelease": {
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Bash",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300
+            }
+          ]
+        },
+        {
+          "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Glob|Grep",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300
+            }
+          ]
+        },
+        {
+          "matcher": "PowerShell",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300
+            }
+          ]
+        },
+        {
+          "matcher": "mcp__.*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 300
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 10
+            }
+          ]
+        }
+      ],
+      "PostToolUseFailure": [
+        {
+          "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|mcp__.*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"<workspace>/.rundock/permission-hook.sh\"",
+              "timeout": 10
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

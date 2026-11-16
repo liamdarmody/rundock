@@ -67,9 +67,7 @@ function idleWorkspace() {
 // a routine runs with cwd set to the workspace it belongs to, so this asks the
 // question per workspace rather than only for the harness fixture.
 function promptsIn(dir) {
-  const file = path.join(dir, 'stub-prompts.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return h.readAppendedLog(path.join(dir, 'stub-prompts.jsonl'));
 }
 
 // Choose a folder, exactly as the interface does it. The reply is awaited so

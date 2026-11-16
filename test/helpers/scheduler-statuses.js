@@ -18,14 +18,16 @@
 // WHAT IT READS. Every quoted word on the `status:` line of a call that
 // records a routine's state, however many the writer chooses between, plus the
 // startup rewrite, which is the one writer that does not go through the
-// recorder.
+// recorder. A call may name the workspace the run started in after the state,
+// as the ending does, so the state's closing brace is matched with or without
+// it.
 const fs = require('node:fs');
 const path = require('node:path');
 
 function statusesTheSchedulerRecords() {
   const src = fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'scheduler.js'), 'utf-8');
   const found = new Set();
-  for (const call of src.matchAll(/recordRoutineRun\(key, \{[\s\S]*?\}\)/g)) {
+  for (const call of src.matchAll(/recordRoutineRun\(key, \{[\s\S]*?\}(?:, run\.workspace)?\)/g)) {
     for (const line of call[0].split('\n')) {
       if (!/\bstatus:/.test(line)) continue;
       for (const m of line.matchAll(/'(\w+)'/g)) found.add(m[1]);

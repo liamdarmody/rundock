@@ -7,7 +7,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert');
 
+// No turn a booted server runs ever watches the account's own startup files.
+require('./account-home-refused.js');
 const { makeWorkspace, makeTempDir, standardTeam } = require('./workspace.js');
+const { readAppendedLog } = require('./appended-log.js');
 
 const STUB_DIR = path.join(__dirname, 'stub-claude');
 const CODEX_STUB_DIR = path.join(__dirname, 'stub-codex');
@@ -52,6 +55,10 @@ async function boot(opts = {}) {
   // RUNDOCK_ELECTRON routes the recent-workspaces file into $HOME (now a temp
   // dir) instead of the repo checkout.
   process.env.RUNDOCK_ELECTRON = '1';
+  // The shell startup files a turn's guard watches resolve under the temp
+  // home too, not under an inherited ZDOTDIR or XDG_CONFIG_HOME.
+  delete process.env.ZDOTDIR;
+  delete process.env.XDG_CONFIG_HOME;
   for (const [k, v] of Object.entries(opts.env || {})) process.env[k] = v;
 
   workspaceDir = makeWorkspace({ agents: opts.agents || standardTeam(), claudeMd: '# Test Workspace\n', ...(opts.workspaceOpts || {}) });
@@ -110,9 +117,7 @@ function codexTurnPrompts() {
 }
 
 function readInvocations() {
-  const file = path.join(workspaceDir, 'stub-invocations.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(workspaceDir, 'stub-invocations.jsonl'));
 }
 
 function clearInvocations() {
@@ -133,9 +138,7 @@ function clearInvocations() {
 // spawn. These model MCP servers: grandchildren of the server that it has no
 // handle on, and which survive a single-pid kill of their parent.
 function readGrandchildren() {
-  const file = path.join(workspaceDir, 'stub-grandchildren.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(workspaceDir, 'stub-grandchildren.jsonl'));
 }
 
 // One line per --print run that finished writing: which agent, its pid, and
@@ -148,9 +151,7 @@ function readGrandchildren() {
 // wants to know about what a run emitted, this is where the child says it,
 // rather than the test inferring it from the size of the fixture it wrote.
 function readStubOutputs() {
-  const file = path.join(workspaceDir, 'stub-output.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(workspaceDir, 'stub-output.jsonl'));
 }
 
 // ── Prompt log (Claude stub) ──────────────────────────────────────────────
@@ -162,15 +163,11 @@ function readStubOutputs() {
 // What the permission hook answered each `hooks` call a stub made, in order
 // (test/helpers/stub-claude/claude, runHookCalls).
 function readHookAnswers() {
-  const file = path.join(workspaceDir, 'stub-hook-answers.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(workspaceDir, 'stub-hook-answers.jsonl'));
 }
 
 function readPrompts() {
-  const file = path.join(workspaceDir, 'stub-prompts.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(workspaceDir, 'stub-prompts.jsonl'));
 }
 
 /** True if the pid is still running (signal 0 probes without delivering). */
@@ -378,6 +375,30 @@ async function shutdown() {
   await new Promise(resolve => internal.server.close(resolve));
 }
 
+// A change to the team made the only way one can be: by a marker in a reply
+// from Doc, acted on at the end of Doc's turn (lib/agents/team-markers.js).
+// Takes the shape the old socket messages had, so a test that needs an agent
+// or skill saved or deleted says what, not how: { type: 'save_agent', name,
+// content } (or create_agent, update_agent), { type: 'delete_agent', agentId },
+// { type: 'save_skill', name, content }, { type: 'delete_skill', name }. The
+// confirmations and errors are broadcast to every window, as Doc's are.
+// Returns the outcomes. A name or body the marker grammar cannot carry is a
+// test that needs rewriting, so it throws rather than sending something else.
+function asDoc(msg) {
+  const name = msg.type === 'delete_agent' ? msg.agentId : msg.name;
+  if (!/^[\w-]+$/.test(String(name))) throw new Error(`asDoc: a marker cannot name "${name}"`);
+  const marker = {
+    save_agent: 'SAVE_AGENT', create_agent: 'SAVE_AGENT', update_agent: 'SAVE_AGENT',
+    save_skill: 'SAVE_SKILL', delete_agent: 'DELETE_AGENT', delete_skill: 'DELETE_SKILL',
+  }[msg.type];
+  if (!marker) throw new Error(`asDoc: ${msg.type} is not a change to the team`);
+  const text = marker.startsWith('SAVE')
+    ? `<!-- RUNDOCK:${marker} name=${name} -->\n${msg.content}\n<!-- /RUNDOCK:${marker} -->`
+    : `<!-- RUNDOCK:${marker} name=${name} -->`;
+  const { applyTeamMarkers } = require('../../lib/agents/team-markers.js');
+  return applyTeamMarkers({ agentId: 'rundock-guide' }, text, msg.conversationId || null);
+}
+
 let convoCounter = 0;
 function freshConvoId(prefix = 'it') {
   return `${prefix}-${Date.now().toString(36)}-${++convoCounter}`;
@@ -385,10 +406,10 @@ function freshConvoId(prefix = 'it') {
 
 module.exports = {
   boot, shutdown, connect, writeScenario, writeCodexScenario, codexTurnPrompts,
-  readInvocations, clearInvocations,
+  readInvocations, clearInvocations, readAppendedLog,
   readGrandchildren, readStubOutputs, readHookAnswers, pidAlive, waitForPidExit,
   readPrompts, promptsFor, unmatchedPrompts, assertAllPromptsMatched, clearPrompts,
-  delay, waitUntil, freshConvoId, reapConvo,
+  delay, waitUntil, freshConvoId, reapConvo, asDoc,
   authHeaders, hookToken, hookHeaders,
   get internal() { return internal; },
   get port() { return port; },

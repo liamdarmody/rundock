@@ -19,7 +19,7 @@ const WebSocket = require('ws');
 const credentials = require('./credentials.js');
 
 const PORT = Number(process.env.E2E_PORT || 34517);
-const STUB_VERSION = '0.0.0-stub';
+const STUB_VERSION = '2.1.318-stub';
 const CONVO = 'stale-session-e2e';
 const LIVE = 'e2e-live-orch-session';
 const DEAD = 'e2e-removed-lead-session';

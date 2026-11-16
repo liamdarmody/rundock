@@ -508,7 +508,11 @@ function renderSessionHistory(d) {
     }
     const div = document.createElement('div');
     div.style.animation = 'none';
-    if (msg.role === 'user') {
+    if (msg.role === 'system') {
+      // What Rundock did with an agent or skill marker, stored by the server.
+      div.className = 'msg-system history-msg';
+      div.textContent = msg.content || '';
+    } else if (msg.role === 'user') {
       div.className = 'msg msg-user history-msg';
       div.innerHTML = RundockChatMarkup.userBubbleHtml(esc(msg.content));
     } else {
@@ -566,7 +570,7 @@ function renderSessionHistory(d) {
   // Routing entries keep their dedicated role so sidebar preview filters them out
   // and the replay loop skips them (auto-divider on the following agent triggers).
   const historyMsgs = d.messages.filter(m => !m.content || !m.content.includes('[WORKSPACE_ANALYSIS]')).map(m => ({
-    role: m.type === 'routing' ? 'routing' : (m.role === 'user' ? 'user' : 'agent'),
+    role: m.type === 'routing' ? 'routing' : (m.role === 'user' || m.role === 'system' ? m.role : 'agent'),
     content: m.role !== 'user' ? stripRundockMarkers(m.content || '').trim() : m.content,
     agentId: m.agentId || convo.agentId,
     timestamp: m.timestamp || null,
@@ -692,6 +696,11 @@ function handlePermissionRequest(d, convoId) {
   // The auto-allow decision path is a named, unit-tested function in
   // permissions.js: standing "Always allow" grants and the low-risk
   // (read-only) auto-approve policy skip the card; everything else asks.
+  // The server asks decidePermission the same question, with the same saved
+  // answers and verdict, before it sends a card (serverAnswer in
+  // lib/http-router.js), and answers a low-risk read and a saved "Always
+  // allow" itself, so either reaches this branch only when the server did not
+  // answer it; the branch stays, as the fallback it now is.
   // Auto-allows answer regardless of which conversation is on screen (a
   // standing grant is session-wide); card-worthy requests render only in
   // the active conversation and QUEUE for background ones, where they used
@@ -1076,9 +1085,12 @@ function renderPermissionCard(d, convoId, host) {
     // this request would change the rules that decide what agents may do, or
     // what runs when they act.
     const named = [req.resolved_path, ...crossingList.map(c => c && c.path)].filter(Boolean);
-    summary = RundockPermissions.answerFileSummary(named);
-    detail = req.resolved_path || detail;
-    context = RundockPermissions.answerFileCopy(named);
+    // A shell startup file is named as `~/.zshrc`, wherever the write reached
+    // it, and a folder holding one as that folder, worded as a startup file.
+    const startupLabel = req.startup_file || (crossingList.find(c => c && c.startupFile) || {}).startupFile || null;
+    summary = RundockPermissions.answerFileSummary(named, startupLabel);
+    detail = startupLabel || req.resolved_path || detail;
+    context = RundockPermissions.answerFileCopy(named, startupLabel);
   } else if (boundary) {
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
     // A shell crossing does not say which act it is. The command may read,
@@ -1258,6 +1270,10 @@ function renderPermissionCard(d, convoId, host) {
         // and unclipped, since this card is the person's only look at it.
         : (toolName === 'SaveConnector' || toolName === 'DeleteConnector')
           ? `<details class="permission-detail-collapse" open><summary>What it would run</summary><code class="permission-detail">${detail.split('\n').map(esc).join('<br>')}</code></details>`
+        // Doc's change to an agent or skill in a hand-off: the whole file, open,
+        // unclipped and with its lines kept, since it is written exactly as shown.
+        : RundockPermissions.isTeamCard(toolName)
+          ? `<details class="permission-detail-collapse" open><summary>${/^Delete/.test(toolName) ? 'What would be deleted' : 'What would be written'}</summary><code class="permission-detail permission-file">${esc(detail)}</code></details>`
         : (toolName === 'Bash' && input.description && detail.length > 60)
           ? `<details class="permission-detail-collapse"><summary>Show command</summary><code class="permission-detail">${esc(detail)}</code></details>`
           : `<code class="permission-detail">${esc(detail)}</code>`}
@@ -1538,7 +1554,11 @@ function updateApprovalsDock() {
 }
 
 // A request that names no conversation. Never placed in the conversation on
-// screen: that fallback is the misattribution this replaces.
+// screen: that fallback is the misattribution this replaces. A routine's
+// low-risk read, and a request a saved "Always allow" covers, are answered by
+// the server before they get here, with or without a window, so what arrives
+// is what the server did not answer; the same decision is asked again below,
+// as in handlePermissionRequest.
 function handleOwnerlessPermissionRequest(d) {
   const req = d.request || {};
   const requestId = d.request_id || '';

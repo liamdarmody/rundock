@@ -62,7 +62,7 @@ describe('the four outcomes, each in its own tone and its own leading word', () 
     const seen = ALL_FOUR.map(([, input]) => status(input));
     assert.deepStrictEqual(seen.map(s => s.kind), ['on-time', 'caught-up', 'missed', 'failed']);
     assert.deepStrictEqual(seen.map(s => s.tone), ['ok', 'ok-quiet', 'neutral', 'failed']);
-    assert.deepStrictEqual(seen.map(s => s.lead), ['Ran', 'Caught up', 'Missed', 'Failed']);
+    assert.deepStrictEqual(seen.map(s => s.lead), ['Ran', 'Ran late', 'Missed', 'Failed']);
     // Four rows, four different first words, so nothing is told apart by
     // colour alone.
     assert.strictEqual(new Set(seen.map(s => s.lead)).size, 4);
@@ -103,7 +103,7 @@ describe('the four outcomes, each in its own tone and its own leading word', () 
 
   test('the text of each row is the text the locked frame draws', () => {
     assert.strictEqual(status(RAN_ON_TIME).text, 'Ran today, 7:00am, London time');
-    assert.strictEqual(status(CAUGHT_UP).text, 'Caught up: ran today, 9:14am, London time, due 7:00am');
+    assert.strictEqual(status(CAUGHT_UP).text, 'Ran late: today, 9:14am. Due 7:00am.');
     assert.strictEqual(status(MISSED).text, 'Missed: Rundock was closed at 7:00am yesterday, London time');
     assert.strictEqual(status(FAILED).text, 'Failed: today, 7:00am, London time');
   });
@@ -152,6 +152,104 @@ describe('the four outcomes, each in its own tone and its own leading word', () 
     assert.strictEqual(status(wellLate).kind, 'caught-up');
   });
 });
+
+// ===== A MONTHLY ROW =====
+//
+// Saturday 14 November 2026, ten past ten, looking at routines due on the 1st
+// or the last day of every month at 9:00am. The server says a routine is
+// monthly, beside the verdict that it can read the schedule; the row reads
+// that fact rather than the schedule's text.
+describe('a monthly row', () => {
+  const NOV = new Date(2026, 10, 14, 10, 10);
+  const say = (input) => m.row({ name: 'Ledger', enabled: true, prompt: 'p', now: NOV, zone: ZONE, ...input });
+  const DAY_N = { schedule: 'on day 1 of every month at 09:00', scheduleKind: 'monthly' };
+  const LAST = { schedule: 'on the last day of every month at 09:00', scheduleKind: 'monthly' };
+
+  test('the sentence names the day of the month', () => {
+    assert.strictEqual(m.routineSentence({ ...DAY_N, name: 'invoice-sweep' }), 'Every month on the 1st at 9:00am, run: invoice-sweep');
+    assert.strictEqual(m.routineSentence({ ...LAST, name: 'invoice-sweep' }), 'Every month on the last day at 9:00am, run: invoice-sweep');
+  });
+
+  test('the next run reads in today\'s format', () => {
+    assert.strictEqual(say({ ...DAY_N, nextRun: new Date(2026, 11, 1, 9, 0) }).nextRun.text,
+      'Next run: 1 December, 9:00am, London time');
+    assert.strictEqual(say({ ...LAST, nextRun: new Date(2026, 10, 30, 9, 0) }).nextRun.text,
+      'Next run: 30 November, 9:00am, London time');
+    // Inside a week, the weekday, as every other row says it.
+    assert.strictEqual(say({ ...LAST, nextRun: new Date(2026, 10, 30, 9, 0), now: new Date(2026, 10, 26, 8, 0) }).nextRun.text,
+      'Next run: Monday, 9:00am, London time');
+  });
+
+  // The server names a slot that has passed only when the tick will fire it,
+  // so a monthly next run in the past is a catch-up a moment away.
+  test('while a catch-up is owed, the next run says shortly and when it was due', () => {
+    const owed = { nextRun: new Date(2026, 10, 1, 9, 0), refusal: null };
+    assert.strictEqual(say({ ...DAY_N, ...owed }).nextRun.text, 'Next run: shortly. It was due 1 November, 9:00am.');
+    assert.strictEqual(say({ ...LAST, nextRun: new Date(2026, 9, 31, 9, 0), refusal: null, now: new Date(2026, 9, 31, 17, 0) }).nextRun.text,
+      'Next run: shortly. It was due 31 October, 9:00am.');
+    // Exactly at the slot is owed too: the tick fires a slot that has come.
+    assert.strictEqual(say({ ...DAY_N, nextRun: new Date(2026, 10, 1, 9, 0), refusal: null, now: new Date(2026, 10, 1, 9, 0) }).nextRun.text,
+      'Next run: shortly. It was due 1 November, 9:00am.');
+  });
+
+  // The cases the tick does not fire. A slot that was never owed (first seen
+  // after it, held, or approved after it) arrives as next month's slot, and a
+  // refusal or a held state is a run the tick will not make.
+  test('a slot the tick will not fire is never called shortly', () => {
+    const past = new Date(2026, 10, 1, 9, 0);
+    const said = (input) => { const n = say({ ...DAY_N, ...input }).nextRun; return n ? n.text : null; };
+    assert.strictEqual(said({ nextRun: new Date(2026, 11, 1, 9, 0), refusal: null }), 'Next run: 1 December, 9:00am, London time');
+    assert.strictEqual(said({ nextRun: past, refusal: 'paused', paused: true }), 'Paused');
+    assert.strictEqual(said({ nextRun: past, refusal: 'enabled', enabled: false }), null);
+    assert.strictEqual(said({ nextRun: past, refusal: 'approval', approvedBefore: true }), null);
+    for (const refusal of ['runOn', 'prompt', 'a reason this row has never heard of']) {
+      assert.doesNotMatch(String(said({ nextRun: past, refusal })), /shortly/, `refused for ${refusal}`);
+    }
+    // Daily and weekly keep their line: the owed form is monthly only.
+    assert.strictEqual(next({ ...MISSED, nextRun: TODAYS_SLOT, scheduleKind: 'daily', refusal: null }).text,
+      'Next run: today, 7:00am, London time');
+  });
+
+  test('a late monthly run names the date it was due', () => {
+    for (const shape of [DAY_N, LAST]) {
+      const slot = shape === DAY_N ? new Date(2026, 10, 1, 9, 0) : new Date(2026, 9, 31, 9, 0);
+      const status = say({ ...shape, lastStart: new Date(2026, 10, 14, 9, 2), lastRunStatus: 'completed', lastSlot: slot }).status;
+      assert.strictEqual(status.lead, 'Ran late');
+      assert.strictEqual(status.tone, 'ok-quiet');
+      assert.strictEqual(status.text, shape === DAY_N
+        ? 'Ran late: today, 9:02am. Due 1 November, 9:00am.'
+        : 'Ran late: today, 9:02am. Due 31 October, 9:00am.');
+    }
+  });
+
+  // A monthly slot is recorded as missed only once its month has closed, so
+  // the line says so.
+  test('a missed monthly slot says Rundock stayed closed until the month ended', () => {
+    const MISSED_MONTHLY = { lastStart: new Date(2026, 8, 1, 9, 0), lastRunStatus: 'completed', lastSlot: new Date(2026, 8, 1, 9, 0) };
+    assert.strictEqual(say({ ...DAY_N, ...MISSED_MONTHLY, missedSlot: new Date(2026, 9, 1, 9, 0) }).status.text,
+      'Missed: Rundock was closed at 9:00am 1 October, London time, and not opened again before the month ended.');
+    // The date, not "yesterday": a slot on the 31st seen on the 1st.
+    assert.strictEqual(say({ ...LAST, ...MISSED_MONTHLY, missedSlot: new Date(2026, 9, 31, 9, 0), now: new Date(2026, 10, 1, 8, 0) }).status.text,
+      'Missed: Rundock was closed at 9:00am 31 October, London time, and not opened again before the month ended.');
+  });
+});
+
+// "Ran late" is the word for every late run, so the word it replaced is not
+// on any row, in any state this model can produce.
+test('no row says Caught up', () => {
+  const states = [RAN_ON_TIME, CAUGHT_UP, MISSED, FAILED, { ...CAUGHT_UP, lastRunStatus: 'cancelled' }];
+  for (const kind of ['daily', 'weekly', 'monthly', undefined]) {
+    for (const input of states) {
+      const row = m.row({ name: 'R', schedule: SCHEDULE_FOR(kind), scheduleKind: kind, enabled: true, prompt: 'p', ...input, now: NOW, zone: ZONE });
+      assert.doesNotMatch(JSON.stringify(row), /caught up/i, `${kind}: ${JSON.stringify(input)}`);
+    }
+  }
+  assert.ok(!Object.values(m.OUTCOMES).some((o) => /caught up/i.test(o.lead)));
+});
+function SCHEDULE_FOR(kind) {
+  return { daily: 'every day at 07:00', weekly: 'every Thursday at 07:00', monthly: 'on day 20 of every month at 07:00' }[kind]
+    || 'every day at 07:00';
+}
 
 describe('the next-run fact, on every row', () => {
   // AC-3 and AC-4. Present on all four, including the longest status text.
@@ -261,6 +359,130 @@ describe('times and days in local words', () => {
   });
 });
 
+describe('a row on a server in another zone says the time the routine fires', () => {
+  // A routine fires on the server's clock. When the server reports a zone the
+  // window is not in, the window's own clock would show the right instant at
+  // an hour nobody scheduled: "Every day at 8:00am" beside "Next run: 7:00am".
+  // So the row's times are worked out in the server's zone and named as it.
+  //
+  // Every instant here is built from UTC components and every time is worked
+  // out in a zone this test names, so none of it depends on the runner's zone.
+  const NOW_UTC = new Date(Date.UTC(2026, 9, 7, 5, 0)); // 06:00 London, 18:00 Auckland
+  const LONDON_SLOT = new Date(Date.UTC(2026, 9, 8, 7, 0)); // 08:00 London tomorrow
+  const server = (input) => ({ ...input, now: NOW_UTC, zone: 'UTC', serverZone: 'Europe/London' });
+
+  test('the next run is worked out and named in the server\'s zone, not the window\'s', () => {
+    assert.strictEqual(m.nextRunLabel(server({ nextRun: LONDON_SLOT })).text,
+      'Next run: tomorrow, 8:00am, London time');
+  });
+
+  test('the row\'s sentence and its next run name the same hour', () => {
+    const row = m.row(server({
+      name: 'Morning briefing', schedule: 'every day at 08:00', agentName: 'Piper', runOn: 'local',
+      lastStart: new Date(Date.UTC(2026, 9, 6, 7, 0, 12)), lastRunStatus: 'completed',
+      lastSlot: new Date(Date.UTC(2026, 9, 6, 7, 0)), missedSlot: null, nextRun: LONDON_SLOT,
+    }));
+    assert.strictEqual(row.sentence, 'Every day at 8:00am, run: Morning briefing');
+    assert.strictEqual(row.nextRun.text, 'Next run: tomorrow, 8:00am, London time');
+    assert.strictEqual(row.status.text, 'Ran yesterday, 8:00am, London time');
+  });
+
+  // Every time on the row, not only the next run: a row that said its last
+  // run in one zone and its next in another would disagree with itself.
+  test('a missed slot and a late run are said in the server\'s zone too', () => {
+    const missed = m.runStatus(server({
+      lastStart: new Date(Date.UTC(2026, 9, 5, 7, 0)), lastRunStatus: 'completed',
+      lastSlot: new Date(Date.UTC(2026, 9, 5, 7, 0)), missedSlot: new Date(Date.UTC(2026, 9, 6, 7, 0)),
+    }));
+    assert.strictEqual(missed.text, 'Missed: Rundock was closed at 8:00am yesterday, London time');
+    const late = m.runStatus(server({
+      lastStart: new Date(Date.UTC(2026, 9, 7, 4, 40)), lastRunStatus: 'completed',
+      lastSlot: new Date(Date.UTC(2026, 9, 7, 3, 0)), missedSlot: null,
+    }));
+    assert.strictEqual(late.text, 'Ran late: today, 5:40am. Due 4:00am.');
+  });
+
+  // A monthly row reads in its own words, on the server's calendar. 09:00 on
+  // the 1st in Auckland is 20:00 on the 31st in the window, so a date taken
+  // from the window's clock names the wrong day as well as the wrong hour.
+  test('a monthly row names the server\'s date and hour', () => {
+    const slot = new Date(Date.UTC(2026, 9, 31, 20, 0)); // 09:00 on 1 November in Auckland
+    const ledger = (input) => m.row({
+      name: 'Ledger', enabled: true, prompt: 'p', schedule: 'on day 1 of every month at 09:00', scheduleKind: 'monthly',
+      now: new Date(Date.UTC(2026, 10, 14, 0, 0)), zone: 'UTC', serverZone: 'Pacific/Auckland', ...input,
+    });
+    assert.strictEqual(ledger({ nextRun: slot, refusal: null }).nextRun.text,
+      'Next run: shortly. It was due 1 November, 9:00am.');
+    assert.strictEqual(ledger({ lastStart: new Date(Date.UTC(2026, 10, 13, 20, 2)), lastRunStatus: 'completed', lastSlot: slot }).status.text,
+      'Ran late: today, 9:02am. Due 1 November, 9:00am.');
+    const before = new Date(Date.UTC(2026, 8, 30, 20, 0)); // 09:00 on 1 October in Auckland
+    assert.strictEqual(ledger({ lastStart: before, lastRunStatus: 'completed', lastSlot: before, missedSlot: slot }).status.text,
+      'Missed: Rundock was closed at 9:00am 1 November, Auckland time, and not opened again before the month ended.');
+  });
+
+  // The day is the server's as well as the hour. 19:00 UTC is still today in
+  // the window and already tomorrow on a server in Auckland.
+  test('today and tomorrow are the server\'s days, not the window\'s', () => {
+    const label = m.nextRunLabel({
+      nextRun: new Date(Date.UTC(2026, 9, 7, 19, 0)), now: NOW_UTC, zone: 'UTC', serverZone: 'Pacific/Auckland',
+    });
+    assert.strictEqual(label.text, 'Next run: tomorrow, 8:00am, Auckland time');
+  });
+
+  // A zone this window's runtime has no data for, which a server with newer
+  // zone data can report. No time on the row can be worked out in it, so each
+  // line leaves its time out: never a throw, never "null" where the time was,
+  // and never a time off this window's clock, which is an hour nobody
+  // scheduled. The outcome and its tone are still said.
+  test('a server zone this window cannot read leaves the times out, and never shows the window\'s clock', () => {
+    assert.throws(() => new Intl.DateTimeFormat('en-US', { timeZone: 'Not/AZone' }), RangeError,
+      'sanity: this runtime has no such zone');
+    const unknown = (input) => ({ ...input, now: NOW_UTC, zone: 'UTC', serverZone: 'Not/AZone' });
+    const ranAt = new Date(Date.UTC(2026, 9, 6, 7, 0, 12));
+    const slotAt = new Date(Date.UTC(2026, 9, 6, 7, 0));
+
+    assert.strictEqual(m.nextRunLabel(unknown({ nextRun: LONDON_SLOT })), null);
+    assert.strictEqual(m.nextRunLabel(unknown({ nextRun: new Date(Date.UTC(2026, 9, 1, 8, 0)), scheduleKind: 'monthly' })), null,
+      'nor a monthly slot still owed');
+
+    const said = (input) => m.runStatus(unknown({ lastStart: ranAt, lastSlot: slotAt, missedSlot: null, ...input }));
+    const statuses = [
+      [said({ lastRunStatus: 'completed' }), 'on-time', 'Ran'],
+      [said({ lastRunStatus: 'completed', lastStart: new Date(Date.UTC(2026, 9, 6, 9, 40)) }), 'caught-up', 'Ran late'],
+      [said({ lastRunStatus: 'failed' }), 'failed', 'Failed'],
+      [said({ lastRunStatus: 'cancelled' }), 'stopped', 'Stopped'],
+      [said({ lastRunStatus: 'completed', missedSlot: new Date(Date.UTC(2026, 9, 7, 3, 0)), lastStart: new Date(Date.UTC(2026, 9, 5, 7, 0)) }), 'missed', 'Missed'],
+    ];
+    for (const [status, kind, text] of statuses) {
+      assert.deepStrictEqual({ kind: status.kind, text: status.text }, { kind, text });
+    }
+    assert.strictEqual(statuses[2][0].tone, 'failed', 'a failure keeps its tone with its time left out');
+
+    const row = m.row(unknown({
+      name: 'Morning briefing', schedule: 'every day at 08:00', agentName: 'Piper', runOn: 'local',
+      lastStart: ranAt, lastRunStatus: 'completed', lastSlot: slotAt, missedSlot: null, nextRun: LONDON_SLOT,
+    }));
+    assert.strictEqual(row.status.text, 'Ran');
+    assert.strictEqual(row.nextRun, null);
+    const offer = m.enableOffer(unknown({
+      enabled: false, paused: false, nextRun: LONDON_SLOT, schedule: 'every day at 08:00', scheduleReadable: true, runOn: 'local',
+    }));
+    assert.ok(offer, 'sanity: the offer is still made');
+    for (const text of [...statuses.map(([s]) => s.text), row.status.text, offer.text]) {
+      assert.doesNotMatch(text, /null|undefined|\d:\d\d|UTC/, `a time, or nothing in its place, reached the row: ${text}`);
+    }
+  });
+
+  // The same zone on both ends, or none reported: the row reads as it did, on
+  // the window's clock, named as the server's zone when it gave one.
+  test('when the two zones agree, or the server reports none, the row is the window\'s clock as before', () => {
+    const local = { ...RAN_ON_TIME, now: NOW, zone: ZONE };
+    assert.strictEqual(m.nextRunLabel({ ...local, serverZone: ZONE }).text, m.nextRunLabel(local).text);
+    assert.strictEqual(m.runStatus({ ...local, serverZone: ZONE }).text, m.runStatus(local).text);
+    assert.strictEqual(m.nextRunLabel({ ...local, serverZone: null }).text, m.nextRunLabel(local).text);
+  });
+});
+
 describe('the rest of the row', () => {
   // AC-1 and AC-2. Two lines, and the second carries both facts.
   test('a row with a last-run fact carries two lines', () => {
@@ -270,7 +492,7 @@ describe('the rest of the row', () => {
     });
     assert.strictEqual(row.sentence, 'Every day at 7:00am, run: Compile the ops summary');
     assert.strictEqual(row.meta, 'Piper');
-    assert.strictEqual(row.runsOn, 'Runs on this computer');
+    assert.strictEqual(row.runsOn, 'Runs on your computers');
     assert.strictEqual(row.status.text, 'Ran today, 7:00am, London time');
     assert.strictEqual(row.nextRun.text, 'Next run: tomorrow, 7:00am, London time');
   });
@@ -301,8 +523,20 @@ describe('the rest of the row', () => {
 
   test('a schedule the editor never offered assembles into no sentence', () => {
     assert.strictEqual(m.scheduleWords('0 7 * * *'), null);
-    assert.strictEqual(m.scheduleWords('every weekday at 07:00'), null);
+    assert.strictEqual(m.scheduleWords('every weekdays at 07:00'), null);
+    assert.strictEqual(m.scheduleWords('every mon and fri at 07:00'), null);
     assert.strictEqual(m.scheduleWords('every monday at 08:00'), 'Every Monday at 8:00am');
+  });
+
+  // A monthly row's sentence, for a day and for the last day, in the editor's
+  // words: an ordinal, never the "day 15" the file says.
+  test('a monthly routine reads as every month on its day', () => {
+    assert.strictEqual(m.routineSentence({ schedule: 'on day 15 of every month at 09:00', name: 'Context review' }),
+      'Every month on the 15th at 9:00am, run: Context review');
+    assert.strictEqual(m.routineSentence({ schedule: 'on the last day of every month at 18:00', name: 'Context review' }),
+      'Every month on the last day at 6:00pm, run: Context review');
+    assert.strictEqual(m.scheduleWords('on day 1 of every month at 09:00'), 'Every month on the 1st at 9:00am');
+    assert.strictEqual(m.scheduleWords('on day 31 of every month at 09:00'), null);
   });
 
   // AC-11. Delete says what stops, what does not, and that it is final.
@@ -611,6 +845,27 @@ describe('the copy this card ships', () => {
 
   test('no em dash or en dash reaches this view\'s copy', () => {
     for (const line of copyShipped()) assert.ok(!/[\u2014\u2013]/.test(line), `dash in: ${line}`);
+  });
+
+  // A routine on a set of days runs on the days ticked, holiday or not, and
+  // nothing a row says suggests otherwise: not the copy it builds, not any
+  // string the model exports, and not its source.
+  test('no copy the routines model ships mentions a holiday', () => {
+    const owed = {
+      nextRun: new Date(2026, 10, 9, 9, 0).toISOString(), now: new Date(2026, 10, 9, 10, 15).toISOString(),
+      scheduleKind: 'days', enabled: true, prompt: 'Run the digest skill.', runOn: 'local', zone: ZONE,
+    };
+    const lines = copyShipped().concat(everyString(Object.values(m)), everyString([
+      m.nextRunLabel(owed),
+      m.routineSentence({ schedule: 'every weekday at 09:00', name: 'Digest' }),
+      m.routineSentence({ schedule: 'every monday, wednesday and sunday at 09:00', name: 'Digest' }),
+      m.scheduleProblem({ schedule: 'every mon and fri at 07:00', scheduleReadable: false }),
+    ]));
+    assert.ok(lines.length > 50, `sanity: the copy was walked, found ${lines.length} strings`);
+    assert.ok(lines.includes(m.SCHEDULE_PROBLEM.body), 'sanity: the walk reaches the hint');
+    for (const line of lines) assert.ok(!/holiday/i.test(line), `a holiday in: ${line}`);
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'routines-model.js'), 'utf-8');
+    assert.ok(!/holiday/i.test(src), 'public/routines-model.js mentions a holiday');
   });
 
   test('the copy is UK spelling', () => {
@@ -1092,10 +1347,11 @@ describe('a routine whose schedule the scheduler cannot read', () => {
     const p = problem({ schedule: '0 7 * * *', scheduleReadable: false });
     assert.ok(p, 'an unreadable schedule raises nothing');
     assert.match(p.text, /cannot read this schedule/i);
-    // Both accepted shapes, by example rather than by description. A reader
+    // The accepted shapes, by example rather than by description. A reader
     // who has just been told their schedule is wrong needs one they can copy.
     assert.match(p.text, /every day at 07:00/);
-    assert.match(p.text, /every Monday at 07:00/);
+    assert.match(p.text, /every weekday at 07:00/);
+    assert.match(p.text, /every Monday and Friday at 07:00/);
   });
 
   test('a schedule the scheduler reads raises nothing', () => {
@@ -1147,6 +1403,54 @@ describe('a routine whose schedule the scheduler cannot read', () => {
     });
     assert.ok(row.scheduleProblem, 'the row drops the problem');
     assert.strictEqual(row.nextRun, null);
+  });
+});
+
+// ===== THE UNREADABLE-SCHEDULE NOTICE =====
+//
+// A red lead that says the routine will not run, and a quiet body that says
+// what to write instead. A hand-typed day 29, 30 or 31 gets a body of its own,
+// and which body shows is the server's answer, carried beside
+// scheduleReadable: this side keeps no reading of those days.
+describe('the unreadable-schedule notice: a red lead and a quiet body', () => {
+  const LEAD = 'Rundock cannot read this schedule, so this routine will not run.';
+
+  test('any other schedule is shown four forms that work', () => {
+    const p = m.scheduleProblem({ schedule: 'every month at 09:00', scheduleReadable: false });
+    assert.strictEqual(p.lead, LEAD);
+    assert.strictEqual(p.body, 'Use Edit schedule, or change the file to say every day at 07:00, '
+      + 'every weekday at 07:00, every Monday and Friday at 07:00 or on day 15 of every month at 07:00.');
+    assert.strictEqual(p.text, `${p.lead} ${p.body}`);
+  });
+
+  test('a day 29, 30 or 31 is told the last-day form, at its own time', () => {
+    for (const [day, time] of [[29, '07:30'], [30, '18:00'], [31, '09:00']]) {
+      const p = m.scheduleProblem({
+        schedule: `on day ${day} of every month at ${time}`, scheduleReadable: false,
+        unreadableMonthDay: { day, time },
+      });
+      assert.strictEqual(p.lead, LEAD);
+      assert.strictEqual(p.body, `Day ${day} is not in every month, and Rundock will not pick another day for you. `
+        + `To run on the last day of every month, change it to on the last day of every month at ${time}, `
+        + 'or use Edit schedule.');
+    }
+  });
+
+  test('which body shows is the server\'s answer, not a reading of the text here', () => {
+    assert.match(m.scheduleProblem({ schedule: 'on day 31 of every month at 09:00', scheduleReadable: false }).body,
+      /^Use Edit schedule/, 'a roster that did not say gets the general body');
+    assert.match(m.scheduleProblem({
+      schedule: '0 7 * * *', scheduleReadable: false, unreadableMonthDay: { day: 30, time: '06:00' },
+    }).body, /^Day 30 is not in every month/);
+  });
+
+  test('the row carries both parts', () => {
+    const row = m.row({
+      name: 'Context review', schedule: 'on day 31 of every month at 09:00', scheduleReadable: false,
+      unreadableMonthDay: { day: 31, time: '09:00' }, enabled: true, now: NOW, zone: ZONE,
+    });
+    assert.strictEqual(row.scheduleProblem.lead, LEAD);
+    assert.match(row.scheduleProblem.body, /^Day 31 is not in every month/);
   });
 });
 

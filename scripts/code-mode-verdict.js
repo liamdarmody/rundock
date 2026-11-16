@@ -22,6 +22,7 @@
 const path = require('path');
 const os = require('os');
 const { lexSegments, lexWords, substitutions, stripHeredocs } = require('./code-mode-parse.js');
+const { shellView } = require('../public/read-only-shell.js');
 const gitContext = require('./code-mode-git.js');
 const devPaths = require('./dev-paths.js');
 
@@ -107,8 +108,28 @@ function codeModeVerdict(opts) {
 // taken as unreadable.
 const MAX_DEPTH = 8;
 
+// A BASH LINE IS JUDGED AS WRITTEN AND AS ITS VIEW, and the stricter verdict
+// stands. The view (shellView, in public/read-only-shell.js) is the line with
+// each quote character that opens nothing in bash made a space: one in a
+// comment, one escaped inside `$'…'`, one in a here-document's body. Read as
+// a quote, any of them hid the commands after it, and they ran unjudged. A
+// line whose quotes the shells read differently, or that cannot be read to
+// its end, asks; so does one with a `(` inside a word (`ls *(e:'cmd':)`,
+// `cat =(cmd)`), where zsh runs a command bash's grammar has no place for.
+// Each command a line carries in turn (a subshell, a substitution, a shell's
+// `-c`) is judged here too, so it is read both ways as well.
 function judgeLine(text, ctx, depth = 0) {
   if (depth > MAX_DEPTH) return always('unreadable-command');
+  const result = judgeAsWritten(text, ctx, depth);
+  if (ctx.dialect !== 'bash') return result;
+  const view = shellView(text);
+  let out = result;
+  if (!view.ok || view.wordParen) out = stricter(out, always('unreadable-command'));
+  if (view.text !== text) out = stricter(out, judgeAsWritten(view.text, ctx, depth));
+  return out;
+}
+
+function judgeAsWritten(text, ctx, depth) {
   // Pointing git at another repository by environment moves the context the
   // verdict reads; see judgeGit.
   if (gitEnvironmentIn(text, ctx)) ctx = { ...ctx, gitRedirected: true };

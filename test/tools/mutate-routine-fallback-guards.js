@@ -11,11 +11,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -91,12 +91,13 @@ const MUTATIONS = [
     '  const where = unchecked.line ? ` (at line ${unchecked.line} of the file)` : \'\';'],
 ];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   try {
-    out = execFileSync('node', ['--test', '--test-reporter', 'spec', suite], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', '--test-reporter', 'spec', suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -110,7 +111,7 @@ function redTests(suite) {
   return names;
 }
 
-function run() {
+async function run() {
   const targets = targetsFromRows(MUTATIONS);
   const session = beginMutationRun({ files: targets.map((t) => t.src) });
   const originals = new Map(targets.map((t) => [t, session.original(t.src)]));
@@ -121,8 +122,9 @@ function run() {
       const matches = original.split(guard).length - 1;
       if (matches !== 1) { results.push({ label, applied: false, ambiguous: matches > 1 ? matches : 0, red: [] }); continue; }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable ? { label, applied: true, unparsable: true, red: [] } : { label, applied: true, red });
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] } : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
   } finally {
@@ -134,9 +136,10 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
     let why = null;
-    if (unparsable) why = 'no verdict: the suite failed but its output could not be parsed';
+    if (didNotFinish) why = didNotFinishWhy(didNotFinish);
+    else if (unparsable) why = 'no verdict: the suite failed but its output could not be parsed';
     else if (ambiguous) why = `the guard text matches ${ambiguous} places, so it would break whichever came first`;
     else if (!applied) why = 'the guard text was not found, so nothing was mutated';
     else if (red.length === 0) why = 'nothing turned red';
@@ -160,12 +163,13 @@ if (require.main === module) {
   const verdict = preflight(os.tmpdir());
   if (!verdict.ok) { console.error(verdict.message); process.exit(NO_VERDICT); }
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded.`);
-    process.exit(exitCodeFor(failed, results));
-  }
+  run().then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded.`);
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run };

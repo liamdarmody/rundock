@@ -1,5 +1,5 @@
 'use strict';
-// SR1 universal search: core primitives (capability probe, FTS5 query
+// Universal search: core primitives (capability probe, FTS5 query
 // sanitizer, fuzzy title matcher). These are pure functions/factories in
 // search.js with no workspace or server dependency.
 const { test, describe } = require('node:test');

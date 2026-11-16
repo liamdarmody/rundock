@@ -15,6 +15,7 @@ const { spawn } = require('node:child_process');
 
 const { createCodexAppServer, normalizeErrorKind, parseUserAgentVersion } = require('../../codex-appserver.js');
 const asfx = require('../fixtures/codex-appserver-protocol.js');
+const { readAppendedLog } = require('../helpers/appended-log.js');
 
 const STUB_BIN = path.join(__dirname, '..', 'helpers', 'stub-codex', 'codex');
 
@@ -33,9 +34,7 @@ function writeScenario(dir, scenario) {
 }
 
 function readInvocations(dir) {
-  const file = path.join(dir, 'stub-invocations.jsonl');
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  return readAppendedLog(path.join(dir, 'stub-invocations.jsonl'));
 }
 
 // The stub appends to the invocation log asynchronously as it processes its

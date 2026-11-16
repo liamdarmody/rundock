@@ -30,6 +30,12 @@ function isolateStores() {
   if (sessions && !inTemp(sessions)) {
     auth.configureSessionStore(path.join(makeTempDir('test-sessions-'), 'browser-sessions.json'));
   }
+  // And the record of where routines are off on this computer.
+  const here = require('../../lib/agents/routines-here.js');
+  const offRecord = here.storePath();
+  if (offRecord && !inTemp(offRecord)) {
+    here.configureRoutinesHere(path.join(makeTempDir('test-routines-here-'), 'routines-here.json'));
+  }
 }
 
 function seenHere(dir) {

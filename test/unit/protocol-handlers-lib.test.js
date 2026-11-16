@@ -5,7 +5,7 @@
 // session-history, search, chat-close and friends); these tests pin the
 // SEAMS themselves: the dispatch table routes exactly the enumerated
 // message types (and never the four root shims), the composition root's
-// context object keeps the spec-frozen member list with identity-preserved
+// context object keeps its fixed member list with identity-preserved
 // live state, and handlers reach root capabilities only through ctx.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
@@ -14,6 +14,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
+const team = require('../../lib/protocol/handlers/team.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 
@@ -95,6 +96,9 @@ const EXPECTED_TYPES = [
   'save_routine', 'delete_routine', 'set_routine_paused',
   'set_routine_enabled', 'set_routine_schedule', 'approve_routine_plan',
   'allow_held_routines', 'dismiss_held_routines',
+  // Routines off on this computer, for the open workspace. Pressed by
+  // test/unit/routines-here.test.js.
+  'set_routines_here',
   'search_conversations', 'search_universal', 'get_session_history',
   'save_file', 'create_path', 'reveal_in_finder',
   // Named sources for an extension view, pressed by
@@ -315,10 +319,25 @@ describe('dispatch table', () => {
     }
   });
 
-  test('save_agent legacy aliases map to the same handler by identity', () => {
+  test('the six agent and skill changes, legacy aliases included, map to the one refusal by identity', () => {
+    // A socket cannot change the team: only Doc's replies can, decided on the
+    // server at the end of Doc's turn (lib/agents/team-markers.js).
     const table = buildDispatch();
-    assert.strictEqual(table.create_agent, table.save_agent);
-    assert.strictEqual(table.update_agent, table.save_agent);
+    for (const type of ['save_agent', 'create_agent', 'update_agent', 'delete_agent', 'save_skill', 'delete_skill']) {
+      assert.strictEqual(table[type], team.handleTeamChangeRefused, `${type} is refused`);
+    }
+  });
+
+  test('the refusal writes nothing, answers on the conversation it came from, and says only Doc changes the team', () => {
+    const table = buildDispatch();
+    const ws = captureWs();
+    table.delete_skill({}, ws, { type: 'delete_skill', name: 'anything', conversationId: 'convo-A' });
+    table.save_agent({}, ws, { type: 'save_agent', name: 'anything', content: 'x' });
+    assert.deepStrictEqual(ws.sent.map((m) => [m.type, m.refused, m.conversationId]), [
+      ['skill_error', true, 'convo-A'],
+      ['agent_error', true, undefined],
+    ]);
+    for (const m of ws.sent) assert.match(m.message, /^Only Doc can change the team/);
   });
 
   test('the four root shims never appear in the table', () => {
@@ -329,12 +348,12 @@ describe('dispatch table', () => {
   });
 });
 
-describe('the composition root context (spec-frozen member list)', () => {
+describe('the composition root context (a fixed member list)', () => {
   test('carries exactly the eleven frozen members', () => {
     assert.deepStrictEqual(Object.keys(srv.wsHandlerContext).sort(), [
       'agents', 'broadcast', 'clients', 'config', 'pendingPermissions',
       'processes', 'runtime', 'signals', 'store', 'transitions', 'workspace',
-    ], 'the context member list is frozen by the decomposition spec');
+    ], 'the context member list is fixed: a member added or removed is a deliberate change, made here too');
   });
 
   test('live state members are the root objects by identity', () => {
@@ -1465,7 +1484,9 @@ describe('handler seams (stub ctx, capture ws)', () => {
   test('save_agent and save_skill answer Invalid path when the boundary guard refuses', () => {
     // The guard is injected (ctx.workspace.isInsideWorkspace); a refusal must
     // produce the error card, write nothing, and skip the roster broadcast.
-    const table = buildDispatch();
+    // The handlers are called in-process, as Doc's markers reach them: the
+    // socket messages of these types are refused before any handler runs.
+    const table = { save_agent: team.handleSaveAgent, save_skill: team.handleSaveSkill };
     const original = config.getWorkspace();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-handlers-'));
     try {

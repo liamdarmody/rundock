@@ -20,11 +20,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const os = require('node:os');
 const { preflight } = require('../helpers/temp-root.js');
 const {
   beginMutationRun, targetsFromRows, rowsForShard, exitCodeFor, NO_VERDICT,
+  runSuite, didNotFinishWhy, suiteOutput,
 } = require('./mutation-run.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -64,6 +64,8 @@ const READ_ONLY_CLIENT = { src: path.join(ROOT, 'public', 'read-only-shell.js'),
 // The card grader's PowerShell branch, through the suite that asks the grader
 // and the shared reading about the same command.
 const PS_GRADER = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/permissions.test.js' };
+// The card grader's Bash branch and the decision it feeds, the same suite.
+const BASH_GRADER = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/permissions.test.js' };
 // The grader again, through the real hook, server and client permission path.
 const PS_GRADER_FLOW = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/powershell-read-approvals.test.js' };
 // The app's own message dispatch, between the real server's socket and the card.
@@ -72,6 +74,22 @@ const PS_DISPATCH_FLOW = { src: path.join(ROOT, 'public', 'app.js'), suite: 'tes
 const PS_HOOK_REAL = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/powershell-reads-hook.test.js' };
 // The card a person answers for a PowerShell command, through the real chat view.
 const PS_CARD = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/powershell-read-cards.test.js' };
+// The shared reading of sort and date, through the suites that drive it as a
+// person meets it: the real hook against a home holding hook scripts, the real
+// card code, and the real hook with the reading forced to fail.
+const SORT_DATE_HOOK = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/sort-date-reads-hook.test.js' };
+const SORT_DATE_CARDS = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/sort-date-read-cards.test.js' };
+const SORT_DATE_CRASH = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/hook-never-crashes.test.js' };
+// The shared reading of find, rg, tree and file, through the suite that drives
+// the real hook with a quoted or escaped option, in Notes mode and Code mode.
+const QUOTED_OPTIONS_HOOK = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/quoted-options-hook.test.js' };
+// The view of a line, where a quote character that opens nothing in bash is
+// text: in process, and through the suite that drives the real hook in Notes
+// mode and Code mode, from the shared definition, the hook and the verdict.
+const SHELL_VIEW = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/shell-view.test.js' };
+const SHELL_VIEW_SHARED_HOOK = { src: path.join(ROOT, 'public', 'read-only-shell.js'), suite: 'test/unit/shell-view-hook.test.js' };
+const SHELL_VIEW_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-view-hook.test.js' };
+const SHELL_VIEW_VERDICT = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'), suite: 'test/unit/shell-view-hook.test.js' };
 // The mode-persisted-before-scaffold ordering guard lives in the protocol
 // handler, not the scaffold layer, and is reachable only through the real
 // workspace-open path (the scaffold-layer tests call scaffoldWorkspace
@@ -145,6 +163,16 @@ const VERDICT_CODEX = { src: path.join(ROOT, 'scripts', 'code-mode-verdict.js'),
 // The answer-file guard around Claude turns, and the spawn point that starts it.
 const CLAUDE_TURN_GUARD = { src: path.join(ROOT, 'lib', 'runtime', 'claude-turn-guard.js'), suite: 'test/unit/claude-answer-file-guard.test.js' };
 const CLAUDE_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-answer-file-guard.test.js' };
+// The oldest Claude Code the spawn point starts: the comparison in the flag
+// table's module, the verdicts spawnClaude keeps, and the check on every path,
+// each driven by the suite that notices it.
+const FLOOR_TABLE = { src: path.join(ROOT, 'lib', 'runtime', 'claude-floor.js'), suite: 'test/unit/claude-version-floor.test.js' };
+const FLOOR_SPAWN = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/unit/claude-version-floor.test.js' };
+const FLOOR_PATHS = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor.test.js' };
+const FLOOR_EACCES = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 'test/integration/claude-version-floor-eacces.test.js' };
+// The step the desktop app runs before it looks for `claude`, which puts the
+// folders the too-old notice names first on PATH.
+const FLOOR_FOLDERS = { src: path.join(ROOT, 'lib', 'runtime', 'claude-folders.js'), suite: 'test/unit/claude-version-floor.test.js' };
 const DEV_HOME = { src: path.join(ROOT, 'scripts', 'dev-paths.js'), suite: 'test/unit/code-mode-home-in-temp.test.js' };
 const SCAFFOLD_CM = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/code-mode-boundary.test.js' };
 const CM_PARSE = { src: path.join(ROOT, 'scripts', 'code-mode-parse.js'), suite: 'test/unit/code-mode-verdict.test.js' };
@@ -174,7 +202,19 @@ const AGENT_NOTICE_STORE = { src: path.join(ROOT, 'lib', 'runtime', 'agent-notic
 const STOP_ASK_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_LINE = { src: path.join(ROOT, 'scripts', 'refusal-notice.js'), suite: 'test/unit/stop-and-ask.test.js' };
 const STOP_ASK_SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/stop-and-ask.test.js' };
+// Claude Code blocks the call when the permission hook fails: the field on
+// every PreToolUse entry, its one value, the reconcile that repairs it and what
+// that leaves alone, and the settings file the open will not rebuild. The doc
+// suite is paired too, because its pin compares the value the passage quotes
+// with the one the code writes.
+const ON_FAILURE = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/hook-on-failure.test.js' };
+const ON_FAILURE_DOC = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/doc-claims.test.js' };
+const ON_FAILURE_IMPORT = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: 'test/unit/hook-on-failure.test.js' };
 const STOP_ASK_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/codex-stop-and-ask.test.js' };
+// A workspace switch retires the shared Codex app-server, and one a routine
+// turn still holds shuts down when that turn ends: the switch never ends a
+// running routine. Watched by the suite that switches mid-turn.
+const SWITCH_CODEX_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/integration/routine-outlives-switch.test.js' };
 // A run nobody can be asked from is told to carry on or say it failed: the
 // hook that decides who can be asked and hands every refusal over in those
 // words, and the words themselves, each driven by the suite that runs the real
@@ -270,13 +310,25 @@ const REPEAT_HINT_LINK = { src: path.join(ROOT, 'public', 'views', 'settings.js'
 // program: escape strings, here-documents, interpreter code and a `cd` partway
 // through a chain.
 const SHELL_CODE = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-boundary.test.js' };
+// The same file, the suite for three spellings in an inline script that name
+// no place: a piece joined onto a name given one plain string, a doubled
+// backslash, and Python's `%` formatting.
+const INLINE_SCRIPT = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/inline-script-readings.test.js' };
 // The same file, the suite that runs it as its own process: a hook that dies
 // answers nothing, and the runtime carries on as though nothing had objected.
 const HOOK_CRASH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-never-crashes.test.js' };
+// The same file, the suite that sends the real hook requests it cannot name or
+// whose input it cannot read, and the doc pin that runs it on a few of them.
+const HOOK_UNNAMED = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/hook-unnamed-request.test.js' };
+const HOOK_UNNAMED_DOC = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/doc-claims.test.js' };
 const HOOK_BLOCK_CAPTURE = { src: path.join(ROOT, 'scripts', 'hook-block-truth', 'capture.js'), suite: 'test/unit/hook-block-capture.test.js' };
 // The same file, the suite that times it: the folder each word starts from is
 // worked out once per command, or the check grows with the square of it.
 const SHELL_TIMING = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-code-timing.test.js' };
+// The same suite's own bound on growth: the row above stops at the ceiling
+// before the ratio is reached, so only the bound's tests can show it is the
+// bound that tells linear growth from quadratic.
+const SHELL_TIMING_BOUND = { src: path.join(ROOT, 'test', 'unit', 'shell-code-timing.test.js'), suite: 'test/unit/shell-code-timing.test.js' };
 
 // A connector action that sends, replies or forwards: never a read in the hook,
 // high risk in the client. The word tables are proven by the suite that grades
@@ -395,7 +447,62 @@ const KEYCHAIN_HOOK_FLOW = { src: path.join(ROOT, 'scripts', 'permission-hook.js
 // reaches that check.
 const SECRET_REACH = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/secret-reach.test.js' };
 const SECRET_REACH_GRANT = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/secret-reach-card.test.js' };
+// A runtime folder handed to a program that reads all of it. Proven by the
+// suite that drives the real hook and the classifier over its spellings; what
+// happens when the reading gives up is proven where the hook is made to fail.
+const SECRET_FOLDER = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/secret-folder-read.test.js' };
+// Where the server decides whether a stored grant answers a request. Proven
+// only through the real server, with the real hook's request and a grant
+// stored over the runtime folder.
+const SECRET_FOLDER_GRANT = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/secret-reach-card.test.js' };
+// The same folder rule, through the real hook and the real server.
+const SECRET_FOLDER_CARD = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/integration/secret-reach-card.test.js' };
+// The server's own answer to a low-risk read, which needs no window: proven
+// through the real router with none connected, against the real hook.
+const READ_ONLY_ANSWER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/read-only-without-window.test.js' };
+// The server's own answer from a saved "Always allow": proven through the real
+// router with no window, a turn held on the answer-file guard, and the hook.
+const SAVED_ANSWER = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
+// What a Rundock writer of the permissions file builds on, proven by the same
+// suite: a key planted before a person's save or revoke is never carried into
+// it, so the router never answers it.
+const SAVED_WRITER = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
+const SAVED_BUILD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/integration/saved-answers-without-window.test.js' };
+// Whose saved answers apply: the request's own workspace, never the open one.
+// A routine started in one workspace and still running after a switch, and
+// the inverse, prove the router's binding and the run's recorded folder; the
+// doc pin proves a conversation is bound only by its own guarded turn.
+const SAVED_BOUND = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: 'test/integration/saved-answers-workspace.test.js' };
+const SAVED_RUN_FOLDER = { src: path.join(ROOT, 'lib', 'scheduler.js'), suite: 'test/integration/saved-answers-workspace.test.js' };
+const SAVED_TURN = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/doc-claims.test.js' };
+// A saved Code-mode rule through the real hook: the push to the default
+// branch Asks once, and only its own rule key answers it, never Bash:git.
+const SAVED_RULE = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/integration/saved-answers-code-mode.test.js' };
 
+// The shell startup files and Rundock's record of them: the hook's match and
+// its card's words, the stored-grant check, Codex grading, the sandbox block,
+// and the guard that puts a change back, each driven by the suite that
+// notices it.
+const STARTUP_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/shell-startup-files.test.js' };
+const STARTUP_COPY = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/shell-startup-files.test.js' };
+const STARTUP_BOUNDARY = { src: path.join(ROOT, 'lib', 'workspace', 'boundary.js'), suite: 'test/unit/shell-startup-files.test.js' };
+const STARTUP_CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-approval.js'), suite: 'test/unit/codex-startup-files.test.js' };
+const STARTUP_SANDBOX = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-settings.test.js' };
+const STARTUP_GUARD = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/startup-file-guard.test.js' };
+const STARTUP_GLUE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/startup-file-guard.test.js' };
+// A folder that holds a startup file: the card's words where the window builds
+// them, and the hook's naming as Codex grading uses it.
+const STARTUP_CHAT = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/shell-startup-files.test.js' };
+const STARTUP_HOOK_NAMES = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/codex-startup-files.test.js' };
+const STARTUP_COPY_NAMES = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/codex-startup-files.test.js' };
+// The put-back card, whose words a startup file's name alone chooses.
+const STARTUP_COPY_PUTBACK = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/startup-file-guard.test.js' };
+// The test preload that keeps every test off the account's own startup files.
+const STARTUP_PRELOAD = { src: path.join(ROOT, 'test', 'helpers', 'account-home-refused.js'), suite: 'test/unit/startup-file-guard.test.js' };
+// A file tool's write into the workspace's own agents and skills folders is
+// refused, through the real hook in every mode and run, and the check itself
+// in-process with the case-folding seam set both ways.
+const TEAM_FOLDERS = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/workspace-team-folders.test.js' };
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -590,22 +697,22 @@ const MUTATIONS = [
     '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
   // Forget a length a build wrote and every workspace carrying it is stranded.
   [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22, 23];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22, 23, 36, 41];'],
   [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22, 23];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22, 23, 36, 41];'],
   [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
-    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22, 23];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22, 23, 36, 41];'],
   // Leave the current length out and the day a longer list ships, every block
   // this build wrote reads as a person's edit and never upgrades.
   [SCAFFOLD_SETTINGS, 'the current deny list\'s length is recorded as written',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 41];'],
   [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-two-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 23];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 23, 36, 41];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.
@@ -911,8 +1018,8 @@ const MUTATIONS = [
   // Widen the exemption to any redirect target and the fail-safe inverts:
   // `ls x > x/listing.txt` writes into the surface and would read as free.
   [READ_ONLY, 'only /dev/null and descriptor duplication are exempt, never an arbitrary redirect target',
-    'var DISCARDING_REDIRECT_RE = /\\d*>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
-    'var DISCARDING_REDIRECT_RE = /\\d*>>?\\s*\\S+/g;'],
+    'var DISCARDING_REDIRECT_RE = /(?:(?<![^ \\t\\n])\\d+)?>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
+    'var DISCARDING_REDIRECT_RE = /(?:(?<![^ \\t\\n])\\d+)?>>?\\s*\\S+/g;'],
   // A command is read-only only if every leading word is actually in the
   // registry: drop the check and any command (a bare `rm`, included) reads
   // as free against a persistence surface.
@@ -928,15 +1035,12 @@ const MUTATIONS = [
   [READ_ONLY_CLIENT, 'structure the segmenter cannot see into is never a read',
     '    if (HIDES_SUBCOMMAND.test(str)) return false;',
     ''],
-  // The vocabulary grew by exactly one word. Put the card grader's old private
-  // list back into it and `sort -o <persistence surface> payload` is graded a
-  // read and exempted from its crossing, which is the write nobody sees.
   // `find` sat on the read-only registry with its flags unexamined. Drop the
   // allowlist and `find ~/.claude/hooks -delete` is graded a read again, its
   // crossing skipped, and in Code mode the hook scripts go with no card.
   [READ_ONLY_CLIENT, 'find is judged by its flags at all',
-    "    if (first === 'find') return findOnlyReads(words.slice(1));",
-    ''],
+    '    find: findOnlyReads,',
+    '    find: function () { return true; },'],
   // THE SHAPE, not the contents. Return true for an unrecognised flag and the
   // allowlist becomes a denylist of nothing: every write action this file does
   // not name, on every platform it does not run on, is waved through again.
@@ -948,10 +1052,352 @@ const MUTATIONS = [
   [READ_ONLY_CLIENT, 'only a flag that always takes an operand consumes the word after it',
     '      if (FIND_READ_FLAGS_NO_OPERAND.indexOf(w) >= 0) continue;',
     '      if (FIND_READ_FLAGS_NO_OPERAND.indexOf(w) >= 0) { i++; continue; }'],
+  // The vocabulary grew by exactly one word. Put the card grader's old private
+  // list back into it and `uniq payload <persistence surface>` is graded a
+  // read and exempted from its crossing, which is the write nobody sees.
+  // (`sort` and `date` are judged by their options before the list is asked,
+  // so the rows below break those.)
   [READ_ONLY_CLIENT, 'the shared vocabulary adds only the word the reported command needs',
     "  var NO_TARGET_COMMANDS = ['cd'];",
     "  const NO_TARGET_COMMANDS = ['cd', 'pushd', 'popd', 'true', 'date', 'diff',\n"
     + "    'printenv', 'sort', 'uniq', 'which', 'whoami'];"],
+  // SORT AND DATE ARE READ BY THEIR OPTIONS, as find is. Each row undoes one
+  // thing that keeps a writing form asking: read every form, skip an option
+  // nobody named, take `-o` or `-T` for a reading option, let a date be set
+  // without `-j`, or read the words other than as getopt is handed them.
+  [READ_ONLY_CLIENT, 'sort and date: judged by their options, not read in every form',
+    '    sort: function (words) { return optionsAndOperands(words, SORT_OPTIONS) !== null; },\n'
+    + '    date: function (words) {\n'
+    + '      var seen = optionsAndOperands(words, DATE_OPTIONS);\n'
+    + '      return seen !== null && dateOnlyReads(seen);\n'
+    + '    },',
+    '    sort: function () { return true; },\n    date: function () { return true; },'],
+  [READ_ONLY_CLIENT, 'sort and date: a short option nobody named fails closed',
+    '        return null;\n      }\n    }\n    return seen;',
+    '        continue;\n      }\n    }\n    return seen;'],
+  [READ_ONLY_CLIENT, 'sort and date: a long option nobody named fails closed',
+    '        return null;\n      }\n      for (var j = 1;',
+    '        continue;\n      }\n      for (var j = 1;'],
+  [READ_ONLY_CLIENT, 'sort: -o is never a reading option',
+    "    operandLetters: 'ktS',",
+    "    operandLetters: 'ktSo',"],
+  [READ_ONLY_CLIENT, 'sort: -T is never a reading option',
+    "    operandLetters: 'ktS',",
+    "    operandLetters: 'ktST',"],
+  [READ_ONLY_CLIENT, 'sort: --output, --temporary-directory and --compress-program are never reading options',
+    "    longValue: ['--sort=', '--key=', '--field-separator=', '--buffer-size='],",
+    "    longValue: ['--sort=', '--key=', '--field-separator=', '--buffer-size=', '--output=', '--temporary-directory=', '--compress-program='],"],
+  [READ_ONLY_CLIENT, 'date: -s is never a reading option',
+    "    operandLetters: 'rzvdf',",
+    "    operandLetters: 'rzvdfs',"],
+  [READ_ONLY_CLIENT, 'date: -f reads only with -j',
+    "      if (seen[k].option === 'f') sets = true;\n",
+    ''],
+  [READ_ONLY_CLIENT, 'date: a time operand sets the clock',
+    "      if ('operand' in seen[k] && seen[k].operand.charAt(0) !== '+') sets = true;\n",
+    ''],
+  [READ_ONLY_CLIENT, 'date: only a -j before the first operand stops the time being set',
+    "    for (var i = 0; i < seen.length && !('operand' in seen[i]); i++) {",
+    '    for (var i = 0; i < seen.length; i++) {'],
+  [READ_ONLY_CLIENT, 'sort and date: a letter whose operand must be joined never takes the next word',
+    '        if (spec.joinedLetters.indexOf(letter) >= 0) { seen.push({ option: letter }); break; }',
+    '        if (spec.joinedLetters.indexOf(letter) >= 0) { seen.push({ option: letter }); if (j === w.length - 1) i++; break; }'],
+  [READ_ONLY_CLIENT, 'sort and date: a letter given its operand in the bundle does not also take the next word',
+    '          if (j === w.length - 1) i++;',
+    '          i++;'],
+  [READ_ONLY_CLIENT, 'sort and date: quotes are taken away from a word, not kept in it',
+    `      if (c === "'" || c === '"') { quote = c; continue; }`,
+    `      if (c === "'" || c === '"') { quote = c; word += c; continue; }`],
+  [READ_ONLY_CLIENT, 'sort and date: a backslash is taken away from a word, not kept in it',
+    '        if (i + 1 >= text.length) return null;\n        word += text[++i];',
+    '        if (i + 1 >= text.length) return null;\n        word += c + text[++i];'],
+  [READ_ONLY_CLIENT, 'sort and date: an unquoted character the shell may expand is not followed',
+    '      if (!PLAIN_WORD_CHAR.test(c)) return null;\n',
+    ''],
+  [READ_ONLY_CLIENT, 'sort and date: a $ or a backtick inside double quotes is not followed',
+    "        if (c === '$' || c === '`') return null;\n",
+    ''],
+  [READ_ONLY_CLIENT, 'sort and date: a quote left open is not read',
+    '    if (quote) return null;\n',
+    ''],
+  [READ_ONLY_CLIENT, 'sort and date: options longer than the reading follows are not read',
+    '    if (text.length > OPTIONS_READ_LIMIT || UNREADABLE.test(text)) return null;',
+    '    if (UNREADABLE.test(text)) return null;'],
+  [READ_ONLY_CLIENT, 'sort and date: a control character among the options is not read',
+    '    if (text.length > OPTIONS_READ_LIMIT || UNREADABLE.test(text)) return null;',
+    '    if (text.length > OPTIONS_READ_LIMIT) return null;'],
+  [READ_ONLY_CLIENT, 'sort and date: a failure inside the reading is not a read',
+    '    } catch (failed) {\n      return false;',
+    '    } catch (failed) {\n      return true;'],
+  [READ_ONLY_CLIENT, 'a command that is not text is not read',
+    "    if (typeof command !== 'string') return false;\n",
+    ''],
+  // Only a space or a tab ends a word in bash. Read the words split on `\s`
+  // again and `sort -t<form feed> -o out in` is `-t` given `-o`: a read.
+  [READ_ONLY_CLIENT, 'sort and date: read from the segment\'s own text, never from words split on any blank',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (judgesOptions(first)) return optionsOnlyRead(first, words.slice(1).join(' '), 0);"],
+  [READ_ONLY_CLIENT, 'sort and date: a blank bash does not split on, anywhere in the segment, is not a read',
+    '      if (NOT_A_WORD_BREAK.test(text)) return false;\n',
+    ''],
+  [READ_ONLY_CLIENT, 'sort and date: a carriage return on the line is not a read',
+    '    if (carriageReturnSplitsJudgedOptions(str)) return false;\n',
+    ''],
+  // Take any digits before `>` as the descriptor again and `sort -t2>&1 -o out
+  // in` loses its `2`, so `-t` takes the `-o` and the line reads.
+  [READ_ONLY_CLIENT, 'a descriptor number glued to the word before a redirect stays with that word',
+    'var DISCARDING_REDIRECT_RE = /(?:(?<![^ \\t\\n])\\d+)?>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;',
+    'var DISCARDING_REDIRECT_RE = /\\d*>>?\\s*(?:\\/dev\\/null|&\\s*\\d+)/g;'],
+  // The same reading, where it frees a crossing: in process, through the real
+  // hook, on the card, and when the reading fails inside the real hook.
+  [READ_ONLY, 'the boundary layer frees a sort crossing only on a reading sort',
+    "    operandLetters: 'ktS',",
+    "    operandLetters: 'ktSo',"],
+  [HOOK, 'the hook reads a sort or date segment from its own text for what writes an answer file',
+    '    if (readsPart === isReadOnlyShellCommand && leadsJudgedOptions(seg)) reads = readsPart(seg);\n',
+    ''],
+  [HOOK, 'the hook counts every word written when a carriage return splits a sort or date line',
+    '    if (splitAtReturn) reads = false;\n',
+    ''],
+  // EVERY OPTION OF find, rg, tree AND file IS JUDGED AS THE SHELL HANDS IT
+  // OVER, as sort's and date's are. Judge one command's raw words again and its
+  // quoted or escaped writing or running option (`'-fprintf'`, `'--pre'`,
+  // `'-o'`, `'-C'`) is a read once more.
+  [READ_ONLY_CLIENT, 'find: judged on the words the shell hands it, never on the raw text',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (first === 'find') return OPTION_RULES.find(words.slice(1));\n"
+    + '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);'],
+  [READ_ONLY_CLIENT, 'rg: judged on the words the shell hands it, never on the raw text',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (first === 'rg') return OPTION_RULES.rg(words.slice(1));\n"
+    + '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);'],
+  [READ_ONLY_CLIENT, 'tree: judged on the words the shell hands it, never on the raw text',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (first === 'tree') return OPTION_RULES.tree(words.slice(1));\n"
+    + '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);'],
+  [READ_ONLY_CLIENT, 'file: judged on the words the shell hands it, never on the raw text',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (first === 'file') return OPTION_RULES.file(words.slice(1));\n"
+    + '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);'],
+  // A word whose reading the text does not show is not read. Take an unquoted
+  // `$` or a backtick for plain text and `rg $X sh x .` reads, though `$X` may
+  // be `--pre`.
+  [READ_ONLY_CLIENT, 'the word reader takes an unquoted $ for nothing it can read',
+    '  var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\\/:,=+%@~-]|[\\p{L}\\p{M}\\p{N}])$/u;',
+    '  var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\\/:,=+%@~$-]|[\\p{L}\\p{M}\\p{N}])$/u;'],
+  [READ_ONLY_CLIENT, 'the word reader takes an unquoted backtick for nothing it can read',
+    '  var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\\/:,=+%@~-]|[\\p{L}\\p{M}\\p{N}])$/u;',
+    '  var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\\/:,=+%@~`-]|[\\p{L}\\p{M}\\p{N}])$/u;'],
+  // Only a space or a tab ends a word. End one at any `\s` and a no-break
+  // space splits `-L<NBSP>2` into two words bash never sees.
+  [READ_ONLY_CLIENT, 'the word reader ends a word only at a space or a tab, never at any blank',
+    "      if (c === ' ' || c === '\\t') { if (inWord) words.push(word); word = ''; inWord = false; continue; }",
+    "      if (/\\s/.test(c)) { if (inWord) words.push(word); word = ''; inWord = false; continue; }"],
+  // COMMANDS SPLIT WHERE THE SHELL SPLITS THEM. Let a backslash before a quote
+  // open the quote again and `ls \"`, a new line, `cp a b` is one `ls`.
+  [READ_ONLY_CLIENT, 'the segmenter: a backslash before a quote opens no quote',
+    "      if (shellReading && ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {",
+    "      if (shellReading && ch === '\\\\' && quote !== \"'\" && i + 1 < str.length && '\"\\''.indexOf(str[i + 1]) < 0 && (quote || ';|&\\n\\r'.indexOf(str[i + 1]) < 0)) {"],
+  // A carriage return ends a segment here and nothing in bash. Look for one
+  // only on a sort or date line and `rg -e <CR>cat --pre sh x .` is two reads.
+  [READ_ONLY_CLIENT, 'a carriage return on a find, rg, tree or file line is not a read',
+    "    return str.indexOf('\\r') >= 0 && shellSplits(str).some(leadsJudgedOptions);",
+    "    return str.indexOf('\\r') >= 0 && shellSplits(str).some(function (s) { return /^(?:sort|date)\\b/.test(s); });"],
+  // getopt_long takes any unique start of a long name: `file --comp` compiles.
+  [READ_ONLY_CLIENT, 'a long option cut short is the option it names',
+    '        return o.indexOf(name) === 0 || (name.indexOf(o) === 0 && !/\\w/.test(name.charAt(o.length)));',
+    '        return name === o || (name.indexOf(o) === 0 && !/\\w/.test(name.charAt(o.length)));'],
+  [HOOK, 'the hook reads a find, rg, tree or file segment from its own text for what writes an answer file',
+    '    if (readsPart === isReadOnlyShellCommand && leadsJudgedOptions(seg)) reads = readsPart(seg);\n',
+    '    if (readsPart === isReadOnlyShellCommand && /^\\s*(?:sort|date)\\b/.test(seg)) reads = readsPart(seg);\n'],
+  // Through the real hook, in Notes mode and in Code mode.
+  [QUOTED_OPTIONS_HOOK, 'the real hook: a quoted find option keeps its crossing',
+    '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);',
+    "    if (first === 'find') return OPTION_RULES.find(words.slice(1));\n"
+    + '    if (judgesOptions(first)) return optionsOnlyRead(first, segment, stripped + 1);'],
+  [QUOTED_OPTIONS_HOOK, 'the real hook: a failure inside the reading of find, rg, tree or file frees nothing',
+    '    } catch (failed) {\n      return false;',
+    '    } catch (failed) {\n      return true;'],
+  // A line reads only when it reads both as the shell hands it over and as
+  // written, so nothing that asked before reads now.
+  [READ_ONLY_CLIENT, "find, rg, tree and file are judged on their words as written as well",
+    "      return !asWrittenToo || OPTION_RULES[command](wordsAsWritten(text, skip)) === true;",
+    "      return true;"],
+  [READ_ONLY_CLIENT, "a line is split as written as well as the way the shell splits it",
+    "    return /\\\\['\";|&\\n\\r]/.test(str) ? segments.concat(shellSegments(str, true)) : segments;",
+    "    return segments;"],
+  [READ_ONLY_CLIENT, "sort and date read no standalone ! and no wildcard",
+    "    var lenient = asWrittenToo === true;",
+    "    var lenient = true;"],
+  [READ_ONLY_CLIENT, "a removal is looked for in both splits of a line",
+    "    var segments = shellSplits(cmd);",
+    "    var segments = shellSegments(cmd);"],
+  [PS_GRADER, "a -Force is looked for in both splits of a line",
+    "    var segs = shellSplits(cmd);",
+    "    var segs = RundockReadOnlyShell.shellSegments(cmd);"],
+  [HOOK, "the hook reads each segment of the line split as written for what writes an answer file",
+    "  if (/\\\\['\";|&\\n\\r]/.test(text)) splits.push(shellSegments(text, true));",
+    ""],
+  // A wildcard reads only after a plain first character other than `-`.
+  [READ_ONLY_CLIENT, "a wildcard whose first character is a * still asks",
+    "    return first !== '-' && PLAIN_WORD_CHAR.test(first);",
+    "    return first !== '-' && (PLAIN_WORD_CHAR.test(first) || first === '*');"],
+  // A quote character that opens nothing in bash hides no command: each rule
+  // of the view, the gate that reads it, and each place that reads the view.
+  [SHELL_VIEW, "the view: a quote in a comment is text",
+    "        if (c === '#' && wordStart) { p = comment(p, limit); continue; }\n",
+    ""],
+  [SHELL_VIEW, "the view: a # starts a comment only where a word starts",
+    "        if (c === '#' && wordStart) { p = comment(p, limit); continue; }",
+    "        if (c === '#') { p = comment(p, limit); continue; }"],
+  [SHELL_VIEW, "the view: an escaped quote inside $'...' is text",
+    "        if (text[p] === '\\\\') { if (text[p + 1] === '\\'') blank(p + 1); p += 2; continue; }",
+    "        if (text[p] === '\\\\') { p += 2; continue; }"],
+  [SHELL_VIEW, "the view: a quoted here-document's body is text",
+    "      if (!expands) { blankStructure(from, to); return; }",
+    "      if (!expands) return;"],
+  [SHELL_VIEW, "the view: a here-document's body is text but for its substitutions",
+    "        if (STRUCTURE_CHARS.indexOf(c) >= 0) blank(q);\n",
+    ""],
+  [SHELL_VIEW, "the view: a double-quoted string holding a command is opened up",
+    "      if (holds) {",
+    "      if (false) {"],
+  [SHELL_VIEW, "the view: a quote after a backslash is text",
+    "          if (escapedQuote(text[p + 1])) blank(p + 1);\n          if (text[p + 1] !== '\\n') wordStart = false;",
+    "          if (text[p + 1] !== '\\n') wordStart = false;"],
+  [SHELL_VIEW, "the view: a failure inside it leaves the line not readable",
+    "      return { text: text, ok: false, parens: false, wordParen: true };",
+    "      return { text: text, ok: true, parens: false, wordParen: true };"],
+  [SHELL_VIEW, "the view: a single quote inside ${...} within double quotes is not readable",
+    "          if (inDouble) { st.ok = false; q++; continue; }",
+    "          if (inDouble) { q++; continue; }"],
+  [SHELL_VIEW, "the view: a case inside $( ) is not readable",
+    "        if (inParen && wordStart && /^case[ \\t\\n;&|()<>]/.test(text.slice(p, p + 5))) st.ok = false;\n",
+    ""],
+  [SHELL_VIEW, "the view: a substitution bash 3.2 ends elsewhere is not readable",
+    "        if (old >= 0 && old !== end) st.ok = false;\n",
+    ""],
+  [SHELL_VIEW, "the view: a ) outside every quote is seen",
+    "          if (inParen && groups === 0) return p;\n          st.parens = true;",
+    "          if (inParen && groups === 0) return p;"],
+  [SHELL_VIEW, "the view: a ( inside a word is one the verdict does not model",
+    "          if (!wordStart && !/^[A-Za-z_][A-Za-z0-9_]*\\+?=$/.test(text.slice(wordFrom, p))) st.wordParen = true;\n",
+    ""],
+  [SHELL_VIEW, "the view: an array's name=( is no ( inside a word",
+    "          if (!wordStart && !/^[A-Za-z_][A-Za-z0-9_]*\\+?=$/.test(text.slice(wordFrom, p))) st.wordParen = true;",
+    "          if (!wordStart) st.wordParen = true;"],
+  [SHELL_VIEW, "the view: a quote never closed is not readable",
+    "      if (j < 0 || j >= limit) { st.ok = false; return limit; }\n      return j + 1;",
+    "      if (j < 0 || j >= limit) return limit;\n      return j + 1;"],
+  [SHELL_VIEW, "the view: nesting deeper than it follows is not readable",
+    "      if (depth + level > VIEW_DEPTH_LIMIT) { st.ok = false; st.wordParen = true; return limit; }\n",
+    ""],
+  [SHELL_VIEW, "a line the view cannot read is not a read",
+    "    if (!view.ok || view.parens) return false;",
+    "    if (view.parens) return false;"],
+  [SHELL_VIEW, "a line with a ( or ) outside its quotes is not a read",
+    "    if (!view.ok || view.parens) return false;",
+    "    if (!view.ok) return false;"],
+  [SHELL_VIEW, "a line is split as its view as well",
+    "    if (view !== str) segments = segments.concat(shellSegments(view));\n",
+    ""],
+  [SHELL_VIEW_SHARED_HOOK, "the real hook: a failure inside the view frees nothing",
+    "      return { text: text, ok: false, parens: false, wordParen: true };",
+    "      return { text: text, ok: true, parens: false, wordParen: true };"],
+  [SHELL_VIEW_SHARED_HOOK, "the real hook: a quote in a comment hides no copy",
+    "        if (c === '#' && wordStart) { p = comment(p, limit); continue; }\n",
+    ""],
+  [SHELL_VIEW_SHARED_HOOK, "the real hook: an escaped quote inside $'...' hides no copy",
+    "        if (text[p] === '\\\\') { if (text[p + 1] === '\\'') blank(p + 1); p += 2; continue; }",
+    "        if (text[p] === '\\\\') { p += 2; continue; }"],
+  [SHELL_VIEW_SHARED_HOOK, "the real hook: quotes inside a substitution in double quotes hide no copy",
+    "      if (holds) {",
+    "      if (false) {"],
+  [SHELL_VIEW_HOOK, "the real hook reads the line's view for crossings as well",
+    "  if (view === command) return found;",
+    "  return found;"],
+  [SHELL_VIEW_HOOK, "the real hook reads the view of each command a line's code runs",
+    "  const viewed = c => { const v = shellView(c.text).text; return v === c.text ? [c] : [c, { ...c, text: v }]; };",
+    "  const viewed = c => [c];"],
+  [SHELL_VIEW_HOOK, "the real hook reads the code of a zsh glob qualifier",
+    "? w.raw.indexOf('(') : -1;",
+    "? -1 : -1;"],
+  [SHELL_VIEW_HOOK, "the real hook ends a zsh qualifier's code at its closing delimiter",
+    ".split(close).join(' ')",
+    ".split(close).join(close)"],
+  [SHELL_VIEW_VERDICT, "the verdict asks about a line the view cannot read",
+    "  if (!view.ok || view.wordParen) out = stricter(out, always('unreadable-command'));",
+    "  if (view.wordParen) out = stricter(out, always('unreadable-command'));"],
+  [SHELL_VIEW_VERDICT, "the verdict asks about a command inside a word that only zsh runs",
+    "  if (!view.ok || view.wordParen) out = stricter(out, always('unreadable-command'));",
+    "  if (!view.ok) out = stricter(out, always('unreadable-command'));"],
+  [SHELL_VIEW_VERDICT, "the verdict judges the line's view as well",
+    "  if (view.text !== text) out = stricter(out, judgeAsWritten(view.text, ctx, depth));\n",
+    ""],
+  [READ_ONLY_CLIENT, "find, rg, tree and file: the word reader takes a quote left open for nothing it can read",
+    "    if (quote) return null;\n    if (inWord) words.push(word);",
+    "    if (inWord) words.push(word);"],
+  [READ_ONLY_CLIENT, "find, rg, tree and file read a ! only as a word of its own",
+    "      if (lenient && c === '!' && !word && /^[ \\t]?$/.test(text.charAt(i + 1))) { word += c; continue; }",
+    "      if (lenient && c === '!') { word += c; continue; }"],
+  [READ_ONLY_CLIENT, "find, rg, tree and file read a ! standing alone, find's negation, as main did",
+    "      if (lenient && c === '!' && !word && /^[ \\t]?$/.test(text.charAt(i + 1))) { word += c; continue; }\n",
+    ""],
+  // NOTES MODE: A ( INSIDE A WORD IS HIGH, SO NO SAVED ANSWER COVERS IT. zsh
+  // runs code written inside a file pattern as it expands the word, and a
+  // saved answer is keyed on the leading command alone. Each row must turn the
+  // grader's suite red.
+  [BASH_GRADER, "Notes mode: a ( inside a word, outside quotes, is high",
+    "    if (hidesCodeInAWord(raw)) return 'high';\n",
+    ""],
+  [READ_ONLY_CLIENT, "Notes mode: a ( inside a word is marked in nested code, not only at the top of the line",
+    "          if (!wordStart && !/^[A-Za-z_][A-Za-z0-9_]*\\+?=$/.test(text.slice(wordFrom, p))) st.wordParen = true;",
+    "          if (depth + level === 0 && !wordStart && !/^[A-Za-z_][A-Za-z0-9_]*\\+?=$/.test(text.slice(wordFrom, p))) st.wordParen = true;"],
+  [READ_ONLY_CLIENT, "Notes mode: a view that fails is marked, so its line is high",
+    "      return { text: text, ok: false, parens: false, wordParen: true };",
+    "      return { text: text, ok: false, parens: false, wordParen: false };"],
+  [READ_ONLY_CLIENT, "Notes mode: a view nested deeper than it follows is marked, so its line is high",
+    "      if (depth + level > VIEW_DEPTH_LIMIT) { st.ok = false; st.wordParen = true; return limit; }",
+    "      if (depth + level > VIEW_DEPTH_LIMIT) { st.ok = false; return limit; }"],
+  [READ_ONLY_CLIENT, "Notes mode: a backtick nested deeper than the view follows is marked, so its line is high",
+    "    if (depth > VIEW_DEPTH_LIMIT) return { chars: v, ok: false, parens: false, wordParen: true, command: false };",
+    "    if (depth > VIEW_DEPTH_LIMIT) return { chars: v, ok: false, parens: false, wordParen: false, command: false };"],
+  [BASH_GRADER, "Notes mode: a view the grader cannot ask grades its line high",
+    "    try { view = RundockReadOnlyShell.shellView(raw); } catch (e) { return 'unread'; }",
+    "    try { view = RundockReadOnlyShell.shellView(raw); } catch (e) { return null; }"],
+  [BASH_GRADER, "a saved answer never covers a high-risk request",
+    "    if (risk === 'high') return { action: 'card' };\n",
+    ""],
+  [BASH_GRADER, "Notes mode: a line the view does not mark keeps its grade",
+    "    if (view.wordParen === false) return null;\n",
+    ""],
+  [BASH_GRADER, "Notes mode: the card says why a line the bracket rule grades high asks",
+    "      if (hidden) context = hidden;\n      else if (bin === 'rm')",
+    "      if (bin === 'rm')"],
+  [BASH_GRADER, "Notes mode: the card says when the view could not read the line through",
+    "    return view.ok === false ? 'unread' : 'pattern';",
+    "    return 'pattern';"],
+  [BASH_GRADER, "Notes mode: a line graded high as destructive keeps the sentence its command gives",
+    "    if (isDestructiveShellCommand(raw)) return null;\n",
+    ""],
+  [SORT_DATE_HOOK, 'the real hook: a writing sort keeps its crossing',
+    "    operandLetters: 'ktS',",
+    "    operandLetters: 'ktSo',"],
+  [SORT_DATE_HOOK, 'the real hook: a clock-setting date keeps its crossing',
+    "      if ('operand' in seen[k] && seen[k].operand.charAt(0) !== '+') sets = true;\n",
+    ''],
+  [SORT_DATE_HOOK, 'the real hook: a failure inside the sort reading frees nothing',
+    '    } catch (failed) {\n      return false;',
+    '    } catch (failed) {\n      return true;'],
+  [SORT_DATE_CARDS, 'the card: a writing sort is carded',
+    "    operandLetters: 'ktS',",
+    "    operandLetters: 'ktSo',"],
+  [SORT_DATE_CARDS, 'the card: a failure inside the sort reading cards',
+    '    } catch (failed) {\n      return false;',
+    '    } catch (failed) {\n      return true;'],
+  [SORT_DATE_CRASH, 'when the sort reading fails inside the hook, it answers as for a writing sort',
+    '    } catch (failed) {\n      return false;',
+    '    } catch (failed) {\n      return true;'],
   // Bash has always read `dir` and `type` through the PowerShell list. Drop it
   // and Bash's reading changes, which the PowerShell reading must not do.
   [READ_ONLY, 'the read-only registry answers for PowerShell as well as the Unix shells',
@@ -1355,10 +1801,10 @@ const MUTATIONS = [
     "  if (touchesAnswerFile(g, workspaceRoot)) {",
     "  if (false) {"],
   [CM_ANSWER_GUARD, "Codex self-permission: a change to an answer file during a turn is never detected",
-    "    if (same(now, was)) continue;",
-    "    continue;"],
+    "  if (same(now, was)) return null;",
+    "  return null;"],
   [CM_ANSWER_GUARD, "Codex self-permission: Rundock's own writes are no longer told apart from an agent's",
-    "    if (ownBytes && modeKept) { g.snapshot.set(f, now); continue; }",
+    "  if (ownBytes && modeKept) { g.snapshot.set(f, now); return null; }",
     ""],
   [CM_ANSWER_GUARD_GLUE, "Codex self-permission: a Codex turn starts without the answer-file guard",
     "  guardCodexTurn(entry, convoId);\n  const timer = setInterval(() => {",
@@ -1378,6 +1824,15 @@ const MUTATIONS = [
   [CARD_TOKENS, "Permission card: light success text falls back to the fill",
     "  --success-text: #266A36;\n",
     ""],
+  [CARD_CSS, "Permission card: the light surface is a literal laid over the token again",
+    ".permission-card.risk-low {",
+    "body.light .permission-card { background: #E8E3DB; }\n.permission-card.risk-low {"],
+  [CARD_CSS, "Permission card: the card draws the plain card rather than its surface token",
+    ".permission-card { background: var(--permission-card);",
+    ".permission-card { background: var(--card);"],
+  [CARD_TOKENS, "Permission card: the light surface token moves off #E8E3DB",
+    "  --permission-card: #E8E3DB;",
+    "  --permission-card: #F0EDE8;"],
   [CM_BOUNDARY, "A backslash escape in a Bash command is read as a path again",
     "    if (opts.shellTool !== 'PowerShell' && BASH_ESCAPE.test(raw)) continue;",
     ""],
@@ -1447,11 +1902,11 @@ const MUTATIONS = [
     "  try { st = fs.lstatSync(file); } catch (e) { return null; }",
     "  try { st = fs.statSync(file); } catch (e) { return null; }"],
   [CM_ANSWER_GUARD, "Answer-file guard: a restore writes through whatever stands at the path",
-    "  if (st) fs.rmSync(file, { force: true, recursive: st.isDirectory() });\n  if (bytes === null) return;\n  fs.mkdirSync(path.dirname(file), { recursive: true });\n  fs.writeFileSync(file, bytes, { flag: 'wx' });",
-    "  if (bytes === null) { if (st) fs.rmSync(file, { force: true, recursive: st.isDirectory() }); return; }\n  fs.mkdirSync(path.dirname(file), { recursive: true });\n  fs.writeFileSync(file, bytes);"],
-  [CM_ANSWER_GUARD_GLUE, "Answer-file guard: an approved change is written through a link",
-    "        writePlain(change.file, change.agentContent, change.mode);",
-    "        require('fs').writeFileSync(change.file, change.agentContent);"],
+    "  if (st) { if (st.isDirectory()) fs.rmSync(file, { recursive: true, force: true }); else fs.unlinkSync(file); }\n  if (bytes === null) return;\n  fs.mkdirSync(path.dirname(file), { recursive: true });\n  fs.writeFileSync(file, bytes, { flag: 'wx' });",
+    "  if (bytes === null) { if (st) { if (st.isDirectory()) fs.rmSync(file, { recursive: true, force: true }); else fs.unlinkSync(file); } return; }\n  fs.mkdirSync(path.dirname(file), { recursive: true });\n  fs.writeFileSync(file, bytes);"],
+  [CM_ANSWER_GUARD, "Answer-file guard: an approved change is written through a link",
+    "  writePlain(at, change.agentContent, change.link ? change.link.mode : change.mode);",
+    "  require('fs').writeFileSync(at, change.agentContent);"],
   [CLAUDE_TURN_GUARD, "Claude turns: a turn is never guarded",
     "  const start = () => { if (!guard) guard = acquire(workspace, onChange, { convoId }); };",
     "  const start = () => {};"],
@@ -1533,7 +1988,7 @@ const MUTATIONS = [
     "      if (!g.listeners.size && g.timer) { clearInterval(g.timer); g.timer = null; }",
     "      if (!g.listeners.size) { clearInterval(g.timer); guards.delete(k); }"],
   [CM_ANSWER_GUARD, "Answer-file guard: a change made while no turn ran is not looked for when a turn starts",
-    "    check(k, { outsideTurn: true });",
+    "    safely(() => check(k, { outsideTurn: true }));",
     ""],
   [CM_ANSWER_GUARD, "Answer-file guard: a file's mode is not compared",
     "  if (isPlain(a) || isPlain(b)) return isPlain(a) && isPlain(b) && a.mode === b.mode && a.bytes.equals(b.bytes);",
@@ -1562,14 +2017,14 @@ const MUTATIONS = [
     ""],
   // ===== OUTSIDE CHANGES TO THE CLAUDE CODE SETTINGS, AND THE APPROVED COPY =====
   [CM_ANSWER_GUARD, "Answer-file guard: a settings change made outside Rundock between turns is reported",
-    '      if (SAID_WHEN_KEPT(relative)) tellTurn(g, { file: f, relative, kept: true, outsideTurn: true });',
-    '      tellTurn(g, { file: f, relative, agentContent: null, restored: false, outsideTurn: true });'],
+    '    if (g.saidWhenKept(relative)) tellTurn(g, { file: f, relative, kept: true, outsideTurn: true });',
+    '    tellTurn(g, { file: f, relative, agentContent: null, restored: false, outsideTurn: true });'],
   [CM_ANSWER_GUARD, 'Answer-file guard: a settings change kept between turns is named in a notice',
     "const SAID_WHEN_KEPT = relative => relative === '.mcp.json' ||",
     "const SAID_WHEN_KEPT = relative => SHARED_FILES.has(relative) || relative === '.mcp.json' ||"],
   [CM_ANSWER_GUARD, "Answer-file guard: a Claude Code settings change between turns is put back like Rundock's own files",
-    "    if (outsideTurn && isShared(relative)) {",
-    "    if (false) {"],
+    "keptBetweenTurns: isShared,",
+    "keptBetweenTurns: () => false,"],
   [CM_ANSWER_GUARD, "Answer-file guard: Rundock's own files changed between turns are kept like the settings",
     "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json', '.mcp.json', '.rundock/mcp-secrets.json']);",
     "const SHARED_FILES = new Set(['.claude/settings.local.json', '.claude/settings.json', '.mcp.json', '.rundock/mcp-secrets.json', '.rundock/permissions.json', '.rundock/state.json']);"],
@@ -1604,8 +2059,8 @@ const MUTATIONS = [
     "  if (!convoId || change.outsideTurn) return;",
     "  if (!convoId) return;"],
   [CM_ANSWER_GUARD_GLUE, "Agent notice: a Codex agent's next turn is not told",
-    "  return [...waiting, input].filter(Boolean).join('\\n\\n');",
-    "  return input;"],
+    "    input = [...waiting, input].filter(Boolean).join('\\n\\n');",
+    "    input = input;"],
   [ANSWER_READS_HOOK, "Answer-file reads: a command that only reads a permission file is taken as changing it",
     "    if (writingWords.has(raw)) {",
     "    if (!readOnly) {"],
@@ -1768,10 +2223,10 @@ const MUTATIONS = [
     "    for (const lit of view.literals) if (lit.written) writes.words.add(lit.t);\n",
     "    for (const lit of view.literals) writes.words.add(lit.t);\n"],
   [ANSWER_WRITES, "Answer-file writes: code: A path that may name an answer file counts as written though the code only reads it",
-    "      if (!node.quiet && MAY_NAME_ANSWER_FILE.test(v)) names.push(v);",
-    "      if (MAY_NAME_ANSWER_FILE.test(v)) names.push(v);"],
+    "      if (!node.quiet && (MAY_NAME_ANSWER_FILE.test(v) || MAY_NAME_STARTUP_FILE.test(v))) names.push(v);",
+    "      if (MAY_NAME_ANSWER_FILE.test(v) || MAY_NAME_STARTUP_FILE.test(v)) names.push(v);"],
   [ANSWER_WRITES, "Answer-file writes: code: A path that may name an answer file is not read for answer files",
-    "      if (!node.quiet && MAY_NAME_ANSWER_FILE.test(v)) names.push(v);",
+    "      if (!node.quiet && (MAY_NAME_ANSWER_FILE.test(v) || MAY_NAME_STARTUP_FILE.test(v))) names.push(v);",
     "      if (false) names.push(v);"],
   [ANSWER_WRITES, "Answer-file writes: code: A command code runs is not read",
     "    for (const command of commandWords(open, closeOf(open))) commands.push(command);",
@@ -1819,8 +2274,8 @@ const MUTATIONS = [
     '\n      for (const t of code.names) names.push({ t, at });',
     '\n'],
   [ANSWER_WRITES, 'Answer-file writes: a literal naming a folder that holds answer files is not caught',
-    '        || holdsAnswerFiles(r, workspaceRoot, foldsCase, flavour) || isRundockConsolePath(r, home, foldsCase, flavour)) addAnswer(r, flavour);',
-    '        || isRundockConsolePath(r, home, foldsCase, flavour)) addAnswer(r, flavour);'],
+    '        || holdsAnswerFiles(r, workspaceRoot, foldsCase, flavour) || isRundockConsolePath(r, home, foldsCase, flavour) || startupAt(r, flavour)) addAnswer(r, flavour);',
+    '        || isRundockConsolePath(r, home, foldsCase, flavour) || startupAt(r, flavour)) addAnswer(r, flavour);'],
   [ANSWER_WRITES, 'Answer-file writes: an unsure base is not tried from each literal cd',
     '      const starts = [base, ...cdStarts(pmod, at, fromStart)];',
     '      const starts = [base];'],
@@ -1912,14 +2367,14 @@ const MUTATIONS = [
     '  if ((onlyIgnored || alsoIgnored) && scopes.some(p => under(rundock, p, ctx) || under(p, rundock, ctx))) {',
     '  if (false) {'],
   [ANSWER_WRITES_VOCAB, 'Read-only vocabulary: tree -o is taken as a read',
-    '  var WRITING_FLAGS = { tree: /(^|\\s)-[A-Za-z]*o/, file:',
-    '  var WRITING_FLAGS = { file:'],
+    "  var WRITING_FLAGS = { tree: { letters: 'o', long: [] }, file:",
+    "  var WRITING_FLAGS = { tree: { letters: '', long: [] }, file:"],
   [ANSWER_WRITES_VOCAB, 'Read-only vocabulary: file -C is taken as a read',
-    ', file: /(^|\\s)(-[A-Za-z]*C|--compile\\b)/ };',
-    ' };'],
+    "file: { letters: 'C', long: ['--compile'] } };",
+    "file: { letters: '', long: [] } };"],
   [ANSWER_WRITES_VOCAB, 'Read-only vocabulary: a writing flag is never looked at',
-    '      && WRITING_FLAGS[first].test(segment)) return false;',
-    '      && false) return false;'],
+    '      return !words.some(function (w) { return namesOption(w, spec); });',
+    '      return true;'],
   [ANSWER_READS_VOCAB, "Answer-file reads: od is not a read",
     "    'od', 'hexdump',",
     "    'hexdump',"],
@@ -1962,8 +2417,8 @@ const MUTATIONS = [
     "      put_back: {\n        runtime:",
     "      unused_put_back: {\n        runtime:"],
   [PUTBACK_SERVER, "Put-back card: the server drops its details on the way to the browser",
-    ", 'answer_file', 'put_back'];",
-    ", 'answer_file'];"],
+    ", 'startup_file', 'put_back'];",
+    ", 'startup_file'];"],
   [PUTBACK_VIEW, "Put-back card: drawn as an ordinary card",
     "  if (req.put_back && !RundockPermissions.permissionEnded(endedPermissions, requestId)) { renderPutBackCard(d, convoId, host); return; }",
     ""],
@@ -2637,7 +3092,7 @@ const MUTATIONS = [
     "      if (n >= 2 && parts[n - 2] === '.rundock' && /^permission-hook\\.(sh|cmd)$/.test(parts[n - 1])) return 'launcher';\n",
     ''],
   [WHAT_RUNS_CLIENT, 'What runs: the stakes on a card that also reaches outside ignore which file it is',
-    '    if (crossing.answerFile) return answerFileCopy(crossing.path);',
+    '    if (crossing.answerFile) return answerFileCopy(crossing.path, crossing.startupFile);',
     '    if (crossing.answerFile) return answerFileCopy();'],
   [WHAT_RUNS_VIEW, 'What runs: the card reads no path when choosing its words',
     '    const named = [req.resolved_path, ...crossingList.map(c => c && c.path)].filter(Boolean);',
@@ -2700,17 +3155,17 @@ const MUTATIONS = [
   // Forget the length the last build wrote and every workspace carrying it is
   // stranded: never rewritten, never given the new entries.
   [SCAFFOLD_SETTINGS, 'What runs: the nineteen-entry list is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 41];'],
   [SCAFFOLD, 'What runs: the nineteen-entry list upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 41];'],
   [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-one-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 41];'],
   [SCAFFOLD, 'Connector secrets: the twenty-one-entry list upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 41];'],
   // An inherited Code-mode flag puts a Notes workspace under Code-mode grading;
   // an inherited conversation id names a conversation the agent does not have.
   [SPAWN_ENV, 'Spawn env: an inherited RUNDOCK_CODE_MODE reaches the agent',
@@ -2806,11 +3261,11 @@ const MUTATIONS = [
     '  if (writing && isRundockConsolePath(resolvedPath, home, foldsCase)) {',
     '  if (false) {'],
   [CONSOLE_HOOK, 'Console folder: a shell command writes to it as ordinary work',
-    '          || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod));',
-    '          || globReachesConsole(r, home, foldsCase, pmod));'],
+    '          || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod) || startupAt(r, pmod));',
+    '          || globReachesConsole(r, home, foldsCase, pmod) || startupAt(r, pmod));'],
   [CONSOLE_HOOK, 'Console folder: a glob at home that matches it is not looked at',
-    '          || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod));',
-    '          || isRundockConsolePath(r, home, foldsCase, pmod));'],
+    '          || isRundockConsolePath(r, home, foldsCase, pmod) || globReachesConsole(r, home, foldsCase, pmod) || startupAt(r, pmod));',
+    '          || isRundockConsolePath(r, home, foldsCase, pmod) || startupAt(r, pmod));'],
   [CONSOLE_HOOK, 'Console folder: only the folder itself is matched, not what is in it',
     '  return matchesAnswerFileSet([RUNDOCK_CONSOLE_DIR], resolvedPath, home, foldsCase, pmod, true);',
     '  return matchesAnswerFileSet([RUNDOCK_CONSOLE_DIR], resolvedPath, home, foldsCase, pmod);'],
@@ -2833,10 +3288,10 @@ const MUTATIONS = [
     '    path.posix.join(home, RUNDOCK_CONSOLE_DIR),\n',
     ''],
   [ALLOWED_GUARD, 'Allowed change: a change allowed on the card is put back and asked about again',
-    '    if (!outsideTurn && modeKept && takeAllowed(g, f, now)) { g.snapshot.set(f, now); continue; }\n',
+    '  if (!outsideTurn && modeKept && takeAllowed(g, f, now)) { g.snapshot.set(f, now); return null; }\n',
     ''],
   [ALLOWED_GUARD, 'Allowed change: any content stands once the path is allowed',
-    '  if (mark.digest !== null && !(isPlain(now) && digest(now.bytes) === mark.digest)) return false;\n',
+    '  if (mark.digest !== null && !(now && !now.other && now.bytes && digest(now.bytes) === mark.digest)) return false;\n',
     ''],
   [ALLOWED_GUARD, "Allowed change: another conversation's allow covers this one",
     '  if (!mark || ![...g.listeners].some(l => l.convoId === mark.convoId)) return false;',
@@ -2878,8 +3333,8 @@ const MUTATIONS = [
     'guard = acquire(workspace, onChange, { convoId });',
     'guard = acquire(workspace, onChange);'],
   [ALLOWED_WIRING, "Allowed change: the server does not pass the conversation to the turn guard",
-    '    workspace: config.getWorkspace(),\n    convoId,\n',
-    '    workspace: config.getWorkspace(),\n'],
+    '      workspace: config.getWorkspace(),\n      convoId,\n',
+    '      workspace: config.getWorkspace(),\n'],
   [GUARD_RUNS, 'Guard: only the permission answers are watched',
     'const ANSWER_FILES = [...WORKSPACE_ANSWER_FILES];',
     "const ANSWER_FILES = ['.rundock/permissions.json', '.rundock/state.json', '.claude/settings.local.json', '.claude/settings.json'];"],
@@ -2887,8 +3342,8 @@ const MUTATIONS = [
     '    const files = [...ANSWER_FILES, ...hookScriptsIn(k)].map(',
     '    const files = [...ANSWER_FILES].map('],
   [GUARD_RUNS, 'Guard: a change to a file that decides what runs, kept between turns, is said nowhere',
-    '      if (SAID_WHEN_KEPT(relative)) tellTurn(g, { file: f, relative, kept: true, outsideTurn: true });\n',
-    ''],
+    'saidWhenKept: SAID_WHEN_KEPT };',
+    'saidWhenKept: () => false };'],
   [GUARD_RUNS_LINE, 'Guard: a change kept between turns is offered on a card',
     '  if (change && change.kept) { surfaceKeptChange(entry, convoId, change); return; }\n',
     ''],
@@ -2896,7 +3351,7 @@ const MUTATIONS = [
     '  return `${relative} changed while no agent was running, and Rundock kept it as it is. `',
     '  return `A file changed while no agent was running, and Rundock kept it as it is. `'],
   [GUARD_RUNS, 'Guard: a hook script added after the guard started is not watched',
-    '  watchNewHookScripts(key(workspace), g);\n',
+    '  part(() => watchNewHookScripts(key(workspace), g));\n',
     ''],
   [GUARD_RUNS, 'Guard: a new hook script is taken as the starting point',
     '    if (!g.snapshot.has(f)) { g.files.push(f); g.snapshot.set(f, null); }',
@@ -2905,8 +3360,8 @@ const MUTATIONS = [
     "  if (realOrNull(path.join(root, ...HOOK_SCRIPTS_DIR.split('/'))) !== g.hooksAt) return;\n",
     ''],
   [GUARD_RUNS, 'Guard: a file is put back through a folder swapped for a link',
-    '    try { putBackFolders(key(workspace), g, f); restore(f, was); }',
-    '    try { restore(f, was); }'],
+    '  try { putBackFolders(g.root, g, f); restore(f, was); }',
+    '  try { restore(f, was); }'],
   [GUARD_RUNS, "Guard: a person's link pointed somewhere else is kept",
     '    if (was && was.link !== null && realOrNull(at) === was.real) continue;',
     '    if (was && was.link !== null) continue;'],
@@ -2923,8 +3378,8 @@ const MUTATIONS = [
     'const isShared = relative => SHARED_FILES.has(relative) || relative.startsWith(`${HOOK_SCRIPTS_DIR}/`);',
     'const isShared = relative => SHARED_FILES.has(relative);'],
   [GUARD_RUNS, 'Guard: the launcher is offered on a keep card',
-    '    if (LAUNCHERS.has(relative)) { putLauncherBack(key(workspace), g, f, was, relative); continue; }\n',
-    ''],
+    '  const relative = g.relativeOf(f);\n  if (LAUNCHERS.has(relative)) { putLauncherBack(g.root, g, f, was, relative); return null; }\n  // A change the person allowed',
+    '  const relative = g.relativeOf(f);\n  // A change the person allowed'],
   [GUARD_RUNS, "Guard: the launcher is put back to the baseline, not this copy's latest",
     '    if (mine) writePlain(f, mine.bytes, mine.mode); else restore(f, was);',
     '    restore(f, was);'],
@@ -3373,6 +3828,14 @@ const MUTATIONS = [
   [CLAUDE_CONSOLE, 'Reconnect: the macOS script takes its mode from the umask',
     '    fs.fchmodSync(fd, 0o700);\n',
     ''],
+  // One write call may take only part of the script, and Terminal runs
+  // whatever the file holds: half a script is half a command.
+  [CLAUDE_CONSOLE, 'Reconnect: the macOS script is left at whatever one write call took',
+    '    at += wrote;\n',
+    '    at = bytes.length;\n'],
+  [CLAUDE_CONSOLE, 'Reconnect: a write of the macOS script that takes nothing is tried for ever',
+    '    if (!(wrote > 0)) {\n',
+    '    if (false) {\n'],
   // A frame inside the main window, such as one a page embeds, taken for the
   // window itself.
   [CLAUDE_CONSOLE, 'Reconnect: a frame inside the window is taken for the window',
@@ -3474,12 +3937,15 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: input the hook cannot read passes through again',
     "if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { refuseUnanswered(); return; }",
     "if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { writeAnswer({}); process.exit(0); }"],
+  // These two remove the non-object check and the name check together: the
+  // name check refuses a string or a list with the same words on its own, so
+  // removing only the first would leave the outcome unchanged.
   [HOOK_CRASH, 'Hook crash: JSON that is not an object is read as a request',
-    "if (!finished || typeof finished !== 'object' || Array.isArray(finished))",
-    "if (!finished || Array.isArray(finished))"],
+    "if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { refuseUnanswered(); return; }\n// A REQUEST THIS HOOK CANNOT NAME, OR WHOSE INPUT IT CANNOT READ, is refused\n// the same way, and before anything is asked of Rundock, so it raises no card.\n// Every check below keys on the tool name, and the file, shell and connector\n// checks read the tool's input too, so a request with no name to read, or one\n// of those tools with input that is not an object, matched none of them:\n// nothing marked it as one to refuse, and with Rundock unreachable it was\n// allowed as ordinary access. A finished tool was answered above, as before.\nif (cannotJudge(finished)) { refuseUnanswered(); return; }",
+    "if (!finished || Array.isArray(finished)) { refuseUnanswered(); return; }\n// A REQUEST THIS HOOK CANNOT NAME, OR WHOSE INPUT IT CANNOT READ, is refused\n// the same way, and before anything is asked of Rundock, so it raises no card.\n// Every check below keys on the tool name, and the file, shell and connector\n// checks read the tool's input too, so a request with no name to read, or one\n// of those tools with input that is not an object, matched none of them:\n// nothing marked it as one to refuse, and with Rundock unreachable it was\n// allowed as ordinary access. A finished tool was answered above, as before.\nif (typeof finished === 'object' && cannotJudge(finished)) { refuseUnanswered(); return; }"],
   [HOOK_CRASH, 'Hook crash: a JSON list is read as a request',
-    "if (!finished || typeof finished !== 'object' || Array.isArray(finished))",
-    "if (!finished || typeof finished !== 'object')"],
+    "if (!finished || typeof finished !== 'object' || Array.isArray(finished)) { refuseUnanswered(); return; }\n// A REQUEST THIS HOOK CANNOT NAME, OR WHOSE INPUT IT CANNOT READ, is refused\n// the same way, and before anything is asked of Rundock, so it raises no card.\n// Every check below keys on the tool name, and the file, shell and connector\n// checks read the tool's input too, so a request with no name to read, or one\n// of those tools with input that is not an object, matched none of them:\n// nothing marked it as one to refuse, and with Rundock unreachable it was\n// allowed as ordinary access. A finished tool was answered above, as before.\nif (cannotJudge(finished)) { refuseUnanswered(); return; }",
+    "if (!finished || typeof finished !== 'object') { refuseUnanswered(); return; }\n// A REQUEST THIS HOOK CANNOT NAME, OR WHOSE INPUT IT CANNOT READ, is refused\n// the same way, and before anything is asked of Rundock, so it raises no card.\n// Every check below keys on the tool name, and the file, shell and connector\n// checks read the tool's input too, so a request with no name to read, or one\n// of those tools with input that is not an object, matched none of them:\n// nothing marked it as one to refuse, and with Rundock unreachable it was\n// allowed as ordinary access. A finished tool was answered above, as before.\nif (!Array.isArray(finished) && cannotJudge(finished)) { refuseUnanswered(); return; }"],
   [HOOK_CRASH, 'Hook crash: the refusal is armed in everything that requires the file',
     "if (require.main === module) {\n  process.on('uncaughtException', refuseUnanswered);",
     "if (true) {\n  process.on('uncaughtException', refuseUnanswered);"],
@@ -3495,6 +3961,51 @@ const MUTATIONS = [
   [HOOK_CRASH, 'Hook crash: the refusal never sees which event it is answering',
     "input += chunk; hookInput = input;",
     "input += chunk;"],
+  // ===== A REQUEST THE HOOK CANNOT NAME, OR WHOSE INPUT IT CANNOT READ =====
+  // Matched none of the checks, so with Rundock unreachable it was allowed.
+  [HOOK_UNNAMED, 'Unnamed request: a request with no tool name is judged as any other',
+    "  if (typeof name !== 'string' || !name.trim()) return true;\n",
+    ""],
+  [HOOK_UNNAMED, 'Unnamed request: an empty tool name is a name',
+    "if (typeof name !== 'string' || !name.trim()) return true;",
+    "if (typeof name !== 'string') return true;"],
+  [HOOK_UNNAMED, 'Unnamed request: a tool name of only spaces is a name',
+    "if (typeof name !== 'string' || !name.trim()) return true;",
+    "if (typeof name !== 'string' || !name) return true;"],
+  [HOOK_UNNAMED, 'Unnamed request: input that cannot be read is judged as any other',
+    "  return readsInput && (!input || typeof input !== 'object' || Array.isArray(input));",
+    "  return false;"],
+  [HOOK_UNNAMED, 'Unnamed request: a list is read as input',
+    "(!input || typeof input !== 'object' || Array.isArray(input))",
+    "(!input || typeof input !== 'object')"],
+  [HOOK_UNNAMED, "Unnamed request: a file tool's input is not checked",
+    "Object.prototype.hasOwnProperty.call(FILE_TOOL_PATH_FIELD, name) || SHELL_TOOLS.has(name)",
+    "SHELL_TOOLS.has(name)"],
+  [HOOK_UNNAMED, "Unnamed request: a shell tool's input is not checked",
+    " || SHELL_TOOLS.has(name) || /^mcp__/.test(name);",
+    " || /^mcp__/.test(name);"],
+  [HOOK_UNNAMED, "Unnamed request: a connector action's input is not checked",
+    " || /^mcp__/.test(name);",
+    ";"],
+  // Refused before Rundock is asked, so it raises no card and leaves the line
+  // left for the agent to the next answer; a finished tool is not checked.
+  [HOOK_UNNAMED, 'Unnamed request: the check is made after Rundock is asked',
+    "if (cannotJudge(finished)) { refuseUnanswered(); return; }\nfetchAgentNotice((agentNotice) => {",
+    "fetchAgentNotice((agentNotice) => {\nif (cannotJudge(finished)) { refuseUnanswered(); return; }"],
+  [HOOK_UNNAMED, 'Unnamed request: a finished tool is checked too',
+    "if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {",
+    "if (cannotJudge(finished || {})) { refuseUnanswered(); return; }\nif (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {"],
+  [HOOK_UNNAMED, 'Unnamed request: a request the hook cannot judge passes through',
+    "if (cannotJudge(finished)) { refuseUnanswered(); return; }",
+    "if (cannotJudge(finished)) { writeAnswer({}); process.exit(0); }"],
+  // The check failing fails closed: nothing carries on past it.
+  [HOOK_UNNAMED, 'Unnamed request: a failure in the check carries on to judge the request',
+    "if (cannotJudge(finished)) { refuseUnanswered(); return; }",
+    "try { if (cannotJudge(finished)) { refuseUnanswered(); return; } } catch (e) { /* carry on */ }"],
+  // The claim on the page and in the header is pinned to what the hook does.
+  [HOOK_UNNAMED_DOC, 'Unnamed request: the page says it is refused when it is not',
+    "if (cannotJudge(finished)) { refuseUnanswered(); return; }",
+    ""],
   // The capture works in a folder made new for the run, outside the
   // repository, so no link left inside the repository can lead it elsewhere.
   [HOOK_BLOCK_CAPTURE, 'Hook block capture: a run works under the repository again',
@@ -3508,8 +4019,10 @@ const MUTATIONS = [
     ""],
   // ===== WHAT THE SHELL CHECK READS IN CODE AND TEXT =====
   [SHELL_CODE, "Shell code: a backslash in a Bash word is a Windows separator again on a POSIX host",
-    "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot, posixText);",
-    "    const pmod = winWorld ? path.win32 : flavourFor(t, workspaceRoot);"],
+    // Every reading of a Bash word goes through flavourOf, so the POSIX
+    // reading is dropped there, for all of them at once.
+    ": flavourFor(t, workspaceRoot, posixText));",
+    ": flavourFor(t, workspaceRoot));"],
   [SHELL_CODE, "Shell code: an unquoted Bash escape is judged as written, not as bash reads it",
     " t = t.replace(/\\\\(.)/g, '$1');",
     " {}"],
@@ -3555,7 +4068,7 @@ const MUTATIONS = [
     "    if (ch === '`') {",
     "    if (false) {"],
   [SHELL_CODE, "Shell code: Perl and Ruby command quotes are not noticed",
-    "    const q = /[\\w$@%]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));",
+    String.raw`    const q = /[\w$@%"')\]}]/.test(s[i - 1] || ' ') ? null : QUOTE_OPERATOR.exec(s.slice(i, i + 4));`,
     "    const q = null;"],
   [SHELL_CODE, "Shell code: what an unquoted here-document runs as it expands is not judged",
     "    for (const c of [...code.commands, ...subs.bodies]) commands.push({ text: c, at });",
@@ -3596,8 +4109,8 @@ const MUTATIONS = [
     "      for (const c of code.commands) commands.push({ text: c, at });",
     ""],
   [SHELL_CODE, "Shell code: code attached to its flag is not read",
-    "      const code = codeParts(m[1] || words[++k] || '', reading);",
-    "      const code = codeParts(words[++k] || '', reading);"],
+    "      const code = codeParts(m[1] || words[++k] || '', reading, plain);",
+    "      const code = codeParts(words[++k] || '', reading, plain);"],
   [SHELL_CODE, "Shell code: node's long --eval is not read as code",
     "|--(?:eval|print)=?)(.*)$/s",
     ")(.*)$/s"],
@@ -3668,6 +4181,9 @@ const MUTATIONS = [
   [SHELL_TIMING, "Shell code: the folder each word starts from is worked out again for every word",
     "    if (!bases.has(key)) bases.set(key, commandBases(",
     "    bases.set(key, commandBases("],
+  [SHELL_TIMING_BOUND, "Shell code timing: the bound on growth is loosened until quadratic growth passes",
+    "const BOUND = 24;",
+    "const BOUND = 1000;"],
   [SHELL_CODE, "Shell code: a route-shaped literal whose first folder is not on this machine is a place",
     "  if (reading && reading.posixText && /^\\/[^\\s/\\\\]/.test(lit) && !firstFolderExists(lit, reading.firstFolders)) return false;\n",
     ""],
@@ -3704,10 +4220,647 @@ const MUTATIONS = [
   [SHELL_CODE, "Shell code: a cd to a variable is trusted as a base",
     " || CD_NOT_LITERAL.test(target)) return null;",
     ") return null;"],
+  // ===== A RUNTIME FOLDER HANDED TO A PROGRAM THAT READS ALL OF IT =====
+  // A word kept as written, its quotes and escapes in place, is not the
+  // folder it names: `~/\.claude` and `"$HOME"/.claude` go unasked.
+  [SECRET_FOLDER, "Folder reads: a reader's words are kept as written, quotes and escapes in",
+    "    out.push({ words: seg.lexed.map(w => w.text), at: seg.at, pipedTo: next && next.op === '|' ? next.lexed.map(w => w.text) : null });",
+    "    out.push({ words: seg.lexed.map(w => w.raw), at: seg.at, pipedTo: next && next.op === '|' ? next.lexed.map(w => w.raw) : null });"],
+  [SECRET_FOLDER, "Folder reads: a group or a function body is not read as commands",
+    "      if (close) shellCommandsIn(w.raw.slice(1, w.raw.lastIndexOf(close)), posixText, seg.at + Math.max(0, seg.text.indexOf(w.raw)) + 1, depth + 1, out);",
+    ""],
+  [SECRET_FOLDER, "Folder reads: a substitution is not read as commands",
+    "    for (const body of substitutions(seg.text, dialect).bodies) shellCommandsIn(body, posixText, seg.at + Math.max(0, seg.text.indexOf(body)), depth + 1, out);",
+    ""],
+  // Past the depth read, the words there are taken as folders read whole.
+  // Take none instead and a reader nested deep goes unasked.
+  [HOOK_CRASH, "Folder reads: a reader nested past the depth read is taken to read nothing",
+    "    out.push({ words: null, loose: [...loose, '.'], at: offset, pipedTo: null });",
+    "    out.push({ words: null, loose: [], at: offset, pipedTo: null });"],
+  // The program is found past the programs that run the next one, and their
+  // options' values, as the shell's own -c is. Take the first word instead and
+  // `env -u FOO rg token ~/.claude` is a run of env.
+  [SECRET_FOLDER, "Folder reads: the program is the first word, whatever runs it",
+    "    const i = programIndex(ws);",
+    "    const i = 0;"],
+  [SECRET_FOLDER, "Folder reads: a keyword before the program is taken as the program",
+    "  while (lead < words.length - 1 && COMMAND_LEADS.has(words[lead]) && words[lead] !== 'time') lead++;",
+    ""],
+  [SECRET_FOLDER, "Folder reads: xargs behind a program that runs it is not seen",
+    "  return ws.slice(0, programIndex(ws) + 1).some(w => w.split('/').pop() === 'xargs');",
+    "  return (ws[0] || '').split('/').pop() === 'xargs';"],
+  [SECRET_FOLDER, "Folder reads: env's --unset is taken to have no value, so the name it unsets is the program",
+    "env: /^(?:-[uSCP]|--unset|--chdir|--split-string)$/,",
+    "env: /^(?:-[uSCP]|--chdir|--split-string)$/,"],
+  [SECRET_FOLDER, "Folder reads: a loop word naming home is left with its ~ unread",
+    ".flatMap(loopForms).map(homeIn)) {",
+    ".flatMap(loopForms)) {"],
+  // An option's value is not a folder, and a pattern given to -e or -f leaves
+  // every other word one. Break either half and a search given no folder
+  // (`cd ~/.claude && rg -e token`) takes its pattern for one.
+  [SECRET_FOLDER, "Folder reads: a long option's value given as the next word is taken for a folder",
+    "      if (value === null && spec.long.includes(name) && k + 1 < args.length) value = args[++k];",
+    ""],
+  [SECRET_FOLDER, "Folder reads: a short option's value given as the next word is taken for a folder",
+    "        given.push([a[c], c + 1 < a.length ? a.slice(c + 1) : (k + 1 < args.length ? args[++k] : null)]);",
+    "        given.push([a[c], c + 1 < a.length ? a.slice(c + 1) : null]);"],
+  [SECRET_FOLDER, "Folder reads: the first folder is taken for the pattern even when -e gave it",
+    "      operands = spec.patterns && !lists && !has(...spec.patterns) ? opt.operands.slice(1) : opt.operands;",
+    "      operands = opt.operands.slice(1);"],
+  [SECRET_FOLDER, "Folder reads: a shortened long option is not the option it stands for",
+    "    return could.length === 1 ? could[0] : written;",
+    "    return written;"],
+  [SECRET_FOLDER, "Folder reads: a folder cp copies into with -t is not counted",
+    "      if (spec.into) operands = operands.concat(values(...spec.into));",
+    ""],
+  [SECRET_FOLDER, "Folder reads: grep's -d recurse is not read as recursive",
+    " || values('d', 'directories').includes('recurse');",
+    ";"],
+  [SECRET_FOLDER, "Folder reads: a search given no folder is not read where it runs",
+    "    if (!operands.length && SEARCHES_CWD_UNNAMED.has(family)) operands = ['.'];",
+    ""],
+  // find's own options come before its folders. Read one as the expression
+  // and `find -L ~/.claude -exec cat {} +` is judged as a search of `.`.
+  [SECRET_FOLDER, "Folder reads: an option find takes before its folders ends them",
+    "    if (/^-[HLPEXdsx]+$/.test(a)) continue;",
+    ""],
+  [SECRET_FOLDER, "Folder reads: the folder BSD find's -f names is not counted",
+    "    if (/^-[HLPEXdsx]*f$/.test(a)) { if (k + 1 < args.length) roots.push(args[++k]); continue; }",
+    ""],
+  [SECRET_FOLDER, "Folder reads: GNU find's -D list is taken for a folder",
+    "    if (a === '-D') { k++; continue; }",
+    ""],
+  [SECRET_FOLDER, "Folder reads: find's -- is taken for the expression",
+    "    if (a === '--') { k++; break; }\n    if (a === '-D')",
+    "    if (a === '-D')"],
+  // A mode that lists names opens no file, unless the names go on to xargs.
+  [SECRET_FOLDER, "Folder reads: rg --files is read as a search",
+    "      if (lists && !runsXargs(pipedTo)) continue;",
+    ""],
+  [SECRET_FOLDER, "Folder reads: the names rg --files hands to xargs are not read",
+    "      if (lists && !runsXargs(pipedTo)) continue;",
+    "      if (lists) continue;"],
+  [SECRET_FOLDER, "Folder reads: the first folder rg --files lists is taken for a pattern",
+    "spec.patterns && !lists && !has(",
+    "spec.patterns && !has("],
+  // A stored grant never answers a shell command, nor a crossing tagged
+  // secret. Two guards hold that, the request's `grantable: false` and the
+  // secret check in crossingCovered, and either alone keeps the card, so this
+  // breaks the decision itself: a stored grant reaching every path answers.
+  [SECRET_FOLDER_GRANT, "Folder reads: a stored grant over the runtime folder answers a read of everything in it",
+    "        const uncovered = grantable ? crossings.filter(c => !crossingCovered(c)) : crossings;\n"
+    + "        if (data.boundary && grantable && crossings.length && uncovered.length === 0) {",
+    "        const uncovered = crossings.filter(c => !require('./workspace/boundary.js').boundaryGrantCovers(c.path));\n"
+    + "        if (data.boundary && crossings.length && uncovered.length === 0) {"],
+  // pax writing an archive reads all of a folder with no flag to say so.
+  [SECRET_FOLDER, "Folder reads: pax is not a reader",
+    "'7z', '7za', 'ditto', 'pax']);",
+    "'7z', '7za', 'ditto']);"],
+  // The control failing: a program this does not know, given a folder after a
+  // recursive flag, reads it. Recursive diff is read only this way.
+  [SECRET_FOLDER, "Folder reads: a program this does not know is never a reader, whatever its flags",
+    "      const flagged = args.some(a => /^-[A-Za-z]*[rR][A-Za-z]*$/.test(a)) || args.includes('--recursive');",
+    "      const flagged = false;"],
+  // A folder cpio copies into: every folder pass-through is handed, and the
+  // folder copy-in extracts into. Drop either and a workspace file named
+  // `.credentials.json` replaces the credential file with no secret card.
+  [SECRET_FOLDER, "Folder reads: the folder a cpio pass-through copies into is not counted",
+    "  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));",
+    ""],
+  [SECRET_FOLDER_CARD, "Folder reads: the folder a cpio pass-through copies into is not counted, against the real server",
+    "  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));",
+    ""],
+  [HOOK_CRASH, "Folder reads: the folder a cpio pass-through copies into is not counted, when something fails",
+    "  if (mode('p', 'pass-through')) folders.push(...opt.operands.map(o => (dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)));",
+    ""],
+  [SECRET_FOLDER, "Folder reads: the folder a cpio copy-in extracts into is not counted",
+    "  if (mode('i', 'extract') && !has('t', 'list', 'to-stdout', 'only-verify-crc')) folders.push(dir || '.');",
+    ""],
+  [SECRET_FOLDER, "Folder reads: a cpio mode written as a shortened long option is not counted",
+    "  const mode = (letter, name) => has(letter) || opt.given.some(([n]) => n.length > 1 && name.startsWith(n));",
+    "  const mode = (letter, name) => has(letter, name);"],
+  [SECRET_FOLDER, "Folder reads: a relative cpio pass-through folder is not measured from -D",
+    "(dir && !/^[/~$]/.test(o) ? `${dir}/${o}` : o)",
+    "o"],
+  // The other side: a copy-in that only lists stays as it is today.
+  [SECRET_FOLDER, "Folder reads: a cpio copy-in that only lists is counted as extracting",
+    "!has('t', 'list', 'to-stdout', 'only-verify-crc')",
+    "true"],
+
+  // ===== CLAUDE CODE BLOCKS THE CALL WHEN THE PERMISSION HOOK FAILS =====
+  // Without the field, a hook that fails lets the call through. With any value
+  // but "block" (or "continue"), Claude Code 2.1.295 and later skip the whole
+  // settings file. So: the field on every fresh entry, the one value, the
+  // repair of a missing or wrong one, nothing given to an entry or a hook that
+  // is not Rundock's, nothing on the PostToolUse entry, and a file the open
+  // cannot read never rebuilt into one holding something else.
+  [ON_FAILURE, 'On failure: a PreToolUse entry is written without the field',
+    '      hooks: [{ ...hookCommand(300), onFailure: HOOK_ON_FAILURE }],',
+    '      hooks: [hookCommand(300)],'],
+  [ON_FAILURE, 'On failure: the constant holds a value other than "block"',
+    "const HOOK_ON_FAILURE = 'block';",
+    "const HOOK_ON_FAILURE = 'continue';"],
+  [ON_FAILURE_DOC, 'On failure: the value the doc quotes is not the value written',
+    "const HOOK_ON_FAILURE = 'block';",
+    "const HOOK_ON_FAILURE = 'continue';"],
+  [ON_FAILURE, 'On failure: the reconcile repairs a missing field but not a wrong value',
+    'h && hookUpToDate(h) && h.onFailure !== HOOK_ON_FAILURE',
+    'h && hookUpToDate(h) && h.onFailure === undefined'],
+  [ON_FAILURE, 'On failure: the reconcile repairs nothing, so an earlier release\'s workspace never gets the field',
+    '          h.onFailure = HOOK_ON_FAILURE;\n          dirty = true;\n',
+    ''],
+  [ON_FAILURE, 'On failure: the reconcile gives the field to an entry under a matcher Rundock never writes',
+    '!PRE_MATCHERS.includes(e.matcher) || ',
+    ''],
+  [ON_FAILURE, 'On failure: the reconcile gives the field to a person\'s hook',
+    'h && hookUpToDate(h) && h.onFailure',
+    'h && h.onFailure'],
+  [ON_FAILURE, 'On failure: the PostToolUse entry carries the field too',
+    'hooks: [hookCommand(10)]',
+    'hooks: [{ ...hookCommand(10), onFailure: HOOK_ON_FAILURE }]'],
+  [ON_FAILURE, 'On failure: a settings file that does not parse is rebuilt from {}',
+    "      if (e.code !== 'ENOENT') throw new Error(`left ${settingsLocalPath} as it is, it could not be read: ${e.message}`);\n",
+    ''],
+  [ON_FAILURE, 'On failure: a settings file holding JSON that is not an object is rewritten',
+    "    if (!settingsLocal || typeof settingsLocal !== 'object' || Array.isArray(settingsLocal)) {\n      throw new Error(`left ${settingsLocalPath} as it is, it does not hold a JSON object`);\n    }\n",
+    ''],
+  [ON_FAILURE, 'On failure: the settings file is written in place, with no temporary file and no rename',
+    'function writeWhole(file, body) {\n',
+    'function writeWhole(file, body) {\n  fs.writeFileSync(file, body); return;\n'],
+  [ON_FAILURE, 'On failure: the temporary file is left behind when the write fails',
+    '    if (temp !== null) { try { fs.rmSync(temp, { force: true }); } catch (e2) { /* nothing to remove */ } }\n',
+    ''],
+  [ON_FAILURE, 'On failure: a read-only settings file is replaced, because its folder is writable',
+    '      fs.accessSync(target, fs.constants.W_OK);\n',
+    ''],
+  [ON_FAILURE, 'On failure: a settings file reached through a link is replaced by a plain file',
+    '      target = fs.realpathSync(file);\n',
+    ''],
+  [ON_FAILURE, 'On failure: the settings file loses its permission bits when it is written',
+    '      mode = fs.statSync(target).mode & 0o7777;\n',
+    ''],
+  [ON_FAILURE, 'On failure: the reconcile on open writes the settings file in place',
+    '      writeWhole(settingsLocalPath, body);',
+    '      fs.writeFileSync(settingsLocalPath, body);'],
+  [ON_FAILURE, 'On failure: the sandbox switch writes the settings file in place',
+    '\n    writeWhole(settingsLocalPath, body);',
+    '\n    fs.writeFileSync(settingsLocalPath, body);'],
+  [ON_FAILURE_IMPORT, 'On failure: bringing in a person\'s sandbox rules writes the settings file in place',
+    '    writeWhole(settingsFile(dir), body);',
+    '    fs.writeFileSync(settingsFile(dir), body);'],
+  [ON_FAILURE_IMPORT, 'On failure: the put-back after a failed import writes the settings file in place',
+    'if (s.bytes) { writeWhole(s.file, s.bytes);',
+    'if (s.bytes) { fs.writeFileSync(s.file, s.bytes);'],
+  // ===== THE OLDEST CLAUDE CODE RUNDOCK STARTS =====
+  [FLOOR_TABLE, "Version floor: the comparison is inverted",
+    "x[i] < y[i] ? -1 : 1",
+    "x[i] > y[i] ? -1 : 1"],
+  [FLOOR_SPAWN, "Version floor: a copy below the floor is remembered, so updating it needs a restart",
+    "  else _floorVerdicts.set(bin, null);",
+    "  _floorVerdicts.set(bin, refusal);"],
+  [FLOOR_SPAWN, "Version floor: a version that cannot be read blocks the spawn",
+    "verdict === false ? tooOldError(version, bin) : null",
+    "verdict !== true ? tooOldError(version, bin) : null"],
+  [FLOOR_PATHS, "Version floor: a resumed chat skips the check",
+    "  const refusal = floorRefusal();",
+    "  const refusal = args.includes('--resume') ? null : floorRefusal();"],
+  [FLOOR_TABLE, "Version floor: any three-part number in the output is taken as the version",
+    "  const m = firstLine(lines, NAMED_LINE) || firstLine(lines, BARE_LINE);",
+    "  const m = /(\\d+)\\.(\\d+)\\.(\\d+)/.exec(lines.join('\\n'));"],
+  [FLOOR_SPAWN, "Version floor: the probe is a command line a shell reads",
+    "    return execFileSync(bin, ['--version'], { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });",
+    "    return require('child_process').execSync(`\"${bin}\" --version`, { timeout, encoding: 'utf-8', stdio: codexRuntime.PROBE_STDIO });"],
+  [FLOOR_SPAWN, "Version floor: a Windows .cmd or .bat copy is run for its version",
+    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
+    "  // every copy is run for its version"],
+  [FLOOR_SPAWN, "Version floor: the spawn's options are not the caller's",
+    "{ ...options, detached: process.platform !== 'win32' }",
+    "{ ...options, stdio: 'ignore', detached: false }"],
+  [FLOOR_EACCES, "Version floor: a copy that cannot be run is refused as too old",
+    "verdict === false ? tooOldError(version, bin) : null",
+    "verdict !== true ? tooOldError(version, bin) : null"],
+  [FLOOR_SPAWN, "Version floor: the stand-in for a refused copy keeps an unguarded stdin",
+    "    guardChildStdin(standIn, 'claude (not started: below the version floor)');",
+    "    // the stand-in's stdin is left unguarded"],
+  [FLOOR_SPAWN, "Version floor: a .cmd launcher's package version is ignored",
+    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return launcherPackageVersion(bin);",
+    "  if (platform === 'win32' && /\\.(cmd|bat)$/i.test(bin)) return null;"],
+  [FLOOR_FOLDERS, "Version floor: the desktop app never puts the folders the notice names on PATH",
+    "  if (next !== current) env.PATH = next;",
+    "  // PATH is left as it was"],
+  // ===== THE SHELL STARTUP FILES =====
+  [STARTUP_HOOK, 'Startup files: a file-tool write to one is ordinary work',
+    '  const startup = writing ? startupFileAt(resolvedPath, home, foldsCase) : null;',
+    '  const startup = null;'],
+  [STARTUP_HOOK, 'Startup files: a shell write to one is ordinary work',
+    ' || startupAt(r, pmod));',
+    ');'],
+  [STARTUP_HOOK, 'Startup files: a literal in code that names one is ordinary work',
+    ' || startupAt(r, flavour)) addAnswer(r, flavour);',
+    ') addAnswer(r, flavour);'],
+  [STARTUP_HOOK, 'Startup files: a copy or move into the home folder writes no startup file',
+    ' || startupAt(target, pmod)) addAnswer(target, pmod);',
+    ') addAnswer(target, pmod);'],
+  [STARTUP_HOOK, 'Startup files: a glob that matches one is not looked at',
+    '      const globbed = tried.flatMap(r => startupFilesGlobbed(r, home, foldsCase, pmod));',
+    '      const globbed = [];'],
+  [STARTUP_HOOK, 'Startup files: matched by the path as written, not the real path',
+    '  const c = canonicalize(resolvedPath);\n  for (const e of shellStartupEntries(home, env)) {\n    const at = canonicalize(e.path);',
+    '  const c = path.resolve(resolvedPath);\n  for (const e of shellStartupEntries(home, env)) {\n    const at = path.resolve(e.path);'],
+  [STARTUP_COPY_PUTBACK, 'Startup files: the card is worded as one about permission answers',
+    "      if (STARTUP_NAMES.includes(parts[n - 1]) ||",
+    "      if (false ||"],
+  [STARTUP_BOUNDARY, 'Startup files: a stored grant over the home folder answers a write to one',
+    '  if (startupFileAt(crossing.path, home)) return false;\n',
+    ''],
+  [STARTUP_CODEX, 'Startup files: Codex grading accepts a change to one',
+    '  const exact = hook.startupFileAt(g, home);',
+    '  const exact = null;'],
+  [STARTUP_CODEX, 'Startup files: Codex grading accepts a change to a folder that holds one',
+    '  const held = exact ? [exact] : hook.shellStartupEntries(home).filter(e => under(hook.canonicalize(e.path), g));',
+    '  const held = exact ? [exact] : [];'],
+  [STARTUP_SANDBOX, 'Startup files: the sandbox block leaves them writable',
+    '    ...shellStartupEntries(home).map(e => e.path),\n',
+    ''],
+  [STARTUP_SANDBOX, 'Startup files: the twenty-three-entry list the last build wrote is recognised',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 36, 41];'],
+  [STARTUP_SANDBOX, "Startup files: the list with ZDOTDIR's zsh files is recorded as written",
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36];'],
+  // The record of the startup files is accepted in the spelling either way of
+  // running writes, and in no other: break each spelling and each refusal.
+  // The record found anywhere in the block, rather than where this run writes
+  // it, changes nothing on its own (a moved entry shifts its neighbours, and
+  // the whole-block comparison refuses that), so the position row compares the
+  // lists with the record left out wherever it sits.
+  [STARTUP_SANDBOX, 'Record spelling: the app\'s record in the block\'s home is recognised',
+    '(entry === path.posix.join(home, STARTUP_FILE_EXPOSURE_RECORD.app)\n      || entry',
+    '(entry'],
+  [STARTUP_SANDBOX, 'Record spelling: another checkout\'s record is recognised',
+    '\n      || entry === path.posix.join(path.posix.dirname(entry), STARTUP_FILE_EXPOSURE_RECORD.source));',
+    ');'],
+  [STARTUP_SANDBOX, 'Record spelling: another deny entry changed is refused',
+    'deny.map((e, i) => (i === at ? theirs : e))',
+    'block.filesystem.denyWrite'],
+  [STARTUP_SANDBOX, 'Record spelling: the record moved to another position is refused',
+    '  return recordSpelling(theirs, home) ? withDenyWrite(rebuilt, deny.map((e, i) => (i === at ? theirs : e))) : rebuilt;',
+    '  const own = Array.isArray(block.filesystem.denyWrite) ? block.filesystem.denyWrite : [];\n'
+      + '  const found = own.findIndex((e) => recordSpelling(e, home));\n'
+      + '  const rest = (list, i) => JSON.stringify(list.filter((e, j) => j !== i));\n'
+      + '  return found !== -1 && rest(own, found) === rest(deny, at) ? withDenyWrite(rebuilt, own) : rebuilt;'],
+  [STARTUP_SANDBOX, 'Record spelling: a relative record entry is refused',
+    "typeof entry === 'string' && path.posix.isAbsolute(entry)",
+    "typeof entry === 'string'"],
+  [STARTUP_SANDBOX, 'Record spelling: the app\'s record name in another folder is refused',
+    'entry === path.posix.join(home, STARTUP_FILE_EXPOSURE_RECORD.app)',
+    'path.posix.basename(entry) === STARTUP_FILE_EXPOSURE_RECORD.app'],
+  [STARTUP_SANDBOX, 'Record spelling: a record entry with another file name is refused',
+    '|| entry === path.posix.join(path.posix.dirname(entry), STARTUP_FILE_EXPOSURE_RECORD.source));',
+    '|| entry === path.posix.normalize(entry));'],
+  [STARTUP_SANDBOX, 'Record spelling: a record entry that is not a string is refused',
+    "  return typeof entry === 'string' && path.posix.isAbsolute(entry)",
+    "  if (typeof entry !== 'string') return entry !== undefined;\n  return path.posix.isAbsolute(entry)"],
+  [STARTUP_SANDBOX, 'Record spelling: a record entry not joined as Rundock joins a path is refused',
+    'entry === path.posix.join(path.posix.dirname(entry), STARTUP_FILE_EXPOSURE_RECORD.source)',
+    'path.posix.basename(entry) === STARTUP_FILE_EXPOSURE_RECORD.source'],
+  [STARTUP_SANDBOX, 'Record spelling: a deny list that is not an array is refused, and nothing throws',
+    'Array.isArray(block.filesystem.denyWrite) ? block.filesystem.denyWrite[at] : undefined',
+    'block.filesystem.denyWrite[at]'],
+  [STARTUP_SANDBOX, 'Record spelling: an earlier deny list that carries the record has the same latitude',
+    'const rebuilt = recordAsWritten(sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode), block, claimedHome);\n  if (sameSandbox(block, rebuilt)) return true;',
+    'const rebuilt = sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode);\n  if (sameSandbox(block, recordAsWritten(rebuilt, block, claimedHome))) return true;'],
+  [STARTUP_SANDBOX, 'Record spelling: recognising a block never changes it',
+    '  return recordSpelling(theirs, home) ? withDenyWrite(rebuilt, deny.map((e, i) => (i === at ? theirs : e))) : rebuilt;',
+    '  if (recordSpelling(theirs, home)) block.filesystem.denyWrite[at] = deny[at];\n  return rebuilt;'],
+  [STARTUP_GUARD, 'Startup files: the guard watches none of them',
+    '  for (const e of entries) watchHomeFile(g, e.path, read(e.path));\n',
+    ''],
+  [STARTUP_GUARD, 'Startup files: the checks a turn makes skip them',
+    '  const all = outsideTurn ? found : found.concat(part(checkShellStartupFiles));',
+    '  const all = found;'],
+  [STARTUP_GUARD, 'Startup files: a change made while no turn ran is put back',
+    'keptBetweenTurns: rel => rel !== record,',
+    'keptBetweenTurns: () => false,'],
+  [STARTUP_GUARD, "Startup files: Rundock's record changed while no turn ran is kept as it stands",
+    'keptBetweenTurns: rel => rel !== record,',
+    'keptBetweenTurns: () => true,'],
+  [STARTUP_GUARD, 'Startup files: nothing is checked as the first turn starts',
+    '  if (noneRan) safely(checkShellStartupFilesAtStart);\n',
+    ''],
+  [STARTUP_GUARD, 'Startup files: a new fish snippet is not looked for during a turn',
+    '  watchNewSnippets(g, false);\n  return checkGuard(g, false);',
+    '  return checkGuard(g, false);'],
+  [STARTUP_GUARD, "Startup files: Keep replaces the person's link with a plain file",
+    '  const at = change.link ? change.link.real : change.file;',
+    '  const at = change.file;'],
+  [STARTUP_GUARD, 'Startup files: Keep writes through a link that now leads elsewhere',
+    "  if (change.link && realOrNull(change.file) !== at) throw new Error('the link no longer leads where it did');\n",
+    ''],
+  [STARTUP_GUARD, 'Startup files: a check that throws ends the polling',
+    '    g.timer = setInterval(() => safely(() => check(k)), intervalMs);',
+    '    g.timer = setInterval(() => check(k), intervalMs);'],
+  [STARTUP_GLUE, 'Startup files: the kept-change notice says only that the file decides what runs',
+    "answerFileKind(relative) === 'startup' ?",
+    "answerFileKind(relative) === 'never' ?"],
+  [STARTUP_HOOK, 'Startup files: a bare name in code is not read for one',
+    ' || MAY_NAME_STARTUP_FILE.test(v))) names.push(v);',
+    ')) names.push(v);'],
+  [CM_ANSWER_GUARD, 'Answer-file guard: a folder in the way is unlinked like a file',
+    'if (st) { if (st.isDirectory()) fs.rmSync(file, { recursive: true, force: true }); else fs.unlinkSync(file); }',
+    'if (st) fs.unlinkSync(file);'],
+  [STARTUP_GUARD, 'Startup files: a folder swapped for a link is left as the link',
+    '  if (was.dir && !(read(file) || {}).dir) { writePlain(file, null); fs.mkdirSync(file, { recursive: true }); }\n',
+    ''],
+  [STARTUP_GUARD, 'Startup files: a put-back writes through whatever a link leads to now',
+    ' sameBytes(at.bytes, was.bytes))) writePlain(was.real, was.bytes, was.mode);',
+    ' sameBytes(at.bytes, was.bytes))) fs.writeFileSync(file, was.bytes);'],
+  [STARTUP_PRELOAD, 'Startup files: under test, the account\'s own startup files are watched like any',
+    'guard.refuseStartupFiles(accountsOwn);\n',
+    ''],
+  [STARTUP_PRELOAD, 'Startup files: under test, a path is judged by its name, not where it leads',
+    'const forms = p => [path.resolve(p), canonicalize(p)]',
+    'const forms = p => [path.resolve(p)]'],
+  [STARTUP_GUARD, 'Startup files: under test, a new snippet is watched wherever it leads',
+    ' || !mayWatch(f)) continue;',
+    ') continue;'],
+  [STARTUP_PRELOAD, 'Startup files: under test, a dropped file leaves the run passing',
+    '    process.exitCode = 1;\n',
+    ''],
+  [STARTUP_PRELOAD, 'Startup files: an account home that cannot be read is taken as nobody\'s',
+    'const inside = !account || forms(p)',
+    'const inside = !!account && forms(p)'],
+  [STARTUP_GUARD, 'Startup files: the guard takes no notice of the test preload\'s refusal',
+    'const entries = shellStartupEntries(home).filter(e => mayWatch(e.path));',
+    'const entries = shellStartupEntries(home);'],
+  // One file whose check fails never stops the others being checked.
+  [STARTUP_GUARD, 'Startup files: one file whose check fails stops the files after it being checked',
+    '    try {\n      change = checkFile(g, f, outsideTurn);\n      g.unchecked.delete(f);\n    } catch (e) {\n      failed = failed || e;\n      change = putBackUnchecked(g, f, outsideTurn);\n    }',
+    '    change = checkFile(g, f, outsideTurn);'],
+  [STARTUP_GUARD, "Startup files: a failure in the workspace's files stops the startup files being checked",
+    '  const found = part(() => checkGuard(g, outsideTurn));',
+    '  const found = checkGuard(g, outsideTurn);'],
+  [STARTUP_GUARD, 'Startup files: a check that keeps failing asks again at every pass',
+    '  if (seen) return null;\n',
+    ''],
+  [STARTUP_GUARD, 'Startup files: a build that threw as the turn started is never tried again',
+    '  if (!turns.size) return [];\n  const g = homeGuard();\n',
+    '  const g = homeGuards.get(key(os.homedir()));\n  if (!g || !turns.size) return [];\n'],
+  [STARTUP_GUARD, 'Startup files: Keep on a change that could not be read removes the file',
+    "  if (change.unread) throw new Error('what the agent left there could not be read, so there is nothing to keep');\n",
+    ''],
+  // A write to a folder that holds a startup file is asked about, and named as
+  // that folder, in words about what runs when a terminal opens.
+  [STARTUP_HOOK, 'Startup files: a write to a folder that holds one is ordinary work',
+    ' || startupFolderAt(r, home, foldsCase, pmod);',
+    ';'],
+  [STARTUP_BOUNDARY, 'Startup files: a stored grant over home answers a write to a folder that holds one',
+    '  if (crossing.answerFile === true && startupFolderAt(crossing.path, home)) return false;\n',
+    ''],
+  [STARTUP_CHAT, 'Startup files: the card for a folder that holds one is worded from its path alone',
+    '    summary = RundockPermissions.answerFileSummary(named, startupLabel);',
+    '    summary = RundockPermissions.answerFileSummary(named);'],
+  [STARTUP_COPY, 'Startup files: the label on the request does not choose the card\'s words',
+    "    if (!startupLabel || ['launcher', 'console', 'record', 'startup'].includes(kind)) return kind;",
+    '    return kind;'],
+  [STARTUP_COPY_NAMES, 'Startup files: a label naming the record is worded as a startup file',
+    "    return answerFileKind(startupLabel) === 'record' ? 'record' : 'startup';",
+    "    return 'startup';"],
+  [STARTUP_CODEX, 'Startup files: Codex grading names a folder by a file inside it',
+    '    const name = exact ? exact.name : onlyRecord ? held[0].name : hook.homeSpelled(g, hook.canonicalize(home));',
+    '    const name = exact ? exact.name : held[0].name;'],
+  [STARTUP_CODEX, 'Startup files: Codex grading names the checkout as a startup folder',
+    '    const onlyRecord = !exact && !folder && held.every(e => e.record);',
+    '    const onlyRecord = false;'],
+  [STARTUP_CODEX, 'Startup files: Codex grading words a folder holding the answers too as one about permissions',
+    '  if (exact || folder || held.length) {',
+    '  if (!touchesAnswerFile(g, workspaceRoot) && (exact || folder || held.length)) {'],
+  [STARTUP_HOOK_NAMES, 'Startup files: home is named by its full path',
+    "  if (rel === '') return '~';\n",
+    ''],
+  [STARTUP_HOOK_NAMES, "Startup files: the record's folder counts as one holding a startup file",
+    '    if (e.record) continue;\n',
+    ''],
+  [STARTUP_HOOK, 'Startup files: the dotfiles folder a startup file links into is not matched',
+    '    if (link) forms.push(canonicalize(e.path));\n',
+    ''],
+  [SWITCH_CODEX_GLUE, "Workspace switch: the Codex app-server is shut down while a routine turn still holds it",
+    "  if (_routineTurns.has(server)) _retiring.add(server);\n  else stopCodexAppServer(server);",
+    "  stopCodexAppServer(server);"],
+  // Read when it exits instead, the pid file is the open workspace's, and the
+  // one it was registered in keeps a dead pid for a later launch to signal.
+  [SWITCH_CODEX_GLUE, "Workspace switch: a Codex app-server that exits after a switch is taken off the pid file it was registered in",
+    "      if (ownPid) { deps.unregisterChildPid(ownPid, ownPidFile);",
+    "      if (ownPid) { deps.unregisterChildPid(ownPid);"],
+  // ===== A LOW-RISK READ IS ANSWERED BY THE SERVER, AND NOTHING GRADED IS =====
+  // Each field the hook grades keeps its request on the card path, however
+  // its command reads.
+  [READ_ONLY_ANSWER, 'Read-only answer: a crossing out of the workspace is answered with no card',
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
+    "const HOOK_GRADES = ['answer_file', 'startup_file'];"],
+  [READ_ONLY_ANSWER, 'Read-only answer: an answer-file write is answered with no card',
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
+    "const HOOK_GRADES = ['boundary', 'startup_file'];"],
+  [READ_ONLY_ANSWER, 'Read-only answer: a shell startup file is answered with no card',
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
+    "const HOOK_GRADES = ['boundary', 'answer_file'];"],
+  // The verdict decides once it reaches decidePermission, so dropping it from
+  // the call is what answers a Keychain line as a read.
+  [READ_ONLY_ANSWER, 'Read-only answer: a Keychain line or any other verdict is answered with no card',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace));'],
+  // Only the low-risk answer: a medium command is not a read.
+  [READ_ONLY_ANSWER, 'Read-only answer: a medium command is answered as a read',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    "    const answer = decision.decidePermission(risk === 'medium' ? 'low' : risk, key, savedAnswers(workspace), verdict);"],
+  // Fails closed: an error is the card path, never an allow.
+  [READ_ONLY_ANSWER, 'Read-only answer: a request that cannot be graded is allowed',
+    "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return null;",
+    "    console.warn(`[Permission] Could not grade a request for a no-card answer, so it is asked as before: ${e && e.message ? e.message : e}`);\n    return 'read-only';"],
+  // After every token check: each of the three, with the answer moved above it.
+  [READ_ONLY_ANSWER, 'Read-only answer: a read with no token, or one Rundock never issued, is answered',
+    "    if (scope === undefined) {\n      res.writeHead(401, { 'Content-Type': 'application/json' });\n      res.end(JSON.stringify({ error: 'Not a request from an agent Rundock started' }));\n      return;\n    }",
+    "    if (scope === undefined) {\n      let early = '';\n      req.on('data', c => { early += c; });\n      req.on('end', () => {\n        let read = false;\n        try { read = !!serverAnswer(JSON.parse(early)); } catch (e) { /* not a read */ }\n        res.writeHead(read ? 200 : 401, { 'Content-Type': 'application/json' });\n        res.end(JSON.stringify(read ? { allow: true, reason: 'read-only' } : { error: 'Not a request from an agent Rundock started' }));\n      });\n      return;\n    }"],
+  [READ_ONLY_ANSWER, 'Read-only answer: a read whose token names no run going is answered',
+    "    if (scope === null && !run) {\n      res.writeHead(401, { 'Content-Type': 'application/json' });\n      res.end(JSON.stringify({ error: 'Not a request from a run Rundock has going' }));\n      return;\n    }",
+    "    if (scope === null && !run) {\n      let early = '';\n      req.on('data', c => { early += c; });\n      req.on('end', () => {\n        let read = false;\n        try { read = !!serverAnswer(JSON.parse(early)); } catch (e) { /* not a read */ }\n        res.writeHead(read ? 200 : 401, { 'Content-Type': 'application/json' });\n        res.end(JSON.stringify(read ? { allow: true, reason: 'read-only' } : { error: 'Not a request from a run Rundock has going' }));\n      });\n      return;\n    }"],
+  [READ_ONLY_ANSWER, 'Read-only answer: a read whose run ended before its body arrived is answered',
+    '      const still = run && routineRunOf(req);\n',
+    "      try {\n        if (serverAnswer(JSON.parse(body))) {\n          res.writeHead(200, { 'Content-Type': 'application/json' });\n          res.end(JSON.stringify({ allow: true, reason: 'read-only' }));\n          return;\n        }\n      } catch (e) { /* not a read */ }\n      const still = run && routineRunOf(req);\n"],
+  // ===== A SAVED ANSWER IS APPLIED BY THE SERVER, AND ONLY AS RUNDOCK WROTE IT =====
+  // The guard's check runs before the saved set is read.
+  [SAVED_ANSWER, 'Saved answer: the saved set is read without the guard\'s check',
+    '    guard.checkAnswerFilesNow(workspace);\n',
+    ''],
+  // What is read is the guard's baseline, never the file as it stands.
+  [SAVED_ANSWER, 'Saved answer: the saved set is read from the file as it stands after the check',
+    '    return new Set(toolAllowsIn(guard.answerFileBaseline(workspace, permissionsPathIn(workspace))));',
+    "    return new Set(require('./workspace/boundary.js').readToolAllows());"],
+  // No turn's guard watching: nothing checked, so nothing applied.
+  [SAVED_ANSWER, 'Saved answer: saved answers apply on a workspace no turn\'s guard watches',
+    '    if (!workspace || !guard.answerFilesWatched(workspace)) return new Set();',
+    '    if (!workspace) return new Set();'],
+  // The check or the read throwing: the empty set, never the file.
+  [SAVED_ANSWER, 'Saved answer: a saved answer is applied when the check or the read throws',
+    "    console.warn(`[Permission] Could not read the saved answers, so none is applied: ${e && e.message ? e.message : e}`);\n    return new Set();",
+    "    console.warn(`[Permission] Could not read the saved answers, so none is applied: ${e && e.message ? e.message : e}`);\n    return new Set(require('./workspace/boundary.js').readToolAllows());"],
+  // High risk cards ahead of every saved answer.
+  [SAVED_ANSWER, 'Saved answer: a saved key answers a high-risk request',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    "    const answer = decision.decidePermission(risk === 'high' ? 'medium' : risk, key, savedAnswers(workspace), verdict);"],
+  // The verdict reaches the decision as the window passes it.
+  [SAVED_ANSWER, 'Saved answer: the verdict is dropped from the decision',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace));'],
+  // A save or revoke builds on what the guard accepted, never the disk.
+  [SAVED_WRITER, 'Saved answer: a save or revoke merges the permissions file as it stands on disk',
+    '    const accepted = answerFileToBuildOn(getWorkspace(), file);',
+    '    const accepted = null;'],
+  // The guard's check runs first, so the planted change is put back and
+  // handed to the turn rather than written over unseen.
+  // The request's workspace is dropped, and the open one's answers apply.
+  [SAVED_BOUND, 'Saved answer: the workspace check is dropped, so the open workspace answers every request',
+    '        const answered = serverAnswer(data, requestWorkspace(run, convoId));',
+    '        const answered = serverAnswer(data, getWorkspace());'],
+  // A live run no longer names the folder it started in.
+  [SAVED_RUN_FOLDER, 'Saved answer: a live run does not name the folder it started in',
+    '  return run ? { id: run.id, routine: run.routine, agent: run.agent, workspace: run.workspace } : null;',
+    '  return run ? { id: run.id, routine: run.routine, agent: run.agent } : null;'],
+  // Any guarded turn binds every conversation to its workspace.
+  [SAVED_TURN, 'Saved answer: a conversation is bound by any turn in the workspace, not its own',
+    '  for (const g of guards.values()) if ([...g.listeners].some(l => l.convoId === convoId)) roots.push(g.root);',
+    '  for (const g of guards.values()) if (g.listeners.size) roots.push(g.root);'],
+  // A legacy binary key, the leading command, answers an Asks-once rule
+  // that starts with it.
+  [SAVED_RULE, 'Saved answer: a binary key answers an Asks-once',
+    '        return (ruleKey && alwaysAllowedSet && alwaysAllowedSet.has(ruleKey))',
+    "        return (ruleKey && alwaysAllowedSet && (alwaysAllowedSet.has(ruleKey) || [...alwaysAllowedSet].some(k => ruleKey.startsWith(k + '-'))))"],
+  // With no turn watching, a save or revoke builds on the disk as it stands.
+  [SAVED_BUILD, 'Saved answer: a save or revoke between turns builds on the file as it stands on disk',
+    '  const now = read(f);\n  const ours = now === null',
+    '  const now = read(f);\n  if (!g.listeners.size) return { bytes: isPlain(now) ? now.bytes : null };\n  const ours = now === null'],
+  [SAVED_BUILD, 'Saved answer: a save or revoke builds on the file without the guard\'s check first',
+    '  if (g.listeners.size) checkAnswerFilesNow(workspace);\n  const was = g.snapshot.get(f);',
+    '  const was = g.snapshot.get(f);'],
+  // ===== THREE SPELLINGS IN AN INLINE SCRIPT THAT NAME NO PLACE =====
+  [INLINE_SCRIPT, 'Inline script: a name assigned twice is known',
+    '        if (++defs > 1) return false;',
+    '        defs = 1;'],
+  [INLINE_SCRIPT, 'Inline script: a name from sys.argv or the environment is known',
+    String.raw`if (lit && plain(lit) && /^[ \t]*(?:[;\n#]|$)/.test(masked.slice(lit.end)) && top() && depthAt(a) === 0) {`,
+    'if (eq && top() && depthAt(a) === 0) {'],
+  [INLINE_SCRIPT, 'Inline script: a piece is dropped though the whole path is not shaped like a place',
+    'node.values.length && node.values.every(v => literalIsPlace(v, reading))',
+    'node.values.length'],
+  [INLINE_SCRIPT, 'Inline script: a piece is dropped though what it is joined onto is not known',
+    'if (wholeOf(node) && node.values.length',
+    'if (node.values.length'],
+  [INLINE_SCRIPT, 'Inline script: a joined path is judged as a read when the call writes',
+    "quiet: useOf(a, b) === 'read'",
+    'quiet: true'],
+  [INLINE_SCRIPT, 'Inline script: the doubled-backslash rule applies on a Windows host',
+    "opts.shellTool !== 'PowerShell' && !winShaped && WIN_UNC.test(t) ? path",
+    "opts.shellTool !== 'PowerShell' && WIN_UNC.test(t) ? path"],
+  [INLINE_SCRIPT, 'Inline script: the doubled-backslash rule applies to PowerShell',
+    "opts.shellTool !== 'PowerShell' && !winShaped && WIN_UNC.test(t) ? path",
+    '!winShaped && WIN_UNC.test(t) ? path'],
+  [INLINE_SCRIPT, 'Inline script: a failed reading of a joined piece drops the piece',
+    '} catch (e) { /* judged alone */ }',
+    '} catch (e) { continue; }'],
+  [INLINE_SCRIPT, "Inline script: a % before a space is Ruby's quote again",
+    String.raw`const QUOTE_OPERATOR = /^(?:(?:qx|qq|qw|q)\s*|%[xqQwWiI]?)([([{<])/;`,
+    String.raw`const QUOTE_OPERATOR = /^(?:qx|qq|qw|q|%[xqQwWiI]?)\s*([([{<])/;`],
+  [INLINE_SCRIPT, 'Inline script: a % straight after a closing quote is a quote',
+    String.raw`const q = /[\w$@%"')\]}]/.test(s[i - 1] || ' ')`,
+    String.raw`const q = /[\w$@%]/.test(s[i - 1] || ' ')`],
+  [INLINE_SCRIPT, "Inline script: Perl's quote words lose the space before their bracket",
+    String.raw`const QUOTE_OPERATOR = /^(?:(?:qx|qq|qw|q)\s*|%[xqQwWiI]?)([([{<])/;`,
+    String.raw`const QUOTE_OPERATOR = /^(?:qx|qq|qw|q|%[xqQwWiI]?)([([{<])/;`],
+  // Python started plainly, with every word of the script one that loads,
+  // runs and reaches nothing, and nothing in it Python warns of.
+  [INLINE_SCRIPT, 'Inline script: an import of any module counts as one loaded before the script starts',
+    String.raw`const PY_IMPORT = /^\s*import\s+(?:sys|os(?:\.path)?)(?:\s*,\s*(?:sys|os(?:\.path)?))*\s*$/;`,
+    String.raw`const PY_IMPORT = /^\s*import\s+[\w.]+(?:\s*,\s*[\w.]+)*\s*$/;`],
+  [INLINE_SCRIPT, 'Inline script: a dunder anywhere is let through as the main guard is',
+    "s.replace(PY_MAIN_GUARD, '').includes('__') || ",
+    ''],
+  [INLINE_SCRIPT, 'Inline script: getattr is a builtin that reaches nothing',
+    "const PY_BUILTINS_ALLOWED = new Set('abs all",
+    "const PY_BUILTINS_ALLOWED = new Set('getattr abs all"],
+  [INLINE_SCRIPT, 'Inline script: the joined reading applies to node and Ruby',
+    String.raw`const PLAIN_PYTHON = /^python3(?:\.\d+)?$/;`,
+    String.raw`const PLAIN_PYTHON = /^(?:python3(?:\.\d+)?|node|ruby)$/;`],
+  [INLINE_SCRIPT, 'Inline script: Python by a path or after a variable counts as started plainly',
+    'bare && i === 0 && words[i] === lead && PLAIN_PYTHON.test(lead)',
+    'bare && PLAIN_PYTHON.test(lead)'],
+  [INLINE_SCRIPT, 'Inline script: Python after another command counts as started plainly',
+    '!b.expands && b.at < firstEnd && ',
+    '!b.expands && '],
+  [INLINE_SCRIPT, 'Inline script: a here-document the shell fills in is read for names',
+    'depth === 0 && !b.expands && b.at',
+    'depth === 0 && b.at'],
+  [INLINE_SCRIPT, 'Inline script: -c code the shell fills in is read for names',
+    ' && !(lexed[m[1] ? 1 : 2] || lexed[1]).expands',
+    ''],
+  [INLINE_SCRIPT, 'Inline script: code in a backtick or quote word is read for names',
+    'if (plainPython && !opaque && consumed.has(l)) {',
+    'if (plainPython && consumed.has(l)) {'],
+  [INLINE_SCRIPT, 'Inline script: a call or index on a literal or display is let through',
+    String.raw`if (c !== '{' && (/["'}.]/.test(src[p]) || (shut && !calls.get(p)) || /^(?:\d|None$|True$|False$)/.test(word))) return null;`,
+    ''],
+  [INLINE_SCRIPT, "Inline script: open's mode may be anything",
+    "if (w === 'open' && g.args === 2) {",
+    'if (false) {'],
+  [INLINE_SCRIPT, 'Inline script: an escape Python warns of is let through',
+    String.raw`if (l.value.replace(/\\[ntr0\\'"]/g, '').includes('\\')) return false;`,
+    ''],
+  [INLINE_SCRIPT, 'Inline script: the main guard is a dunder like any other',
+    String.raw`const PY_MAIN_GUARD = /\bif[ \t]+__name__[ \t]*==[ \t]*(["'])__main__\1[ \t]*:/g;`,
+    'const PY_MAIN_GUARD = /(?!)/g;'],
+  // ===== THE WORKSPACE'S OWN AGENTS AND SKILLS ARE REFUSED TO FILE TOOLS =====
+  // The refusal never asked: every write into the two folders is in-workspace
+  // access again. Caught by: each file tool is refused in every mode and run.
+  [TEAM_FOLDERS, 'Team folders: the workspace check is removed',
+    '  if (isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot)) {',
+    '  if (false) {'],
+  // Case compared as written: `.claude/Agents/` slips past where the host
+  // folds case. Caught by: a case variant is refused exactly where the host
+  // folds case, driven both ways through the seam.
+  [TEAM_FOLDERS, 'Team folders: case folding is dropped',
+    "    const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);\n    return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {\n      const folder = foldCase(canonicalize(path.join(workspaceRoot, '.claude', d)), foldsCase);",
+    "    const t = canonicalize(path.resolve(workspaceRoot, target));\n    return REFUSED_CLAUDE_EDIT_DIRS.some((d) => {\n      const folder = canonicalize(path.join(workspaceRoot, '.claude', d));"],
+  // A bare prefix: `.claude/agents-old/` and `.claude/skillset/` are refused
+  // too. Caught by: everything beside those two folders keeps today's answer.
+  [TEAM_FOLDERS, 'Team folders: a prefix match also catches agents-old',
+    '      return t === folder || t.startsWith(folder + path.sep);',
+    '      return t === folder || t.startsWith(folder);'],
+  // A relative target resolved against the home folder rather than the
+  // workspace. Caught by: each spelling is refused, in-process and through
+  // the hook (the relative rows).
+  [TEAM_FOLDERS, 'Team folders: a relative target is resolved against the home folder',
+    '    const t = foldCase(canonicalize(path.resolve(workspaceRoot, target)), foldsCase);',
+    '    const t = foldCase(canonicalize(path.resolve(os.homedir(), target)), foldsCase);'],
+  // NotebookEdit left out of the check. Caught by: each file tool is refused,
+  // and the notebook_path spelling.
+  [TEAM_FOLDERS, 'Team folders: NotebookEdit is left out',
+    "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
+    "  if (toolName === 'NotebookEdit') return false;\n  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);"],
+  // A throw inside the check read as "not a team folder", so the write goes
+  // through as in-workspace access. Caught by: a forced failure refuses.
+  [TEAM_FOLDERS, 'Team folders: the check failing is treated as allow',
+    '  if (isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot)) {',
+    '  if ((() => { try { return isWorkspaceTeamFolderEdit(data.tool_name, data.tool_input, wsRoot); } catch (e) { return false; } })()) {'],
+  // Only the first path field present is checked again, so a NotebookEdit
+  // naming a note in file_path and an agent in notebook_path is checked as
+  // the note, and the classifier, reading notebook_path, allows the agent
+  // write. Caught by: a target in those folders is refused in any path field.
+  [TEAM_FOLDERS, 'Team folders: only the first path field present is checked',
+    "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
+    "  const targets = [ti.file_path || ti.notebook_path || ti.path].filter((v) => typeof v === 'string' && v);"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
-function redTests(suite) {
+async function redTests(suite) {
   let out = '';
   let failed = false;
   // A suite under test/electron/ is a run of the shipped desktop app, not a
@@ -3715,8 +4868,9 @@ function redTests(suite) {
   // expectation that did not hold, and exits 1 when there are any.
   if (String(suite || '').startsWith('test/electron/')) {
     try {
-      out = execFileSync('node', [suite], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 240000 });
+      out = await runSuite('node', [suite], { cwd: ROOT });
     } catch (e) {
+      if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
       failed = true;
       out = e.stdout || '';
     }
@@ -3727,9 +4881,9 @@ function redTests(suite) {
     return { unparsable: true };
   }
   try {
-    out = execFileSync('node', ['--test', ...REPORTER, suite],
-      { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = await runSuite('node', ['--test', ...REPORTER, suite], { cwd: ROOT });
   } catch (e) {
+    if (e.didNotFinish) return { didNotFinish: e.didNotFinish };
     failed = true;
     out = (e.stdout || '') + (e.stderr || '');
   }
@@ -3759,7 +4913,7 @@ function targetsFor(mutations) {
   return targetsFromRows(mutations);
 }
 
-function run() {
+async function run() {
   const targets = targetsFor(MUTATIONS);
   // The suites go to the envelope too: several of them build the Code-mode
   // fixture, and without its folder they skip and every row aimed at them
@@ -3788,9 +4942,10 @@ function run() {
         continue;
       }
       fs.writeFileSync(target.src, original.replace(guard, without));
-      const red = redTests(target.suite);
-      results.push(red && red.unparsable
-        ? { label, applied: true, unparsable: true, red: [] }
+      const red = await redTests(target.suite);
+      if (red && red.didNotFinish) results.push({ label, applied: true, didNotFinish: red.didNotFinish, output: suiteOutput(), red: [] });
+      else results.push(red && red.unparsable
+        ? { label, applied: true, unparsable: true, output: suiteOutput(), red: [] }
         : { label, applied: true, red });
       fs.writeFileSync(target.src, original);
     }
@@ -3803,7 +4958,13 @@ function run() {
 function report(results, markdown) {
   let failed = 0;
   const lines = [];
-  for (const { label, applied, red, ambiguous, unparsable } of results) {
+  for (const { label, applied, red, ambiguous, unparsable, didNotFinish } of results) {
+    if (didNotFinish) {
+      failed++;
+      const why = didNotFinishWhy(didNotFinish);
+      lines.push(markdown ? `| ${label} | **${why}** | |` : `${label}\n  ${why.toUpperCase()}`);
+      continue;
+    }
     if (unparsable) {
       failed++;
       const why = 'no verdict: the suite failed but its output could not be parsed, so nothing '
@@ -3857,13 +5018,14 @@ function requireSaneTempRoot() {
 if (require.main === module) {
   requireSaneTempRoot();
   if (process.argv.includes('--preflight-only')) process.exit(0);
-  const results = run();
-  const failed = report(results, process.argv.includes('--markdown'));
-  if (failed) {
-    console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
-      + ' and a mutation that could break more than one place proves nothing about either.');
-    process.exit(exitCodeFor(failed, results));
-  }
+  run().then((results) => {
+    const failed = report(results, process.argv.includes('--markdown'));
+    if (failed) {
+      console.error(`\n${failed} mutation(s) proved nothing. A guard no test notices is not guarded,`
+        + ' and a mutation that could break more than one place proves nothing about either.');
+      process.exit(exitCodeFor(failed, results));
+    }
+  });
 }
 
 module.exports = { MUTATIONS, run, targetsFor };

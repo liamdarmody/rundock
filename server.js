@@ -336,6 +336,11 @@ require('./lib/agents/approval-store.js').configureApprovalStore(process.env.RUN
   // install had opened before it kept approvals itself.
   recentPaths: () => { try { return JSON.parse(fs.readFileSync(RECENT_FILE, 'utf-8')).map((r) => r && r.path); } catch (e) { return []; } },
 });
+// Where routines are off on this computer (lib/agents/routines-here.js):
+// beside the routine approvals, outside every workspace, so it never syncs.
+require('./lib/agents/routines-here.js').configureRoutinesHere(process.env.RUNDOCK_ELECTRON
+  ? path.join(require('os').homedir(), '.rundock-routines-here.json')
+  : path.join(__dirname, '.routines-here.json'));
 auth.configureSessionStore(process.env.RUNDOCK_ELECTRON
   ? path.join(require('os').homedir(), '.rundock-browser-sessions.json')
   : path.join(__dirname, '.browser-sessions.json'));
@@ -668,15 +673,24 @@ const {
 } = claudeRuntime;
 const codexGlue = require('./lib/runtime/codex-glue.js');
 const { watchClaudeTurns } = require('./lib/runtime/claude-turn-guard.js');
-const { startingFresh, noteUnstartedWrite, takeUnstartedWrites, withFreshCatchUp } = require('./lib/runtime/missing-session.js');
+const {
+  startingFresh, noteUnstartedWrite, takeUnstartedWrites, withFreshCatchUp, storeHeldCatchUp, takeStoredCatchUp,
+} = require('./lib/runtime/missing-session.js');
+const teamNotes = require('./lib/agents/team-notes.js');
+teamNotes.wireTeamNotes({ appendTranscript: (...args) => appendTranscript(...args) });
 claudeRuntime.wireClaudeRuntimeDeps({
   getActualPort: () => ACTUAL_PORT,
-  // Every Claude turn runs under the same answer-file guard as a Codex turn.
-  onClaudeSpawn: (proc, { convoId, agentId }) => watchClaudeTurns(proc, {
-    workspace: config.getWorkspace(),
-    convoId,
-    onChange: (change) => codexGlue.surfaceAnswerFileChange({ agentId, processId: null }, convoId, change, 'claude'),
-  }),
+  // Every Claude turn runs under the same answer-file guard as a Codex turn,
+  // and its first message opens with what Rundock did with the last reply's
+  // team markers, when there is something to say.
+  onClaudeSpawn: (proc, { convoId, agentId }) => {
+    watchClaudeTurns(proc, {
+      workspace: config.getWorkspace(),
+      convoId,
+      onChange: (change) => codexGlue.surfaceAnswerFileChange({ agentId, processId: null }, convoId, change, 'claude'),
+    });
+    teamNotes.noteOnNextMessage(proc, convoId);
+  },
 });
 const {
   shutdownCodexAppServer,
@@ -1459,8 +1473,8 @@ const { wireProcessHandlers, handleScopeReturn, handleDelegation, handleEndDeleg
 // ===== WS DISPATCH (lib/protocol/handlers/) =====
 // Every WS message type except the four root shims (chat, delegate,
 // end_delegation, flush_buffer) is handled in lib/protocol/handlers/ and
-// selected from this table. The context object's member list is frozen by
-// the decomposition spec: handlers reach root-owned capabilities through it
+// selected from this table. The context object's member list is fixed, and
+// a test pins it: handlers reach root-owned capabilities through it
 // (and lib modules by direct require); they never require the root.
 const protocolHandlers = require('./lib/protocol/handlers/index.js');
 const wsDispatch = protocolHandlers.buildDispatch();
@@ -1494,6 +1508,9 @@ const wsHandlerContext = {
   broadcast: safeSend,
   config,                                         // lib/config module: getWorkspace at use time
 };
+// The agent and skill markers in a reply are acted on here, at the end of the
+// turn, through the same handlers and broadcast (lib/agents/team-markers.js).
+require('./lib/agents/team-markers.js').wireTeamMarkers(wsHandlerContext);
 
 wss.on('connection', (ws) => {
   console.log('Client connected');
@@ -1513,6 +1530,8 @@ wss.on('connection', (ws) => {
   // told whether to run them (lib/protocol/handlers/held-routines.js).
   ws.send(JSON.stringify(require('./lib/protocol/handlers/held-routines.js').heldRoutinesMessage(WORKSPACE)));
 
+  // A card an earlier run left open becomes its outcome before anything is shown (lib/agents/team-notes.js).
+  if (WORKSPACE) { try { teamNotes.load(); } catch (e) { console.error('[TeamNotes] could not read the conversations:', e && e.message); } }
   // Re-send pending permission requests so permission cards reappear after reconnect
   for (const [requestId, pending] of pendingPermissionRequests) {
     ws.send(JSON.stringify({
@@ -1527,7 +1546,8 @@ wss.on('connection', (ws) => {
         // conversation comes back on screen is rebuilt HERE, so a field not
         // named here is lost on that path even though the first delivery
         // carried it.
-        ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {})
+        ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {}),
+        ...(pending.startupFile ? { startup_file: pending.startupFile } : {})
       },
       _conversationId: pending.conversationId,
       ...(pending.run ? { _run: pending.run } : {})
@@ -1648,8 +1668,8 @@ wss.on('connection', (ws) => {
             // A fresh start that had no prompt of its own gives its first
             // message the catch-up it is owed; every other message is as sent.
             const followUp = withFreshCatchUp(existing, msg.content);
-            // Kept until this process has started its session: one still
-            // starting may yet be refused, and then never reads this.
+            // Kept until this process has answered a turn: until then it may
+            // yet be refused, and then never reads this.
             noteUnstartedWrite(existing, followUp);
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUp } }) + '\n');
           } else {
@@ -1702,8 +1722,11 @@ wss.on('connection', (ws) => {
               stdio: ['pipe', 'pipe', 'pipe']
             }, (err) => handleChatSpawnError(err, convoId));
 
+            // THE AGENT DISCOVERY RESOLVED, not the name the window asked for:
+            // this id is who the turn's agent and skill markers are decided
+            // as, and a window can ask for any name.
             const entry = {
-              process: proc, buffer: '', processId, agentId: msg.agent || 'default',
+              process: proc, buffer: '', processId, agentId: agentData ? agentData.id : 'default',
               responseText: '', exited: false, resultSent: false,
               lastUserMessage: msg.content,
               // Agent tool interception state
@@ -1718,8 +1741,11 @@ wss.on('connection', (ws) => {
 
             safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
 
-            // Send the first message via stdin
-            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+            // Send the first message via stdin, behind any catch-up a fresh
+            // start held for this agent whose process has since gone (reaped,
+            // or the server restarted): given here, once.
+            const heldCatchUp = takeStoredCatchUp(convoId, entry.agentId);
+            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: heldCatchUp + msg.content } }) + '\n');
 
             const stderrRef = wireProcessHandlers(entry, convoId, ws, {
               enableInterception: true,
@@ -1787,6 +1813,10 @@ wss.on('connection', (ws) => {
                 console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
                 entry.missingSessionRecovered = true; // started again below
                 processes.delete(convoId);
+                // A catch-up this process was given was never read: it goes
+                // with the message into the fresh start.
+                entry.freshCatchUp = heldCatchUp;
+                storeHeldCatchUp(convoId, entry);
                 // Naming the session Claude Code refused, when it was refused,
                 // so the window forgets that one and not whichever is primary.
                 const freshName = (agentData && agentData.displayName) || null;
@@ -1800,9 +1830,9 @@ wss.on('connection', (ws) => {
                 // follows it, in order, into the fresh one: the first emit has
                 // already put a live process in place for these to reach. After
                 // any failure, not only a refusal: what is still kept went to a
-                // process that never started a session (its init clears the
-                // list), so it acted on none of it, and dropping it lost what
-                // the person had said.
+                // process that never answered a turn (its first result clears
+                // the list), so it acted on none of it, and dropping it lost
+                // what the person had said.
                 for (const carried of takeUnstartedWrites(entry)) {
                   liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
                 }
@@ -1876,12 +1906,14 @@ wss.on('connection', (ws) => {
             stdio: ['pipe', 'pipe', 'pipe']
           }, (err) => handleChatSpawnError(err, convoId));
 
-          const entry = { process: proc, buffer: '', processId, agentId: msg.agent || 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
+          const entry = { process: proc, buffer: '', processId, agentId: agentData ? agentData.id : 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
           processes.set(convoId, entry);
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
 
-          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: msg.content } }) + '\n');
+          // Behind any catch-up stored for this agent, as on the interactive path.
+          const legacyCatchUp = takeStoredCatchUp(convoId, entry.agentId);
+          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: legacyCatchUp + msg.content } }) + '\n');
 
           // Legacy mode: no interception, no transcript, no idle tracking
           const legacyStderrRef = wireProcessHandlers(entry, convoId, ws, {
@@ -1904,6 +1936,8 @@ wss.on('connection', (ws) => {
               console.log(`[Chat] Resume failed for session ${msg.sessionId}, retrying fresh`);
               entry.missingSessionRecovered = true; // started again below
               processes.delete(convoId);
+              entry.freshCatchUp = legacyCatchUp; // never read: it goes to the fresh start
+              storeHeldCatchUp(convoId, entry);
               const freshName = (agentData && agentData.displayName) || null;
               safeSend(JSON.stringify({ type: 'system', subtype: 'info', content: startingFresh(freshName),
                 ...(entry.missingSession ? { expiredSessionId: entry.missingSession } : {}),
@@ -2464,20 +2498,31 @@ function killAllChildren() {
   savePidFile(loadPidFile().filter(rec => pidRecordAlive(rec)));
 }
 
-// Clean up orphaned processes from a previous crash (PIDs left in the file)
-function cleanOrphanedProcesses() {
+// Clean up orphaned processes from a previous crash (PIDs left in the file).
+//
+// A ROUTINE RUN THIS PROCESS IS STILL RUNNING IS NOT AN ORPHAN. Its child sits
+// in this file like any other, and a workspace switch runs this cleanup, so
+// re-selecting the workspace a run started in, or coming back to it, used to
+// kill that run. It is skipped, and kept on file for a later launch to reap if
+// this process stops first. Decided from the scheduler's own record of what it
+// started, before the recycled-pid guard is asked anything, so the outcome is
+// the same whether a command line can be read or not. `readCommand` is that
+// guard's reader, a parameter so a test can see which pids reach it.
+function cleanOrphanedProcesses(readCommand = processCommand) {
   const records = loadPidFile();
   if (records.length === 0) return;
+  const running = schedulerLib.liveRunPids();
   let cleaned = 0;
   const survivors = [];
   for (const rec of records) {
     const pid = pidOf(rec);
-    if (!pidRecordAlive(rec)) continue; // gone, or the pid now belongs to something else
+    if (running.has(pid)) { survivors.push(rec); continue; }
+    if (!pidRecordAlive(rec, readCommand)) continue; // gone, or the pid now belongs to something else
     killProcessTree(pid, 'SIGTERM');
     cleaned++;
     // Keep it until a later launch observes it gone: a process that ignores
     // SIGTERM must not be forgotten just because we signalled it once.
-    if (pidRecordAlive(rec)) survivors.push(rec);
+    if (pidRecordAlive(rec, readCommand)) survivors.push(rec);
   }
   if (cleaned > 0) {
     console.log(`[Cleanup] Killed ${cleaned} orphaned process tree(s) from a previous session`);
@@ -2523,6 +2568,10 @@ function handleChatSpawnError(err, convoId) {
         userMessage = 'Claude Code not found on PATH. Run `claude --version` to check your install.';
       } else if (err.code === 'EACCES') {
         userMessage = "Couldn't start Claude Code: permission denied. Check your install.";
+      } else if (err.code === 'CLAUDE_TOO_OLD') {
+        // The whole notice: the copy found, the version needed, what to do
+        // (lib/runtime/claude-floor.js).
+        userMessage = err.message;
       } else {
         userMessage = `Couldn't start Claude Code: ${err.message}. Run \`claude --version\` to check your install.`;
       }
@@ -2665,7 +2714,7 @@ function getRuntimeStatus() {
 // Code-mode verdict, a boundary crossing, an answer file), in the same fields a
 // hook request carries, so the card is drawn the same way whichever runtime
 // asked. Only those fields pass.
-const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'put_back'];
+const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'startup_file', 'put_back'];
 function requestServerPermission({ convoId, toolName, toolInput, onDecision, grading }) {
   // An id nothing can guess: an answer is matched to its card by this alone.
   const requestId = 'perm-' + require('crypto').randomBytes(16).toString('hex');
@@ -2716,9 +2765,9 @@ process.on('exit', () => {
     }
   }
   // The shared Codex app-server may still be draining its graceful
-  // SIGTERM; it must not outlive the server process.
-  const codexAppServerPid = codexGlue.getCodexAppServerPid();
-  if (codexAppServerPid) {
+  // SIGTERM, and one a routine turn held past a switch may still be running;
+  // neither may outlive the server process.
+  for (const codexAppServerPid of codexGlue.getCodexAppServerPids()) {
     try { killProcessTree(codexAppServerPid, 'SIGKILL'); } catch (e) {}
   }
 });
@@ -3149,7 +3198,7 @@ function reconcileSearchBeforeQuery() {
 }
 
 // Live-path hook, called after an agent turn's transcript append. Guarded so
-// an index failure can never affect message persistence (spec risk 2): the
+// an index failure can never affect message persistence: the
 // jsonl is written by Claude Code regardless, and the next reconcile-on-search
 // or reconcile-on-open catches anything missed here.
 function noteSearchConversationActivity(convoId) {

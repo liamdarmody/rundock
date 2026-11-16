@@ -1,7 +1,7 @@
 // Callout: atomic block node carrying Obsidian's > [!type] title / > body
 // blocks. Body content is preserved verbatim as a node attribute so the
 // round-trip reconstruction is byte-exact. Body is not user-editable in v1
-// (sealed). Editable body content is tracked separately as a future spec.
+// (sealed).
 //
 // Recognised types render with type-coloured styling: note/info/abstract
 // (blue), tip/success/todo (green), warning/question/example (amber),

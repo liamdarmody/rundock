@@ -88,8 +88,9 @@ describe('codex agent conversation', () => {
     // Usage is recorded as normalised token counts (subscription usage; no dollar costs)
     assert.deepStrictEqual(result.usage, { inputTokens: 1200, cachedInputTokens: 800, outputTokens: 340, reasoningOutputTokens: 0 });
 
-    // Replies stream LIVE: text deltas arrive as Claude-shaped stream events
-    // before the result (the A1 checkpoint's automated twin).
+    // Replies stream live: text deltas arrive as Claude-shaped stream events
+    // before the result, so the chat shows a Codex reply as it is written
+    // rather than all at once when the turn ends.
     const streamed = client.messages.slice(since, resultIdx)
       .filter(m => m.type === 'stream_event' && m._conversationId === convoId)
       .map(m => m.event && m.event.delta && m.event.delta.text);

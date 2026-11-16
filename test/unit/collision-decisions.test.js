@@ -23,7 +23,7 @@ const model = require('../../public/packages-install-model.js');
 // so the rows rendered here are the product's, with no page and no copy of
 // the escaping rule in this file.
 const settings = require('../../public/views/settings.js');
-const { buildPlan, decide } = require('../../lib/packages/import-plan.js');
+const { decide } = require('../../lib/packages/import-plan.js');
 const { applyImport } = require('../../lib/packages/import-apply.js');
 const { evaluateImport, APPROVAL_SCHEMA, ABSENT_DIGEST } = require('../../lib/packages/import-evaluate.js');
 const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
@@ -711,7 +711,7 @@ describe('receipts record each decision beside the item it governed', () => {
     for (const entry of receipt.items) assert.ok(entry.decision, `${entry.id} carries its decision`);
   });
 
-  // Amendment R1 to the receipts addendum: the zero-write shortcut governs
+  // The zero-write shortcut governs
   // destination files, never the decision record. A person who skipped
   // everything still confirmed decisions, and that is what a receipt records;
   // only a pure replay, every item already at its approved bytes, records

@@ -277,6 +277,17 @@ test('a request held back through the end of its run is refused when it finishes
 // record closes, its asker told no, every window told it has ended, and it is
 // counted with the run. Nothing after the close changes any of that.
 const pendingNow = () => h.internal.pendingPermissionRequests;
+// A card the close did not settle, denied here so that a test failing on that
+// does not leave the card's timer, and its asker's open request, holding the
+// server for minutes after the last test. Denying clears the timer before it
+// answers, so a card whose answer cannot be written is let go as well.
+function settleLeftover(card) {
+  if (!pendingNow().has(card.request_id)) return;
+  try {
+    handlePermissionResponse({ pendingPermissions: pendingNow(), broadcast: () => {} }, { send() {} },
+      { requestId: card.request_id, conversationId: '', allow: false, card: true });
+  } catch (e) { /* its answer could not be written; its timer was cleared first */ }
+}
 // Start the routine and wait for its own card, which holds the run open.
 async function startHeld(agent, name) {
   const since = client.messages.length;
@@ -382,7 +393,10 @@ test('a card that cannot be settled cleanly as its run ends is still counted, an
     assert.strictEqual(letThrough, false, 'the hook that could not be answered is never let through');
     assert.strictEqual(pendingNow().has(unwritable.card.request_id), false);
     assert.strictEqual((await permissionRequest('not-a-token')).status, 401, 'and the server goes on answering');
-  } finally { stuck.destroy(); }
+  } finally {
+    stuck.destroy();
+    for (const card of [told.card, unwritable.card]) settleLeftover(card);
+  }
 });
 
 // THE RACE: a denial, and a timeout, landing inside the close itself, after
@@ -390,6 +404,22 @@ test('a card that cannot be settled cleanly as its run ends is still counted, an
 // timer is caught as it is set, so it can be made to fire at that moment.
 // Either way the card is counted once.
 const RACE_TIMEOUT_MS = 987654;
+// How long the asker may go unanswered once its run has closed. The close
+// answers it at once, through `land` or as it settles the run's cards; one
+// still waiting after this was answered by neither, which is what this test
+// exists to see. Its card is then denied, so its timer, set long above so that
+// only `land` can fire it, does not hold the suite for a quarter of an hour,
+// and the test fails on the answer it records instead.
+const ASKER_MS = 5000;
+const UNANSWERED = { unanswered: `no answer within ${ASKER_MS} ms of the run closing` };
+async function answeredAfterClose(open) {
+  let wait;
+  const late = new Promise((resolve) => { wait = setTimeout(() => resolve(UNANSWERED), ASKER_MS); });
+  const body = await Promise.race([open.asked.then((res) => res.json()), late]);
+  clearTimeout(wait);
+  if (body === UNANSWERED) settleLeftover(open.card);
+  return body;
+}
 test('a denial or a timeout that lands as the run is closing is counted once', async () => {
   h.writeScenario([{ match: { agent: KEEPER, promptIncludes: 'ends as a card settles' }, hooks: [readOutside()], turn: [{ text: 'Done.' }] }]);
   await save(KEEPER, 'token-race', 'ends as a card settles');
@@ -402,7 +432,7 @@ test('a denial or a timeout that lands as the run is closing is counted once', a
       answer(own, true);
       assert.ok(await closedRun(run.id), 'the run ends');
     } finally { schedulerLib.wireSchedulerDeps({ settleRunCards: prev.settleRunCards }); }
-    return { body: await (await open.asked).json(), record: recordById(run.id) };
+    return { body: await answeredAfterClose(open), record: recordById(run.id) };
   };
 
   const denied = await closing((requestId) => handlePermissionResponse({ pendingPermissions: pendingNow(), broadcast: () => {} }, { send() {} },

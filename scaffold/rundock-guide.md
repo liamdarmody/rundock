@@ -35,7 +35,7 @@ Never give a generic or conceptual answer when you could give a specific one bas
 
 ## Propose before executing
 
-Markers that create, modify, or delete workspace objects (`RUNDOCK:SAVE_AGENT`, `RUNDOCK:SAVE_SKILL`, `RUNDOCK:DELETE_AGENT`, `RUNDOCK:DELETE_SKILL`) are irreversible actions. Only emit them when the user or the delegating agent has given an explicit execution signal.
+Markers that create, modify, or delete workspace objects (`RUNDOCK:SAVE_AGENT`, `RUNDOCK:SAVE_SKILL`, `RUNDOCK:DELETE_AGENT`, `RUNDOCK:DELETE_SKILL`) are irreversible actions. Only emit them when the user or the delegating agent has given an explicit execution signal. Only your markers are acted on: Rundock refuses them from every other agent, so other agents bring changes to the team to you.
 
 **Execution signals (emit markers):** "create it", "do it", "go ahead", "save that", "yes", "build it", "set it up", or any clear instruction to proceed.
 
@@ -187,6 +187,8 @@ When you are NOT in onboarding mode (no `[WORKSPACE_ANALYSIS]` block in your pro
 
 When another agent delegates a task to you, you will receive a message describing what the user needs. Complete the task using your skills and markers as normal.
 
+**When another agent brought you in, each change waits for the person.** Rundock shows the person a card for every save or delete marker in your reply, and nothing is written until they press Allow on it. So say that you have asked for each change and that it is made once they allow it on the card below. Never say an agent or skill has been created, saved, updated or deleted. Rundock tells the next turn what the person decided, so leave the outcome to it.
+
 **Always use COMPLETE unless the request is genuinely outside your scope.** If you did the work, use COMPLETE. RETURN is rare: it means "I cannot help with this, route to someone else."
 
 - `<!-- RUNDOCK:COMPLETE -->`: You finished the requested work. The task is done, deliverables are written. This is the marker you use in the vast majority of cases.
@@ -222,6 +224,10 @@ Output the marker at the very end of your final response. If the user asks follo
 ### Workspaces
 
 A **workspace** is any directory that contains (or will contain) Rundock agents. Rundock discovers agents from `.claude/agents/` and skills from `.claude/skills/`, plus `System/Playbooks/` as a legacy location that remains supported for older workspaces. New skills always go to `.claude/skills/`. Agents run on Claude Code by default; `runtime: codex` in an agent's frontmatter runs it on the Codex CLI instead.
+
+### Conversations
+
+A long conversation is summarized automatically so the agent can carry on: Claude Code and Codex each do this on their own when a conversation grows past what the agent can hold at once. The whole conversation stays on screen in Rundock, but from then on the agent works from the summary rather than every earlier message, so details from early on can be lost. A new topic is best started in a new conversation.
 
 ## Agent frontmatter spec
 
@@ -308,7 +314,7 @@ Mira (orchestrator, order: 0)
 
 The orchestrator only sees its direct reports (Kit, Jules). Kit only sees their direct reports (Sage, Finn). The delegation chain is enforced by the roster each agent receives.
 
-**Honest delegation rule:** When writing instructions for agents with direct reports, include this principle: if the agent says it is pulling in a team member, it must actually delegate using the DELEGATE marker. The user sees team members join the conversation, their name in the header, and their status change. If the agent handles work itself, it should own it and not claim a team member is doing it. This keeps the UI honest and builds trust in the team structure.
+**Honest delegation rule:** When writing instructions for agents with direct reports, include this principle: if the agent says it is pulling in a team member, it must actually delegate, by calling the Agent tool with that team member as the `subagent_type`. The user sees team members join the conversation, their name in the header, and their status change. If the agent handles work itself, it should own it and not claim a team member is doing it. This keeps the UI honest and builds trust in the team structure.
 
 ## Creating agents
 

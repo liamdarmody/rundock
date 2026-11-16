@@ -43,22 +43,30 @@
 //     "refusalSplitAt": 0,           // write the refusal line in pieces
 //     "refusalPreamble": "...",      // stderr written just before the refusal
 //     "refusalAfterInit": false,     // send the init envelope before refusing
-//     "loadAgentFiles": false }      // read agent files as Claude Code does, and
+//     "loadAgentFiles": false,       // read agent files as Claude Code does, and
 //                                    // refuse an --agent no file loads for
 //                                    // (see AGENT_NOT_LOADED below)
+//     "refusalUntilFile": "..." }    // hold that refusal open until this file
+//                                    // exists, then exit as it would have
 // A crash rule may give "stderrChunks": [...] to write its stderr in pieces.
 // A crash rule may give "beforeSession": true to fail at startup, before the
 // session's transcript exists, as an expired login does.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
+// Any rule may give "untilFile": "<path>" to hold its turn until that file
+// exists, so a test decides the moment a run ends rather than racing a delay.
+// Any rule may give "holdAfterText": "<path>" to stream its turn's text and
+// hold the rest (the message's end and the result) until that file exists,
+// and "finishOnSigterm": true to have a SIGTERM write the rest at once and
+// exit, as a runtime that finishes its turn when asked to stop: see emitTurn.
 // A rule may give "shell": ["rm a.md", "mv b.md c.md"], commands the run
 // gives its shell tool. Each is put to the PreToolUse hooks the --settings
 // file names first, as Claude Code does, and really runs unless a hook or the
 // deny rules refuse it (see THE TOOL FLAGS below). `writes` entries are held
 // to the same deny rules, and a `writes` entry may give "content", the exact
 // text the write carries.
-// Any rule may give "hooks": [{ "event", "tool", "input", "error", "extra" }] to
-// run Rundock's real permission hook for each call, in order, before its turn:
-// see runHookCalls below.
+// Any rule may give "hooks": [{ "event", "tool", "input", "error", "extra",
+// "untilFile" }] to run Rundock's real permission hook for each call, in
+// order, before its turn: see runHookCalls below.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -76,8 +84,14 @@ const argv = process.argv.slice(2);
 // Version probe: answer immediately without touching stdin or the scenario,
 // so runtime detection never hangs on the stub. No invocation is logged for
 // version probes (they are not conversation spawns).
+//
+// The version is the Claude Code the stub's behaviour was last measured
+// against (test/fixtures/claude-cli-*.json), so it is one Rundock will start:
+// spawnClaude starts nothing older than the flags it passes. `-stub` is how a
+// test tells it from a real install. A test that needs another version sets
+// STUB_CLAUDE_VERSION, read on every probe.
 if (argv.includes('--version')) {
-  process.stdout.write('0.0.0-stub (Claude Code)\n');
+  process.stdout.write(`${process.env.STUB_CLAUDE_VERSION || '2.1.318-stub'} (Claude Code)\n`);
   process.exit(0);
 }
 
@@ -130,7 +144,12 @@ try {
       // The hook token this agent was started with, so a test can tell two
       // runs' tokens apart, and use one after its run has ended.
       RUNDOCK_HOOK_TOKEN: process.env.RUNDOCK_HOOK_TOKEN || null,
+      // The workspace the permission hook is told it is answering for.
+      RUNDOCK_WORKSPACE: process.env.RUNDOCK_WORKSPACE || null,
     },
+    // The folder this process was started in, which is also where this log
+    // and the scenario are read from.
+    cwd: process.cwd(),
   }) + '\n');
 } catch (e) { /* logging is best-effort */ }
 
@@ -420,9 +439,16 @@ const AGENT_NOT_LOADED = (() => {
   // before it refused, which puts the refusal last.
   if (TOP.refusalPreamble) writeErr(String(TOP.refusalPreamble));
   writeErr(`${agents.agentNotFoundLine(AGENT, available)}\n`);
-  exitWhenWritten(1);
+  whenFileExists(TOP.refusalUntilFile, () => exitWhenWritten(1));
   return true;
 })();
+
+// Carry on once `file` exists, or at once when no file is named. Polled, so a
+// test releases a held process by writing the file.
+function whenFileExists(file, then) {
+  if (!file || fs.existsSync(file)) { then(); return; }
+  setTimeout(() => whenFileExists(file, then), 20);
+}
 
 // Write stderr in pieces a moment apart, so each reaches the reader as its
 // own chunk, then carry on.
@@ -581,6 +607,20 @@ function emitTurn(rule, prompt) {
   // other and fills like any other, and a scenario that can only reach it by
   // crashing cannot exercise that at all.
   if (rule.stderr) writeErr(String(rule.stderr));
+  // A REPLY STILL BEING FINISHED. `holdAfterText` writes the turn up to the
+  // end of its text and holds the rest, the message's end and the result,
+  // until the named file exists. With `finishOnSigterm`, a SIGTERM no longer
+  // ends the process where it stands: the rest of the turn is written at once
+  // and the process exits once it has left, so the output log counts it.
+  if (rule.holdAfterText) {
+    const at = events.findIndex((e) => e.type === 'stream_event' && e.event && e.event.type === 'message_delta');
+    for (const e of events.slice(0, at)) writeOut(JSON.stringify(e) + '\n');
+    let held = events.slice(at);
+    const finish = () => { for (const e of held) writeOut(JSON.stringify(e) + '\n'); held = []; };
+    if (rule.finishOnSigterm) process.on('SIGTERM', () => { finish(); exitWhenWritten(0); });
+    whenFileExists(rule.holdAfterText, () => { finish(); if (PRINT) exitWhenWritten(0); });
+    return;
+  }
   if (rule.singleChunk) {
     // One write -> one 'data' chunk on the server side (small payloads do not
     // get split by the pipe). Used to pin per-chunk guard behavior.
@@ -683,10 +723,10 @@ function handleUserMessage(content) {
     return;
   }
   const delay = rule.delayMs || 0;
-  const speak = () => {
+  const speak = () => whenFileExists(rule.untilFile, () => {
     if (delay > 0) setTimeout(() => emitTurn(rule, content), delay);
     else emitTurn(rule, content);
-  };
+  });
   if (Array.isArray(rule.hooks)) runHookCalls(rule.hooks, speak);
   else speak();
 }
@@ -701,7 +741,8 @@ function handleUserMessage(content) {
 // call's error, for PostToolUseFailure; `extra` sets fields of the payload, as
 // the runtime adds `agent_id` and `agent_type` for a call a subagent makes, or
 // a nested `claude` sends a session of its own, and a field set to null is
-// left out, as a call that names no session would.
+// left out, as a call that names no session would. `untilFile` holds the call
+// until that file exists, so a test decides what happens between two calls.
 const HOOK_LOG = path.join(process.cwd(), 'stub-hook-answers.jsonl');
 const PERMISSION_HOOK = path.join(__dirname, '..', '..', '..', 'scripts', 'permission-hook.js');
 function runHookCalls(calls, then) {
@@ -709,6 +750,7 @@ function runHookCalls(calls, then) {
   const next = () => {
     if (at >= calls.length) { then(); return; }
     const call = calls[at++] || {};
+    if (call.untilFile && !fs.existsSync(call.untilFile)) { at--; setTimeout(next, 20); return; }
     const event = call.event || 'PreToolUse';
     const input = {
       session_id: SESSION_ID, hook_event_name: event, tool_name: call.tool || 'Bash', tool_input: call.input || {}, cwd: process.cwd(),

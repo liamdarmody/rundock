@@ -36,8 +36,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
 // ---------------------------------------------------------------------------
-// Locked roster (from the spec's "Demo workspace roster and skills"). Names,
-// roles, order and reportsTo are verbatim; colour and icon are fixed here for
+// Locked roster. Names, roles, order and reportsTo are fixed so every capture
+// shows the same team; color and icon are fixed here too, for
 // deterministic, pleasant avatars rather than relying on the server's rotating
 // defaults (which depend on directory read order). Ana and Cody carry hues that
 // are deliberately distinct from their leads (Cleo, Dev), so the two most

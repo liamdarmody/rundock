@@ -14,6 +14,8 @@
 //
 // Through the real hook where the question is what a person sees; in process
 // where the question is a registry or a settings file.
+// Its turns run the guard, which watches the home folder's shell startup files.
+require('../helpers/made-up-home.js');
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -292,8 +294,9 @@ describe('the OS sandbox block is unchanged', () => {
     const block = scaffold.sandboxSettings('/w/ws', 'darwin', '/Users/someone', ['/var/folders/zz/T', '/private/var/folders/zz/T'], ['/Users/someone/Projects'], 'code');
     // Recorded from v0.15.0 with these exact inputs. The one change since is
     // entries APPENDED to denyWrite: the runtimes' credential files, the
-    // user-level state file, and the paths the runtime acts on outside the
-    // sandbox, which narrows what the block permits and widens nothing.
+    // user-level state file, the paths the runtime acts on outside the
+    // sandbox, and the shell startup files, which narrows what the block
+    // permits and widens nothing.
     assert.deepStrictEqual(block, {
       enabled: false,
       filesystem: {
@@ -311,6 +314,11 @@ describe('the OS sandbox block is unchanged', () => {
           '/Users/someone/.claude-local-oauth.json', '/Users/someone/.claude-custom-oauth.json',
           '/w/ws/.claude/settings.json', '/w/ws/.mcp.json', '/w/ws/.rundock/permission-hook.sh', '/w/ws/.rundock/mcp-secrets.json',
           '/Users/someone/.rundock-console',
+          '/Users/someone/.zshenv', '/Users/someone/.zprofile', '/Users/someone/.zshrc', '/Users/someone/.zlogin', '/Users/someone/.zlogout',
+          '/Users/someone/.bash_profile', '/Users/someone/.bash_login', '/Users/someone/.profile', '/Users/someone/.bashrc', '/Users/someone/.bash_logout',
+          '/Users/someone/.config/fish/config.fish', '/Users/someone/.config/fish/conf.d',
+          // Rundock's record of them, and a ZDOTDIR's own when this process has one.
+          ...hook.shellStartupEntries('/Users/someone').slice(12).map(e => e.path),
         ],
       },
     }, 'the development paths are a card rule, not a widening of what the operating system allows');
@@ -467,9 +475,12 @@ describe('another workspace\'s answer files and agents, reached through a named 
     assert.strictEqual(r.cls, 'runs');
   });
 
-  test('this workspace\'s own agents are its own to edit', async () => {
+  // Agents and skills in a workspace are changed only by Doc, so a file tool
+  // is refused there in Code mode too (isWorkspaceTeamFolderEdit), with no card.
+  test('this workspace\'s own agents are refused to a file tool, with no card', async () => {
     const r = await fx.judge(world, capture, deadPort, { tool: 'Edit', input: { file_path: path.join(world.ws, '.claude', 'agents', 'mine.md'), old_string: 'a', new_string: 'b' }, cwd: world.app });
-    assert.strictEqual(r.cls, 'runs');
+    assert.strictEqual(r.cls, 'refused');
+    assert.match(r.live.reason, /changed only by Doc/);
   });
 
   test('this workspace\'s own .claude/settings.json is an answer file, and a project\'s is ordinary work', async () => {

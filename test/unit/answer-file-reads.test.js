@@ -31,20 +31,8 @@ after(async () => {
   if (root.dir) fs.rmSync(root.dir, { recursive: true, force: true });
 });
 
-const READS = [
-  'tail .rundock/permissions.json', 'tail -c 400 .rundock/permissions.json', 'cat .rundock/permissions.json', 'od -c .rundock/permissions.json',
-  'head -5 .rundock/state.json', 'ls -l .rundock/permissions.json', 'wc -l .claude/settings.local.json', 'grep allow .rundock/permissions.json',
-  'cat .claude/settings.json', 'hexdump -C .rundock/permissions.json', 'tail -c 200 .rundock/permissions.json; echo; od -c .rundock/state.json',
-  'cat .rundock/permissions.json && echo done > build.log', 'tail .rundock/permissions.json | wc -l',
-  // A copy out of one reads it: what is written is the copy.
-  'cat .rundock/permissions.json > copy.json', 'cp .rundock/permissions.json copy.json',
-];
-const WRITES = [
-  'echo x > .rundock/permissions.json', 'echo x >> .rundock/state.json', 'cat x > .claude/settings.local.json', 'tee .rundock/permissions.json',
-  'echo x | tee -a .rundock/state.json', 'sed -i s/a/b/ .rundock/permissions.json', 'cp x .rundock/permissions.json', 'mv x .claude/settings.json',
-  'rm .rundock/permissions.json', 'cat .rundock/permissions.json; echo x > .rundock/permissions.json',
-  'truncate -s 0 .rundock/state.json', 'ln -sf x .rundock/permissions.json',
-];
+// The tables, shared with the other suites that judge the same commands.
+const { PERMISSION_FILE_READS: READS, PERMISSION_FILE_WRITES: WRITES } = require('../fixtures/bash-reads.js');
 
 const scan = (command) => hook.classifyShellAccess('Bash', { command }, world.ws, [world.projects], world.home, true, { cwd: world.ws, codeMode: true });
 const answerFile = (a) => !!(a && hook.boundaryCrossingsFor(a).some(c => c && c.answerFile));

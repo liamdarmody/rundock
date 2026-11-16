@@ -17,6 +17,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { ciVerdict, REQUIRED_CI_CHECKS } = require('../../scripts/release-ci.js');
+const { readWorkflow } = require('../helpers/workflow-text.js');
 
 const TREE = 'a'.repeat(40);
 const OTHER_TREE = 'b'.repeat(40);
@@ -165,5 +166,23 @@ describe('the required check names are the ones CI actually runs', () => {
     assert.ok(REQUIRED_CI_CHECKS.includes('Mutation guards'), 'the release demands the mutation check main demands');
     assert.ok(expanded.length >= 7 && nodes.length >= 2, `sanity: the workflow's job names were read (found ${expanded.length})`);
     for (const name of REQUIRED_CI_CHECKS) assert.ok(expanded.includes(name), `${name} is a CI job (found: ${expanded.join(', ')})`);
+  });
+
+  // Required checks match by name across workflows, so a nightly job named
+  // like one would report that check on any commit the sweep ran on, without
+  // the scoped run behind it. A name holding an expression could become
+  // anything there, so it is read as matching anything there.
+  test('no job in the nightly mutation sweep is named like a required check', () => {
+    const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const like = (name) => new RegExp(`^${name.split(/\$\{\{[^}]*\}\}/).map(escape).join('.+')}$`);
+    assert.ok(like('Mutation ${{ matrix.part }}').test('Mutation guards'), 'sanity: an expression in a name matches anything');
+    assert.ok(!like('Sweep shard ${{ matrix.shard }}').test('Mutation guards'), 'sanity: the rest of the name must match');
+    const names = Object.values(readWorkflow('mutation-nightly.yml').jobs).map((job) => job.name || job.id);
+    assert.ok(names.length >= 3 && names.some((n) => n.includes('${{')), `sanity: the nightly job names were read (${names.join(', ')})`);
+    for (const name of names) {
+      for (const check of REQUIRED_CI_CHECKS) {
+        assert.ok(!like(name).test(check), `the nightly job "${name}" is named like the required check "${check}"`);
+      }
+    }
   });
 });

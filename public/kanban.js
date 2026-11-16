@@ -528,8 +528,7 @@
    * Sort a lane's cards in place. by = 'text' (display text, natural
    * case-insensitive) or 'tags' (first #tag alphabetically, untagged last).
    * Byte-safe by construction (any permutation of card blocks is valid);
-   * ORDER parity with the plugin's comparator is approximate, noted in the
-   * format spec.
+   * ORDER parity with the plugin's comparator is approximate.
    */
   function sortLane(board, laneIndex, by) {
     const lane = board.lanes[laneIndex];

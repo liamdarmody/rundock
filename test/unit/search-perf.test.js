@@ -1,6 +1,6 @@
 'use strict';
-// SR1 perf verification (spec: timed search on a 10k-message synthetic
-// workspace, budget under 100ms server-side). Deliberately generous
+// Search speed: a timed search on a 10k-message synthetic workspace, with
+// a budget under 100ms server-side. Deliberately generous
 // assertions relative to observed times (~1-5ms) so CI machines with noisy
 // neighbours don't flake, while still catching order-of-magnitude
 // regressions (e.g. an accidental table scan or per-hit file read).

@@ -81,17 +81,21 @@ jobs:
 
       # Every harness the selector discovers in test/tools/, so a new harness
       # is in the sweep the day it lands, with no list to update. Writing the
-      # plan runs nothing.
+      # plan runs nothing. Finding no harness at all fails this step rather
+      # than planning zero shards, which would read as a pass.
       - name: Shard every harness
         id: plan
         run: node scripts/mutation-scope.js --all --plan --out mutation-plan.json
 
+      # Overwrite, because a re-run of this job keeps the run, and the first
+      # attempt's artifact of this name would refuse a second upload.
       - name: Keep the plan for the shards and the verdict
         uses: actions/upload-artifact@v7
         with:
           name: mutation-plan
           path: mutation-plan.json
           retention-days: 7
+          overwrite: true
 
   mutation-shard:
     name: Sweep shard ${{ matrix.shard }}
@@ -138,10 +142,36 @@ jobs:
           --plan-file mutation-plan.json --verdict "verdict-$SHARD.json"
 
       # The tools restore what they mutate, including when a run throws. A
-      # shard that leaves any file modified is itself worth seeing.
+      # shard that leaves any file modified fails here, naming each file in
+      # this log and in the job summary. The verdict above can still say pass:
+      # what makes this failure count is the verdict job reading the shard
+      # jobs' result, which nothing the shard uploads can rewrite afterwards.
+      # As in ci.yml, a harness that restores or hides its own leftovers
+      # before this runs, or changes what it runs with, is outside it. The
+      # same check as ci.yml's, and run always() for the same reason: a shard
+      # whose guard survived is checked as well.
       - name: Fail if any tool left a file modified
-        run: git diff --exit-code
+        if: always()
+        run: |
+          modified="$(git diff --name-only HEAD)"
+          if [ -z "$modified" ]; then
+            echo "No tool left a file modified."
+            exit 0
+          fi
+          echo "::error title=A tool left files modified::$(printf '%s' "$modified" | tr '\n' ' ')"
+          echo "A tool left these files modified:"
+          printf '%s\n' "$modified" | sed 's/^/  /'
+          git --no-pager diff HEAD
+          {
+            echo '## A tool left files modified'
+            echo
+            printf '%s\n' "$modified" | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
+      # Overwrite, because "Re-run failed jobs" keeps the run, and the first
+      # attempt's verdict of this name would refuse a second upload: the re-run
+      # shard would fail here however clean its run, and the check stay red.
       - name: Keep this shard's verdict, whether it passed or not
         if: always()
         uses: actions/upload-artifact@v7
@@ -150,6 +180,7 @@ jobs:
           path: verdict-${{ matrix.shard }}.json
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
 
   mutation-sweep:
     name: Complete set verdict
@@ -176,11 +207,16 @@ jobs:
 
       # Pass, fail, or no verdict. A shard that wrote no verdict (it died, was
       # cancelled or timed out) is no verdict for that shard, and the sweep
-      # ends non-green, titled "No verdict".
+      # ends non-green, titled "No verdict". As in ci.yml, the shard jobs'
+      # result goes in beside the verdicts, and anything but success is not
+      # green: a shard that left a file modified uploaded a passing verdict
+      # from a failed job, and nothing it uploads can rewrite how that job
+      # ended.
       - name: One outcome from every shard
         env:
           PLAN_RESULT: ${{ needs.mutation-plan.result }}
+          SHARDS_RESULT: ${{ needs.mutation-shard.result }}
         run: >-
           node scripts/mutation-scope.js --aggregate
           --plan-file mutation/mutation-plan.json --verdicts mutation
-          --plan-result "$PLAN_RESULT"
+          --plan-result "$PLAN_RESULT" --shards-result "$SHARDS_RESULT"

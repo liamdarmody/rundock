@@ -52,7 +52,20 @@ const FAILED_LINE = 'RUN STATUS: failed: <one-line reason>';
 // carry on without what was refused, save the work, and end on the line the
 // record reads. `RUN STATUS: succeeded` is accepted and changes nothing, so
 // a run that finished can say so without risk.
-const UNATTENDED_RUN = 'Nobody is watching this run, so nobody can answer a question or approve a step. Do not ask, and do not wait for a reply: work from what you have, and if a step is refused, carry on with the rest of the job without it. Save the work in the workspace as you go. End your final message with the line RUN STATUS: succeeded, or, if you could not finish, make its last line: ' + FAILED_LINE;
+//
+// TWO LINES, BUILT FROM THE SAME PARTS, because one sentence is true on only
+// one runtime. On Claude Code, in Notes mode, a shell command that changes
+// files asks for approval; nobody can give it, so the step is refused, and the
+// refusal says not to try another way, so a run that moved or copied a file
+// with the shell stops there. Its file tools save the same work with no card,
+// so a Claude Code routine (UNATTENDED_RUN) is told to use them. A Codex
+// routine (UNATTENDED_RUN_CODEX) is not: its thread runs with approvals set to
+// never, so nothing it runs asks, and its tools are not Write and Edit.
+const RUN_OPENS = 'Nobody is watching this run, so nobody can answer a question or approve a step. Do not ask, and do not wait for a reply: work from what you have, and if a step is refused, carry on with the rest of the job without it. Save the work in the workspace as you go.';
+const RUN_FILE_TOOLS = 'To create, change or copy a file in the workspace, use your file tools (Write and Edit) rather than the shell: a shell command that changes files can need an approval that nobody here can give.';
+const RUN_ENDS = 'End your final message with the line RUN STATUS: succeeded, or, if you could not finish, make its last line: ' + FAILED_LINE;
+const UNATTENDED_RUN = `${RUN_OPENS} ${RUN_FILE_TOOLS} ${RUN_ENDS}`;
+const UNATTENDED_RUN_CODEX = `${RUN_OPENS} ${RUN_ENDS}`;
 
 // `kind` is 'denied', 'timeout' or 'sandbox'. Anything else is no refusal,
 // and gets no line. `unattended` is true only for a run nobody can be asked
@@ -102,4 +115,4 @@ function sandboxBlocked(toolName, toolInput, text, { codeMode = false, platform 
   return !sandboxOff && NOT_PERMITTED.test(out);
 }
 
-module.exports = { refusalNotice, unansweredNotice, approvalNotice, sandboxBlocked, UNATTENDED_NEXT, UNATTENDED_RUN, FAILED_LINE };
+module.exports = { refusalNotice, unansweredNotice, approvalNotice, sandboxBlocked, UNATTENDED_NEXT, UNATTENDED_RUN, UNATTENDED_RUN_CODEX, FAILED_LINE };

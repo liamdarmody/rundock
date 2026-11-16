@@ -213,6 +213,67 @@ describe('the workspace boundary says what it enforces, per platform', () => {
   });
 });
 
+describe('ARCHITECTURE.md: what happens to a call when the permission hook fails', () => {
+  // The claim: on Claude Code 2.1.295 and later a failing permission hook
+  // blocks the call, earlier versions let it through with the hook's own
+  // refusal the only answer, and a wrong value for the field voids the whole
+  // settings file, which is why only one constant is ever written. A reader
+  // trusting the first half while the field had quietly gone from the entries
+  // would be trusting a block that is not there, so the value the passage
+  // quotes is checked against what an open actually writes.
+  const scaffoldLib = require('../../lib/workspace/scaffold.js');
+  const passage = architecture.split('\n\n').find((p) => p.includes('onFailure') && p.includes('2.1.295 and later')) || '';
+
+  test('the passage gives the outcome by version, as observed, and says why only the constant is written', () => {
+    assert.ok(passage, 'a paragraph names the field and the versions that honor it');
+    assert.match(passage, /2\.1\.294/, 'and the last version observed to ignore it');
+    assert.match(passage, /[Oo]bserved/, 'stated as observed, not as a guess');
+    assert.match(passage, /hook's own refusal is the only answer/, 'before 2.1.295 the hook alone answers');
+    assert.match(passage, /skip the whole settings file/, 'a wrong value voids the file');
+    assert.match(passage, /only the constant is ever written/, 'and that is why one constant is written');
+    assert.match(passage, /`HOOK_ON_FAILURE`/, 'naming it');
+    assert.doesNotMatch(passage, /\/Users\/|\/home\/|[A-Z]:\\/, 'with no personal paths');
+    assert.doesNotMatch(architecture, /registration does not set/, 'the sentence saying Rundock does not set it is gone');
+  });
+
+  test('the value the passage quotes is the one every PreToolUse entry gets, and no PostToolUse entry', () => {
+    const quoted = passage.match(/`"onFailure": "([^"]*)"`/);
+    assert.ok(quoted, 'the passage quotes the field as it is written');
+    assert.strictEqual(quoted[1], scaffoldLib.HOOK_ON_FAILURE, 'the quoted value is the constant');
+    const dir = useWorkspace({ claudeMd: '# x' });
+    srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf-8'));
+    assert.strictEqual(settings.hooks.PreToolUse.length, 4);
+    for (const e of settings.hooks.PreToolUse) assert.strictEqual(e.hooks[0].onFailure, quoted[1], `${e.matcher} carries it`);
+    for (const event of ['PostToolUse', 'PostToolUseFailure']) {
+      for (const e of settings.hooks[event]) assert.ok(!('onFailure' in e.hooks[0]), `${event} does not`);
+    }
+  });
+
+  test('going back to an earlier release keeps the field, as the record the passage names shows', () => {
+    const named = passage.match(/`(scripts\/hook-on-failure-undo\/[a-z-]+\.json)`/);
+    assert.ok(named, 'the passage names the record');
+    const record = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', named[1]), 'utf-8'));
+    assert.match(passage, new RegExp(`the ${record.release.replace(/\./g, '\\.')} release's own scaffold`), 'the release the passage names is the one recorded');
+    assert.match(passage, /left the settings file byte for byte/);
+    assert.strictEqual(record.releaseChangedTheFile, false, 'and the record says the release left it as it was');
+    assert.deepStrictEqual(record.leftByRelease, record.written);
+    assert.match(passage, /renamed over it only once that write has finished/, 'the passage says the file is written whole');
+  });
+});
+
+describe('ARCHITECTURE.md: the oldest Claude Code Rundock starts', () => {
+  // The number a contributor reads is the one the flag table derives, so a
+  // flag that raises the floor fails here until the sentence says so.
+  test('the runtime section names the floor the flag table derives, and where the table is', () => {
+    const { FLOOR } = require('../../lib/runtime/claude-floor.js');
+    const paragraph = architecture.split('\n').find((line) => line.includes('`lib/runtime/claude-floor.js`'));
+    assert.ok(paragraph, 'the runtime section names the flag table');
+    assert.ok(paragraph.includes(`below ${FLOOR}, the first release that accepts every flag Rundock passes`),
+      `and the floor it derives, ${FLOOR}`);
+  });
+});
+
 describe('SKILLS.md: only slugs are injected into the prompt', () => {
   // The claim: "Rundock injects a bare list of slugs into the agent's prompt
   // (`Skills: alpha, beta`) and nothing else: no description, no summary."
@@ -438,6 +499,32 @@ describe('ROUTINES.md: the child\'s output is discarded, and its stderr kept onl
     assert.ok(UNATTENDED_RUN.endsWith(FAILED_LINE), 'and both lines end on the same failure line, as it says');
     assert.match(paragraph, /doc-claims\.test\.js/, 'the paragraph names the test that pins it');
   });
+
+  // The claim: a Claude Code routine is also told to change workspace files
+  // with its file tools, word for word as the page quotes it, and a Codex
+  // routine is not. The page quotes the sentence, so a rewording on either
+  // side fails here. The Codex half is read through the real spawn path in
+  // test/integration/routine-unattended-line.test.js.
+  test('a Claude Code routine is told to use its file tools, and a Codex routine is not, as the page says', () => {
+    const { UNATTENDED_RUN, UNATTENDED_RUN_CODEX, FAILED_LINE } = require('../../scripts/refusal-notice.js');
+    const FILE_TOOLS = 'To create, change or copy a file in the workspace, use your file tools (Write and Edit) rather than the shell: a shell command that changes files can need an approval that nobody here can give.';
+    const { args } = whatTheSpawnIsAskedFor();
+    const line = args[args.indexOf('--append-system-prompt') + 1];
+    assert.ok(line.includes(`Save the work in the workspace as you go. ${FILE_TOOLS} End your final message`),
+      'the Claude Code line carries the sentence, straight after saving the work');
+    assert.ok(!UNATTENDED_RUN_CODEX.includes(FILE_TOOLS), 'the Codex line does not');
+
+    const paragraph = routinesDoc.split('\n').find(l => l.startsWith('**Every routine run is told that nobody is watching.**'));
+    assert.ok(paragraph, 'ROUTINES.md says what every routine run is told');
+    assert.ok(paragraph.includes(`A Claude Code routine's line also says, straight after the part about saving its work: "${FILE_TOOLS}"`),
+      'the page quotes the sentence word for word, and says where it sits');
+    assert.match(paragraph, /In Notes mode a shell command that changes files asks for approval/, 'and why it is said');
+    assert.match(paragraph, /A Codex routine is not told this: its thread runs with approvals set to never, so nothing it runs asks, and its tools are not called Write and Edit\./,
+      'and that Codex is not told it, and why');
+    assert.ok(UNATTENDED_RUN.endsWith(FAILED_LINE) && UNATTENDED_RUN_CODEX.endsWith(FAILED_LINE),
+      'both routine lines end on the same failure line');
+    assert.match(paragraph, /both routine lines end on the same failure line it does\./, 'as it says');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -501,6 +588,18 @@ describe('ROUTINES.md: the hook experiment reports the capture\'s own numbers', 
     assert.match(routinesDoc, /runs again at its next slot/,
       'and must say the routine is released, because a routine that could be stopped and never ran '
       + 'again would be worse than one that could not be stopped');
+  });
+
+  test('a run that used the shell is said to be one, on the record and on the run screen', () => {
+    // A shell write is not on the list, and the page used to stop there. The
+    // record now says when the shell was used, under the field name the
+    // scheduler writes, and the run screen says what that means for the list.
+    assert.match(routinesDoc, /The record says when the run used the shell \(`usedShell: true`\), and the run screen says so under the list/,
+      'ROUTINES.md must say the run screen tells you when a run used the shell');
+    assert.ok(fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8').includes('{ usedShell: true }'),
+      'the field the page names is the one the scheduler writes');
+    assert.doesNotMatch(routinesDoc, /shell command is invisible/,
+      'the page no longer says only that shell writes are invisible');
   });
 
   test('the word a restart-orphaned record reports is the routine state\'s own', () => {
@@ -634,6 +733,207 @@ describe('ROUTINES.md: same-day catch-up', () => {
 });
 
 // ---------------------------------------------------------------------------
+// docs/ROUTINES.md: the run guard, said by time
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: the run guard holds a slot by time, not by hour', () => {
+  const { getNextRun, wireSchedulerDeps } = require('../../lib/scheduler.js');
+  // The paragraph that says what the guard does, found by its first words.
+  const paragraph = routinesDoc.split('\n').find(line => line.startsWith('Each routine has a `lastRun` guard.')) || '';
+
+  // The claim, asked of getNextRun at a fixed instant rather than the wall
+  // clock, so it says the same thing whenever the suite runs. Friday 3 July
+  // 2026, built from local components.
+  const friday = (hour, minute) => new Date(2026, 6, 3, hour, minute);
+  function askedAt(now, schedule, lastRun) {
+    const previous = wireSchedulerDeps({ now: () => now });
+    try {
+      return getNextRun(schedule, lastRun.toISOString());
+    } finally {
+      wireSchedulerDeps(previous);
+    }
+  }
+
+  test('the doc states the guard by time and says what a later time on the same day does', () => {
+    assert.match(paragraph, /Daily and weekly routines do not re-fire once they have run at or after their scheduled time in that period/,
+      'ROUTINES.md must state the guard by time');
+    assert.match(paragraph, /Moving one to a later time on a day it has already run makes it run again at the new time, including a later time that has already gone/,
+      'ROUTINES.md must say what a move to a later time on the same day does');
+    assert.match(paragraph, /A run still going at the new time counts for it/);
+    assert.doesNotMatch(paragraph, /scheduled hour|same weekday/,
+      'ROUTINES.md must not keep the rule by hour, or by weekday alone, beside it');
+  });
+
+  for (const schedule of ['every day at 20:30', 'every friday at 20:30']) {
+    test(`a run stamped at 20:03 does not hold a 20:30 slot: ${schedule}`, () => {
+      assert.deepStrictEqual(askedAt(friday(20, 30), schedule, friday(20, 3)), friday(20, 30),
+        'moved to 20:30 after a run at 20:01, it runs at 20:30');
+    });
+
+    test(`a run stamped at 20:31 holds the 20:30 slot: ${schedule}`, () => {
+      assert.strictEqual(askedAt(friday(20, 45), schedule, friday(20, 31)), null,
+        'having run at 20:30, it does not re-fire that day');
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// docs/ROUTINES.md: a monthly schedule, and its window
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: a monthly routine runs once a month and catches up within it', () => {
+  const { getNextRun, wireSchedulerDeps } = require('../../lib/scheduler.js');
+  const section = (heading) => {
+    const start = routinesDoc.indexOf(`\n## ${heading}\n`);
+    const end = routinesDoc.indexOf('\n## ', start + 1);
+    return start === -1 ? '' : routinesDoc.slice(start, end === -1 ? undefined : end);
+  };
+  const format = section('Schedule format');
+  const behaviour = section('Scheduler behaviour');
+
+  // Asked at fixed instants in October 2026, built from local components.
+  const october = (day, hour, minute = 0) => new Date(2026, 9, day, hour, minute);
+  function askedAt(now, schedule, lastRun) {
+    const previous = wireSchedulerDeps({ now: () => now });
+    try {
+      return getNextRun(schedule, lastRun ? lastRun.toISOString() : null);
+    } finally {
+      wireSchedulerDeps(previous);
+    }
+  }
+  const DAY_15 = 'on day 15 of every month at 09:00';
+
+  test('the format table gives both monthly forms, and says why 29 to 31 are refused', () => {
+    assert.match(format, /\| `on day N of every month at HH:MM` \|.*N is a day from 1 to 28/,
+      'ROUTINES.md must give the day-of-month form with its range');
+    assert.match(format, /\| `on the last day of every month at HH:MM` \|/, 'and the last-day form');
+    assert.match(format, /Days 29, 30 and 31 are refused, because they are not in every month, and Rundock will not move a slot to another date/,
+      'and why the days some months lack are refused');
+  });
+
+  test('both forms parse, and day 31 does not', () => {
+    assert.ok(askedAt(october(1, 8), DAY_15, null), 'the day-of-month form is read');
+    assert.ok(askedAt(october(1, 8), 'on the last day of every month at 18:00', null), 'and the last-day form');
+    assert.strictEqual(askedAt(october(1, 8), 'on day 31 of every month at 09:00', null), null, 'day 31 is not');
+  });
+
+  test('the catch-up section gives the monthly window, and what is never owed', () => {
+    assert.match(behaviour, /A monthly routine catches up within its month\./);
+    assert.match(behaviour, /runs once, at the first tick Rundock is open later in the same month, and its row marks the run as late/);
+    assert.match(behaviour, /If the month ends first, it does not run, and the slot is recorded as missed/);
+    assert.match(behaviour, /not owed at all if it passed before the routine existed, while it was paused or switched off, or before its plan was approved/);
+    assert.match(behaviour, /A monthly routine does not re-fire once it has run at or after its scheduled time in that month/,
+      'and the guard sentence covers the monthly period');
+  });
+
+  // What a late monthly run carries is its record's dueAt, and its row marks it
+  // late, naming when it was due.
+  test('the catch-up section says the record carries dueAt, and the row marks a late run', () => {
+    assert.match(behaviour, /Its run record names the slot it was due at, in a `dueAt` field, on every scheduled run/);
+    assert.match(behaviour, /its row marks the run as late, naming when it was due/);
+  });
+
+  test('a slot earlier this month is still due', () => {
+    assert.deepStrictEqual(askedAt(october(20, 10), DAY_15, null), october(15, 9),
+      'on the 20th, the 15th is still owed and the next tick fires it');
+  });
+
+  test("last month's slot is not", () => {
+    const next = askedAt(october(2, 10), DAY_15, null);
+    assert.deepStrictEqual(next, october(15, 9), "on 2 October, the next run is this month's, not September's");
+  });
+
+  test('one that ran this month is suppressed', () => {
+    assert.strictEqual(askedAt(october(25, 10), DAY_15, october(20, 10, 5)), null,
+      'having caught up on the 20th, it is not due again that month');
+  });
+
+  // The row's word for a late run is the model's own lead, read off it, so the
+  // page and the row cannot part company on it.
+  test('the page calls a late run what the row calls it', () => {
+    const { OUTCOMES, CATCH_UP_AFTER_MS } = require('../../public/routines-model.js');
+    const lead = OUTCOMES['caught-up'].lead;
+    assert.strictEqual(lead, 'Ran late');
+    assert.match(routinesDoc, /The row's on-time, ran-late and missed verdicts are computed from scheduled runs only/,
+      'the verdict words follow the row');
+    assert.ok(behaviour.includes(`its row then leads with **${lead}**, naming when it started and when it was due`),
+      'and so does the description of a late run');
+    assert.match(behaviour, new RegExp(`A run counts as late from ${CATCH_UP_AFTER_MS / 60000} minutes after its slot\\.`));
+    assert.doesNotMatch(routinesDoc, /caught-up verdict|Caught up:/, 'the old word is gone from the page');
+  });
+
+  test('the page no longer says there are only two forms, or a run once per day or week', () => {
+    assert.doesNotMatch(routinesDoc, /only two patterns|the two forms that work|both forms that work|two accepted forms|once per day or week/,
+      'every sentence that counted two forms follows the change');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/ROUTINES.md: a routine on a set of days
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: a routine on a set of days', () => {
+  const { getNextRun, parseSchedule, wireSchedulerDeps } = require('../../lib/scheduler.js');
+  const editor = require('../../public/routine-editor-model.js');
+  const section = (heading) => {
+    const start = routinesDoc.indexOf(`\n## ${heading}\n`);
+    const end = routinesDoc.indexOf('\n## ', start + 1);
+    return start === -1 ? '' : routinesDoc.slice(start, end === -1 ? undefined : end);
+  };
+  const format = section('Schedule format');
+  const behaviour = section('Scheduler behaviour');
+
+  test('the format table gives the weekday form and the list form, and the examples parse', () => {
+    assert.match(format, /\| Every weekday \| `every weekday at HH:MM` \| Monday to Friday\./);
+    assert.match(format, /\| A list of days \| `every <day>, <day> and <day> at HH:MM` \| Full day names, in any order, joined by commas and a final `and`/);
+    for (const schedule of ['every weekday at 08:30', 'every monday, wednesday and friday at 18:00',
+      'every saturday and sunday at 10:00', 'every monday, wednesday and sunday at 09:00']) {
+      assert.ok(format.includes(schedule), `the format section no longer gives ${schedule}`);
+      assert.ok(parseSchedule(schedule), `${schedule} is given as working and does not parse`);
+    }
+    for (const schedule of ['every mon and fri at 18:00', 'every monday, friday at 18:00']) {
+      assert.ok(format.includes(`schedule: ${schedule}`), `the format section no longer warns about ${schedule}`);
+      assert.strictEqual(parseSchedule(schedule), null, `${schedule} is given as never firing and parses`);
+    }
+  });
+
+  // The page says the catch-up in the editor's own words, read off the model,
+  // so the two cannot say it differently.
+  test('the page says the catch-up as the editor does, and no longer as "the same day"', () => {
+    const said = editor.WORKSPACE_CAVEAT.slice(editor.WORKSPACE_CAVEAT.lastIndexOf('A missed slot'));
+    assert.strictEqual(said, 'A missed slot is caught up if Rundock is open again that day.');
+    assert.ok(behaviour.includes(said), 'the catch-up sentence is the editor\'s');
+    assert.doesNotMatch(routinesDoc, /caught up the same day/);
+  });
+
+  test('the page never mentions public holidays', () => {
+    assert.doesNotMatch(routinesDoc, /holiday/i);
+  });
+
+  // Asked at fixed instants in November 2026, built from local components.
+  // 6 November is a Friday.
+  const november = (day, hour, minute = 0) => new Date(2026, 10, day, hour, minute);
+  function askedAt(now, schedule) {
+    const previous = wireSchedulerDeps({ now: () => now });
+    try {
+      return getNextRun(schedule, null);
+    } finally {
+      wireSchedulerDeps(previous);
+    }
+  }
+
+  test('the catch-up section says what a set of days does on a day it leaves out, and it does', () => {
+    assert.match(behaviour, /A routine on a set of days catches up on each chosen day, as a weekly one does\./);
+    assert.match(behaviour, /A day the set leaves out has no slot: the routine does not run that day, catches nothing up on it, and the day is never recorded as missed\./);
+    assert.match(behaviour, /closed through Friday's slot and opened on Saturday does not run on Saturday: its row says Friday's slot was missed, and names Monday as the next run/);
+    assert.deepStrictEqual(askedAt(november(6, 14), 'every weekday at 09:00'), november(6, 9),
+      'on Friday afternoon, Friday\'s slot is still owed');
+    assert.deepStrictEqual(askedAt(november(7, 10), 'every weekday at 09:00'), november(9, 9),
+      'on Saturday, the next is Monday\'s');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // docs/ROUTINES.md: where a routine actually runs
 //
 // The page RECOMMENDS keeping Rundock on a VPS with the workspace synced. Two
@@ -717,26 +1017,35 @@ describe('ROUTINES.md: where a routine actually runs', () => {
   //
   // ASSERTED AGAINST THE SOURCE BECAUSE THE CLAIM IS THAT NOTHING EXISTS, and
   // a behavioural test can only ever show that one particular thing did not
-  // happen. Read at the time of writing: the file is named in exactly three
-  // places in lib/scheduler.js, one comment, one read inside loadRoutineState
-  // and one write inside saveRoutineState, and no watcher anywhere in the
-  // server names it.
-  test('nothing but the load ever reads the state file', () => {
+  // happen. Read at the time of writing: the file is named in lib/scheduler.js
+  // in comments, in one read inside loadRoutineState, in one write inside the
+  // save, and in one read of a workspace that is NOT open, for a run of it that
+  // ends with no state carried. That last read fills only the state carried for
+  // that workspace, which the tick never decides with. No watcher anywhere in
+  // the server names the file.
+  test('nothing but the load ever reads the open workspace\'s state file', () => {
     const scheduler = fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8');
     // Code lines only: a comment naming the file is prose, not a reader.
     const touches = scheduler.split('\n')
       .filter(line => line.includes('routine-state.json') && !line.trim().startsWith('//'));
-    assert.strictEqual(touches.length, 2,
-      `the state file is named in ${touches.length} code lines, not the read and the write:\n${touches.join('\n')}`);
+    assert.strictEqual(touches.length, 3,
+      `the state file is named in ${touches.length} code lines, not the read, the write and the read for a workspace not open:\n${touches.join('\n')}`);
 
-    // And each of the two sits in the one function it belongs to, so neither
-    // can be reached except by loading the state or saving it.
+    // And each sits in the one function it belongs to, so none can be reached
+    // except by loading the state, saving it, or building a closed workspace's.
     const between = (from, to) => scheduler.slice(scheduler.indexOf(from), scheduler.indexOf(to));
     const load = between('function loadRoutineState()', 'function saveRoutineState()');
     const save = between('function saveRoutineState()', '// ===== SLOTS THAT PASSED UNSERVED =====');
     assert.match(load, /readFileSync[\s\S]{0,80}routine-state\.json|routine-state\.json[\s\S]{0,80}readFileSync/,
-      'the only read is inside the load, which runs at boot and on a workspace switch');
+      'the only read of the open workspace\'s file is inside the load, which runs at boot and on a workspace switch');
     assert.match(save, /routine-state\.json/, 'and the only write is inside the save');
+    const built = between('function stateInItsFile(', '// ===== RUN RECORDS =====');
+    assert.match(built, /routine-state\.json[\s\S]{0,80}readFileSync/, 'the other read builds the state of a workspace');
+    const routed = between('function statesFor(', 'function stateInItsFile(');
+    assert.match(routed,
+      /if \(workspace === getWorkspace\(\)\) return routineState;\n\s*if \(!carriedStates\.has\(workspace\)\) carriedStates\.set\(workspace, stateInItsFile\(workspace\)\);/,
+      'only one that is not open, into the state carried for it, never into the one the tick reads');
+    assert.strictEqual(scheduler.split('stateInItsFile(').length, 3, 'and it is built there and nowhere else');
     // And nothing watches the folder it lives in.
     for (const file of ['lib/scheduler.js', 'server.js']) {
       const src = fs.readFileSync(path.join(ROOT, file), 'utf-8');
@@ -827,6 +1136,123 @@ describe('ROUTINES.md: where a routine actually runs', () => {
       'and said in terms of what running from a closed workspace would do');
     assert.match(behaviour, /What would change it/i,
       'and what would overturn it is stated, so the decision is revisitable rather than fixed');
+  });
+});
+
+// docs/ROUTINES.md: the switch that turns routines off on one computer. Each
+// claim the page makes is bound to the code that keeps it: the words to the
+// model's own, the record to the store, and where the check sits to the tick.
+describe('ROUTINES.md: turning routines off on one computer', () => {
+  const here = require('../../lib/agents/routines-here.js');
+  const routinesModel = require('../../public/routines-model.js');
+  const editorModel = require('../../public/routine-editor-model.js');
+  const schedulerSrc = fs.readFileSync(path.join(ROOT, 'lib', 'scheduler.js'), 'utf-8');
+  const section = (() => {
+    const start = routinesDoc.indexOf('\n### Turning routines off on one computer\n');
+    const end = routinesDoc.indexOf('\n## ', start + 1);
+    return start === -1 ? '' : routinesDoc.slice(start, end);
+  })();
+  const between = (src, from, to) => src.slice(src.indexOf(from), src.indexOf(to, src.indexOf(from)));
+
+  /** Run `fn` against a record of its own, so the checkout's is never touched. */
+  function withRecord(fn) {
+    const previous = here.storePath();
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-routines-here-'));
+    here.configureRoutinesHere(path.join(dir, 'routines-here.json'));
+    try { return fn(dir); } finally {
+      here.configureRoutinesHere(previous);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('the page names the switch and its words as the list draws them', () => {
+    assert.ok(section.length > 0, 'the page has no section on turning routines off on one computer');
+    assert.ok(section.includes(`**${routinesModel.HERE.label}**`), 'the switch is named in other words than its label');
+    assert.ok(section.includes(`**${routinesModel.HERE.row}**`), 'the row\'s words are not the model\'s');
+    assert.ok(section.includes('**Paused**'), 'and a paused routine still says Paused');
+    assert.match(section, /It sits under the Routines header whether or not the workspace has routines yet/);
+    assert.match(section, /a routine nobody has turned on still offers \*\*Turn on\*\*, because that writes the agent file every computer reads/);
+    // The empty pane draws the switch the list does, and Turn on is offered
+    // whatever the switch says.
+    const viewSrc = fs.readFileSync(path.join(ROOT, 'public', 'views', 'routines.js'), 'utf-8');
+    assert.match(between(viewSrc, 'function emptyHtml()', 'function confirmHtml('), /headerHtml\(null, null, hereHtml\(\)\)/,
+      'the empty pane draws no switch');
+    const offer = { enabled: false, refusal: 'enabled', schedule: 'every day at 07:00', prompt: 'p', workspace: '/w/a',
+      servingWorkspace: '/w/a', nextRun: '2026-10-07T06:00:00.000Z', now: '2026-10-06T08:00:00.000Z' };
+    assert.deepStrictEqual(!!routinesModel.enableOffer({ ...offer, offHere: true }), !!routinesModel.enableOffer(offer),
+      'Turn on is offered differently while routines are off here');
+    assert.ok(routinesModel.enableOffer(offer), 'sanity: the routine is offered Turn on');
+  });
+
+  test('it covers this workspace on this computer, is kept outside every workspace, and does not sync', () => {
+    assert.match(section, /turns routines off for this workspace on this computer only, and it does not sync/);
+    assert.match(section, /outside every workspace, beside the record of where routine approvals were given, keyed by the workspace's path on this computer/);
+    assert.match(section, /It is on until you turn it off\. A workspace moved to a new path starts on/);
+    withRecord((dir) => {
+      const a = path.join(dir, 'a');
+      const b = path.join(dir, 'b');
+      fs.mkdirSync(a);
+      fs.mkdirSync(b);
+      assert.strictEqual(here.offHere(a), false, 'on is not the default');
+      here.setOffHere(a, true);
+      assert.strictEqual(here.offHere(b), false, 'another workspace on this computer was turned off');
+      assert.deepStrictEqual(fs.readdirSync(a), [], 'something was written into the workspace');
+    });
+  });
+
+  test('while off, nothing runs on a schedule, and Run now still does', () => {
+    assert.match(section, /While it is off, this computer starts no routine of that workspace on a schedule/);
+    assert.match(section, /It takes effect at the next tick, with no restart/);
+    assert.match(section, /not recorded as missed and is not owed as a catch-up/);
+    assert.match(section, /Run now still works while it is off/);
+    assert.match(section, /its record says `trigger: manual`/);
+    // The check reads the record on every tick, inside the tick, and the
+    // pressed path does not pass through it.
+    const tick = between(schedulerSrc, 'function startScheduler()', 'function stopScheduler()');
+    assert.match(tick, /routinesHere\.offHere\(getWorkspace\(\)\)/, 'the tick does not read the record');
+    assert.match(tick, /if \(offHere\) continue;/, 'the tick does not stop a due routine while off');
+    const pressed = between(schedulerSrc, 'function runRoutineNow(', 'function recordFailedStart(');
+    assert.doesNotMatch(pressed, /offHere/, 'Run now is held back by the switch');
+    assert.match(pressed, /'manual'\)/, 'and a pressed run is still marked manual');
+  });
+
+  test('turning it back on is turning a routine on', () => {
+    assert.match(section, /Turning it back on is turning a routine on/);
+    assert.match(section, /A daily or weekly routine whose time has already gone today runs shortly after/);
+    assert.match(section, /A monthly routine carries nothing across the time it was off/);
+    assert.match(section, /Nothing that passed while it was off shows as missed/);
+  });
+
+  test('a record that cannot be read reads on, and a failed save changes nothing', () => {
+    assert.match(section, /set aside under a dated name beside it, as the scheduler's state files are, and the switch reads on/);
+    assert.match(section, /set aside the same way before the next change is written in its place, so the entries it holds for other workspaces are never written over; if it cannot be set aside, the change is not saved/);
+    assert.match(section, /the record is left as it was, the switch stays where it was, and a short line under it says the change did not happen, until it is pressed again or a change made in another window arrives/);
+    withRecord((dir) => {
+      const a = path.join(dir, 'a');
+      fs.mkdirSync(a);
+      fs.writeFileSync(here.storePath(), '{ not json');
+      const error = console.error;
+      console.error = () => {};
+      try { assert.strictEqual(here.offHere(a), false, 'a record nobody can read turned routines off'); } finally { console.error = error; }
+      // A record of the wrong shape reads on, and is kept rather than written over.
+      const held = JSON.stringify({ workspaces: [] });
+      fs.writeFileSync(here.storePath(), held);
+      console.error = () => {};
+      try {
+        assert.strictEqual(here.offHere(a), false);
+        here.setOffHere(a, true);
+      } finally { console.error = error; }
+      const kept = fs.readdirSync(dir).filter(n => n.startsWith('routines-here.json.unparsed-'));
+      assert.ok(kept.some(n => fs.readFileSync(path.join(dir, n), 'utf-8') === held), 'the record was written over');
+    });
+  });
+
+  test('no sentence says a routine runs on the machine it was made on', () => {
+    const untrue = /runs? on the machine (it was|they were) made on/i;
+    assert.doesNotMatch(routinesDoc, untrue);
+    assert.doesNotMatch(editorModel.RUN_ON_CAVEAT, untrue);
+    assert.match(routinesDoc, /unless routines are off on one of them/,
+      'the always-on section does not name the switch as the way to run them on one computer');
   });
 });
 
@@ -931,6 +1357,145 @@ describe('ROUTINES.md: running a routine now, and consent as change-consent', ()
     assert.match(section, /prompt/, 'the page names the prompt');
     assert.match(section, /skill/, 'the skill');
     assert.match(section, /where it runs/, 'and the run target as what lapses it');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/ROUTINES.md: whose clock a schedule follows
+//
+// The page used to say there was no timezone field on a routine, which was
+// false, and said the schedule followed "the machine running Rundock" without
+// saying which machine that is when the window is on another one. Both halves
+// are pinned to the behavior they describe: a declared zone changes nothing
+// about when a routine is due, and the process's own zone changes everything.
+// ---------------------------------------------------------------------------
+
+describe('ROUTINES.md: a schedule follows the clock of the computer Rundock runs on', () => {
+  const scheduler = require('../../lib/scheduler.js');
+  const CLOCK = 'A schedule follows the clock of the computer Rundock runs on. For a Rundock on a server '
+    + 'reached through a tunnel, that is the server\'s clock, whatever zone the computer showing the window is in.';
+  const FIELD = 'A routine can carry a `timezone` field that names a zone as words, like `Europe/London`. '
+    + 'Rundock checks that it is written that way, and doesn\'t read it when deciding when the routine runs. '
+    + 'Firing in a routine\'s own zone is not supported.';
+  const SERVER = 'Routine times follow the server\'s clock:';
+
+  /** Run `fn` with the process in `zone` and the scheduler's clock held still. */
+  function inZone(zone, now, fn) {
+    const was = process.env.TZ;
+    process.env.TZ = zone;
+    const previous = scheduler.wireSchedulerDeps({ now: () => now });
+    try { return fn(); } finally {
+      scheduler.wireSchedulerDeps(previous);
+      if (was === undefined) delete process.env.TZ; else process.env.TZ = was;
+    }
+  }
+
+  test('the page no longer says a routine has no timezone field', () => {
+    assert.doesNotMatch(routinesDoc, /There is no timezone field/i);
+  });
+
+  test('the page says whose clock it is, what the field is, and says it on the server section too', () => {
+    assert.ok(routinesDoc.includes(`${CLOCK} ${FIELD}`), 'ROUTINES.md must say whose clock a schedule follows');
+    const server = routinesDoc.slice(routinesDoc.indexOf('#### Reaching a Rundock on a server'));
+    assert.ok(server.includes(SERVER), 'and the server section must say routine times follow the server\'s clock');
+  });
+
+  // "Doesn't read it when deciding when the routine runs", as behavior.
+  //
+  // HANDED THE ROUTINES THEMSELVES, never their schedule strings. Two routines
+  // with one schedule hand the scheduler the same string, so a comparison of
+  // what it makes of the strings cannot see a scheduler that starts reading
+  // the routine's own zone. Here both routines are read out of an agent file
+  // by discovery, one declaring Pacific/Auckland and one declaring nothing,
+  // and the tick and the row are each given the routine objects, as they are
+  // in the product. Each must decide the same for both: the slot, whether it
+  // fires, and the next run after it.
+  //
+  // The process is in London, where 08:00 on 7 October 2026 is 07:00 UTC.
+  // 08:00 in Auckland that day was 19:00 UTC the evening before, so a
+  // scheduler that read the declared zone would find that routine already due
+  // at half past six in London, and fire it an hour and a half early.
+  test('a routine declaring Pacific/Auckland is judged due exactly as one declaring nothing', () => {
+    const { agentFile } = require('../helpers/workspace.js');
+    const discovery = require('../../lib/agents/discovery.js');
+    const claude = require('../../lib/runtime/claude.js');
+    const key = require.resolve('../../lib/scheduler.js');
+    const SCHEDULE = 'every day at 08:00';
+    const KEYS = ['piper:declared', 'piper:plain'];
+    const SLOT = '2026-10-07T07:00:00.000Z';
+    const TOMORROW = '2026-10-08T07:00:00.000Z';
+    useWorkspace({ agents: { piper: agentFile({ name: 'piper', type: 'specialist', order: 1, routines: [
+      { name: 'declared', schedule: SCHEDULE, prompt: 'go', enabled: true, timezone: 'Pacific/Auckland' },
+      { name: 'plain', schedule: SCHEDULE, prompt: 'go', enabled: true },
+    ] }) } });
+
+    // A private scheduler whose children are stand-ins, loaded after the spawn
+    // is swapped because it takes the spawn when it loads, and whose tick is
+    // the interval it arms, run by hand.
+    const was = process.env.TZ;
+    process.env.TZ = 'Europe/London';
+    const cached = require.cache[key]; delete require.cache[key];
+    const realSpawn = claude.spawnClaude;
+    const realSetInterval = global.setInterval;
+    const prevDeps = claude.wireClaudeRuntimeDeps({ getActualPort: () => 0 });
+    const children = [];
+    claude.spawnClaude = () => { const c = new (require('node:events').EventEmitter)(); c.kill = () => {}; children.push(c); return c; };
+    let sched = null;
+    try {
+      sched = require(key);
+      const clock = { at: new Date(Date.UTC(2026, 9, 7, 5, 30)) }; // 06:30 in London
+      sched.wireSchedulerDeps({ now: () => clock.at, getWssClients: () => [] });
+      let tick = null;
+      global.setInterval = (fn) => { tick = fn; return { unref() {} }; };
+      try { sched.startScheduler(); } finally { global.setInterval = realSetInterval; }
+      const tickAt = (at) => { clock.at = at; tick(); };
+
+      discovery.invalidateAgentCache();
+      const routines = discovery.discoverAgents().find(a => a.id === 'piper').routines;
+      const byKey = Object.fromEntries(routines.map(r => [`piper:${r.name}`, r]));
+      assert.strictEqual(byKey['piper:declared'].timezone, 'Pacific/Auckland', 'sanity: discovery kept the declared zone');
+      assert.ok(!byKey['piper:plain'].timezone, 'sanity: and the other routine declares none');
+      const each = (fn) => KEYS.map(k => fn(k, byKey[k]));
+      const nextRuns = () => each((k, r) => sched.routineDisplayFacts(k, r.schedule, r).nextRun);
+      const ran = () => each(k => (sched.routineState[k] ? sched.routineState[k].lastRun : null));
+
+      assert.deepStrictEqual(nextRuns(), [SLOT, SLOT], 'the row names the same next run for both before the slot');
+      tickAt(new Date(Date.UTC(2026, 9, 7, 5, 30)));
+      assert.strictEqual(children.length, 0, 'neither fired at 06:30, before its slot');
+      assert.deepStrictEqual(ran(), [null, null]);
+      assert.deepStrictEqual(each(k => sched.routineSlots.routines[k].due), [SLOT, SLOT],
+        'the tick placed both slots at the same instant');
+
+      tickAt(new Date(SLOT));
+      assert.strictEqual(children.length, 2, 'both fired at 08:00 in London');
+      assert.deepStrictEqual(ran(), [SLOT, SLOT]);
+      const dueAt = Object.fromEntries(sched.readRunRecords().map(rec => [`${rec.agent}:${rec.routine}`, rec.dueAt]));
+      assert.deepStrictEqual(each(k => dueAt[k]), [SLOT, SLOT], 'and each run is on record as due at that slot');
+
+      clock.at = new Date(Date.UTC(2026, 9, 7, 7, 5));
+      for (const child of children) child.emit('close', 0);
+      assert.deepStrictEqual(nextRuns(), [TOMORROW, TOMORROW], 'and the row names tomorrow\'s 08:00 for both');
+      tickAt(new Date(Date.UTC(2026, 9, 7, 7, 30)));
+      assert.strictEqual(children.length, 2, 'and neither fired again that morning');
+    } finally {
+      if (sched) sched.stopScheduler();
+      global.setInterval = realSetInterval;
+      claude.spawnClaude = realSpawn;
+      claude.wireClaudeRuntimeDeps(prevDeps);
+      delete require.cache[key]; if (cached) require.cache[key] = cached;
+      discovery.invalidateAgentCache();
+      if (was === undefined) delete process.env.TZ; else process.env.TZ = was;
+    }
+  });
+
+  // "The clock of the computer Rundock runs on", as behavior: the same
+  // schedule at the same instant is a different slot in a different zone.
+  test('the same schedule gives different slot instants under two values of the process zone', () => {
+    const now = new Date(Date.UTC(2026, 9, 7, 5, 0));
+    const london = inZone('Europe/London', now, () => scheduler.getNextRun('every day at 08:00', null));
+    const newYork = inZone('America/New_York', now, () => scheduler.getNextRun('every day at 08:00', null));
+    assert.strictEqual(london.toISOString(), '2026-10-07T07:00:00.000Z');
+    assert.strictEqual(newYork.toISOString(), '2026-10-07T12:00:00.000Z');
   });
 });
 
@@ -1202,6 +1767,82 @@ describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its c
   });
 });
 
+// docs/ROUTINES.md: what a pause you applied looks like on its row
+describe('ROUTINES.md: a pause you applied dims the avatar, not the row', () => {
+  test('the doc says the avatar dims and the text stays at full strength, which is what the stylesheet does', () => {
+    const paragraph = routinesDoc.split('\n').find(l => l.includes('A pause you applied is quieter'));
+    assert.ok(paragraph, 'ROUTINES.md describes a pause you applied');
+    assert.ok(paragraph.includes('A pause you applied is quieter: its avatar dims while its text stays at full strength'),
+      'ROUTINES.md must say what a pause you applied dims');
+    assert.ok(!paragraph.includes('the row dims'), 'the old sentence, which is no longer true, is gone');
+    const css = fs.readFileSync(path.join(ROOT, 'public', 'styles', 'views', 'routines.css'), 'utf-8');
+    assert.ok(css.includes('.routine-row.paused .avatar { opacity: 0.5; }'), 'the sentence is true of the stylesheet');
+    assert.ok(!css.includes('.routine-row.paused { opacity'), 'and nothing dims the row as a whole');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// scaffold/rundock-guide.md: what happens to a long conversation
+// ---------------------------------------------------------------------------
+
+describe('rundock-guide.md: a long conversation is summarized automatically and stays on screen', () => {
+  // What Doc answers when someone asks what happens once a conversation grows
+  // past what the agent can hold. The runtime's half, that Claude Code and
+  // Codex summarize a long session on their own and the agent then works
+  // from the summary, is theirs: it is stated here, not run. Rundock's half
+  // is pinned by doing it: a session holding a summary is read back through
+  // the history the chat is drawn from, and everything said before the
+  // summary is still there, without the summary itself.
+  const guide = fs.readFileSync(path.join(ROOT, 'scaffold', 'rundock-guide.md'), 'utf-8');
+  const section = (() => {
+    const from = guide.indexOf('### Conversations');
+    const to = guide.indexOf('\n#', from + 1);
+    return from < 0 ? '' : guide.slice(from, to < 0 ? undefined : to);
+  })();
+
+  test('the guide says it where it explains conversations, and names no limit or number', () => {
+    assert.ok(section.length > 0, 'the guide has a Conversations section among what Doc knows');
+    assert.ok(guide.indexOf('### Conversations') > guide.indexOf('## What you know'), 'and it is among what Doc knows');
+    assert.match(section, /A long conversation is summarized automatically so the agent can carry on: Claude Code and Codex each do this on their own when a conversation grows past what the agent can hold at once\./);
+    assert.match(section, /The whole conversation stays on screen in Rundock, but from then on the agent works from the summary rather than every earlier message, so details from early on can be lost\./);
+    assert.match(section, /A new topic is best started in a new conversation\./);
+    assert.doesNotMatch(section, /\d/, 'the section names no limit or number');
+  });
+
+  test('and the whole conversation stays on screen: the history keeps every message before a summary, and not the summary', async () => {
+    const home = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-home-'));
+    const was = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const dir = useWorkspace();
+      const sessions = path.join(home, '.claude', 'projects', dir.replace(/\//g, '-'));
+      fs.mkdirSync(sessions, { recursive: true });
+      const at = (n) => `2026-01-14T09:${String(n).padStart(2, '0')}:00.000Z`;
+      const said = (role, text, n) => (role === 'user'
+        ? { type: 'user', message: { role: 'user', content: text }, timestamp: at(n) }
+        : { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] }, timestamp: at(n) });
+      // Claude Code's own lines when it summarizes a session: a boundary, and
+      // the summary written as the person's message.
+      const lines = [
+        said('user', 'Plan the launch.', 0),
+        said('assistant', 'Here is the plan.', 1),
+        { type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', timestamp: at(2) },
+        { type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true, timestamp: at(3),
+          message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The conversation is summarized below: planning the launch.' } },
+        said('user', 'Add a timeline.', 4),
+        said('assistant', 'Timeline added.', 5),
+      ];
+      fs.writeFileSync(path.join(sessions, 'doc-claims-summarized.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      const history = await srv.parseSessionHistory('doc-claims-summarized', 50);
+      assert.deepStrictEqual(history.messages.map((m) => m.content),
+        ['Plan the launch.', 'Here is the plan.', 'Add a timeline.', 'Timeline added.']);
+    } finally {
+      if (was === undefined) delete process.env.HOME; else process.env.HOME = was;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ARCHITECTURE.md: a PowerShell command runs with no card only when every part of it is a read Rundock can name', () => {
   // The claim a reader on Windows relies on, where no sandbox sits under the
   // card. Pinned by asking the reading the page names about the very cmdlets
@@ -1316,5 +1957,683 @@ describe('ARCHITECTURE.md: a saved Always allow for a PowerShell command answers
     assert.strictEqual(decide('Get-Date -Format "HH:mm"', ['PowerShell:Get-Date']).action, 'allow');
     assert.strictEqual(decide('Get-Date; Add-Content notes.md x', ['PowerShell:Get-Date']).action, 'card');
     assert.strictEqual(decide('$t = Get-Date; Add-Content time-log.md $t', ['PowerShell:PowerShell']).action, 'card');
+  });
+});
+
+describe('ARCHITECTURE.md: sort and date run with no card only in the forms that read', () => {
+  // The claim an unattended routine relies on, and the one a person relies on
+  // that a writing form still asks. Pinned by asking the shared definition and
+  // the grader about every form the page names, and by reading the comment the
+  // module keeps beside its list, so neither can keep saying it after the code
+  // stops doing it.
+  const shell = require('../../public/read-only-shell.js');
+  const P = require('../../public/permissions.js');
+  const LEAD = '**`sort` and `date` run with no card only in the forms that read.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  // The module's comments as running text, so a sentence is found wherever
+  // its lines wrap.
+  const sharedSrc = fs.readFileSync(path.join(ROOT, 'public', 'read-only-shell.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
+  const reads = (command) => shell.isReadOnlyShellCommand(command) && P.classifyRisk('Bash', { command }) === 'low';
+
+  test('the audit section says what makes either one a read, and that any other option asks', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    for (const said of [
+      '`isReadOnlyShellCommand` in `public/read-only-shell.js` reads each of them option by option, as it reads `find`',
+      'a `sort` or `date` is a read only when every option on the line is on its list of reading options, and any other option asks',
+      'The options are read as getopt reads them, a short bundle letter by letter (`-rno out` is `-r -n -o out`)',
+      'checked against both the macOS and the GNU manuals',
+      'a reading `sort` or `date` of a file under the runtime\'s own home is freed exactly as `cat` and `stat` of it are',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+  });
+
+  test('the comment beside the list says which forms read and why the rest ask, and no longer that both are left out', () => {
+    for (const said of ['SORT AND DATE READ ONLY IN THE FORMS THAT READ.', 'any other option asks',
+      '`sort -o FILE` writes FILE with no redirection on the line', 'set the system clock']) {
+      assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
+    }
+    assert.ok(!sharedSrc.includes('those are NOT carried across'), 'it no longer says the grader\'s other words were not carried across');
+    assert.ok(!sharedSrc.includes('Two of them are why: `sort -o FILE`'), 'nor that sort is one of the reasons');
+    assert.ok(sharedSrc.includes('CHECKED AGAINST TWO MANUALS'), 'and it says which manuals the lists were checked against');
+    // The words the comment says are left out are only the words really left
+    // out: neither `sort` nor `date` is among them.
+    const leftOut = (/The card grader also recognized ([^.]*?), and none of them is on this list\./.exec(sharedSrc) || [])[1] || '';
+    assert.ok(leftOut.includes('`uniq`'), `the comment names what is left out: ${leftOut}`);
+    assert.ok(!/`sort`|`date`/.test(leftOut), `and names neither sort nor date among them: ${leftOut}`);
+  });
+
+  test('every form the page says reads, reads, and every one it says asks, asks', () => {
+    // Each entry: the words the page names, and a command spelling each one.
+    const READS = [['`sort`', 'ls notes | sort'], ['ordering', 'sort -rn x'], ['key', 'sort -k2,2n x'], ['field separator', 'sort -t, x'],
+      ['buffer size', 'sort -S 1M x'], ['check', 'sort -c x'], ['merge', 'sort -m a b'], ['unique', 'sort -u x'],
+      ['`date` reads alone', 'date'], ['a `+` format', 'date +%Y-%m-%d'], ['`-u`', 'date -u'], ['`-R`', 'date -R'], ['`-I`', 'date -I'],
+      ['`-r`', 'date -r notes.md'], ['`-z`', 'date -z UTC'], ['`-v`', 'date -v+1d'], ['`-d`', 'date -d yesterday'], ['`-j`', 'date -j 0101'],
+      ['GNU long forms', 'date --utc --date=yesterday']];
+    const ASKS = [['`sort -o`', 'sort -o x y'], ['`--output`', 'sort --output=x y'], ['`-T`', 'sort -T /tmp x'],
+      ['`--temporary-directory`', 'sort --temporary-directory=/tmp x'], ['`--compress-program`', 'sort --compress-program=sh x'],
+      ['`date -s`', 'date -s 2026-01-01'], ['`--set`', 'date --set=2026-01-01'], ['a time operand', 'date 010112002026'],
+      ['`-f` without `-j`', 'date -f %Y%m%d 20260101'], ['any other option asks', 'sort --bogus x'],
+      ['`\'-o\'` is `-o`', "sort '-o' x y"], ['a `$`', 'sort $X x'], ['a glob', 'sort *'], ['a brace', 'sort {-o,x} y'], ['a redirection', 'sort < x']];
+    for (const [named, command] of READS) {
+      assert.ok(passage.includes(named), `the page names ${named}`);
+      assert.strictEqual(reads(command), true, `${command} runs with no card`);
+    }
+    for (const [named, command] of ASKS) {
+      assert.ok(passage.includes(named), `the page names ${named}`);
+      assert.strictEqual(shell.isReadOnlyShellCommand(command), false, `${command} is not a read`);
+      assert.notStrictEqual(P.classifyRisk('Bash', { command }), 'low', `${command} asks`);
+    }
+  });
+
+  test('the tests the page names exist', () => {
+    for (const file of ['test/unit/permissions.test.js', 'test/unit/sort-date-reads-hook.test.js', 'test/unit/sort-date-read-cards.test.js']) {
+      assert.ok(passage.includes(`\`${file}\``), `the page names ${file}`);
+      assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} exists`);
+    }
+  });
+});
+
+describe('ARCHITECTURE.md: an option is judged as the shell hands it to the program', () => {
+  // The claim a person relies on that a quoted or escaped writing option still
+  // asks. Pinned by asking the shared definition and the grader about every
+  // spelling the page names, and by reading the comments the module keeps
+  // beside its reader, find's lists and the named flags, so neither can keep
+  // saying it after the code stops doing it.
+  const shell = require('../../public/read-only-shell.js');
+  const P = require('../../public/permissions.js');
+  const LEAD = '**An option is judged as the shell hands it to the program, so quoting or escaping an option that writes or runs never makes it a read.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const sharedSrc = fs.readFileSync(path.join(ROOT, 'public', 'read-only-shell.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
+  const reads = (command) => shell.isReadOnlyShellCommand(command) && P.classifyRisk('Bash', { command }) === 'low';
+  const asks = (command) => !shell.isReadOnlyShellCommand(command) && P.classifyRisk('Bash', { command }) !== 'low';
+
+  test('the audit section says options are judged as the shell reads them, and that a reading that cannot be known asks', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    for (const said of [
+      'judges the options of `find`, `rg`, `tree`, `file`, `sort` and `date` on the words the shell hands the program',
+      'after it has taken quotes and backslashes away',
+      'is not a read, so it asks',
+      'Commands split where the shell splits them',
+      'Only a space, a tab and a newline separate words, as in bash',
+      'a quoted writing option keeps its crossing as a write in Notes mode and in Code mode',
+      'A wildcard after a plain first character other than `-` still reads for `find`, `rg`, `tree` and `file`',
+      '**Nothing the earlier reading asked about reads now.**',
+      'a line reads only when both readings read it',
+      'are the only two exceptions to the rule that a character outside the plain set makes the segment not a read',
+      'No quote character that opens nothing in bash hides a command either',
+      'every reading reads the line that way as well as as written',
+      'is not a read, and neither is one with a `(` or `)` outside its quotes',
+      'In Code mode the verdict reads the line both ways as well',
+      'checked against the graders at that base wherever history holds it',
+      'the hook reads the paths in a bash command as it always did and in the line\'s view as well',
+      'so none of them hides a path from its crossing check and no path it saw before is lost',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+  });
+
+  test('the module says it beside its reader, find\'s lists and the named flags', () => {
+    for (const said of [
+      'Every command whose options are judged is judged on these words',
+      'segment is not a read, and it asks',
+      'EACH FLAG IS JUDGED AS THE SHELL HANDS IT TO find, never as it is written',
+      'A line whose words the text alone does not show is not a read, so it asks.',
+      'WHETHER A WORD IS ONE OF THESE OPTIONS, judged as the shell hands the word over',
+      'A BACKSLASH OUTSIDE SINGLE QUOTES TAKES THE NEXT CHARACTER WITH IT',
+      'READ BOTH WAYS. find, rg, tree and file were judged on their words as written',
+      'a segment reads only when both readings say it reads',
+      'SPLIT AS WRITTEN TOO, with each quote taken as written and a backslash as text',
+      'A line reads only when every piece of both splits reads',
+      'A WILDCARD THAT CANNOT START WITH A DASH.',
+      'makes the only two exceptions to the plain set',
+      'EVERY READING HERE FINDS A QUOTE BY PAIRING QUOTE CHARACTERS',
+      'shellView gives the line back with each of those characters made a space',
+      'A FAILURE INSIDE THIS READING IS AN ANSWER',
+    ]) assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
+    const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
+    assert.ok(hookSrc.includes('which the crossing check reads as well (shellCrossings), so none of them hides a path'), 'the hook says where an escaped quote is read');
+  });
+
+  test('every spelling the page names asks, and the reads beside them read', () => {
+    const ASKS = [["`'-fprintf'`", "find . -maxdepth 0 '-fprintf' out x"], ['`"--pre"`', 'rg "--pre" sh x .'], ['`\\-o`', 'tree \\-o out'],
+      ["`-fpr'int'f`", "find . -fpr'int'f out x"], ['`file --comp` is `--compile`', 'file --comp -m x'], ['a `$`', 'rg $X x .'],
+      ['a backtick', 'tree `echo -o` out'], ["`$'…'`", "tree $'-o' out"], ['a wildcard at the start of a word', 'file *'], ['a brace', 'tree {-o,out}'],
+      ['a quote left open', "rg 'x ."], ['a backslash with nothing after it', 'tree -L 2 \\'], ['a control character', 'file x\u0001'],
+      ['more than 8,192 characters', 'rg' + ' x'.repeat(4200)], ['`\\"` and `\\\'` open no quote', 'ls \\"\ncp a b\necho \\"'],
+      ['a form feed', 'tree -L\f2'], ['a vertical tab', 'rg -n\vx .'], ['a no-break space', 'file -b\u00a0x'],
+      ['a carriage return on its line', 'rg -e \rcat --pre sh x .'], ['`rg "x --pre" .`', 'rg "x --pre" .'],
+      ["`find . -na'me' x`", "find . -na'me' x"], ['`grep "a\\"; rm x" f`', 'grep "a\\"; rm x" f'],
+      ['a quote in a comment', "ls # it's\ncp a b\nls # '"], ["one escaped inside `$'…'`", "ls $'\\''; cp a b"],
+      ["one in a here-document's body", "cat <<EOF\n'\nEOF\ncp a b\necho \"'\""], ['the quotes inside a substitution held in double quotes', 'echo "$(echo "\'")"\ncp a b\necho "$(echo "\'")"'],
+      ["zsh's glob qualifiers", "ls *(e:'cp a b':)"], ['its `=( )`', 'cat =(cp a b)'], ['a `case` pattern', 'case x in x) cp a b;; esac'],
+      ['`find . ! -name x`', 'find . !x -name y']];
+    for (const [named, command] of ASKS) {
+      assert.ok(passage.includes(named), `the page names ${named}`);
+      assert.ok(asks(command), `${JSON.stringify(command.slice(0, 60))} asks`);
+    }
+    for (const command of ["find . -name '*.md'", "rg 'two words' notes", 'tree -L 2', 'file notes.md', 'echo "a\nb"', "rg 'TODO' notes/*.md",
+      'find . ! -name x', "ls # it's here", "grep -rn \"it's\" notes", "echo $'a\\tb'"]) {
+      assert.ok(reads(command), `${command} still reads`);
+    }
+  });
+
+  // A ( INSIDE A WORD IS HIGH IN NOTES MODE, SO NO SAVED ANSWER COVERS IT.
+  // Pinned by asking the grader and the decision path about lines the page
+  // names, with a saved answer for their leading command, and by reading the
+  // comment the grader keeps beside the rule.
+  test('the page and the grader say a ( inside a word is high in Notes mode, so no saved answer covers it, and it is', () => {
+    for (const said of [
+      'In Notes mode a line with a `(` inside a word, outside its quotes, is graded high risk by `classifyBashRisk` in `public/permissions.js`',
+      'however the word starts and wherever it sits',
+      'and so is a line whose view fails or nests deeper than the view follows',
+      'Such a line is carded every time and never offers "Always allow", so no saved answer covers it',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+    const graderSrc = fs.readFileSync(path.join(ROOT, 'public', 'permissions.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
+    assert.ok(graderSrc.includes('A `(` INSIDE A WORD, OUTSIDE QUOTES, IS HIGH, SO NO SAVED ANSWER COVERS IT.'), 'the grader says it beside the rule');
+    assert.ok(graderSrc.includes('a view that fails or cannot be read counts as marked'), 'and that a view that fails counts');
+    for (const [named, command] of [["`ls 'a'*(e:'cmd':)`", "ls 'a'*(e:'cp a b':)"], ['`cat =(cmd)`', 'cat =(cp a b)'], ["`echo $(ls *(e:'cmd':))`", "echo $(ls *(e:'cp a b':))"]]) {
+      assert.ok(passage.includes(named), `the page names ${named}`);
+      const risk = P.classifyRisk('Bash', { command });
+      const key = P.toolAllowKey('Bash', { command });
+      assert.strictEqual(risk, 'high', command);
+      assert.deepStrictEqual(P.decidePermission(risk, key, new Set([key])), { action: 'card' }, `a saved ${key} covers ${command}`);
+      assert.strictEqual(P.offersAlwaysAllow(risk), false, command);
+      const { summary, context } = P.describeToolRequest('Bash', { command });
+      assert.doesNotMatch(`${summary} ${context}`, /delet|destructi/i, `the card never calls ${command} a delete or destructive`);
+    }
+  });
+
+  // THE CARD SAYS WHY. Pinned by reading the sentences off the page and
+  // asking describeToolRequest for the context of lines that carry each one,
+  // so the page and the card cannot drift apart.
+  test('the page quotes the sentence the card gives for each reason, and the card gives it', () => {
+    const quoted = (lead) => {
+      const at = passage.indexOf(lead);
+      assert.ok(at >= 0, `the page says: ${lead}`);
+      const m = passage.slice(at + lead.length).match(/^"([^"]+)"/);
+      assert.ok(m, `the page quotes a sentence after: ${lead}`);
+      return m[1];
+    };
+    const pattern = quoted('The card says why it asks, in the context sentence `describeToolRequest` gives: ');
+    const unread = quoted('or, for a line whose view failed or stopped short, ');
+    assert.ok(passage.includes('A line graded high as destructive first keeps the sentence its leading command gives.'), 'the page names the exception');
+    const contextOf = (command) => P.describeToolRequest('Bash', { command }).context;
+    for (const command of ["ls 'a'*(e:'cp a b':)", 'cat =(cp a b)', 'f() { echo hi; }; f']) assert.strictEqual(contextOf(command), pattern, command);
+    assert.strictEqual(contextOf(`echo ${'$('.repeat(40)}x${')'.repeat(40)}`), unread, 'a line nested past what the view follows');
+    assert.strictEqual(contextOf("rm *(e:'cp a b':)"), 'This will permanently delete files', 'a destructive line keeps its own');
+    for (const sentence of [pattern, unread]) assert.doesNotMatch(sentence, /delet|destructi/i, sentence);
+  });
+
+  test('the page says a function definition is graded high with them, and it is', () => {
+    assert.ok(passage.includes('A function definition (`f() { echo hi; }; f`) puts a `(` inside a word too, and is graded high with them; Code mode already asks about it.'),
+      'the page says it');
+    assert.strictEqual(P.classifyRisk('Bash', { command: 'f() { echo hi; }; f' }), 'high');
+  });
+
+  test('the tests the page names exist', () => {
+    for (const file of ['test/unit/permissions.test.js', 'test/unit/quoted-options-hook.test.js', 'test/unit/hook-never-crashes.test.js',
+      'test/unit/read-only-on-main.test.js', 'test/tools/record-read-only-on-main.js', 'test/unit/shell-view.test.js', 'test/unit/shell-view-hook.test.js',
+      'test/unit/zsh-pattern-cards.test.js', 'test/integration/zsh-pattern-saved-answer.test.js', 'test/unit/shell-view-shells.test.js',
+      'test/tools/zsh-pattern-grade-moves.js']) {
+      assert.ok(passage.includes(`\`${file}\``), `the page names ${file}`);
+      assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} exists`);
+    }
+  });
+});
+
+describe('ARCHITECTURE.md and the hook header: a request the hook cannot name, or whose input it cannot read, is refused inside Rundock', () => {
+  // The claim a reader of either relies on when the runtime's request changes
+  // shape. Pinned by running the hook on such requests, so neither can keep
+  // saying it after the hook stops doing it.
+  const { spawnSync } = require('node:child_process');
+  const HOOK = path.join(ROOT, 'scripts', 'permission-hook.js');
+  const LEAD = '**A permission hook that cannot answer, or cannot read what it was asked, refuses the call.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const hookSrc = fs.readFileSync(HOOK, 'utf-8');
+  const header = hookSrc.slice(0, hookSrc.indexOf('*/')).split('\n').map(line => line.replace(/^\s*\*\s?/, '')).join(' ').replace(/\s+/g, ' ');
+  const COULD_NOT_CHECK = 'Rundock could not check this request, so it was refused rather than approved on your behalf.';
+  const hook = (raw, env) => {
+    const r = spawnSync(process.execPath, [HOOK], {
+      input: raw,
+      encoding: 'utf8',
+      env: { ...process.env, NODE_V8_COVERAGE: '', RUNDOCK: '1', RUNDOCK_PORT: '1', RUNDOCK_WORKSPACE: ROOT, RUNDOCK_CONVO_ID: 'c1', RUNDOCK_CODE_MODE: '', ...env },
+    });
+    let answer = null;
+    try { answer = JSON.parse(r.stdout); } catch (e) { /* asserted below */ }
+    return answer;
+  };
+  const request = (fields) => JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ROOT, session_id: 's', ...fields });
+
+  test('the audit section and the hook header both say it', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    assert.ok(passage.includes('A request the hook cannot name, or whose input it cannot read, is refused inside Rundock the same way, before anything is asked of the server'),
+      'the audit section says it');
+    assert.ok(passage.includes('a file, shell or connector tool whose `tool_input` is missing or is not an object'), 'and which input it means');
+    assert.ok(header.includes('A request the hook cannot name (no tool name, or one that is not a string, is empty or is only spaces), or whose input it cannot read (a file, shell or connector tool whose input is missing or is not an object), is refused inside Rundock'),
+      'the hook header says it');
+  });
+
+  test('and the hook does it: each is refused inside Rundock with nobody to ask, and passes through outside it', () => {
+    for (const raw of ['{}', request({ tool_name: 7 }), request({ tool_name: '' }), request({ tool_name: '  ' }),
+      request({ tool_name: 'Bash' }), request({ tool_name: 'Write', tool_input: 'x' }), request({ tool_name: 'mcp__example__update_thing', tool_input: null })]) {
+      const inside = hook(raw, {});
+      assert.strictEqual(inside && inside.hookSpecificOutput && inside.hookSpecificOutput.permissionDecision, 'deny', `${raw}: ${JSON.stringify(inside)}`);
+      assert.strictEqual(inside.hookSpecificOutput.permissionDecisionReason, COULD_NOT_CHECK, raw);
+      assert.deepStrictEqual(hook(raw, { RUNDOCK: '' }), {}, `${raw}, outside Rundock`);
+    }
+    const named = hook(request({ tool_name: 'WebFetch' }), {});
+    assert.strictEqual(named && named.hookSpecificOutput && named.hookSpecificOutput.permissionDecision, 'allow',
+      `a tool named properly whose checks read no input is judged as before: ${JSON.stringify(named)}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/RUNDOCK-UI.md: one rule for a destructive button that acts at once
+// ---------------------------------------------------------------------------
+
+describe('RUNDOCK-UI.md: the danger rule says the same thing in both places', () => {
+  // The button section names "Stop this run" as a destructive button that
+  // acts at once and is drawn as a neutral outline. The design rules near
+  // the end of the page state the danger rule again, and a reader who meets
+  // only that statement must not be told every such button is solid.
+  const uiDoc = fs.readFileSync(path.join(ROOT, 'docs', 'RUNDOCK-UI.md'), 'utf-8');
+  const ruleOf = (start) => uiDoc.split('\n').find(line => line.startsWith(start)) || '';
+
+  test('the design rule names the outline exception the button section makes', () => {
+    const button = ruleOf('The rule is about where the click lands');
+    const design = ruleOf('- **Danger differs by form as well as colour.**');
+    assert.ok(button && design, 'both statements of the danger rule are on the page');
+    for (const [where, text] of [['the button section', button], ['the design rules', design]]) {
+      assert.match(text, /Stop this run/, `${where} names the control the exception is for`);
+      assert.match(text, /neutral outline that takes the danger colors on hover and keyboard focus/,
+        `${where} says how that control is drawn`);
+    }
+  });
+});
+
+// The server's own answers, read and saved, pinned by putting requests to a
+// router with no window wired to it.
+const auth = require('../../lib/auth/index.js');
+const { EventEmitter } = require('node:events');
+// A router with nothing connected to it, as Rundock on a server runs: what
+// it answers, what it sends toward a window, and what it leaves waiting.
+function routerWithNoWindow() {
+  const key = require.resolve('../../lib/http-router.js');
+  const shared = require.cache[key];
+  delete require.cache[key];
+  const router = require(key);
+  delete require.cache[key];
+  if (shared) require.cache[key] = shared;
+  const pending = new Map();
+  const sent = [];
+  router.wireHttpRouterDeps({
+    pendingPermissionRequests: () => pending, safeSend: (s) => sent.push(JSON.parse(s)),
+    getPermissionTimeoutMs: () => 60000, routineRun: () => null, noteRefusedCard: () => false,
+  });
+  const token = auth.issueHookToken('doc-claims-read');
+  const put = (body) => new Promise((resolve) => {
+    const req = Object.assign(new EventEmitter(), { method: 'POST', url: '/api/permission-request', headers: { [auth.HOOK_HEADER]: token } });
+    const res = Object.assign(new EventEmitter(), {
+      writeHead() {}, writableEnded: false,
+      end(payload) { this.writableEnded = true; resolve(JSON.parse(payload)); },
+    });
+    router.handleHttpRequest(req, res);
+    req.emit('data', JSON.stringify(body));
+    req.emit('end');
+    if (!res.writableEnded) resolve(null);
+  });
+  return { put, pending, sent, done: () => { for (const p of pending.values()) clearTimeout(p.timer); } };
+}
+
+describe('ARCHITECTURE.md: the server answers a low-risk read itself, with or without a window', () => {
+  // The claim a person running Rundock with no window open relies on: a
+  // routine's read gets the answer a conversation's does. Pinned by putting a
+  // request to a router with no window wired to it, so the page cannot keep
+  // saying it after the server stops doing it.
+  const LEAD = '**The server answers a low-risk read itself, with or without a window.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const routerSrc = fs.readFileSync(path.join(ROOT, 'lib', 'http-router.js'), 'utf-8');
+  const graderSrc = fs.readFileSync(path.join(ROOT, 'public', 'permissions.js'), 'utf-8');
+  const chatSrc = fs.readFileSync(path.join(ROOT, 'public', 'views', 'chat.js'), 'utf-8');
+  const flat = (src) => src.replace(/\n\s*\/\/ ?/g, ' ').replace(/\s+/g, ' ');
+  const waitFor = async (ok) => {
+    for (let i = 0; i < 50; i++) { if (ok()) return true; await new Promise((r) => setTimeout(r, 20)); }
+    return ok();
+  };
+  // What the routines page says the server answers before any card, besides a
+  // read, and what still cards. The router's standing-folder-grant branch
+  // answers a crossing it covers ahead of the read and the card, so the page
+  // cannot say every place outside the workspace raises a card.
+  const GRANT_TOOLS = ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
+  const GRANT_SENTENCE = `A place outside the workspace that a file tool (${GRANT_TOOLS.slice(0, -1).join(', ')} or ${GRANT_TOOLS[GRANT_TOOLS.length - 1]}) `
+    + 'reaches inside a folder you chose "Always allow this folder" for is answered by the server with no card, as it already was: '
+    + 'that grant covers everything under the folder except a secrets-tier path, an answer file, a shell startup file '
+    + '(and a write to a folder that holds one) and Rundock\'s console folder, and it never answers a shell command.';
+  const STILL_CARDS_SENTENCE = 'Every other place outside the workspace the hook graded (any a shell command reaches, and any a file tool '
+    + 'reaches that no such grant covers), an answer file, a shell startup file, a Keychain line, a secrets-tier path, '
+    + 'and anything not low risk that no saved answer covers still raises a card, as below.';
+
+  test('the audit section, the routines page and the comments say it', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    assert.ok(passage.includes('`serverAnswer` in `lib/http-router.js` requires that same module'), 'it names where the server answers');
+    assert.ok(passage.includes('whether or not a window is connected'), 'it says a window is not needed');
+    assert.ok(passage.includes('is never answered this way, nor is one whose `code_mode_verdict` decides otherwise (a Keychain line carries one that always asks), nor anything not low risk that no saved answer covers, and any error falls through to the card'), 'it says what still cards');
+    assert.ok(passage.includes('The window\'s own branch now sees only what the server did not answer.'), 'it says what the window still sees');
+    assert.ok(routinesDoc.includes('the server answers it itself, from the decision the window makes, whether or not a Rundock window is open'),
+      'the routines page says a read raises no card with no window');
+    assert.ok(routinesDoc.includes(GRANT_SENTENCE), 'the routines page says which crossings a standing folder grant answers with no card');
+    assert.ok(routinesDoc.includes(STILL_CARDS_SENTENCE), 'and that everything else the hook graded still raises a card');
+    assert.ok(!routinesDoc.includes('Anything the hook graded (a place outside the workspace'),
+      'and no longer says every place outside the workspace raises a card, which a standing folder grant answers without one');
+    assert.ok(!graderSrc.includes('client-side, and nowhere else'), 'the module no longer says the policy runs only in the browser');
+    assert.ok(flat(graderSrc).includes('two layers read it: the window, and the server bridge (serverAnswer in lib/http-router.js)'), 'it says who reads it');
+    assert.ok(flat(chatSrc).includes('answers a low-risk read and a saved "Always allow" itself, so either reaches this branch only when the server did not answer it'), 'the window says what reaches it');
+    assert.ok(routerSrc.includes("require('../public/permissions.js')"), 'the server requires the module the window loads');
+  });
+
+  test('and the server does it: a router with no window answers a read with no card, and cards what is not one', async () => {
+    const dir = useWorkspace({});
+    const { put, pending, sent, done } = routerWithNoWindow();
+    try {
+      assert.deepStrictEqual(await put({ tool_name: 'Bash', tool_input: { command: 'ls -la' } }), { allow: true, reason: 'read-only' }, 'a read is answered');
+      assert.deepStrictEqual(sent, [], 'with no card sent toward a window');
+      assert.strictEqual(pending.size, 0, 'and nothing left waiting');
+      for (const body of [
+        { tool_name: 'Bash', tool_input: { command: 'npm run build' } },
+        { tool_name: 'Bash', tool_input: { command: 'cat /elsewhere/notes.md' }, boundary: true, crossings: [{ path: '/elsewhere/notes.md' }] },
+      ]) {
+        assert.strictEqual(await put(body), null, `waits for a card: ${JSON.stringify(body)}`);
+      }
+      assert.strictEqual(pending.size, 2, 'both wait');
+      assert.deepStrictEqual(sent.map((m) => m.type), ['control_request', 'control_request'], 'each as a card');
+      const month = new Date().toISOString().slice(0, 7);
+      const events = path.join(dir, '.rundock', 'state', `events-${month}.jsonl`);
+      assert.ok(await waitFor(() => fs.existsSync(events) && fs.readFileSync(events, 'utf-8').includes('"reason":"read-only"')),
+        'and the allow is recorded with its reason');
+    } finally {
+      done();
+    }
+  });
+
+  test('and a standing folder grant answers only the crossings the routines page says, with no card', async () => {
+    // The tools the page names are the hook's file tools, the ones whose
+    // crossing a stored grant may answer, and a shell command's crossing never
+    // is one: the hook marks it not grantable.
+    const hook = require('../../scripts/permission-hook.js');
+    const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8');
+    const map = hookSrc.match(/const FILE_TOOL_PATH_FIELD = \{([\s\S]*?)\};/);
+    assert.ok(map, 'the hook still keeps its file tools in FILE_TOOL_PATH_FIELD');
+    assert.deepStrictEqual([...map[1].matchAll(/(\w+):/g)].map((m) => m[1]).sort(), [...GRANT_TOOLS].sort(), 'the page names every file tool and no other');
+    const dir = useWorkspace({});
+    const granted = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-grant-'));
+    const file = path.join(granted, 'notes.md');
+    for (const tool of GRANT_TOOLS) {
+      const access = hook.classifyFileAccess(tool, { file_path: file, notebook_path: file, path: file }, dir);
+      assert.ok(access && access.where === 'outside' && access.grantable !== false, `${tool}: a crossing a grant may answer`);
+    }
+    const shell = hook.classifyShellAccess('Bash', { command: `cat ${file}` }, dir);
+    assert.ok(shell && shell.where === 'outside' && shell.grantable === false, 'a shell command\'s crossing is never one');
+
+    // And the router does it: with the folder granted, a file tool's crossing
+    // into it is answered with no card, while the same place reached by a
+    // shell command, and a place the grant does not cover, wait for a card.
+    require('../../lib/workspace/boundary.js').addBoundaryGrant(granted);
+    const { put, pending, sent, done } = routerWithNoWindow();
+    try {
+      const crossing = (p) => ({ boundary: true, resolved_path: p, crossings: [{ path: p }] });
+      assert.deepStrictEqual(await put({ tool_name: 'Read', tool_input: { file_path: file }, ...crossing(file) }),
+        { allow: true, reason: 'standing-folder-grant' }, 'a file tool\'s crossing the grant covers is answered');
+      assert.deepStrictEqual(sent, [], 'with no card sent toward a window');
+      const elsewhere = path.join(path.dirname(granted), 'not-granted', 'notes.md');
+      for (const body of [
+        { tool_name: 'Bash', tool_input: { command: `cat ${file}` }, ...crossing(file), grantable: false },
+        { tool_name: 'Read', tool_input: { file_path: elsewhere }, ...crossing(elsewhere) },
+      ]) {
+        assert.strictEqual(await put(body), null, `waits for a card: ${JSON.stringify(body)}`);
+      }
+      assert.deepStrictEqual(sent.map((m) => m.type), ['control_request', 'control_request'], 'each as a card');
+      assert.strictEqual(pending.size, 2, 'and both wait');
+    } finally {
+      done();
+      fs.rmSync(granted, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ARCHITECTURE.md: the server applies a saved "Always allow" itself, with or without a window', () => {
+  // The claim a person who saved an answer relies on: a routine with no
+  // window open is not left waiting on a card they already answered, and
+  // nothing but what Rundock saved is applied. Pinned by a router with no
+  // window wired to it, a turn held on the answer-file guard, and a key saved
+  // through the store's own writer.
+  const guard = require('../../lib/workspace/answer-file-guard.js');
+  const boundary = require('../../lib/workspace/boundary.js');
+  const config = require('../../lib/config.js');
+  const LEAD = '**The server applies a saved "Always allow" itself, with or without a window, and only as Rundock wrote it.**';
+  const at = architecture.indexOf(LEAD);
+  const passage = at >= 0 ? architecture.slice(at, architecture.indexOf('\n', at)) : '';
+  const routerSrc = fs.readFileSync(path.join(ROOT, 'lib', 'http-router.js'), 'utf-8');
+  const graderSrc = fs.readFileSync(path.join(ROOT, 'public', 'permissions.js'), 'utf-8');
+  const chatSrc = fs.readFileSync(path.join(ROOT, 'public', 'views', 'chat.js'), 'utf-8');
+  const flat = (src) => src.replace(/\n\s*\/\/ ?/g, ' ').replace(/\s+/g, ' ');
+
+  test('the audit section, the routines page and the comments say it', () => {
+    assert.ok(passage.length > LEAD.length, 'the paragraph is in the audit section');
+    assert.ok(passage.includes('`serverAnswer` gives `decidePermission` those saved answers and the request\'s `code_mode_verdict` exactly as the window gives them'),
+      'it says the server makes the window\'s decision');
+    assert.ok(passage.includes("answered `{ allow: true, reason: 'always-allowed' }` at once, whether or not a window is connected"), 'it says a window is not needed');
+    assert.ok(passage.includes('a high-risk command still cards, ahead of every saved answer in `decidePermission`'), 'it says high risk still cards');
+    assert.ok(passage.includes('an Asks-once verdict is answered only by its own saved rule key, never by a binary key such as `Bash:git`'), 'it says what answers an Asks once');
+    assert.ok(passage.includes('So `savedAnswers` applies none while no turn\'s guard watches the workspace, runs `checkAnswerFilesNow` first'), 'it says the check comes first');
+    assert.ok(passage.includes('and then reads that baseline (`answerFileBaseline` in `lib/workspace/answer-file-guard.js`) rather than the file'), 'it says what is read');
+    assert.ok(passage.includes("Rundock's own writes of the file build on what the guard has accepted, never on the file as it stands (`answerFileToBuildOn`"), 'it says what a writer builds on');
+    assert.ok(passage.includes("The saved answers are those of the request's own workspace, never the open one's: a routine run's is the folder it started in"), 'it says whose answers apply');
+    assert.ok(routinesDoc.includes('the server applies that answer itself, whether or not a Rundock window is open, so a routine never waits on a card for something you already allowed'),
+      'the routines page says a saved answer holds with no window');
+    assert.ok(flat(graderSrc).includes('auto-allow POLICY for low-risk read-only commands and saved "Always allow" answers lives here and only here'), 'the module says the policy covers saved answers');
+    assert.ok(flat(chatSrc).includes('and a request a saved "Always allow" covers, are answered by the server before they get here, with or without a window'),
+      'the approvals dock\'s branch says what reaches it');
+    // The order the paragraph states is the order the code keeps.
+    const body = routerSrc.slice(routerSrc.indexOf('function savedAnswers('), routerSrc.indexOf('function requestWorkspace('));
+    const order = ['guard.answerFilesWatched(workspace)', 'guard.checkAnswerFilesNow(workspace)', 'guard.answerFileBaseline('].map((n) => body.indexOf(n));
+    assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], `watched, then checked, then the baseline read: ${order}`);
+    assert.ok(!body.includes('readToolAllows'), 'and never the file as it stands');
+  });
+
+  test('and the server does it: a router with no window applies a saved key while a turn is guarded, never a key planted before a save, and nothing once no turn is guarded', async () => {
+    // A turn's guard watches the home folder's shell startup files, and the
+    // test preload fails the run if any of them is the account's own
+    // (test/helpers/account-home-refused.js). So the guard is given a made-up
+    // home for this test only, as made-up-home.js gives a whole file one:
+    // HOME, the desktop layout that puts Rundock's record there too, and no
+    // ZDOTDIR or XDG_CONFIG_HOME. Put back once the turn is released.
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-home-')));
+    const ENV = ['HOME', 'RUNDOCK_ELECTRON', 'ZDOTDIR', 'XDG_CONFIG_HOME'];
+    const was = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+    process.env.HOME = home;
+    process.env.RUNDOCK_ELECTRON = '1';
+    delete process.env.ZDOTDIR;
+    delete process.env.XDG_CONFIG_HOME;
+    const restore = () => {
+      for (const k of ENV) { if (was[k] === undefined) delete process.env[k]; else process.env[k] = was[k]; }
+      fs.rmSync(home, { recursive: true, force: true });
+    };
+    useWorkspace({});
+    const ws = config.getWorkspace();
+    const command = { tool_name: 'Bash', tool_input: { command: 'python3 tools/report.py' } };
+    const { put, pending, sent, done } = routerWithNoWindow();
+    let turn;
+    // Guarded for the conversation the router's token names, as every Claude
+    // turn is: the server applies a conversation's saved answers only from
+    // the workspace whose guard holds that conversation's turn.
+    try { turn = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000, convoId: 'doc-claims-read' }); } catch (e) { restore(); throw e; }
+    let released = false;
+    try {
+      assert.strictEqual(await put(command), null, 'with nothing saved, it waits for a card');
+      boundary.addToolAllow('Bash:python3');
+      assert.deepStrictEqual(await put(command), { allow: true, reason: 'always-allowed' }, 'once saved, it is answered');
+      // A turn guarded for another conversation does not bind this one.
+      const other = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000, convoId: 'doc-claims-other' });
+      turn.release();
+      try {
+        assert.strictEqual(await put(command), null, 'with only another conversation\'s turn guarded, it waits for a card');
+      } finally {
+        turn = guard.acquireAnswerFileGuard(ws, () => {}, { intervalMs: 60 * 60 * 1000, convoId: 'doc-claims-read' });
+        other.release();
+      }
+      assert.deepStrictEqual(await put({ tool_name: 'Bash', tool_input: { command: 'python3 tools/report.py && rm -rf build' } }), null, 'a high-risk line under the same key waits');
+      // A key written straight to the file, as a script would, and then a
+      // save of another key through the store's own writer: the save never
+      // carries the planted key, so the router never answers it.
+      const file = boundary.boundaryPermissionsPath();
+      const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      fs.writeFileSync(file, JSON.stringify({ ...data, allowedTools: [...data.allowedTools, 'Bash:node'] }, null, 2));
+      boundary.addToolAllow('Bash:echo');
+      assert.strictEqual(await put({ tool_name: 'Bash', tool_input: { command: 'node scripts/build.js' } }), null, 'a command under the planted key waits');
+      assert.ok(!boundary.readToolAllows().includes('Bash:node') && boundary.readToolAllows().includes('Bash:echo'), 'the save wrote the file without the planted key');
+      turn.release();
+      released = true;
+      assert.strictEqual(await put(command), null, 'with no turn guarded, the saved key answers nothing');
+      assert.strictEqual(pending.size, 5, 'each one it did not answer waits on a card');
+      assert.deepStrictEqual(sent.map((m) => m.type), ['control_request', 'control_request', 'control_request', 'control_request', 'control_request']);
+    } finally {
+      if (!released) turn.release();
+      boundary.removeToolAllow('Bash:python3');
+      boundary.removeToolAllow('Bash:echo');
+      done();
+      restore();
+    }
+  });
+});
+
+// THREE SPELLINGS IN AN INLINE SCRIPT THAT NAME NO PLACE. The audit section and
+// the comment above literalIsPlace say what the hook does with each; the hook
+// is asked about the examples they name, beside the cards it keeps.
+describe('ARCHITECTURE.md and the hook: three spellings in an inline script name no place', { skip: process.platform === 'win32' && 'bash on a macOS or Linux host' }, () => {
+  const hook = require('../../scripts/permission-hook.js');
+  const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8').replace(/\s*\n\s*\/\/\s*/g, ' ');
+  const ws = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'doc-claims-inline-')));
+  after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  const bash = (command, opts = {}) => hook.classifyShellAccess('Bash', { command }, ws, [], path.dirname(ws), false, opts);
+  const scan = (body) => bash(`python3 - <<'EOF'\n${body}\nEOF`);
+
+  test('the page and the comment say each rule', () => {
+    for (const said of [
+      'a word that starts with two backslashes is not a network name',
+      '`\\\\server\\share` included',
+      'A literal joined by `+` onto a name the code gives one plain string, once, at the top level',
+      'is judged as the whole path, `/ws/etc/x`, and not alone',
+      'leave the piece judged alone as before',
+      'is Python\'s formatting operator, so `"%d" % (n/len(t))` runs nothing',
+    ]) assert.ok(architecture.includes(said), `the page says: ${said}`);
+    for (const said of [
+      'THREE SPELLINGS THAT NAME NO PLACE',
+      'is judged as the whole path, `/ws/etc/x`, not alone',
+      'not a network name: `\'\\\\n\\\\n\'` is text. A Windows host and PowerShell keep `\\\\server\\share`',
+      'is Python\'s formatting: `"%d" % (n/len(t))` runs nothing',
+    ]) assert.ok(hookSrc.includes(said), `the hook says: ${said}`);
+  });
+
+  test('and the hook does what they say, and keeps the cards beside it', () => {
+    assert.strictEqual(scan(`V = "${ws}"\nopen(V + "/etc/x", "w")`), null, 'a piece joined onto a name given the workspace once');
+    assert.ok(scan(`V = "${ws}"\nV = "/"\nopen(V + "/etc/x", "w")`), 'a name assigned again');
+    assert.ok(scan('import sys\nV = sys.argv[1]\nopen(V + "/etc/x", "w")'), 'a name taken from outside');
+    assert.strictEqual(scan("t = 'a'\nparts = t.split('\\\\n\\\\n')"), null, 'two backslashes');
+    assert.ok(bash("cp a '\\\\server\\share\\x'", { platform: 'win32' }), 'a network path on a Windows host');
+    assert.strictEqual(scan('t = "a"\nprint("%d" % (100*(1-0)/len(t)))'), null, 'Python\'s % formatting');
+    assert.ok(bash("ruby <<'RB'\nputs %x(cat /etc/hosts)\nRB"), 'Ruby\'s %x( ) runs its body');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ARCHITECTURE.md and the hook's own comment: a file tool's write into the
+// workspace's agents and skills folders is refused
+// ---------------------------------------------------------------------------
+
+describe('the workspace\'s agents and skills are refused to file tools, as the page and the hook say', () => {
+  const HEADING = '**A file tool\'s write into the workspace\'s own agents and skills is refused outright, in every run.**';
+  const passage = (() => {
+    const at = architecture.indexOf(HEADING);
+    return at < 0 ? '' : architecture.slice(at, architecture.indexOf('\n', at));
+  })();
+
+  test('the page says which folders, which tools, which runs and why, and names the check', () => {
+    assert.ok(passage, 'ARCHITECTURE.md has the passage');
+    for (const said of [
+      'changed only by Doc (`rundock-guide`)',
+      'A Write, Edit, MultiEdit or NotebookEdit whose target is in the workspace\'s `.claude/agents/` or `.claude/skills/`, or is one of those folders',
+      'before any card, saved answer, folder grant or mode can answer it',
+      'in Notes and Code mode, in a conversation and in a routine',
+      '`isWorkspaceTeamFolderEdit` in `scripts/permission-hook.js`',
+      '--dangerously-skip-permissions',
+      'a neighbor such as `.claude/agents-old/` or `.claude/commands/` does not',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+    assert.ok(!architecture.includes('they live with the agents and skills, which are ordinary workspace files'),
+      'the page no longer calls the agents and skills ordinary workspace files');
+  });
+
+  test('the comment above CLAUDE_EDIT_TOOLS says the same, and no longer that workspace edits go unblocked', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8');
+    const end = src.indexOf('const CLAUDE_EDIT_TOOLS');
+    const comment = src.slice(src.lastIndexOf('// Deny a direct file edit to the GLOBAL', end), end).replace(/\n\/\/ ?/g, ' ');
+    assert.ok(comment.includes('The workspace\'s own .claude/agents and .claude/skills are refused to these tools too (isWorkspaceTeamFolderEdit)'), comment);
+    assert.ok(comment.includes('changed only by Doc\'s SAVE_AGENT / SAVE_SKILL markers'), comment);
+    assert.ok(!/NOT blocked/.test(comment), 'the old claim is gone');
+  });
+
+  test('and the check the page names does what the page says', () => {
+    const { isWorkspaceTeamFolderEdit } = require('../../scripts/permission-hook.js');
+    const ws = path.join(require('node:os').tmpdir(), 'doc-claims-team-folders');
+    for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']) {
+      for (const target of [path.join(ws, '.claude', 'agents', 'helper.md'), path.join(ws, '.claude', 'skills', 'example', 'SKILL.md'), path.join(ws, '.claude', 'agents')]) {
+        assert.strictEqual(isWorkspaceTeamFolderEdit(tool, { file_path: target, notebook_path: target }, ws), true, `${tool} ${path.relative(ws, target)}`);
+      }
+    }
+    for (const target of [path.join(ws, '.claude', 'agents-old', 'x.md'), path.join(ws, '.claude', 'commands', 'x.md')]) {
+      assert.strictEqual(isWorkspaceTeamFolderEdit('Write', { file_path: target }, ws), false, `a neighbor: ${path.relative(ws, target)}`);
+    }
+    for (const tool of ['Read', 'Glob', 'Grep']) {
+      assert.strictEqual(isWorkspaceTeamFolderEdit(tool, { file_path: path.join(ws, '.claude', 'agents', 'helper.md'), path: path.join(ws, '.claude', 'agents') }, ws), false, `${tool} reads`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// scaffold/rundock-guide.md: a change Doc makes when another agent brought it in
+// ---------------------------------------------------------------------------
+
+describe('rundock-guide.md: when another agent brought Doc in, a change is asked for, not reported as made', () => {
+  // In a hand-off every save or delete marker raises a card, and Doc's reply is
+  // written before anyone answers it, so the reply must not say it is done.
+  const guide = fs.readFileSync(path.join(ROOT, 'scaffold', 'rundock-guide.md'), 'utf-8');
+  const section = (() => {
+    const from = guide.indexOf('## Delegated tasks');
+    const to = guide.indexOf('\n## ', from + 1);
+    return from < 0 ? '' : guide.slice(from, to < 0 ? undefined : to);
+  })();
+  const flat = section.replace(/\s+/g, ' ');
+
+  test('Doc is told each change waits for the person\'s Allow on a card', () => {
+    assert.ok(flat.includes('When another agent brought you in, each change waits for the person.'), 'the rule opens with when it applies');
+    assert.ok(flat.includes('Rundock shows the person a card for every save or delete marker in your reply, and nothing is written until they press Allow on it.'), 'what the card does');
+  });
+
+  test('Doc says it has asked, and never that a change is made', () => {
+    assert.ok(flat.includes('say that you have asked for each change and that it is made once they allow it on the card below'), 'asked, not done');
+    assert.ok(flat.includes('Never say an agent or skill has been created, saved, updated or deleted.'), 'no outcome claimed');
+  });
+
+  test('the outcome is Rundock\'s to tell', () => {
+    assert.ok(flat.includes('Rundock tells the next turn what the person decided'), 'the next turn hears it from Rundock');
+  });
+
+  test('the rule is about a hand-off only, and the file says nothing of a card for a direct conversation', () => {
+    const outside = guide.slice(0, guide.indexOf('## Delegated tasks')) + guide.slice(guide.indexOf('\n## ', guide.indexOf('## Delegated tasks') + 1));
+    const outsideFlat = outside.replace(/\s+/g, ' ');
+    assert.ok(!outsideFlat.includes('each change waits for the person'), 'the rule appears only in the hand-off section');
+    assert.ok(!outsideFlat.includes('nothing is written until they press Allow'), 'no card is promised for a direct conversation');
+    const dashes = [0x2013, 0x2014].map((c) => String.fromCharCode(c));
+    assert.ok(!dashes.some((d) => section.includes(d)), 'no em or en dashes');
   });
 });

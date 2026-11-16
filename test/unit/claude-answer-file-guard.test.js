@@ -11,6 +11,8 @@
 // A real child process stands in for Claude here: it reads a user message on
 // stdin, writes with `node -e`-style code, and prints a result line, exactly
 // the shape of a stream-json Claude turn.
+// Its turns run the guard, which watches the home folder's shell startup files.
+require('../helpers/made-up-home.js');
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

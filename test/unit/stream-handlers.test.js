@@ -8,6 +8,7 @@ const { EventEmitter } = require('node:events');
 
 const { _internal: srv } = require('../../server.js');
 const fx = require('../fixtures/stream-json.js');
+const { noteUnstartedWrite } = require('../../lib/runtime/missing-session.js');
 const { makeWorkspace, standardTeam, cleanup } = require('../helpers/workspace.js');
 
 after(cleanup);
@@ -67,15 +68,20 @@ describe('stdout JSONL parsing', () => {
     assert.strictEqual(captured[0]._sessionId, 'sess-42');
   });
 
-  test('once the session starts, nothing kept for a refused start is kept any longer', () => {
+  test('what was kept for a refused start is kept through the init, and spent by the first result', () => {
     // Messages are kept while a process could still be refused, to hand to a
-    // fresh start. Once its session starts it reads them all, and anything
-    // still kept could be sent a second time.
+    // fresh start. An init can come before a refusal, so it is the first
+    // result, proof a turn ran and read what it was sent, that ends the
+    // keeping: anything still kept after it could be sent a second time.
     const entry = makeEntry();
     entry.unstartedWrites = ['written before the session started'];
     srv.wireProcessHandlers(entry, 'convo-1', null, {});
     push(entry, [fx.init('sess-43')]);
-    assert.deepStrictEqual(entry.unstartedWrites, []);
+    assert.deepStrictEqual(entry.unstartedWrites, ['written before the session started'], 'the init alone keeps it');
+    push(entry, [fx.result({ text: 'answered' })]);
+    assert.deepStrictEqual(entry.unstartedWrites, [], 'the result spends it');
+    noteUnstartedWrite(entry, 'written after the result');
+    assert.deepStrictEqual(entry.unstartedWrites, [], 'and nothing written after it is kept to send again');
   });
 
   test('a line split across two chunks is buffered and parsed once complete', () => {

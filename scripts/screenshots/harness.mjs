@@ -160,7 +160,7 @@ export async function setTheme(page, theme) {
   }, theme);
 }
 
-// Org-chart status story (locked by the spec): Dev, Cleo and Reese are working
+// Org-chart status story, fixed for every capture: Dev, Cleo and Reese are working
 // (pulsing green); Cody, Ana and Glen were active at varied recent times. Cody
 // reports to Dev and Ana to Cleo, so it reads as reports handing back to their
 // lead. Times are fixed relative to FIXED_EPOCH (2026-07-18T12:00:00Z), giving

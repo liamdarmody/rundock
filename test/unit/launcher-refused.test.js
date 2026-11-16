@@ -58,7 +58,7 @@ after(async () => {
 function decision(tool_name, tool_input, codeMode) {
   const env = { ...process.env, RUNDOCK: '1', RUNDOCK_WORKSPACE: ws, RUNDOCK_PORT: String(port), RUNDOCK_EXTRA_DIRS: path.join(ws, 'projects') };
   delete env.RUNDOCK_CODE_MODE;
-  delete env.NODE_V8_COVERAGE;
+  env.NODE_V8_COVERAGE = '';
   if (codeMode) env.RUNDOCK_CODE_MODE = '1';
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [HOOK], { env, stdio: ['pipe', 'pipe', 'pipe'] });

@@ -18,9 +18,8 @@
 //   - Action order matches the historical scan order: agent saves, skill
 //     saves, skill deletes, agent deletes, in text order within each kind.
 //   - DELEGATE honours the FIRST marker only; RETURN is a boolean.
-//   - The frontmatter fallback (fenced, then raw) applies only when the
-//     marker scan produced zero save/delete actions; delegation and return
-//     markers do not suppress it.
+//   - Only a marker is an action. An agent file shown without one, fenced
+//     or not, is text, so a reply that previews a file saves nothing.
 (/** @param {any} root @param {() => object} factory */ function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.RundockMarkers = factory();
@@ -103,38 +102,6 @@
     return { actions, delegation, hasReturn };
   }
 
-  // Fallback extraction for responses that carry agent definitions as raw
-  // YAML frontmatter without the marker wrapper. Fenced blocks are tried
-  // first; raw frontmatter blocks only when fenced extraction found nothing.
-  // Returns [{ name, content }].
-  /** @param {string} text @returns {{ name: string, content: string }[]} */
-  function extractFrontmatterAgents(text) {
-    const t = typeof text === 'string' ? text : '';
-    const found = [];
-
-    const fmPattern = /```[^\n]*\n(---\n[\s\S]*?\n---[\s\S]*?)```/g;
-    let fmMatch;
-    while ((fmMatch = fmPattern.exec(t)) !== null) {
-      const block = fmMatch[1].trim();
-      const nameMatch = block.match(/^name:\s*(.+)$/m);
-      const typeMatch = block.match(/^type:\s*(orchestrator|specialist)$/m);
-      if (nameMatch && typeMatch) {
-        found.push({ name: nameMatch[1].trim(), content: block });
-      }
-    }
-    if (found.length) return found;
-
-    const rawBlocks = t.split(/\n(?=---\nname:\s)/).filter(b => b.trim().startsWith('---'));
-    for (const block of rawBlocks) {
-      const nameMatch = block.match(/^name:\s*(.+)$/m);
-      const typeMatch = block.match(/^type:\s*(orchestrator|specialist)$/m);
-      if (nameMatch && typeMatch) {
-        found.push({ name: nameMatch[1].trim(), content: block.trim() });
-      }
-    }
-    return found;
-  }
-
   // Remove marker syntax from display text: RETURN markers, whole
   // SAVE_AGENT/SAVE_SKILL blocks, and DELETE lines.
   /** @param {string} t */
@@ -161,5 +128,5 @@
     return t.replace(/<!-- RUNDOCK:DELEGATE agent=[\w-]+ -->\n?[\s\S]*/g, '');
   }
 
-  return { scanMarkers, extractFrontmatterAgents, stripMarkers, stripDelegateTail };
+  return { scanMarkers, stripMarkers, stripDelegateTail };
 }));

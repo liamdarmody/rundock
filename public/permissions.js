@@ -6,12 +6,15 @@
 // as code-language.js and markers.js.
 //
 // The permission decision path spans THREE layers (see ARCHITECTURE.md):
-// the PreToolUse hook script, the server bridge, and THIS module in the
-// browser. The auto-allow POLICY for low-risk read-only commands lives here,
-// client-side, and nowhere else; what counts as read-only is a separate
-// question, answered once in public/read-only-shell.js and read by the hook as
-// well, because a command the hook read as harmless used to be carded here
-// anyway by a narrower list kept alongside the policy.
+// the PreToolUse hook script, the server bridge, and THIS module. The
+// auto-allow POLICY for low-risk read-only commands and saved "Always allow"
+// answers lives here and only here, and two layers read it: the window, and
+// the server bridge (serverAnswer in lib/http-router.js), which requires this
+// file through the wrapper below and answers a low-risk read and a saved
+// answer itself, so the answer is the same whether or not a window is open. What counts as read-only is a separate question, answered
+// once in public/read-only-shell.js and read by the hook as well, because a
+// command the hook read as harmless used to be carded here anyway by a
+// narrower list kept alongside the policy.
 //
 // ONE ANSWER FOR EACH SHELL, AND NO LIST HERE. A Bash command is low only when
 // isReadOnlyShellCommand reads it as read-only, and a PowerShell command only
@@ -46,7 +49,7 @@
   // command the hook read as harmless was carded here anyway. See
   // public/read-only-shell.js.
   var DISCARDING_REDIRECT_RE = RundockReadOnlyShell.DISCARDING_REDIRECT_RE;
-  var shellSegments = RundockReadOnlyShell.shellSegments;
+  var shellSplits = RundockReadOnlyShell.shellSplits;
   var isReadOnlyShellCommand = RundockReadOnlyShell.isReadOnlyShellCommand;
   var isReadOnlyPowerShellCommand = RundockReadOnlyShell.isReadOnlyPowerShellCommand;
   var isDestructiveShellCommand = RundockReadOnlyShell.isDestructiveShellCommand;
@@ -93,8 +96,9 @@
   function forceIsDestructive(cmd) {
     if (!/-Force\b/i.test(cmd)) return false;
     // Judged per segment: a read with -Force must not shield a removal with
-    // -Force later on the same line.
-    var segs = shellSegments(cmd);
+    // -Force later on the same line. Each segment of both splits is judged
+    // (shellSplits), so one that is a removal in either is one.
+    var segs = shellSplits(cmd);
     for (var i = 0; i < segs.length; i++) {
       if (/-Force\b/i.test(segs[i]) && !FORCE_SAFE_READ_CMDLETS.test(segs[i])) return true;
     }
@@ -123,11 +127,44 @@
     // command with no card at all while this grader stood ready to paint the
     // card it never drew as high risk.
     if (isDestructiveShellCommand(raw)) return 'high';
+    // A `(` INSIDE A WORD, OUTSIDE QUOTES, IS HIGH, SO NO SAVED ANSWER COVERS
+    // IT. zsh runs code written inside a file pattern as it expands the word
+    // (`ls *(e:'cmd':)`, `cat =(cmd)`, `ls x(+fn)`), and a saved answer is
+    // keyed on the leading command alone, so in Notes mode "Always allow ls"
+    // would otherwise cover that code. High risk cards ahead of every saved
+    // answer and never offers one (decidePermission, offersAlwaysAllow). The
+    // mark is the shared view's `wordParen`, the one Code mode's verdict always
+    // asks on, and a view that fails or cannot be read counts as marked.
+    if (hidesCodeInAWord(raw)) return 'high';
     // Command/process substitution used to be tested here and nowhere else,
     // which meant the hook exempted a crossing for text this grader would not
     // auto-allow. It is part of the shared definition of a read now.
     if (isReadOnlyShellCommand(raw)) return 'low';
     return 'medium';
+  }
+  function hidesCodeInAWord(raw) {
+    return hiddenCodeReason(raw) !== null;
+  }
+  // Why the view marks a line: 'pattern' for a `(` inside a word it read,
+  // 'unread' for a view that failed or stopped short, null for no mark.
+  function hiddenCodeReason(raw) {
+    var view;
+    try { view = RundockReadOnlyShell.shellView(raw); } catch (e) { return 'unread'; }
+    if (view.wordParen === false) return null;
+    return view.ok === false ? 'unread' : 'pattern';
+  }
+  // THE CARD SAYS WHY A LINE THE BRACKET RULE GRADES HIGH ASKS, in the
+  // context sentence the Bash branch of describeToolRequest gives. Only for a
+  // line graded high by that rule: one the destructive test grades high first
+  // keeps the sentence its leading command gives.
+  const HIDDEN_CODE_COPY = {
+    pattern: 'This line has a parenthesis inside a word, which the shell can use to run hidden code, so Rundock asks every time and there is no Always allow.',
+    unread: 'Rundock could not read this line all the way through, so it asks every time and there is no Always allow.',
+  };
+  function hiddenCodeCopy(raw) {
+    if (isDestructiveShellCommand(raw)) return null;
+    var reason = hiddenCodeReason(raw);
+    return reason ? HIDDEN_CODE_COPY[reason] : null;
   }
 
   // A connector action that sends, replies or forwards is high risk for the
@@ -192,6 +229,9 @@
     // .mcp.json: a stdio server is a command run outside the sandbox. High, so
     // it is carded ahead of every standing allow and never offers one.
     if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') return 'high';
+    // Doc's change to an agent or skill in a hand-off (lib/agents/team-markers.js):
+    // the files every later run follows, so no standing allow answers it.
+    if (isTeamCard(toolName)) return 'high';
     if (toolName.startsWith('mcp__')) {
       // MCP reads auto-approve in the permission hook, so by the time a request
       // reaches the card it's a write or destructive action. Flag destructive ones
@@ -218,7 +258,9 @@
       detail = cmd;
       const bin = bashBin(cmd);
       summary = input.description || BASH_DESCRIPTIONS[bin] || `Run ${bin}`;
-      if (bin === 'rm') context = 'This will permanently delete files';
+      const hidden = hiddenCodeCopy(cmd);
+      if (hidden) context = hidden;
+      else if (bin === 'rm') context = 'This will permanently delete files';
       else if (bin === 'sudo') context = 'This runs with elevated privileges';
       else if (/git\s+push/.test(cmd)) context = 'This will push changes to a remote repository';
       else if (/git\s+reset\s+--hard/.test(cmd)) context = 'This will discard uncommitted changes';
@@ -262,6 +304,8 @@
       detail = input.file_path || '';
     } else if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') {
       ({ summary, context, detail } = connectorCopy(toolName, input));
+    } else if (isTeamCard(toolName)) {
+      ({ summary, context, detail } = teamCopy(toolName, input));
     } else if (toolName.startsWith('mcp__')) {
       const parts = toolName.split('__');
       const server = connectorServerName(toolName);
@@ -342,6 +386,24 @@
     }
     said.push('Rundock asks about every connector an agent adds or removes, so there is no Always allow.');
     return { summary: `${verb} the connector ${i.name || ''}`.trim(), context: said.join(' '), detail: lines.length ? lines.join('\n') : JSON.stringify(i) };
+  }
+
+  // THE CARD FOR DOC'S CHANGE IN A HAND-OFF: for a save, the whole file, since the
+  // server writes exactly what it shows. Line breaks and tabs are kept; any other
+  // control character is shown by its escape, as on the connector card.
+  const TEAM_CARDS = ['SaveAgent', 'DeleteAgent', 'SaveSkill', 'DeleteSkill'];
+  function isTeamCard(toolName) { return TEAM_CARDS.indexOf(toolName) !== -1; }
+  function teamCopy(toolName, input) {
+    const i = input || {};
+    const kind = /Skill$/.test(toolName) ? 'skill' : 'agent';
+    const action = /^Delete/.test(toolName) ? 'delete' : (i.action === 'replace' ? 'replace' : 'add');
+    const said = (v) => escapeControl(String(v == null ? '' : v));
+    const follow = kind === 'agent' ? 'Agents follow their instructions every time they run' : 'Agents follow a skill\'s instructions whenever they use it';
+    const context = `${said(i.by || 'Another agent')} brought Doc in, and Doc asked Rundock to ${action} this ${kind}${i.file ? ` (${said(i.file)})` : ''}. `
+      + `${follow}, so check ${action === 'delete' ? 'this is the one to delete' : 'what would be written'} before you allow it. `
+      + 'Rundock asks about every change Doc makes when another agent brought it in, so there is no Always allow.';
+    const detail = action === 'delete' ? said(i.file) : String(i.content == null ? '' : i.content).replace(CONTROL_ALL, (c) => (c === '\n' || c === '\t' ? c : escapeControl(c)));
+    return { summary: `${action[0].toUpperCase()}${action.slice(1)} the ${kind} ${said(i.name)}`, context, detail };
   }
 
   // Key for always-allow matching. Null when there is nothing to save, and
@@ -626,7 +688,7 @@
   function alwaysAskCopy(crossing) {
     if (!crossing) return null;
     if (crossing.secret) return ALWAYS_ASK_COPY.secret;
-    if (crossing.answerFile) return answerFileCopy(crossing.path);
+    if (crossing.answerFile) return answerFileCopy(crossing.path, crossing.startupFile);
     if (crossing.instructionFile) return ALWAYS_ASK_COPY.instructionFile;
     if (crossing.hiddenHome) return hiddenHomeCopy(crossing.hiddenHome, crossing.write === true);
     if (crossing.persistenceSurface) return ALWAYS_ASK_COPY.persistenceSurface;
@@ -807,7 +869,23 @@
         + 'decides what runs on your computer, outside the sandbox, the next time you reconnect. An agent can request a '
         + 'change to it, but never keep the permission: this asks every time, and there is no option to stop being asked.',
     },
+    // `~/.zshrc` and the other shell startup files (SHELL_STARTUP_FILES in the hook).
+    startup: {
+      summary: 'Wants to change what runs when you open a terminal',
+      context: 'This file runs each time you open a terminal, with your full access and outside every sandbox, so a change to '
+        + 'it decides what runs on your computer. An agent can request a change to it, but never keep the permission: this '
+        + 'asks every time, and there is no option to stop being asked.',
+    },
+    // Rundock's record of which startup files an agent could have changed.
+    record: {
+      summary: 'Wants to change Rundock\'s own record',
+      context: 'This is Rundock\'s own record of which shell startup files an agent could have changed, and only Rundock '
+        + 'writes it. An agent can request a change to it, but never keep the permission: this asks every time, and there '
+        + 'is no option to stop being asked.',
+    },
   };
+  const STARTUP_NAMES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout', '.bash_profile', '.bash_login', '.profile', '.bashrc', '.bash_logout'];
+  const RECORD_NAMES = ['.rundock-startup-file-exposure.json', '.startup-file-exposure.json'];
   function answerFileKind(paths) {
     const kinds = (Array.isArray(paths) ? paths : [paths]).map((p) => {
       const parts = String(p || '').split(/[\\/]+/).filter(Boolean).map(s => s.toLowerCase());
@@ -817,12 +895,22 @@
       if (parts[n - 1] === '.mcp.json' || (n >= 2 && parts[n - 2] === '.claude' && parts[n - 1] === 'settings.json')) return 'runs';
       if (parts.some((s, i) => s === '.claude' && parts[i + 1] === 'hooks')) return 'runs';
       if (parts.includes('.rundock-console')) return 'console';
+      if (RECORD_NAMES.includes(parts[n - 1])) return 'record';
+      if (STARTUP_NAMES.includes(parts[n - 1]) || (parts[n - 2] === 'fish' && parts[n - 1] === 'config.fish') || (parts[n - 3] === 'fish' && parts[n - 2] === 'conf.d')) return 'startup';
       return 'answers';
     });
-    return ['launcher', 'console', 'runs', 'connectorSecrets'].find(k => kinds.includes(k)) || 'answers';
+    return ['launcher', 'console', 'record', 'startup', 'runs', 'connectorSecrets'].find(k => kinds.includes(k)) || 'answers';
   }
-  function answerFileCopy(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].context; }
-  function answerFileSummary(paths) { return ANSWER_FILE_COPY[answerFileKind(paths)].summary; }
+  // A startup label (the `startup_file` the hook or Codex grading put on the
+  // request) marks a startup file, or a folder holding one, whatever its path
+  // is called: `~/.config/fish`, or `~` itself.
+  function answerFileKindFor(paths, startupLabel) {
+    const kind = answerFileKind(paths);
+    if (!startupLabel || ['launcher', 'console', 'record', 'startup'].includes(kind)) return kind;
+    return answerFileKind(startupLabel) === 'record' ? 'record' : 'startup';
+  }
+  function answerFileCopy(paths, startupLabel) { return ANSWER_FILE_COPY[answerFileKindFor(paths, startupLabel)].context; }
+  function answerFileSummary(paths, startupLabel) { return ANSWER_FILE_COPY[answerFileKindFor(paths, startupLabel)].summary; }
 
   // ── The put-back card ────────────────────────────────────────────────────
   // Rundock has already put back a change to one of the workspace's permission
@@ -836,6 +924,8 @@
     answers: { heading: 'Rundock put back a change to your permission answers', is: 'the file that holds your own answers about what agents may do' },
     launcher: { heading: 'Rundock put back a change to its permission checks', is: 'the file that starts Rundock\'s permission checks' },
     runs: { heading: 'Rundock put back a change to what runs', is: 'a file that decides what Rundock or Claude Code runs' },
+    startup: { heading: 'Rundock put back a change to what runs when you open a terminal', is: 'a file that runs each time you open a terminal' },
+    record: { heading: 'Rundock put back a change to its own record', is: 'Rundock\'s own record of which startup files an agent could have changed' },
   };
   function putBackCardCopy(putBack) {
     const p = putBack || {};
@@ -926,7 +1016,7 @@
   const agentHomeBoundaryCopy = alwaysAskCopy;
 
   return { BASH_DESCRIPTIONS, bashBin, classifyRisk, describeToolRequest, toolAllowKey, decidePermission, offersAlwaysAllow, POWERSHELL_RUNNERS, alwaysAskCopy, answerFileCopy, answerFileSummary, answerFileKind,
-    MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend,
+    MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend, isTeamCard,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
     routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions,

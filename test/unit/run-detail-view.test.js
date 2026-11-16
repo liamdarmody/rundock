@@ -104,10 +104,80 @@ function draw(run, { agentId = 'default', routine = 'Hello World' } = {}) {
   return { w, doc, dom, html: doc.getElementById('run-detail-content').innerHTML };
 }
 
+// The words around a name that opens, pinned exactly.
+const PLAIN_NAMES = "Names in plain text can't be opened here: hidden files and folders, code and config files, "
+  + 'and files that have since been moved or deleted.';
+const OPEN_IN_FILES = 'Open in Files';
+
+// The workspace the records above were written in, and the tree the server
+// would send for it: the record's one file, and nothing else.
+const TREE_ROOT = '/w';
+const fileNode = (p) => ({ type: 'file', name: p.split('/').pop(), path: p, kind: 'note' });
+const folderNode = (p, children) => ({ type: 'folder', name: p.split('/').pop(), path: p, children });
+const TREE = [folderNode('Hello World', [fileNode('Hello World/hello-world-2026-08-24.md')])];
+
+/**
+ * Draw a record with a workspace root and a file tree loaded, as the shell
+ * holds them once the roster and the tree have arrived, and a stand-in for
+ * the Files view's open that records what it was asked to open.
+ */
+function drawLinked(run, { tree = TREE, root = TREE_ROOT, reply = {} } = {}) {
+  const { w, doc, dom } = shell();
+  w.rosterWorkspacePath = root;
+  w.cachedFileTree = tree;
+  w.opened = [];
+  w.openWorkspaceFilePath = (p) => { w.opened.push(p); };
+  w.openRunDetail('default', 'Hello World');
+  w.runArrived({ type: 'run', runId: null, agentId: 'default', routine: 'Hello World', run, ...reply });
+  return { w, doc, dom };
+}
+
 /** The text a reader actually sees, with markup and entities out of the way. */
 function pageText(doc) {
   return doc.getElementById('run-detail-content').textContent.replace(/\s+/g, ' ').trim();
 }
+
+// One line under the start time on a run that started late, with the lead
+// word in the primary text and the rest in the strong secondary.
+describe('a run that started late', () => {
+  const LATE = record({
+    trigger: 'scheduled', startedAt: new Date(2026, 7, 24, 8, 2).toISOString(),
+    dueAt: new Date(2026, 7, 21, 7, 0).toISOString(), dueUnobserved: true,
+  });
+
+  test('says so under the start time, and the chip stays Finished', () => {
+    // The clock built in the page's own realm, so the start time is drawn.
+    const { w, doc, dom } = shell();
+    w.runDetailNow = () => new w.Date(2026, 7, 24, 9, 0);
+    w.openRunDetail('default', 'Hello World');
+    w.runArrived({ type: 'run', runId: null, agentId: 'default', routine: 'Hello World', run: LATE });
+    const late = doc.querySelector('[data-run-detail="late"]');
+    assert.ok(late, 'no late line');
+    const when = doc.querySelector('[data-run-detail="when"]');
+    assert.strictEqual(when.textContent, 'today, 8:02am');
+    assert.strictEqual(late.previousElementSibling, when, 'it sits under the start time');
+    assert.strictEqual(late.textContent.replace(/\s+/g, ' ').trim(),
+      'Ran late. It was due on 21 August at 7:00am. Rundock was closed then, so it started when Rundock next opened.');
+    assert.strictEqual(late.querySelector('b').textContent, 'Ran late.');
+    assert.strictEqual(doc.querySelector('[data-run-detail="chip"]').textContent, 'Finished');
+    const style = (el) => dom.window.getComputedStyle(el);
+    assert.strictEqual(style(late).color, 'var(--text-2-strong)');
+    assert.strictEqual(style(late).backgroundColor, 'var(--elevated)');
+    assert.strictEqual(style(late.querySelector('b')).color, 'var(--text-1)');
+    assert.doesNotMatch(pageText(doc), /caught up/i);
+    dom.window.close();
+  });
+
+  test('is not drawn on an on-time run, a pressed run, or a record with no dueAt', () => {
+    const { dueAt, ...older } = LATE;
+    assert.ok(dueAt);
+    for (const run of [record({ ...LATE, startedAt: new Date(2026, 7, 21, 7, 1).toISOString() }), record({ ...LATE, trigger: 'manual' }), older]) {
+      const { doc, dom } = draw(run);
+      assert.strictEqual(doc.querySelector('[data-run-detail="late"]'), null);
+      dom.window.close();
+    }
+  });
+});
 
 describe('the record on screen', () => {
   test('a run that failed on a system error says so plainly, with the raw words behind Details', () => {
@@ -332,17 +402,26 @@ describe('what the run changed', () => {
     bad.dom.window.close();
   });
 
-  test('the screen says plainly that it cannot open a changed file, and why', () => {
-    // The card allows either: files that open, or a plain statement that this
-    // release cannot. This is the statement, and it has to be ON THE PAGE
-    // rather than in a comment, so a reader who expects a link is told why
-    // there is none instead of clicking a name that does nothing.
-    const { doc, dom } = draw(record());
-    assert.match(pageText(doc), /can't be opened from here yet/i);
-    assert.match(pageText(doc), /records each file as a full path on the computer that ran/i);
-    assert.strictEqual(doc.querySelectorAll('#run-detail-content a[href]').length, 0,
-      'a file name is a link that goes nowhere, which is worse than no link');
-    dom.window.close();
+  test('the screen says which names cannot be opened, under the list, only while one cannot', () => {
+    // A name in plain text beside names that open needs its reason ON THE
+    // PAGE, so a reader is told why it does not open instead of clicking it.
+    // With no tree loaded every name is plain, so the sentence shows; once the
+    // tree lists the file, the name opens and the sentence goes.
+    const plain = draw(record());
+    const note = plain.doc.querySelector('[data-run-detail="plain-names"]');
+    assert.ok(note, 'a list with a plain name says why');
+    assert.strictEqual(note.textContent, PLAIN_NAMES);
+    assert.strictEqual(plain.doc.querySelector('[data-run-detail="files"]').nextElementSibling, note, 'directly under the list');
+    const linked = drawLinked(record());
+    assert.strictEqual(linked.doc.querySelector('[data-run-detail="plain-names"]'), null, 'every name opens, so there is nothing to explain');
+    for (const { doc } of [plain, linked]) {
+      assert.ok(!/can't be opened from here yet|records each file as a full path/i.test(pageText(doc)),
+        'the old reason, which no longer applies, is gone');
+      assert.strictEqual(doc.querySelectorAll('#run-detail-content a[href]').length, 0,
+        'a name that opens is a button, never a link that navigates away');
+    }
+    plain.dom.window.close();
+    linked.dom.window.close();
   });
 
   test('a file is named by the part a reader recognises, with its path underneath', () => {
@@ -541,5 +620,345 @@ describe('the cards a run had refused, on the page', () => {
     assert.strictEqual(doc.querySelector('[data-run-detail="refused"]'), null);
     assert.strictEqual(doc.querySelector('#run-detail-content b'), null);
     dom.window.close();
+  });
+});
+
+/**
+ * The declarations a stylesheet rule gives `selector`, merged across every
+ * rule that names it, read from the stylesheet text. jsdom does not resolve
+ * custom properties, so a token is asserted by name here and its contrast is
+ * measured from tokens.css in test/unit/run-screen-contrast.test.js.
+ */
+function cssRule(selector, src = CSS_SRC) {
+  const out = new Map();
+  for (const m of src.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!m[1].split(',').map(s => s.trim()).includes(selector)) continue;
+    for (const d of m[2].split(';')) {
+      const i = d.indexOf(':');
+      if (i > 0) out.set(d.slice(0, i).trim(), d.slice(i + 1).trim());
+    }
+  }
+  return out;
+}
+
+describe('a run that used the shell, on the page', () => {
+  const SOME = 'This run used the shell. Files written that way are not counted, so this list may be incomplete.';
+  const NONE = 'No files were changed through the editor. This run used the shell, and files written that way are not counted. '
+    + 'Check your workspace if you expect one.';
+  const note = (doc) => doc.querySelector('[data-run-detail="shell-note"]');
+
+  // One test per label, because the note qualifies whichever heading the list
+  // takes, and each heading is reached by a different ending.
+  for (const [label, over] of [
+    ['Files changed', {}],
+    ['Files changed before it stopped', { status: 'failed', error: 'x' }],
+    ['What was recorded before Rundock closed', { status: 'interrupted', endedAt: null, durationMs: null }],
+  ]) {
+    test(`the note sits directly under the "${label}" label of a list with files`, () => {
+      const { doc, dom } = draw(record({ ...over, usedShell: true }));
+      const heading = doc.querySelector('.rd-files-label');
+      assert.strictEqual(heading.textContent, label);
+      assert.ok(note(doc), 'the note is drawn');
+      assert.strictEqual(heading.nextElementSibling, note(doc), 'directly under the label it qualifies');
+      assert.strictEqual(note(doc).textContent, SOME);
+      assert.strictEqual(doc.querySelectorAll('[data-run-detail="file"]').length, 1, 'and the list is still drawn');
+      dom.window.close();
+    });
+  }
+
+  test('on an empty list the note stands in place of "This run changed no files."', () => {
+    const { doc, dom } = draw(record({ files: [], usedShell: true }));
+    assert.strictEqual(note(doc).textContent, NONE);
+    assert.strictEqual(doc.querySelector('.rd-files-label').nextElementSibling, note(doc));
+    assert.strictEqual(doc.querySelector('[data-run-detail="files-empty"]'), null);
+    assert.ok(!pageText(doc).includes('This run changed no files.'));
+    dom.window.close();
+  });
+
+  test('a known list without shell use, and a record with no shell field, draw neither note', () => {
+    for (const run of [record(), record({ usedShell: false }), CHANGED_NOTHING, record({ files: [], usedShell: false })]) {
+      const { doc, dom } = draw(run);
+      assert.strictEqual(note(doc), null);
+      assert.ok(!pageText(doc).includes(SOME) && !pageText(doc).includes(NONE.slice(0, 40)));
+      dom.window.close();
+    }
+    const { doc, dom } = draw(CHANGED_NOTHING);
+    assert.strictEqual(doc.querySelector('[data-run-detail="files-empty"]').textContent, 'This run changed no files.');
+    dom.window.close();
+  });
+
+  test('an unknown list draws neither note, whatever the shell field holds', () => {
+    for (const run of [
+      record({ files: null, filesStatus: 'unknown', filesReason: 'no-transcript', usedShell: true }),
+      record({ files: null, filesStatus: 'unknown', filesReason: 'running', status: 'running', usedShell: true }),
+    ]) {
+      const { doc, dom } = draw(run);
+      assert.strictEqual(note(doc), null);
+      assert.ok(!pageText(doc).includes(SOME) && !pageText(doc).includes(NONE.slice(0, 40)),
+        'a list nobody can read says nothing about the shell');
+      dom.window.close();
+    }
+  });
+
+  test('the note is a 1px border edge on the elevated fill, its words in the strong secondary text', () => {
+    const rule = cssRule('.rd-note');
+    assert.strictEqual(rule.get('border'), '1px solid var(--border)');
+    assert.strictEqual(rule.get('background'), 'var(--elevated)');
+    assert.strictEqual(rule.get('color'), 'var(--text-2-strong)');
+  });
+});
+
+describe('a changed file opens from the record', () => {
+  const names = (doc) => [...doc.querySelectorAll('[data-run-detail="file-name"]')];
+  const TWO = record({ files: [
+    { path: '/w/Hello World/hello-world-2026-08-24.md', tool: 'Write', change: 'created', at: null, source: 'transcript' },
+    { path: '/w/scripts/tidy.py', tool: 'Write', change: 'created', at: null, source: 'transcript' },
+  ] });
+
+  test('a name the tree lists is a button titled "Open in Files", and one it does not list is plain text', () => {
+    const { doc, dom } = drawLinked(TWO);
+    const [linked, plain] = names(doc);
+    assert.strictEqual(linked.tagName, 'BUTTON');
+    assert.strictEqual(linked.type, 'button');
+    assert.strictEqual(linked.title, OPEN_IN_FILES);
+    assert.strictEqual(linked.textContent, 'hello-world-2026-08-24.md');
+    assert.strictEqual(plain.tagName, 'SPAN');
+    assert.strictEqual(plain.textContent, 'tidy.py');
+    assert.strictEqual(doc.querySelectorAll('[data-run-detail="file"]')[1].querySelector('button'), null,
+      'a name the tree does not list has no control at all');
+    assert.strictEqual(doc.querySelector('[data-run-detail="plain-names"]').textContent, PLAIN_NAMES,
+      'and the list says why one name is plain');
+    dom.window.close();
+  });
+
+  test("clicking a linked name opens the tree's own path in Files, never the recorded string", () => {
+    const { w, doc, dom } = drawLinked(TWO);
+    names(doc)[0].click();
+    assert.deepStrictEqual(w.opened, ['Hello World/hello-world-2026-08-24.md']);
+    names(doc)[1].click();
+    assert.deepStrictEqual(w.opened, ['Hello World/hello-world-2026-08-24.md'], 'a plain name opens nothing');
+    dom.window.close();
+  });
+
+  test('a second click on a linked name opens the same file again', () => {
+    const { w, doc, dom } = drawLinked(TWO);
+    names(doc)[0].click();
+    names(doc)[0].click();
+    assert.deepStrictEqual(w.opened, ['Hello World/hello-world-2026-08-24.md', 'Hello World/hello-world-2026-08-24.md']);
+    dom.window.close();
+  });
+
+  // The click asks the matcher again with the root, a forward slash and the
+  // drawn path, which under a Windows root is a path of mixed separators. The
+  // matcher maps them before the prefix check, so the click still opens the
+  // tree's forward-slash path.
+  test("under a Windows root, a click opens the tree's forward-slash path", () => {
+    const run = record({ files: [{
+      path: 'C:\\Users\\me\\Vault\\notes\\plan.md', tool: 'Write', change: 'created', at: '2026-08-24T00:30:43.206Z', source: 'transcript',
+    }] });
+    const tree = [folderNode('notes', [fileNode('notes/plan.md')])];
+    const { w, doc, dom } = drawLinked(run, { root: 'C:\\Users\\me\\Vault', tree });
+    const [name] = names(doc);
+    assert.strictEqual(name.tagName, 'BUTTON', 'the name links under a Windows root');
+    name.click();
+    assert.deepStrictEqual(w.opened, ['notes/plan.md'], 'and opens the path the tree gives it');
+    name.click();
+    assert.deepStrictEqual(w.opened, ['notes/plan.md', 'notes/plan.md'], 'again on a second click');
+    dom.window.close();
+  });
+
+  // A workspace opened through a symbolic link. A run records its files under
+  // the folder the link resolves to, so the reply carrying the record names
+  // that spelling beside the workspace it was read from.
+  const RESOLVED = record({ files: [{
+    path: '/private/w/Hello World/hello-world-2026-08-24.md', tool: 'Write', change: 'created', at: '2026-08-24T00:30:43.206Z', source: 'transcript',
+  }] });
+
+  test("a file recorded under a linked workspace's resolved folder links, and opens the tree's path", () => {
+    const { w, doc, dom } = drawLinked(RESOLVED, { reply: { workspace: TREE_ROOT, workspaceRealPath: '/private/w' } });
+    const [name] = names(doc);
+    assert.strictEqual(name.tagName, 'BUTTON', 'the name links');
+    name.click();
+    assert.deepStrictEqual(w.opened, ['Hello World/hello-world-2026-08-24.md'], 'and the click opens the tree\'s own path');
+    assert.strictEqual(doc.querySelector('[data-run-detail="plain-names"]'), null, 'with no plain name to explain');
+    dom.window.close();
+  });
+
+  test('the resolved folder counts only for the workspace the reply was read from', () => {
+    for (const reply of [{}, { workspace: '/elsewhere', workspaceRealPath: '/private/w' }, { workspace: TREE_ROOT, workspaceRealPath: 42 }]) {
+      const { doc, dom } = drawLinked(RESOLVED, { reply });
+      assert.strictEqual(names(doc)[0].tagName, 'SPAN', `${JSON.stringify(reply)}: the name stays plain`);
+      dom.window.close();
+    }
+    // With no workspace known to the shell, a reply naming none is not a
+    // match for it: the resolved folder alone links nothing.
+    const { doc, dom } = drawLinked(RESOLVED, { root: null, reply: { workspace: null, workspaceRealPath: '/private/w' } });
+    assert.strictEqual(names(doc)[0].tagName, 'SPAN', 'with no root known, the name stays plain');
+    dom.window.close();
+  });
+
+  test("a name and path holding quotes and markup render as their own characters and open the tree's path", () => {
+    // A file of this name is one the tree can list: it ends .md and starts
+    // with no dot. So it renders as a button, and what is tested is that the
+    // path reaches the click as data, never as markup or as script.
+    const name = `It's "done" <b>now <img src=x onerror="window.__xss=1">.md`;
+    const tree = [folderNode('notes', [fileNode(`notes/${name}`)])];
+    const run = record({ files: [{ path: `/w/notes/${name}`, tool: 'Write', change: 'created', at: null, source: 'transcript' }] });
+    const { w, doc, dom } = drawLinked(run, { tree });
+    const content = doc.getElementById('run-detail-content');
+    const [button] = names(doc);
+    assert.strictEqual(button.tagName, 'BUTTON');
+    assert.strictEqual(button.textContent, name);
+    assert.strictEqual(content.querySelector('b, img'), null, 'the name created no element');
+    assert.deepStrictEqual([...button.attributes].map(a => a.name).sort(),
+      ['class', 'data-path', 'data-run-detail', 'onclick', 'title', 'type'], 'no attribute was broken out of');
+    assert.strictEqual(button.getAttribute('onclick'), 'runDetailOpenFile(this)', 'the handler carries no path');
+    button.click();
+    assert.deepStrictEqual(w.opened, [`notes/${name}`]);
+    assert.notStrictEqual(w.__xss, 1);
+    dom.window.close();
+  });
+
+  test('a click on a name whose file has left the tree opens nothing, and the name turns plain', () => {
+    const { w, doc, dom } = drawLinked(TWO);
+    assert.strictEqual(names(doc)[0].tagName, 'BUTTON', 'sanity: the name opened when it was drawn');
+    // The tree changes underneath the drawn screen, before any redraw.
+    w.cachedFileTree = [folderNode('Hello World', [])];
+    names(doc)[0].click();
+    assert.deepStrictEqual(w.opened, [], 'a file the current tree no longer lists is not opened');
+    assert.strictEqual(names(doc)[0].tagName, 'SPAN', 'and the screen now agrees with the tree');
+    dom.window.close();
+  });
+
+  test('names link when the tree arrives, and turn plain when a later tree drops the file', () => {
+    const { w, doc, dom } = drawLinked(record(), { tree: null });
+    assert.strictEqual(names(doc)[0].tagName, 'SPAN', 'with no tree loaded every name is plain');
+    assert.ok(doc.querySelector('[data-run-detail="plain-names"]'), 'and the list says why');
+    w.cachedFileTree = TREE;
+    w.runDetailTreeUpdated();
+    assert.strictEqual(names(doc)[0].tagName, 'BUTTON', 'the tree arrived, so the name links');
+    assert.strictEqual(doc.querySelector('[data-run-detail="plain-names"]'), null);
+    w.cachedFileTree = [folderNode('Hello World', [])];
+    w.runDetailTreeUpdated();
+    assert.strictEqual(names(doc)[0].tagName, 'SPAN', 'the file was deleted since the draw, so the name is plain again');
+    assert.ok(doc.querySelector('[data-run-detail="plain-names"]'));
+    dom.window.close();
+  });
+
+  test('a tree push that changes no name leaves the screen as drawn, focus included', () => {
+    // The client asks for the tree after every file-writing tool call, and
+    // the server sends it to every client: a redraw on each would take
+    // keyboard focus off the name, or off Stop, every turn.
+    const { w, doc, dom } = drawLinked(record());
+    const button = names(doc)[0];
+    button.focus();
+    w.cachedFileTree = JSON.parse(JSON.stringify(TREE));
+    w.runDetailTreeUpdated();
+    assert.strictEqual(names(doc)[0], button, 'the name was not redrawn');
+    assert.strictEqual(doc.activeElement, button, 'and keeps focus');
+    dom.window.close();
+  });
+
+  test('leaving the screen and coming back draws the same links, plain names and note', () => {
+    const run = record({ ...TWO, usedShell: true });
+    const { w, doc, dom } = drawLinked(run);
+    const before = doc.getElementById('run-detail-content').innerHTML;
+    assert.ok(doc.querySelector('[data-run-detail="shell-note"]') && names(doc)[0].tagName === 'BUTTON' && names(doc)[1].tagName === 'SPAN',
+      'sanity: the first draw has a link, a plain name and the note');
+    w.runDetailBack();
+    assert.strictEqual(w.navigatedTo, 'routines');
+    w.openRunDetail('default', 'Hello World');
+    w.runArrived({ type: 'run', runId: null, agentId: 'default', routine: 'Hello World', run });
+    assert.strictEqual(doc.getElementById('run-detail-content').innerHTML, before);
+    dom.window.close();
+  });
+});
+
+describe('a linked name and the plain-name sentence, in the stylesheet', () => {
+  test('a linked name draws in --link-text, underlined at rest, thickening to 2px on hover', () => {
+    const rest = cssRule('.rd-file-link');
+    assert.strictEqual(rest.get('color'), 'var(--link-text)');
+    assert.strictEqual(rest.get('text-decoration'), 'underline');
+    assert.strictEqual(rest.get('text-underline-offset'), '2px');
+    assert.strictEqual(cssRule('.rd-file-link:hover').get('text-decoration-thickness'), '2px');
+  });
+
+  test('a linked name shows keyboard focus as a 2px --accent-control ring at a 2px offset', () => {
+    const focus = cssRule('.rd-file-link:focus-visible');
+    assert.strictEqual(focus.get('outline'), '2px solid var(--accent-control)');
+    assert.strictEqual(focus.get('outline-offset'), '2px');
+  });
+
+  test('a linked name is a button with none of a button\'s chrome', () => {
+    const rest = cssRule('.rd-file-link');
+    assert.strictEqual(rest.get('background'), 'none');
+    assert.strictEqual(rest.get('border'), '0');
+    assert.strictEqual(rest.get('padding'), '0');
+    assert.strictEqual(rest.get('font-family'), 'inherit');
+    assert.strictEqual(rest.get('cursor'), 'pointer');
+  });
+
+  test('the plain-name sentence draws in the strong secondary text', () => {
+    assert.strictEqual(cssRule('.rd-cannot-open').get('color'), 'var(--text-2-strong)');
+  });
+});
+
+describe('Stop this run is a neutral outline until it is pointed at', () => {
+  const RUNNING = record({ status: 'running', endedAt: null, durationMs: null, files: null, filesStatus: 'unknown', filesReason: 'running' });
+  // Every rule, in the run screen's stylesheet and in the settings one whose
+  // button classes it used to borrow, that names one of `classes`.
+  const SHEETS = CSS_SRC + read('public', 'styles', 'views', 'settings.css');
+  const rulesFor = (classes) => [...SHEETS.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .flatMap(m => m[1].split(',').map(s => s.trim())
+      .filter(s => classes.some(c => new RegExp(`\\.${c}(?![\\w-])`).test(s)))
+      .map(s => [s, cssRule(s, SHEETS)]));
+
+  test('the control carries none of the danger button\'s classes, before or after it is pressed', () => {
+    const { w, doc, dom } = draw(RUNNING);
+    const stop = () => doc.querySelector('[data-run-detail="stop"]');
+    assert.strictEqual(stop().textContent, 'Stop this run');
+    assert.deepStrictEqual([...stop().classList], ['rd-stop']);
+    w.runDetailStop();
+    assert.strictEqual(stop().textContent, 'Stopping…');
+    assert.deepStrictEqual([...stop().classList], ['rd-stop']);
+    dom.window.close();
+  });
+
+  test('at rest: no fill, a --text-1 label and a 1px --border-strong edge', () => {
+    const rest = cssRule('.rd-stop');
+    assert.strictEqual(rest.get('background'), 'transparent');
+    assert.strictEqual(rest.get('color'), 'var(--text-1)');
+    assert.strictEqual(rest.get('border'), '1px solid var(--border-strong)');
+  });
+
+  test('on hover: the label and edge in --danger-text over a 5% --danger tint on --elevated', () => {
+    const hover = cssRule('.rd-stop:not(:disabled):hover');
+    assert.strictEqual(hover.get('background'), 'color-mix(in srgb, var(--danger) 5%, var(--elevated))');
+    assert.strictEqual(hover.get('color'), 'var(--danger-text)');
+    assert.strictEqual(hover.get('border-color'), 'var(--danger-text)');
+  });
+
+  test('on keyboard focus: the same colors, plus a 2px --accent-control ring', () => {
+    const focus = cssRule('.rd-stop:focus-visible');
+    assert.strictEqual(focus.get('background'), 'color-mix(in srgb, var(--danger) 5%, var(--elevated))');
+    assert.strictEqual(focus.get('color'), 'var(--danger-text)');
+    assert.strictEqual(focus.get('border-color'), 'var(--danger-text)');
+    assert.strictEqual(focus.get('outline'), '2px solid var(--accent-control)');
+    assert.strictEqual(focus.get('outline-offset'), '2px');
+  });
+
+  test('no rule gives the control a --danger fill in any state', () => {
+    const { w, doc, dom } = draw(RUNNING);
+    const classes = [...doc.querySelector('[data-run-detail="stop"]').classList];
+    w.runDetailStop();
+    classes.push(...doc.querySelector('[data-run-detail="stop"]').classList);
+    dom.window.close();
+    const rules = rulesFor([...new Set(classes)]);
+    assert.ok(rules.length >= 3, 'sanity: the rules that draw the control were found');
+    for (const [selector, decl] of rules) {
+      for (const prop of ['background', 'background-color']) {
+        assert.notStrictEqual((decl.get(prop) || '').trim(), 'var(--danger)', `${selector} fills the control with --danger`);
+      }
+    }
   });
 });

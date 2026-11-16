@@ -7,8 +7,9 @@
 //
 // On Windows no sandbox sits under the card, so whether a PowerShell command
 // runs with no card is decided on this path and nowhere else. A listed read is
-// allowed with no card. A read with a write or a send after it is carded, and
-// the hook is given no allow until a person answers. The same commands are
+// allowed with no card: the server answers it itself, from the decision the
+// window makes, so it never reaches the window. A read with a write or a send
+// after it is carded, and the hook is given no allow until a person answers. The same commands are
 // graded in process in test/unit/permissions.test.js and drawn as cards in
 // test/unit/powershell-read-cards.test.js.
 const { test, describe, before, after } = require('node:test');
@@ -152,13 +153,16 @@ async function settle(r) {
 describe('Notes mode, through the hook, the server and the client', () => {
   for (const command of READS) {
     test(`a listed read is allowed with no card: ${command}`, async () => {
-      const r = await request(command);
-      try {
-        assert.strictEqual(r.card, null, 'no card was drawn');
-        assert.deepStrictEqual(r.answers().map((m) => ({ allow: m.allow, card: m.card })), [{ allow: true, card: undefined }],
-          'allowed once, by the client, with no card');
-        assert.strictEqual((await r.done).decision, 'allow', 'and the hook is told to allow it');
-      } finally { await settle(r); }
+      const since = client.messages.length;
+      const sentBefore = sent.length;
+      const cardsBefore = document.querySelectorAll('[id^="perm-"]').length;
+      assert.strictEqual((await runHook(command)).decision, 'allow', 'the hook is told to allow it');
+      // Long enough for a request sent toward the window to have arrived.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.deepStrictEqual(client.messages.slice(since).filter((m) => m.type === 'control_request'), [],
+        'answered by the server: nothing reached the window');
+      assert.deepStrictEqual(sent.slice(sentBefore), [], 'and the window answered nothing');
+      assert.strictEqual(document.querySelectorAll('[id^="perm-"]').length, cardsBefore, 'no card was drawn');
     });
   }
 

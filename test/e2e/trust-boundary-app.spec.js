@@ -9,6 +9,7 @@ const base = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
 const { appendRawCoverage, writeLcov, isClientEntry } = require('./coverage.js');
+const { readAppendedLog } = require('../helpers/appended-log.js');
 
 const test = base.test.extend({
   page: async ({ page }, use) => {
@@ -254,8 +255,8 @@ test.describe('asking an agent in the app', () => {
     // composer text, and never the line that says who drafted it.
     await page.locator('#send-btn').click();
     const promptsFile = path.join(workspace, 'stub-prompts.jsonl');
-    await expect.poll(() => (fs.existsSync(promptsFile) ? fs.readFileSync(promptsFile, 'utf8') : ''), { timeout: 15_000 }).toContain('Summarise the risk');
-    const prompts = fs.readFileSync(promptsFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((p) => p.agent === 'wren');
+    await expect.poll(() => readAppendedLog(promptsFile).map((p) => p.prompt).join('\n'), { timeout: 15_000 }).toContain('Summarise the risk');
+    const prompts = readAppendedLog(promptsFile).filter((p) => p.agent === 'wren');
     const last = prompts[prompts.length - 1].prompt;
     expect(last.endsWith('Summarise the risk'), 'the composer text reaches the agent').toBe(true);
     expect(last).not.toContain('Drafted by');

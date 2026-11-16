@@ -76,12 +76,23 @@ after(async () => {
   fs.rmSync(outside, { recursive: true, force: true });
 });
 
+// How long the hook gets to answer. A route that leaves a request unanswered
+// leaves the hook waiting out its own five-minute request timeout, and a test
+// waiting on the hook then holds the suite for those minutes before its
+// assertions on the answer can fail. Every hook here answers in about a
+// second, so one still running after this is ended, and its answer is what it
+// printed, which is nothing: those assertions then fail at once.
+const HOOK_ANSWER_MS = 10000;
 function runHook(env, input) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [HOOK], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
+    const unanswered = setTimeout(() => child.kill('SIGKILL'), HOOK_ANSWER_MS);
     child.stdout.on('data', (d) => { out += d; });
-    child.on('close', () => { let parsed = null; try { parsed = JSON.parse(out); } catch (e) { /* raw kept */ } resolve(parsed); });
+    child.on('close', () => {
+      clearTimeout(unanswered);
+      let parsed = null; try { parsed = JSON.parse(out); } catch (e) { /* raw kept */ } resolve(parsed);
+    });
     child.stdin.end(JSON.stringify(input));
   });
 }

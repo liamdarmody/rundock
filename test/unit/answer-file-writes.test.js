@@ -185,10 +185,10 @@ describe('a command asks about an answer file only when it can write it', () => 
   // the runtime's own settings would otherwise pass as a read of them.
   test('tree -o and file -C are not reads in the shared vocabulary', () => {
     const { isReadOnlyShellCommand } = require('../../public/read-only-shell.js');
-    for (const c of ['tree -o out.txt', 'tree -ao out.txt .', 'file -C -m magic', 'file --compile -m magic']) {
+    for (const c of require('../fixtures/bash-reads.js').LISTER_WRITES) {
       assert.strictEqual(isReadOnlyShellCommand(c), false, c);
     }
-    for (const c of ['tree', 'tree -a -L 2 .claude', 'file x.json', 'tree --noreport .']) {
+    for (const c of require('../fixtures/bash-reads.js').LISTER_READS) {
       assert.strictEqual(isReadOnlyShellCommand(c), true, c);
     }
     const home = os.homedir();
@@ -236,7 +236,7 @@ describe('a command asks about an answer file only when it can write it', () => 
   function hookDecision(command, codeMode) {
     const env = { ...process.env, RUNDOCK: '1', RUNDOCK_WORKSPACE: ws, RUNDOCK_PORT: String(closed), RUNDOCK_EXTRA_DIRS: '' };
     delete env.RUNDOCK_CODE_MODE;
-    delete env.NODE_V8_COVERAGE;
+    env.NODE_V8_COVERAGE = '';
     if (codeMode) env.RUNDOCK_CODE_MODE = '1';
     return new Promise((resolve) => {
       const child = spawn(process.execPath, [HOOK], { env, stdio: ['pipe', 'pipe', 'pipe'] });

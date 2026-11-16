@@ -17,7 +17,7 @@
  * behaving perfectly, and teaches its user to ignore the one signal that
  * matters.
  *
- * So: Ran on time and Caught up share the success colour, Caught up one weight
+ * So: Ran on time and Ran late share the success colour, Ran late one weight
  * quieter because it is still a success. Missed is idle grey, the only state
  * where nothing ran at all. Failed is the danger colour. Amber appears
  * nowhere: the palette already spends it on "needs the user, not an error",
@@ -30,8 +30,10 @@
  * NOTHING HERE READS THE MACHINE IT RUNS ON. No clock, no locale, no ambient
  * time zone. `now` and every instant arrive from the caller, day and clock
  * words are arithmetic over local date components, and the zone is a string
- * passed in. So this module behaves identically wherever it runs and whenever,
- * and so does every test of it.
+ * passed in. The one exception is a server in a zone the window is not in:
+ * then the components are the ones Intl gives for that named zone, as numbers.
+ * So this module behaves identically wherever it runs and whenever, and so
+ * does every test of it.
  */
 (/** @param {any} root @param {(editor: any) => object} factory */ function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -69,7 +71,7 @@
    */
   const OUTCOMES = {
     'on-time': { tone: 'ok', lead: 'Ran' },
-    'caught-up': { tone: 'ok-quiet', lead: 'Caught up' },
+    'caught-up': { tone: 'ok-quiet', lead: 'Ran late' },
     'missed': { tone: 'neutral', lead: 'Missed' },
     'failed': { tone: 'failed', lead: 'Failed' },
     // A run somebody deliberately stopped. History, like a missed slot,
@@ -142,23 +144,33 @@
   /**
    * What a row says when the scheduler cannot read its schedule.
    *
-   * THE SILENCE THIS ENDS. `parseSchedule` accepts two shapes and returns null
-   * for everything else, at which point the tick skips the routine with no
-   * error, no warning and no log line. A cron-scheduled routine then sits in a
-   * first-class Routines view looking exactly like a routine, and the silence
-   * has moved from a log nobody reads to a surface everybody reads. Migration
-   * never touches a schedule, so every such entry survives an upgrade exactly
-   * as written, which means anyone arriving from cron arrives with these.
+   * THE SILENCE THIS ENDS. `parseSchedule` accepts daily, weekly, day-set and
+   * monthly shapes and returns null for everything else, at which point the
+   * tick skips the routine with no error, no warning and no log line. A
+   * cron-scheduled routine then sits in a first-class Routines view looking
+   * exactly like a routine, and the silence has moved from a log nobody reads
+   * to a surface everybody reads. Migration never touches a schedule, so every such entry
+   * survives an upgrade exactly as written, which means anyone arriving from
+   * cron arrives with these.
    *
    * IT NAMES WHAT TO CHANGE, BY EXAMPLE. "Unsupported schedule" sends the
    * reader to documentation this product does not put in front of them. The
-   * two shapes that work, written out, send them to the editor instead. Both
-   * are given because a reader whose job is weekly should not have to guess
-   * that the daily example generalises.
+   * editor, and four shapes that work written out, send them to a fix
+   * instead: a reader whose job is weekly or monthly should not have to guess
+   * that the daily example generalises, and the list shows how a list of days
+   * is written.
+   *
+   * A hand-typed day 29 to 31 gets a body of its own (`monthDay`), naming the
+   * last-day form at the file's own time, because that is almost always what
+   * was meant and Rundock will not move the slot itself.
    */
   const SCHEDULE_PROBLEM = {
     lead: 'Rundock cannot read this schedule, so this routine will not run.',
-    body: 'Change it to say every day at 07:00, or a weekday, like every Monday at 07:00.',
+    body: 'Use Edit schedule, or change the file to say every day at 07:00, every weekday at 07:00, '
+      + 'every Monday and Friday at 07:00 or on day 15 of every month at 07:00.',
+    monthDay: 'Day {day} is not in every month, and Rundock will not pick another day for you. '
+      + 'To run on the last day of every month, change it to on the last day of every month at {time}, '
+      + 'or use Edit schedule.',
   };
 
   /**
@@ -255,7 +267,69 @@
     // reads the shipped copy here rather than assembling it out of a template
     // and a variable somewhere else.
     scopedLead: "Every scheduled skill {agent} runs, and when it runs next.",
+    // AND WHEN ROUTINES ARE OFF ON THIS COMPUTER, for this workspace. Said in
+    // place of the workspace line rather than beside it, for the reason the
+    // moved line is: none of these rows is going to fire here.
+    offHereLine: 'These are the routines in {workspace}. Routines are off on this computer, so none of these are running here.',
   };
+
+  /**
+   * THE SWITCH THAT TURNS ROUTINES OFF ON THIS COMPUTER, for this workspace.
+   *
+   * One workspace synced to two computers runs every routine on each, and a
+   * pause in the agent file syncs, so it pauses both. This is the answer kept
+   * on one computer only. `{workspace}` is the workspace's name and
+   * `{computer}` is this computer's, read by the server, so in a browser on a
+   * server it names the server. When no name can be read, `computer` says so.
+   *
+   * NOTHING HERE IS AMBER OR RED. Off is a choice the person made, the same
+   * class of fact as a pause, and it takes the quiet tone a pause does.
+   */
+  const HERE = {
+    label: 'Routines on this computer',
+    onTitle: 'Routines on this computer',
+    onHint: 'Turn it off here if another computer runs these routines, so each one runs once. Applies to {workspace} on {computer} only, and does not sync.',
+    offTitle: 'Routines are off on this computer',
+    offHint: 'Nothing in {workspace} runs on a schedule here. Your other computers are not affected. Turn the switch on to run them here again.',
+    on: 'On',
+    off: 'Off',
+    // In place of Next run on every row, while off.
+    row: 'Off on this computer',
+    computer: 'this computer',
+    workspace: 'this workspace',
+    // A save that did not happen. The switch stays where it was, and says so.
+    failedOff: 'Could not turn routines off on this computer. They are still on here.',
+    failedOn: 'Could not turn routines back on on this computer. They are still off here.',
+  };
+
+  /**
+   * The switch's row, as data: its title, its hint and its word, from the
+   * state the server sent beside the roster. Null when no state was sent,
+   * which is a roster that names no workspace: a switch drawn then would claim
+   * a state nobody read.
+   *
+   * @param {{workspace?: any, here?: {off?: boolean, computer?: any}|null}} [input]
+   */
+  function hereSwitch(input) {
+    const here = input && input.here;
+    if (!here || typeof here !== 'object') return null;
+    const off = here.off === true;
+    const workspace = workspaceWords(input.workspace) || HERE.workspace;
+    const computer = typeof here.computer === 'string' && here.computer.trim() ? here.computer.trim() : HERE.computer;
+    const fill = (text) => text.replace('{workspace}', () => workspace).replace('{computer}', () => computer);
+    return {
+      off,
+      label: HERE.label,
+      title: off ? HERE.offTitle : HERE.onTitle,
+      hint: fill(off ? HERE.offHint : HERE.onHint),
+      word: off ? HERE.off : HERE.on,
+    };
+  }
+
+  /** What the switch row says when a change to it could not be saved. */
+  function hereProblem(wantedOff) {
+    return wantedOff ? HERE.failedOff : HERE.failedOn;
+  }
 
   /**
    * The header this view heads itself with: a title and the sentence under it.
@@ -290,6 +364,8 @@
     let workspaceLine = null;
     if (workspaceName && isServed(input)) {
       workspaceLine = LEAD.workspaceLine.replace('{workspace}', () => workspaceName);
+      // Routines off on this computer: none of these is running here.
+      if (input.offHere) workspaceLine = LEAD.offHereLine.replace('{workspace}', () => workspaceName);
     } else if (workspaceName && servingName) {
       workspaceLine = LEAD.movedLine
         .replace('{workspace}', () => workspaceName)
@@ -488,6 +564,33 @@
   }
 
   /**
+   * The calendar day and clock an instant reads as: on this window's clock,
+   * or on `zone`'s when one is given.
+   *
+   * A zone is given only when the server reads schedules in one this window
+   * is not in (rowClock below). Intl is asked for NUMBERS in that zone, never
+   * for words, so no locale reaches a row. Null when the runtime cannot answer
+   * for the zone, and the row then says no time rather than a wrong one.
+   */
+  function wallClock(when, zone) {
+    if (!zone) {
+      return { year: when.getFullYear(), month: when.getMonth(), day: when.getDate(),
+        weekday: when.getDay(), hour: when.getHours(), minute: when.getMinutes() };
+    }
+    try {
+      const n = {};
+      const options = { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric',
+        hour: 'numeric', minute: 'numeric' };
+      for (const part of Intl.DateTimeFormat('en-US', options).formatToParts(when)) n[part.type] = Number(part.value);
+      if (![n.year, n.month, n.day, n.hour, n.minute].every(Number.isFinite)) return null;
+      const weekday = new Date(Date.UTC(n.year, n.month - 1, n.day)).getUTCDay();
+      return { year: n.year, month: n.month - 1, day: n.day, weekday, hour: n.hour % 24, minute: n.minute };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
    * Whole calendar days from `from` to `to`, counted as days and not as hours.
    *
    * Ten past midnight tomorrow is tomorrow even though it is under three hours
@@ -496,9 +599,7 @@
    * wrong, which is why both ends are flattened to midnight first.
    */
   function dayGap(from, to) {
-    const a = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-    const b = new Date(to.getFullYear(), to.getMonth(), to.getDate());
-    return Math.round((b - a) / 86400000);
+    return Math.round((Date.UTC(to.year, to.month, to.day) - Date.UTC(from.year, from.month, from.day)) / 86400000);
   }
 
   /**
@@ -508,25 +609,28 @@
    * build, which would make this a statement about the machine rather than
    * about the code, and would make every test of it one too.
    */
-  function dayWords(instant, now) {
+  function dayWords(instant, now, zone) {
     const when = asDate(instant);
     const from = asDate(now);
     if (!when || !from) return null;
-    const gap = dayGap(from, when);
+    const a = wallClock(from, zone);
+    const b = wallClock(when, zone);
+    if (!a || !b) return null;
+    const gap = dayGap(a, b);
     if (gap === 0) return 'today';
     if (gap === 1) return 'tomorrow';
     if (gap === -1) return 'yesterday';
-    if (gap > -7 && gap < 7) return DAYS[when.getDay()];
-    return `${when.getDate()} ${MONTHS[when.getMonth()]}`;
+    if (gap > -7 && gap < 7) return DAYS[b.weekday];
+    return `${b.day} ${MONTHS[b.month]}`;
   }
 
   /** The clock, in the same plain words the editor offers times in. */
-  function clockWords(instant) {
+  function clockWords(instant, zone) {
     const when = asDate(instant);
-    if (!when) return null;
-    const hour = when.getHours();
-    const hour12 = hour % 12 === 0 ? 12 : hour % 12;
-    return `${hour12}:${String(when.getMinutes()).padStart(2, '0')}${hour < 12 ? 'am' : 'pm'}`;
+    const at = when ? wallClock(when, zone) : null;
+    if (!at) return null;
+    const hour12 = at.hour % 12 === 0 ? 12 : at.hour % 12;
+    return `${hour12}:${String(at.minute).padStart(2, '0')}${at.hour < 12 ? 'am' : 'pm'}`;
   }
 
   /**
@@ -539,32 +643,72 @@
     return editor.timezoneWords(zone);
   }
 
-  /** "today, 7:00am, London time", the shape every time in this list takes. */
-  function timeWords(instant, now, zone) {
-    const day = dayWords(instant, now);
-    const clock = clockWords(instant);
+  /**
+   * "1 November", the date a monthly slot is named by, however near it is,
+   * on `zone`'s clock when one is given.
+   */
+  function dateWords(instant, zone) {
+    const when = asDate(instant);
+    const at = when ? wallClock(when, zone) : null;
+    return at ? `${at.day} ${MONTHS[at.month]}` : null;
+  }
+
+  /**
+   * "today, 7:00am, London time", the shape every time in this list takes,
+   * worked out on `inZone`'s clock when one is given.
+   */
+  function timeWords(instant, now, zone, inZone) {
+    const day = dayWords(instant, now, inZone);
+    const clock = clockWords(instant, inZone);
     if (!day || !clock) return null;
     const place = zoneWords(zone);
     return place ? `${day}, ${clock}, ${place} time` : `${day}, ${clock}`;
   }
 
   /**
+   * The zone a row's times are named as, and the zone they are worked out in.
+   *
+   * A ROUTINE FIRES ON THE SERVER'S CLOCK. When the server reports a zone this
+   * window is not in, this window's clock shows the right instant at an hour
+   * nobody scheduled: "Every day at 8:00am" beside "Next run: 7:00am". So the
+   * times are worked out in the server's zone and named as it, and the time
+   * shown is the time the routine fires. Otherwise they are this window's
+   * clock, named as the server's zone when it reported one.
+   */
+  function rowClock(input) {
+    const here = (input && input.zone) || null;
+    const server = (input && input.serverZone) || null;
+    if (server && server !== here) return { zone: server, inZone: server };
+    return { zone: server || here, inZone: null };
+  }
+
+  /**
+   * Whether this window cannot work any time out in `inZone`.
+   *
+   * A server can report a zone this window's runtime has no data for, which
+   * an older browser's zone data can do. Then every time on the row comes back
+   * as nothing, so each line that carries one leaves the time out, rather than
+   * print an empty word in its place or fall back to this window's clock.
+   * Asked of a fixed instant, because whether Intl knows a zone does not
+   * depend on when, and this module reads no clock.
+   */
+  function zoneUnreadable(inZone) {
+    return !!inZone && !wallClock(new Date(0), inZone);
+  }
+
+  /**
    * The plain sentence a routine reads as: its schedule, then the skill it
    * runs.
    *
-   * BOTH HALVES ARE LOOKED UP IN THE EDITOR'S OWN LISTS, never formatted from
-   * the string. A schedule the editor never offered has no plain words, so it
+   * READ THROUGH THE EDITOR'S OWN REOPEN AND WORDS, never formatted from the
+   * string. A schedule the editor never offered has no plain words, so it
    * assembles into nothing rather than into a sentence that reads as though
-   * the product understood it.
+   * the product understood it, and the row says a schedule exactly as the
+   * editor's preview does.
    */
   function scheduleWords(schedule) {
-    if (!schedule || typeof schedule !== 'string') return null;
-    const parts = /^every ([a-z]+) at (\d{2}:\d{2})$/.exec(schedule.toLowerCase());
-    if (!parts) return null;
-    const freq = editor.FREQUENCIES.filter(f => f.value === parts[1])[0];
-    const time = editor.times().filter(t => t.value === parts[2])[0];
-    if (!freq || !time) return null;
-    return `Every ${freq.label} at ${time.label}`;
+    const words = editor.whenWords(editor.readSchedule(schedule), true);
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : null;
   }
 
   /**
@@ -688,30 +832,40 @@
   /**
    * What happened last time, in the words and the tone that state gets.
    *
-   * Caught up names BOTH times, the actual and the due, so it is legible as a
+   * Ran late names BOTH times, the actual and the due, so it is legible as a
    * delay rather than an event with no explanation. Missed names the cause,
    * Rundock being closed, and the slot it was closed through.
+   *
+   * A MONTHLY ROUTINE NAMES DATES. Its slot can be weeks before the run that
+   * served it, so the due time carries its date, and a missed slot, which the
+   * scheduler records only once its month has closed, says the month ended
+   * first. Which form a routine is comes from the server (`scheduleKind`).
    */
   function runStatus(input) {
     const kind = outcomeOf(input);
     if (!kind) return null;
     const now = asDate(input && input.now);
-    const zone = (input && input.zone) || null;
+    const { zone, inZone } = rowClock(input);
+    const monthly = input.scheduleKind === 'monthly';
     const outcome = OUTCOMES[kind];
+    // In a zone this window cannot read, the outcome is said with no time.
+    if (zoneUnreadable(inZone)) return { kind: kind, tone: outcome.tone, lead: outcome.lead, text: outcome.lead };
     let text = null;
     if (kind === 'missed') {
       const slot = asDate(input.missedSlot);
       const place = zoneWords(zone);
-      const when = `${clockWords(slot)} ${dayWords(slot, now)}`;
+      const when = `${clockWords(slot, inZone)} ${monthly ? dateWords(slot, inZone) : dayWords(slot, now, inZone)}`;
       text = `Missed: Rundock was closed at ${place ? `${when}, ${place} time` : when}`;
+      if (monthly) text += ', and not opened again before the month ended.';
     } else if (kind === 'caught-up') {
-      text = `Caught up: ran ${timeWords(input.lastStart, now, zone)}, due ${clockWords(input.lastSlot)}`;
+      const due = monthly ? `${dateWords(input.lastSlot, inZone)}, ${clockWords(input.lastSlot, inZone)}` : clockWords(input.lastSlot, inZone);
+      text = `Ran late: ${timeWords(input.lastStart, now, null, inZone)}. Due ${due}.`;
     } else if (kind === 'failed') {
-      text = `Failed: ${timeWords(input.lastStart, now, zone)}`;
+      text = `Failed: ${timeWords(input.lastStart, now, zone, inZone)}`;
     } else if (kind === 'stopped') {
-      text = `Stopped ${timeWords(input.lastStart, now, zone)}`;
+      text = `Stopped ${timeWords(input.lastStart, now, zone, inZone)}`;
     } else {
-      text = `Ran ${timeWords(input.lastStart, now, zone)}`;
+      text = `Ran ${timeWords(input.lastStart, now, zone, inZone)}`;
     }
     return { kind: kind, tone: outcome.tone, lead: outcome.lead, text: text };
   }
@@ -857,13 +1011,21 @@
    * fault, and telling its owner to change a schedule they never wrote is an
    * answer to a question nobody asked.
    *
-   * @param {{schedule?: any, scheduleReadable?: boolean}} [input]
+   * THE BODY FOR A DAY 29 TO 31 IS THE SERVER'S ANSWER TOO, sent beside the
+   * verdict as `unreadableMonthDay`, for the same reason: reading those days
+   * here would be a second copy of the grammar.
+   *
+   * @param {{schedule?: any, scheduleReadable?: boolean, unreadableMonthDay?: {day: number, time: string}|null}} [input]
    */
   function scheduleProblem(input) {
     if (!input || input.scheduleReadable !== false) return null;
     const schedule = input.schedule;
     if (typeof schedule !== 'string' || !schedule.trim()) return null;
-    return { text: `${SCHEDULE_PROBLEM.lead} ${SCHEDULE_PROBLEM.body}` };
+    const fact = input.unreadableMonthDay;
+    const body = fact
+      ? SCHEDULE_PROBLEM.monthDay.replace('{day}', () => String(fact.day)).replace('{time}', () => fact.time)
+      : SCHEDULE_PROBLEM.body;
+    return { lead: SCHEDULE_PROBLEM.lead, body, text: `${SCHEDULE_PROBLEM.lead} ${body}` };
   }
 
   /**
@@ -1138,11 +1300,13 @@
     // says nothing too rather than inventing a time.
     const when = asDate(input.nextRun);
     const now = asDate(input.now);
+    const clock = rowClock(input);
     let timing = '';
-    if (when && now) {
+    // In a zone this window cannot read, the offer names no time.
+    if (when && now && !zoneUnreadable(clock.inZone)) {
       timing = when <= now
         ? ` ${NOT_ENABLED.catchUpGone}`
-        : ` ${NOT_ENABLED.catchUpAhead.replace('{when}', () => timeWords(when, now, input.zone))}`;
+        : ` ${NOT_ENABLED.catchUpAhead.replace('{when}', () => timeWords(when, now, clock.zone, clock.inZone))}`;
     }
     return {
       text: `${NOT_ENABLED.lead} ${NOT_ENABLED.body}${timing}`,
@@ -1172,6 +1336,13 @@
     // worse than silence: it is the exact reassurance the reader came for.
     // The offer takes this line's place on the row.
     if (input && input.enabled === false) return null;
+    // ROUTINES OFF ON THIS COMPUTER: none of them runs here on a schedule, so
+    // every row says so where its next run would be, in a pause's quiet tone.
+    // After a routine nobody turned on, whose offer is the same one it gets
+    // with routines on: Turn on writes the agent file, which every computer
+    // reads. Not when Rundock has moved elsewhere, where the row's note says
+    // more.
+    if (input && input.offHere && isServed(input)) return { text: HERE.row, className: 'next-run paused-label', off: true };
     // Nor does a routine whose schedule nothing here can read. The server does
     // not supply an instant for one today, so on that path this changes
     // nothing; it is here for the row that carries both, which is a state the
@@ -1193,7 +1364,24 @@
     // which is the exact reassurance the reader came for and the one this row
     // must not give. The note below takes its place.
     if (!isServed(input)) return null;
-    const words = timeWords(input && input.nextRun, input && input.now, input && input.zone);
+    // A MONTHLY SLOT THE TICK STILL OWES. The server names a monthly slot that
+    // has passed only when the tick will fire it (it steps over one that was
+    // never owed), so with no refusal it is a catch-up a moment away, and a
+    // time in the past would read as a fault. Daily and weekly keep theirs.
+    const at = asDate(input.nextRun);
+    const now = asDate(input.now);
+    const clock = rowClock(input);
+    // In a zone this window cannot read, no next run rather than one with no time.
+    if (zoneUnreadable(clock.inZone)) return null;
+    if (input.scheduleKind === 'monthly' && !input.refusal && at && now && at <= now) {
+      return { text: `Next run: shortly. It was due ${dateWords(at, clock.inZone)}, ${clockWords(at, clock.inZone)}.`, className: 'next-run' };
+    }
+    // A SLOT A SET OF DAYS STILL OWES, which can only be today's: a chosen
+    // day's slot is caught up that day or not at all.
+    if (input.scheduleKind === 'days' && !input.refusal && at && now && at <= now) {
+      return { text: `Next run: shortly. It was due ${dayWords(at, now, clock.inZone)}, ${clockWords(at, clock.inZone)}.`, className: 'next-run' };
+    }
+    const words = timeWords(input && input.nextRun, input && input.now, clock.zone, clock.inZone);
     if (!words) return null;
     return { text: `Next run: ${words}`, className: 'next-run' };
   }
@@ -1316,8 +1504,8 @@
   }
 
   return {
-    OUTCOMES, LEAD, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, PROMPT_PROBLEM, NOT_SERVED, CATCH_UP_AFTER_MS,
-    actionProblem, emptyState, header,
+    OUTCOMES, LEAD, HERE, EMPTY, ACTION_PROBLEM, NOT_ENABLED, SCHEDULE_PROBLEM, PROMPT_PROBLEM, NOT_SERVED, CATCH_UP_AFTER_MS,
+    actionProblem, emptyState, header, hereSwitch, hereProblem,
     dayWords, clockWords, zoneWords, timeWords, workspaceWords, workspaceNames,
     scheduleWords, routineSentence, sentenceParts,
     RUN_STATUS_WORDS, REFUSALS_UNDERSTOOD, PAUSED_WORDS, RUNNING_WORDS,

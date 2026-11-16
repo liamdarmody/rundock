@@ -107,7 +107,7 @@ describe('the picker reads what discovery writes', () => {
       const option = model.skillChoices({ skills: real.skills, agentId: null }).options[0];
       const draft = model.routineDraft({
         skill: { id: option.id, slug: option.slug, name: option.name },
-        agentId: option.agentId, frequency: 'monday', time: '07:00', runOn: 'local',
+        agentId: option.agentId, frequency: 'week', days: ['monday'], time: '07:00', runOn: 'local',
       });
       assert.ok(draft, 'the real payload builds a routine');
 

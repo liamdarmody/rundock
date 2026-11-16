@@ -12,8 +12,8 @@
  *
  * THE COPY RULE THIS FILE EXISTS TO HOLD, AND IT IS THE ONE MOST LIKELY TO BE
  * GOT WRONG. Where a routine runs is a choice between two options, and only
- * one of them is real in this release. `local` runs while Rundock is open on
- * this computer. The always-on option is reserved and refused, and its whole
+ * one of them is real in this release. `local` runs while Rundock is open, on
+ * each computer that has the workspace open. The always-on option is reserved and refused, and its whole
  * point is that it keeps running while the computer is off. Those words belong
  * to that option and to nothing else. Written onto the local option they would
  * advertise the single thing this release cannot do, at the exact moment the
@@ -25,10 +25,10 @@
  * time zone. A time label is arithmetic and a time zone is supplied by the
  * caller, so this module behaves identically wherever it runs and whenever.
  */
-(/** @param {any} root @param {() => object} factory */ function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.RundockRoutineEditorModel = factory();
-}(typeof self !== 'undefined' ? self : this, function () {
+(/** @param {any} root @param {(scheduleDays: any) => object} factory */ function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./schedule-days.js'));
+  else root.RundockRoutineEditorModel = factory(root.RundockScheduleDays);
+}(typeof self !== 'undefined' ? self : this, function (scheduleDays) {
 
   // What can actually run, mirrored from lib/agents/routines.js.
   //
@@ -44,8 +44,8 @@
    *
    * FOUR SEPARATE STRINGS PER OPTION, NOT ONE. `name` and `meta` are the row.
    * `sentence` is how the option reads inside the plain-words preview, which
-   * is a different grammatical position and therefore different words ("this
-   * computer", not "This computer"). `setupLabel` is the way in for an option
+   * is a different grammatical position and therefore different words ("your
+   * computers", not "Your computers"). `setupLabel` is the way in for an option
    * that is not set up. Keeping them apart is what lets every surface read the
    * option instead of rebuilding its own version of the same sentence.
    *
@@ -57,9 +57,12 @@
   const RUN_ON = [
     {
       value: 'local',
-      name: 'This computer',
-      meta: 'Runs while Rundock is open here.',
-      sentence: 'this computer',
+      // PLURAL, BECAUSE IT IS. A routine carries no machine: every computer
+      // with this workspace open runs it, so "This computer" named a
+      // different computer on each one and promised the routine ran on one.
+      name: 'Your computers',
+      meta: 'Runs on each computer that has this workspace open, while Rundock is open there.',
+      sentence: 'your computers',
       setupLabel: null,
     },
     {
@@ -74,18 +77,25 @@
 
   /**
    * The limitation a synced workspace hits, said plainly where the choice is
-   * made.
+   * made, with the way out.
    *
    * There is no machine identity in a routine and nothing coordinates two
    * copies of a workspace, so a workspace opened on four computers is four
-   * separate local schedulers. Each keeps the guard that stops a re-fire in
-   * memory, filled once when it starts, so each has its own idea of what has
-   * already run for as long as it stays up. That is four runs, and no sync
-   * tool changes it. None of it is solvable in this release, so the copy says
-   * what happens instead of leaving the user to find out.
+   * separate local schedulers, and four runs. The way to run them on one is
+   * the switch on the Routines page that turns routines off on a computer,
+   * for that workspace, without syncing. The second sentence is that way out,
+   * exported on its own so the view can give it weight.
    */
-  const RUN_ON_CAVEAT = 'Routines run on the machine they were made on. '
-    + 'A workspace open on more than one computer runs its routines on each of them.';
+  const RUN_ON_CAVEAT_ACTION = 'To run them on one only, turn routines off on the others, from the Routines page.';
+  const RUN_ON_CAVEAT = 'If you use this workspace on more than one computer, each one runs its routines. '
+    + RUN_ON_CAVEAT_ACTION;
+
+  /**
+   * Added to the local option's meta while routines are off on this computer
+   * for this workspace, so the reader is not told it runs here when it will
+   * not.
+   */
+  const RUN_ON_OFF_HERE = 'Routines are off on this computer, so this one will not run here until you turn them on, from the Routines page.';
 
   /**
    * What happens to this routine when its workspace is not the one open, said
@@ -99,6 +109,9 @@
    * IT NAMES THE CATCH-UP IN THE SAME BREATH, because without it the sentence
    * reads as "you will lose runs" and the answer for most people is that they
    * will not: coming back to the workspace the same day serves the slot.
+   * "That day", not "the same day you return", which read as whichever day
+   * you return: someone away over a weekend would expect Friday's slot on
+   * Monday, and it does not run then.
    *
    * TIGHTENED IN THE DESIGN REVIEW PASS, from two sentences of 41 words to
    * two clauses of 32, joined as one sentence rather than two: "so" carries
@@ -109,29 +122,42 @@
    */
   const WORKSPACE_CAVEAT = 'Rundock only runs the routines of the workspace that is open, '
     + "so this one's do not run while you are elsewhere. "
-    + 'A missed slot is caught up the same day you return.';
+    + 'A missed slot is caught up if Rundock is open again that day.';
+  // A monthly slot is caught up anywhere in its month, so its note says that.
+  const MONTHLY_WORKSPACE_CAVEAT = WORKSPACE_CAVEAT
+    .replace('if Rundock is open again that day.', 'the next time Rundock is open that month.');
 
   const RUN_ON_LABEL = 'Run on';
 
-  // The frequencies the scheduler recognises, and only those.
+  // The frequencies the scheduler recognises, and only those: every day,
+  // every week on the days ticked under the sentence (`weekDays`), and every
+  // month on a day from `monthDays`.
   //
-  // The mock illustrates this field with the word "weekday". The scheduler
-  // reads `every day at HH:MM` or `every <weekday name> at HH:MM` and nothing
-  // else, so a routine saved as "every weekday" would parse, save, appear in
-  // the list and never once fire. Offering it would be the same defect as
-  // promising a run while the computer is off: a control that says something
-  // the product does not do. Every value here round-trips through the
-  // scheduler's own format, asserted in the model's tests.
+  // WEEKDAYS ARE CHOSEN WITH THE DAYS, NOT AS A WORD OF THEIR OWN, and nor is
+  // any single day. The word "weekday" was kept out of this list while the
+  // scheduler could not read it, because a routine saved that way would have
+  // saved, appeared in the list and never once fired. It reads it now, and a
+  // week with Monday to Friday ticked is saved as `every weekday at HH:MM`. A
+  // second way to choose the same days would be a second answer to which one
+  // a routine reopens as. Every set of days the boxes can make is one the
+  // scheduler reads, and every value here round-trips through the scheduler's
+  // own format, asserted in the model's tests.
   const FREQUENCIES = [
     { value: 'day', label: 'day' },
-    { value: 'monday', label: 'Monday' },
-    { value: 'tuesday', label: 'Tuesday' },
-    { value: 'wednesday', label: 'Wednesday' },
-    { value: 'thursday', label: 'Thursday' },
-    { value: 'friday', label: 'Friday' },
-    { value: 'saturday', label: 'Saturday' },
-    { value: 'sunday', label: 'Sunday' },
+    { value: 'week', label: 'week' },
+    { value: 'month', label: 'month' },
   ];
+
+  // The row of days under the sentence when the frequency is `week`: the word
+  // before it, the name of the group, and what the preview line says while no
+  // day is ticked, at rest and once Continue has been pressed.
+  const WEEK_DAYS = {
+    lead: 'on',
+    label: 'Days this routine runs',
+    none: 'Choose at least one day.',
+    noneOnContinue: 'Choose at least one day to continue.',
+  };
+  const ALL_DAYS = scheduleDays.WEEK.map(d => d.value);
 
   // The lead line above each step. The agent's name is substituted rather than
   // concatenated, so every word the editor ships is in this object and a copy
@@ -180,10 +206,14 @@
    */
   const STORED_SCHEDULE_NOTE = "This routine's schedule, {schedule}, is not one this editor can build. "
     + 'Saving replaces it with the one above.';
+  // A hand-typed day 29 to 31, which the editor reopens on the last day.
+  const LAST_DAY_NOTE = "This routine's schedule, {schedule}, is not one this editor can build. "
+    + 'The last day of the month is selected instead. Saving replaces it.';
 
   function storedScheduleNote(input) {
     const schedule = input && typeof input.schedule === 'string' ? input.schedule.trim() : '';
     if (!schedule || readSchedule(schedule)) return null;
+    if (input.unreadableMonthDay) return LAST_DAY_NOTE.replace('{schedule}', schedule);
     return STORED_SCHEDULE_NOTE.replace('{schedule}', schedule);
   }
 
@@ -219,8 +249,14 @@
    * constant can be rendered on a help page and nowhere else while every test
    * still passes; a field that carries it cannot be rendered without it.
    */
-  function runOnField() {
-    return { label: RUN_ON_LABEL, options: runOnOptions(), caveat: RUN_ON_CAVEAT };
+  function runOnField(input) {
+    const offHere = !!(input && input.offHere);
+    const options = runOnOptions().map(option => (offHere && option.value === 'local'
+      ? { ...option, meta: `${option.meta} ${RUN_ON_OFF_HERE}` }
+      : option));
+    return {
+      label: RUN_ON_LABEL, options, caveat: RUN_ON_CAVEAT, caveatAction: RUN_ON_CAVEAT_ACTION,
+    };
   }
 
   /**
@@ -239,13 +275,15 @@
    * reason: a view that assembled the step out of three separate exports could
    * drop this one and still draw a complete-looking step.
    */
-  function scheduleStepFields() {
+  function scheduleStepFields(input) {
     return {
       lead: STEP_LEADS.schedule,
       frequencies: FREQUENCIES,
+      days: monthDays(),
+      week: Object.assign({ days: weekDays() }, WEEK_DAYS),
       times: times(),
-      runOn: runOnField(),
-      workspaceCaveat: WORKSPACE_CAVEAT,
+      runOn: runOnField(input),
+      workspaceCaveat: input && input.frequency === 'month' ? MONTHLY_WORKSPACE_CAVEAT : WORKSPACE_CAVEAT,
     };
   }
 
@@ -381,8 +419,74 @@
     return out;
   }
 
+  /**
+   * The days a monthly routine can run on: 1st to 28th, which every month
+   * has, then the month's last day, drawn after a rule. Days 29 to 31 are not
+   * offered because the scheduler does not read them: they are not in every
+   * month, and nothing moves a slot to another date.
+   */
+  function monthDays() {
+    const out = [];
+    for (let n = 1; n <= 28; n++) {
+      const tens = n % 100 >= 11 && n % 100 <= 13;
+      const suffix = !tens && n % 10 === 1 ? 'st' : !tens && n % 10 === 2 ? 'nd' : !tens && n % 10 === 3 ? 'rd' : 'th';
+      out.push({ value: String(n), label: `${n}${suffix}` });
+    }
+    out.push({ value: 'last', label: 'last day', afterRule: true });
+    return out;
+  }
+
+  /**
+   * The seven days a weekly routine can run on, Monday first: the box's value,
+   * the short name it shows, and the full name it is called by, which
+   * contains the short one.
+   */
+  function weekDays() {
+    return scheduleDays.WEEK.map(d => ({ value: d.value, label: d.short, name: d.name }));
+  }
+
   function frequency(value) {
     return FREQUENCIES.filter(f => f.value === value)[0] || null;
+  }
+
+  function monthDay(value) {
+    return monthDays().filter(d => d.value === value)[0] || null;
+  }
+
+  /**
+   * The builder's values after the frequency changes. Month starts on the 1st
+   * unless a day is already chosen, any other frequency has no day, and the
+   * time stays as it was.
+   *
+   * WEEK STARTS WITH NO DAY TICKED, from every day and from a month alike,
+   * unless it is already week, when it keeps the days it has. A weekly
+   * routine is most often one day, and a set ticked in advance is a guess the
+   * person has to undo: all seven took six unticks to reach one day. The line
+   * under the sentence asks for a day quietly, and Continue saves nothing
+   * until one is ticked.
+   */
+  function chooseFrequency(choice, value) {
+    const from = choice ? choice.frequency : null;
+    const day = value === 'month' ? ((from === 'month' && choice.day) || '1') : null;
+    let days = null;
+    if (value === 'week') days = from === 'week' ? (choice.days || []).slice() : [];
+    return { frequency: value, day, days, time: choice ? choice.time : null };
+  }
+
+  /** The days after one box is ticked or unticked, Monday first. */
+  function toggleDay(days, value) {
+    const was = Array.isArray(days) ? days : [];
+    const now = was.indexOf(value) === -1 ? was.concat(value) : was.filter(v => v !== value);
+    return ALL_DAYS.filter(v => now.indexOf(v) !== -1);
+  }
+
+  /**
+   * Whether the builder is a week with no day ticked, which is the one
+   * schedule it can hold that saves nothing. Continue stays pressable then,
+   * and says why it went nowhere.
+   */
+  function needsADay(input) {
+    return !!input && input.frequency === 'week' && !scheduleDays.daysWords(input.days);
   }
 
   function timeOption(value) {
@@ -401,6 +505,22 @@
   function buildSchedule(input) {
     const freq = frequency(input && input.frequency);
     const time = timeOption(input && input.time);
+    // The day is written without a leading zero, the form the save check and
+    // the scheduler both read.
+    if (freq && freq.value === 'month') {
+      const day = monthDay(input.day);
+      if (!day || !time) return null;
+      return day.value === 'last'
+        ? `on the last day of every month at ${time.value}`
+        : `on day ${day.value} of every month at ${time.value}`;
+    }
+    // A week is saved in the one form its set has: all seven as every day,
+    // Monday to Friday as every weekday, one day by its name, any other set
+    // as its days in week order.
+    if (freq && freq.value === 'week') {
+      const days = scheduleDays.daysWords(input.days);
+      return days && time ? `every ${days} at ${time.value}` : null;
+    }
     if (!freq || !time) return null;
     return `every ${freq.value} at ${time.value}`;
   }
@@ -432,13 +552,28 @@
    */
   function readSchedule(schedule) {
     if (!schedule || typeof schedule !== 'string') return null;
-    const parts = /^every ([a-z]+) at (\d{2}:\d{2})$/.exec(schedule.toLowerCase());
+    // The monthly forms, with one leading zero on the day read as the
+    // scheduler reads it, and the day handed back in the builder's spelling.
+    const monthly = /^on (?:day 0?([1-9]|1\d|2[0-8])|the last day) of every month at (\d{2}:\d{2})$/
+      .exec(schedule.toLowerCase());
+    if (monthly) {
+      const time = timeOption(monthly[2]);
+      if (!time) return null;
+      return { frequency: 'month', day: monthly[1] ? String(Number(monthly[1])) : 'last', time: time.value };
+    }
+    // Every day, or a set of days read by the module the scheduler reads
+    // them through: one day, weekday, or a list. A set reopens as a week with
+    // exactly its days ticked, and all seven reopen as every day, which is
+    // what saving them writes.
+    const parts = DAILY_OR_DAYS.exec(schedule.toLowerCase());
     if (!parts) return null;
-    const freq = frequency(parts[1]);
+    const days = parts[1] === 'day' ? ALL_DAYS : scheduleDays.readDays(parts[1]);
     const time = timeOption(parts[2]);
-    if (!freq || !time) return null;
-    return { frequency: freq.value, time: time.value };
+    if (!days || !time) return null;
+    if (days.length === 7) return { frequency: 'day', time: time.value };
+    return { frequency: 'week', days, time: time.value };
   }
+  const DAILY_OR_DAYS = new RegExp(`^every (day|${scheduleDays.DAYS}) at (\\d{2}:\\d{2})$`);
 
   /**
    * The plain sentence the editor shows back.
@@ -448,12 +583,53 @@
    * this whole module is shaped around.
    */
   function previewSentence(input) {
-    const freq = frequency(input && input.frequency);
-    const time = timeOption(input && input.time);
+    const when = whenWords(input);
     const option = runOnOption(input && input.runOn);
     const skillName = (input && input.skillName) || null;
-    if (!freq || !time || !option || !skillName) return null;
-    return `Run ${skillName} every ${freq.label} at ${time.label}, on ${option.sentence}.`;
+    if (!when || !option || !skillName) return null;
+    return `Run ${skillName} ${when}, on ${option.sentence}.`;
+  }
+
+  /**
+   * "every month on the 15th at 9:00am": the builder's values in words, or
+   * null for values it did not offer. The routine row's sentence reads this
+   * too, so the two say a schedule the same way.
+   *
+   * A WEEK SAYS ITS DAYS as its saved form does: all seven as every day, one
+   * day in full, several by their short names ("every Mon, Wed and Sun"), and
+   * Monday to Friday as "every weekday", which the preview spells out once
+   * for anyone whose working week is another five days. The row (`forRow`)
+   * says only "weekday", so it stays one line.
+   */
+  function whenWords(input, forRow) {
+    const freq = frequency(input && input.frequency);
+    const time = timeOption(input && input.time);
+    if (!freq || !time) return null;
+    if (freq.value === 'week') {
+      const days = scheduleDays.daysWords(input.days);
+      if (!days) return null;
+      const chosen = scheduleDays.WEEK.filter(d => input.days.indexOf(d.value) !== -1);
+      let said = days;
+      if (days === 'weekday') said = forRow ? 'weekday' : 'weekday (Monday to Friday)';
+      else if (days !== 'day') said = chosen.length === 1 ? chosen[0].name : scheduleDays.joined(chosen.map(d => d.short));
+      return `every ${said} at ${time.label}`;
+    }
+    if (freq.value !== 'month') return `every ${freq.label} at ${time.label}`;
+    const day = monthDay(input.day);
+    return day ? `every month on the ${day.label} at ${time.label}` : null;
+  }
+
+  /**
+   * What Edit schedule opens on for a routine on the roster: its own values
+   * when the builder can show them; for a hand-typed day 29 to 31, which the
+   * server reports beside the schedule, month and the last day at the file's
+   * time where the builder offers it; otherwise nothing, and the defaults.
+   */
+  function reopenSchedule(routine) {
+    const read = readSchedule(routine && routine.schedule);
+    if (read || !routine || !routine.unreadableMonthDay) return read;
+    const time = timeOption(routine.unreadableMonthDay.time);
+    return { frequency: 'month', day: 'last', time: time ? time.value : null };
   }
 
   // ===== TIME ZONES, IN WORDS =====
@@ -471,18 +647,27 @@
     return place || null;
   }
 
+  /**
+   * Whose clock the schedule follows: the computer Rundock runs on, which on a
+   * server is the server's.
+   *
+   * THE ZONE IS THE ONE THE SERVER REPORTS, never the window's. A window
+   * reached through a tunnel can be in another zone, and the routine fires on
+   * the server's hour whatever that window says. With no zone reported the
+   * place is left out, and the caption still says whose clock it is.
+   */
   function timezoneCaption(input) {
     const words = timezoneWords(input && input.zone);
-    if (!words) return null;
     const agentName = (input && input.agentName) || null;
     const who = agentName || 'Your agents';
     const verb = agentName ? 'reads' : 'read';
-    return `Your time zone: ${words}. ${who} ${verb} this in your local time, never the Agent Computer's.`;
+    const place = words ? `, ${words} time` : '';
+    return `${who} ${verb} this on the clock of the computer Rundock runs on${place}, never the Agent Computer's.`;
   }
 
   /**
-   * The line under the finished sentence: the zone in words, then what the
-   * chosen option promises.
+   * The line under the finished sentence: the server's zone in words, then
+   * what the chosen option promises.
    *
    * Second reader of the same per-option copy. Both this and the preview
    * sentence go wrong together or not at all, which is the point of the option
@@ -528,11 +713,12 @@
   }
 
   return {
-    RUN_ON_SUPPORTED, RUN_ON_CAVEAT, WORKSPACE_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
+    RUN_ON_SUPPORTED, RUN_ON_CAVEAT, RUN_ON_CAVEAT_ACTION, RUN_ON_OFF_HERE, WORKSPACE_CAVEAT, RUN_ON_LABEL, FREQUENCIES, STEP_LEADS, SAVE_DESTINATION,
     UNASSIGNED_REASON, STORED_SCHEDULE_NOTE, storedScheduleNote,
     runOnOptions, runOnOption, runOnField, scheduleStepFields,
     skillChoices, stepLead,
-    times, buildSchedule, readSchedule, previewSentence,
+    times, monthDays, weekDays, chooseFrequency, toggleDay, needsADay, WEEK_DAYS,
+    buildSchedule, readSchedule, reopenSchedule, previewSentence, whenWords,
     timezoneWords, timezoneCaption, readyCaption,
     routineDraft,
   };

@@ -118,7 +118,7 @@ beforeEach(() => { clicked = []; document.getElementById('messages').innerHTML =
 const env = (convo, extra = {}) => {
   const e = { ...process.env, RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: convo, RUNDOCK_HOOK_TOKEN: auth.issueHookToken(convo), RUNDOCK_EXTRA_DIRS: '' };
   delete e.RUNDOCK_CODE_MODE;
-  delete e.NODE_V8_COVERAGE;
+  e.NODE_V8_COVERAGE = '';
   return { ...e, ...extra };
 };
 const call = (convo, tool_name, tool_input) => ({ session_id: `s-${convo}`, hook_event_name: 'PreToolUse', tool_name, tool_input, cwd: ws });
