@@ -11,6 +11,9 @@
 // Every case stands win32 in through the helper's own argument, or through
 // the runtime's own seam for the platform, and lays the npm folder out in a
 // real temp folder. No start is real: spawn is recorded in its place.
+// Its Codex turns run the guard, which watches the home folder's shell
+// startup files, so the file runs with a made-up home.
+require('../helpers/made-up-home.js');
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
