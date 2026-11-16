@@ -80,6 +80,15 @@ const answer = (m) => ({ requestId: m.requestId, conversationId: m.conversationI
 async function start(page) {
   await page.goto('/');
   await expect(page.locator('.convo-item').first()).toBeVisible();
+  // Switching away from a saved conversation before its history has arrived
+  // drops it from the list, so the test lets the conversation the page opened
+  // by itself finish loading before it switches. The page shows its loading
+  // line in the same step that draws the list, and takes it away only when
+  // the history arrives.
+  await expect.poll(
+    () => page.evaluate(() => Boolean(activeConversation) && !document.getElementById('history-loading')),
+    { message: 'the conversation opened on load has its history' },
+  ).toBe(true);
 }
 
 async function open(page, id) {
