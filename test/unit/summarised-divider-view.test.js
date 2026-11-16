@@ -429,6 +429,139 @@ describe('a summary finishing while the conversation is on screen', () => {
   });
 });
 
+// The live state, from the runtime's own announcement that a summary started
+// (which events announce it, and which end it short, is the reducer's, proven
+// in compaction-state.test.js). The turn ending is the app's finishProcessing,
+// which every end goes through: a result, an error, and a stop, which the
+// server follows with done.
+describe('while the runtime summarises', () => {
+  const CONVO = 'convo-live';
+  const LIVE = 'Summarising earlier messages…';
+  let state;
+  const live = () => messages().querySelectorAll('.msg-summarised.summarising');
+  const thinking = () => {
+    const el = document.createElement('div');
+    el.className = 'msg msg-agent';
+    el.id = 'thinking-indicator';
+    el.innerHTML = global.RundockChatMarkup.thinkingIndicatorHtml(global.agents[0]);
+    messages().appendChild(el);
+    return el;
+  };
+  before(() => {
+    Object.assign(global, {
+      workingConvos: new Set(), currentView: 'chat', unread: { markMessage() {} }, updateUnreadBadge() {},
+      persistConversation() {}, agentLastActivity: {}, formatTimeAgo: () => 'just now', updateWorkingBadge() {}, ws: null,
+    });
+  });
+  beforeEach(() => {
+    messages().replaceChildren();
+    state = { currentStreamingMsg: null, isProcessing: true, streamedText: '', streamPrefix: '' };
+    global.getConvoState = () => state;
+    global.activeConversation = { id: CONVO, agent: global.agents[0] };
+    global.conversations = [{ id: CONVO, agentId: 'example-writer', title: 'Live', messages: [] }];
+  });
+
+  test('from the announcement: the words in a status region, with the reconnect card\'s dot hidden from screen readers, above the thinking indicator', () => {
+    chat.addUserMsg('A question');
+    const t = thinking();
+    const row = chat.showSummarising(CONVO);
+    const label = row.querySelector('.summarised-label');
+    assert.strictEqual(label.getAttribute('role'), 'status');
+    assert.strictEqual(label.textContent, LIVE);
+    const dot = label.querySelector('span.auth-pulse');
+    assert.ok(dot, 'the reconnect card\'s dot');
+    assert.strictEqual(dot.getAttribute('aria-hidden'), 'true');
+    assert.strictEqual(row.querySelector('button'), null, 'nothing to open yet');
+    assert.strictEqual(row.nextElementSibling, t);
+    assert.strictEqual(row.getAttribute('role'), null, 'not a separator');
+  });
+
+  test('the dot is the app\'s own, held still under reduced motion: no new motion', () => {
+    assert.ok(CHAT_CSS.includes('.auth-pulse { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: var(--radius-circle); background: currentColor; animation: agentPulse 1.8s ease-in-out infinite; }'));
+    assert.ok(CHAT_CSS.includes('@media (prefers-reduced-motion: reduce) { .auth-pulse { animation: none; } }'));
+    assert.strictEqual(CHAT_CSS.indexOf('.summarising'), -1, 'no rule of its own');
+  });
+
+  test('announced twice is still one row', () => {
+    chat.showSummarising(CONVO);
+    chat.showSummarising(CONVO);
+    assert.strictEqual(live().length, 1);
+  });
+
+  test('start, then finish: the same row settles into the divider, and its status region announces the finish', () => {
+    chat.addUserMsg('A question');
+    thinking();
+    const row = chat.showSummarising(CONVO);
+    const label = row.querySelector('.summarised-label');
+    const divider = chat.drawCompactionDivider(CONVO, 'k1');
+    assert.strictEqual(divider, row, 'settled in place');
+    assert.strictEqual(row.querySelector('.summarised-label'), label);
+    assert.strictEqual(label.getAttribute('role'), 'status');
+    assert.strictEqual(label.textContent, `${WORDS}Why?`);
+    assert.strictEqual(row.querySelector('.auth-pulse'), null);
+    assert.strictEqual(live().length, 0);
+    assert.strictEqual(messages().querySelectorAll('.msg-summarised').length, 1);
+    assert.strictEqual(row.dataset.compactionKey, 'k1');
+    const why = row.querySelector('button.summarised-why');
+    const explain = row.querySelector('.summarised-explain');
+    assert.strictEqual(why.getAttribute('aria-controls'), explain.id);
+    why.click();
+    assert.strictEqual(explain.hidden, false);
+    assert.strictEqual(explain.textContent, EXPLANATION);
+    why.click();
+    assert.strictEqual(explain.hidden, true);
+  });
+
+  test('start in the middle of a reply, then finish: the reply is split at the row', () => {
+    const bubble = document.createElement('div');
+    bubble.className = 'msg msg-agent';
+    bubble.innerHTML = global.RundockChatMarkup.agentStreamingMessageHtml(global.agents[0], 'Before.', '');
+    messages().appendChild(bubble);
+    state.currentStreamingMsg = bubble;
+    state.streamedText = 'Before.';
+    thinking();
+    const row = chat.showSummarising(CONVO);
+    chat.drawCompactionDivider(CONVO, 'k1');
+    assert.strictEqual(row.previousElementSibling, bubble);
+    assert.strictEqual(row.nextElementSibling, state.currentStreamingMsg);
+    assert.ok(state.currentStreamingMsg.classList.contains('summarised-continuation'));
+    assert.strictEqual(state.currentStreamingMsg.nextElementSibling.id, 'thinking-indicator');
+  });
+
+  test('start, then the turn ends with no finish: the live state goes and no divider is drawn', () => {
+    chat.addUserMsg('A question');
+    thinking();
+    chat.showSummarising(CONVO);
+    chat.finishProcessing(CONVO);
+    assert.strictEqual(messages().querySelectorAll('.msg-summarised').length, 0);
+    assert.strictEqual(document.getElementById('thinking-indicator'), null);
+    assert.strictEqual(messages().children.length, 1, 'the conversation is otherwise as it was');
+  });
+
+  test('start, then the runtime says it stopped short: the live state goes and no divider is drawn', () => {
+    chat.showSummarising(CONVO);
+    chat.clearSummarising(CONVO);
+    assert.strictEqual(messages().querySelectorAll('.msg-summarised').length, 0);
+  });
+
+  test('a finish for a summary already drawn clears the live state and draws nothing more', () => {
+    chat.drawCompactionDivider(CONVO, 'k1');
+    chat.showSummarising(CONVO);
+    assert.strictEqual(chat.drawCompactionDivider(CONVO, 'k1'), null);
+    assert.strictEqual(live().length, 0);
+    assert.strictEqual(messages().querySelectorAll('.msg-summarised').length, 1);
+  });
+
+  test('another conversation\'s start draws nothing here, and its end leaves this one\'s live state alone', () => {
+    chat.showSummarising(CONVO);
+    assert.strictEqual(chat.showSummarising('another-convo'), null);
+    chat.clearSummarising('another-convo');
+    assert.strictEqual(live().length, 1);
+    assert.strictEqual(chat.drawCompactionDivider('another-convo', 'k9'), null);
+    assert.strictEqual(live().length, 1);
+  });
+});
+
 describe('the message count', () => {
   test('a conversation\'s count on the agent profile leaves the divider out', () => {
     const dom = new JSDOM('<!doctype html><html><body><div id="view-profile"><div id="profile-content"></div></div></body></html>', { runScripts: 'dangerously' });

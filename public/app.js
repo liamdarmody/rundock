@@ -747,6 +747,12 @@ function handle(d) {
         renderCodexErrorPill(convoId, d);
         finishProcessing(convoId);
       }
+      // The runtime saying a summary has started, or that one stopped short.
+      if(d.subtype==='status' && convoId) {
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+      }
       // A summary the runtime finished: one divider where it fell, and none
       // for a summary this conversation already holds.
       if(d.subtype==='compact_boundary' && convoId) {
@@ -1161,6 +1167,8 @@ const EFFECT_EXECUTORS = {
     }
     drawCompactionDivider(convoId, ef.key);
   },
+  'show-summarising': (convoId) => { showSummarising(convoId); },
+  'clear-summarising': (convoId) => clearSummarising(convoId),
 };
 
 function executeEffects(convoId, effects) {

@@ -185,6 +185,8 @@ function finishProcessing(convoId) {
     persistConversation(convo);
   }
 
+  // A summary still showing as under way when the turn ends never finished.
+  clearSummarising(convoId);
   if(isActive) {
     const tt=document.getElementById('thinking-indicator'); if(tt) tt.remove();
     document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
@@ -1844,9 +1846,10 @@ function placeSummarisedRow(m, row) {
 function drawCompactionDivider(convoId, key) {
   const m = document.getElementById('messages');
   if (!m || typeof key !== 'string' || !key || activeConversation?.id !== convoId) return null;
-  if ([...m.querySelectorAll('.msg-summarised')].some(el => el.dataset.compactionKey === key)) return null;
-  const divider = createSummarisedDivider({ key });
-  placeSummarisedRow(m, divider);
+  if ([...m.querySelectorAll('.msg-summarised')].some(el => el.dataset.compactionKey === key)) { clearSummarising(convoId); return null; }
+  const settling = summarisingRow(m, convoId);
+  const divider = settling ? settleSummarising(settling, key) : createSummarisedDivider({ key });
+  if (!settling) placeSummarisedRow(m, divider);
   let state = null;
   try { state = typeof getConvoState === 'function' ? getConvoState(convoId) : null; } catch (e) { state = null; }
   const live = state && state.currentStreamingMsg && state.currentStreamingMsg.parentNode === m ? state.currentStreamingMsg : null;
@@ -1867,6 +1870,59 @@ function drawCompactionDivider(convoId, key) {
   return divider;
 }
 
+// WHILE THE RUNTIME SUMMARISES, only from its own announcement that it has
+// started: the row the divider will settle into, saying so in a status region
+// a screen reader hears, with the reconnect card's waiting dot (held still
+// under reduced motion). One per conversation, drawn only when on screen.
+function summarisingRow(m, convoId) {
+  return [...m.querySelectorAll('.msg-summarised.summarising')].find(el => el.dataset.summarisingConvo === convoId) || null;
+}
+
+function showSummarising(convoId) {
+  const m = document.getElementById('messages');
+  if (!m || typeof convoId !== 'string' || activeConversation?.id !== convoId) return null;
+  const existing = summarisingRow(m, convoId);
+  if (existing) return existing;
+  const row = document.createElement('div');
+  row.className = 'msg-summarised summarising';
+  row.dataset.summarisingConvo = convoId;
+  const inner = document.createElement('div');
+  inner.className = 'summarised-row';
+  const line = () => { const l = document.createElement('div'); l.className = 'summarised-line'; return l; };
+  const label = document.createElement('div');
+  label.className = 'summarised-label';
+  label.setAttribute('role', 'status');
+  const dot = document.createElement('span');
+  dot.className = 'auth-pulse';
+  dot.setAttribute('aria-hidden', 'true');
+  label.append(dot, 'Summarising earlier messages…');
+  inner.append(line(), label, line());
+  row.append(inner);
+  placeSummarisedRow(m, row);
+  scrollBottom();
+  return row;
+}
+
+// Finished: the same row becomes the divider in place. Its label stays the
+// status region, so a screen reader hears the finish as it heard the start.
+function settleSummarising(row, key) {
+  const done = createSummarisedDivider({ key });
+  row.classList.remove('summarising');
+  delete row.dataset.summarisingConvo;
+  row.dataset.compactionKey = key;
+  row.querySelector('.summarised-label').replaceChildren(...done.querySelector('.summarised-label').childNodes);
+  row.append(done.querySelector('.summarised-explain'));
+  return row;
+}
+
+// A summary that will not finish: the runtime said so, or the turn ended,
+// failed or was stopped first. The live row goes, and no divider is drawn.
+function clearSummarising(convoId) {
+  const m = document.getElementById('messages');
+  const row = m ? summarisingRow(m, convoId) : null;
+  if (row) row.remove();
+}
+
 return {
   dispatchMessage, sendMessage, startProcessing, finishProcessing,
   cancelProcessing, handleActiveProcesses, addAgentMsg, addUserMsg,
@@ -1878,6 +1934,6 @@ return {
   resolvePermissionCard, handleOwnerlessPermissionRequest, endPermissionRequest,
   reconcilePendingPermissions,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,
-  createSummarisedDivider, drawCompactionDivider,
+  createSummarisedDivider, drawCompactionDivider, showSummarising, clearSummarising,
 };
 }));
