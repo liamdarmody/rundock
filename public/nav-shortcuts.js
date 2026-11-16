@@ -44,12 +44,11 @@
     return list;
   }
 
-  // Digits by physical key, so a layout that needs Shift for them still
-  // works; the comma by the character it types.
+  // A digit or the comma by the character the key types, never by where the
+  // key sits: a layout that types '-' or 'é' on the digit row keeps those keys
+  // for its own shortcuts, zoom out among them.
   function pressedKey(event) {
-    if (event.key === ',') return ',';
-    const digit = /^Digit([1-9])$/.exec(String(event.code || ''));
-    return digit ? digit[1] : null;
+    return /^[1-9,]$/.test(event.key) ? event.key : null;
   }
 
   // Exactly this client's modifier: not the other platform's, not both, and

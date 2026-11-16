@@ -125,11 +125,28 @@ describe('binding by position', () => {
     assert.ok(!N.bindings(doc).some((b) => b.item.id === 'theme-toggle'));
   });
 
-  test('digits match the physical key, so a layout that types another character still works', () => {
+  test('a key on the digit row that types another character is left alone, so zoom out keeps its key', () => {
+    // On a French layout the digit row types é, -, & and the like unshifted,
+    // and Ctrl or Cmd with - there is zoom out.
+    for (const [modifier, event] of [
+      ['Meta', keydown('Digit2', 'é', { metaKey: true })],
+      ['Meta', keydown('Digit1', '&', { metaKey: true })],
+      ['Control', keydown('Digit6', '-', { ctrlKey: true })],
+      ['Meta', keydown('Digit6', '-', { metaKey: true })],
+    ]) {
+      const doc = page();
+      const { calls, onKey } = wired(doc, modifier);
+      assert.strictEqual(N.match(event, modifier, doc), null, `${modifier}+${event.key}`);
+      onKey(event);
+      assert.strictEqual(event.prevented, 0, `${modifier}+${event.key} was prevented`);
+      assert.deepStrictEqual(calls, [], `${modifier}+${event.key} switched the view`);
+    }
+  });
+
+  test('a digit is matched by the character it types, wherever the key sits', () => {
     const doc = page();
-    const azerty = keydown('Digit2', 'é', { metaKey: true });
-    assert.strictEqual(navOf(N.match(azerty, 'Meta', doc)), mainNavs(doc)[1]);
-    assert.strictEqual(N.match(keydown('Numpad2', '2', { metaKey: true }), 'Meta', doc), null);
+    assert.strictEqual(navOf(N.match(keydown('Numpad2', '2', { metaKey: true }), 'Meta', doc)), mainNavs(doc)[1]);
+    assert.strictEqual(navOf(N.match(keydown('Digit6', '6', { ctrlKey: true }), 'Control', doc)), mainNavs(doc)[5]);
   });
 
   test('reordering the rail moves the bindings and the hints with it', () => {
