@@ -10,6 +10,18 @@
 // here spawns the real hook the way the runtime does, with a made-up home
 // folder and a port nothing listens on, and the credential cases iterate the
 // registry, so an entry added later is covered without a new test.
+//
+// Everything else keeps its answer. Those cases, the credential reads that were
+// already refused for another reason, and the card a credential read draws when
+// the server answers are compared field by field with what main's hook returns:
+// test/fixtures/credential-read-on-main.json, recorded by running this file
+// against main's hook:
+//
+//   git show origin/main:scripts/permission-hook.js > scripts/.main-hook.js
+//   RUNDOCK_RECORD_HOOK="$PWD/scripts/.main-hook.js" node --test test/unit/credential-read-unanswered.test.js
+//
+// Paths under the temporary folder are written as `<root>`, and each card
+// request's session id, which differs per run, is left out.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -22,44 +34,82 @@ const { unansweredNotice, UNATTENDED_NEXT } = require('../../scripts/refusal-not
 // A port nothing listens on: Rundock has quit, crashed or is restarting.
 const { closedPort } = require('../helpers/code-mode-fixture.js');
 
-const HOOK = path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
+const RECORD = process.env.RUNDOCK_RECORD_HOOK || '';
+const HOOK = RECORD || path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
+const FIXTURE = path.join(__dirname, '..', 'fixtures', 'credential-read-on-main.json');
 
 const UNREACHABLE = 'Rundock server unreachable.';
 const UNPARSED = 'Rundock hook: could not parse server response.';
 const CREDENTIAL = 'This reads or changes a sign-in credential, and it is never done without asking, so it was refused rather than approved on your behalf.';
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'credential-read-unanswered-')));
-const home = path.join(root, 'home');
+const home = path.join(root, 'profile');
 const ws = path.join(root, 'ws');
-for (const d of [path.join(home, '.claude'), path.join(home, '.codex'), ws]) fs.mkdirSync(d, { recursive: true });
+for (const d of [path.join(home, '.claude', 'agents'), path.join(home, '.codex'), path.join(ws, '.rundock'), path.join(root, 'elsewhere')]) fs.mkdirSync(d, { recursive: true });
 const REGISTRY = secretsRegistry(home);
-for (const f of REGISTRY) fs.writeFileSync(f, '{}\n');
+for (const f of [...REGISTRY, path.join(home, '.claude', 'settings.json'), path.join(home, '.claude', 'agents', 'helper.md'), path.join(ws, 'notes.md'), path.join(root, 'elsewhere', 'notes.md')]) fs.writeFileSync(f, '{}\n');
 
-// The shell commands are POSIX spellings.
-const POSIX = process.platform === 'win32' ? 'the shell commands here are POSIX' : false;
+// The shell commands are POSIX spellings, and the recorded answers name POSIX paths.
+const POSIX = process.platform === 'win32' ? 'the shell commands and recorded paths here are POSIX' : false;
 const MODES = [['Notes mode', 'notes'], ['Code mode', 'code']];
+const live = v => JSON.parse(JSON.stringify(v).split('<root>').join(root));
 const normal = v => JSON.parse(JSON.stringify(v).split(root).join('<root>'));
 const named = ([tool, input]) => `${tool} ${JSON.stringify(normal(input))}`;
+const keyOf = (label, state, [tool, input]) => `${label} | ${state} | ${tool} | ${JSON.stringify(normal(input))}`;
 const said = got => (got.answer && got.answer.hookSpecificOutput) || {};
 
 // Each credential file, read every way an agent reads one.
 const fileReads = f => [['Read', { file_path: f }], ['Grep', { pattern: 'token', path: f }], ['Glob', { pattern: '*', path: f }]];
 const shellReads = f => [['Bash', { command: `cat ${f}` }], ['Bash', { command: `head ${f}` }], ['Bash', { command: `cp ${f} ${path.join(ws, 'copy.json')}` }]];
 const everyRead = f => [...fileReads(f), ...(POSIX ? [] : shellReads(f))];
+const cardReads = f => [['Read', { file_path: f }], ['Bash', { command: `cat ${f}` }]];
 
 // Code mode already refused some credential reads with nobody to ask, as a
 // crossing it asks about every time: a file directly in the home folder, which
-// is a hidden place there, and a copy, which writes. Those keep their words,
-// so Code mode's wording cases are the reads of the files under a runtime home.
+// is a hidden place there, and a copy, which writes. Those keep main's words
+// (the table further down), so Code mode's wording cases are the reads of the
+// files under a runtime home.
 const underRuntimeHome = f => runtimeHomes(home).some(h => f.startsWith(h.root + path.sep));
 const WORDED = {
   notes: REGISTRY.flatMap(everyRead),
   code: REGISTRY.filter(underRuntimeHome).flatMap(f => [...fileReads(f), ...(POSIX ? [] : shellReads(f).slice(0, 2))]),
 };
 
+const KEYCHAIN = { RUNDOCK_TEST_SEAMS: '1', RUNDOCK_TEST_PLATFORM: 'darwin' };
+const KEYCHAIN_LINE = 'security find-generic-password -w -s example-service';
+// [what, tool, input, env]: every other access, the same in both modes.
+const UNCHANGED = [
+  ['an ordinary read outside the workspace', 'Read', { file_path: '<root>/elsewhere/notes.md' }],
+  ['an ordinary read outside the workspace', 'Bash', { command: 'cat <root>/elsewhere/notes.md' }],
+  ['a free read in the runtime home', 'Read', { file_path: '<root>/profile/.claude/settings.json' }],
+  ['a free read in the runtime home', 'Bash', { command: 'cat ~/.claude/settings.json' }],
+  ['a read of a persistence surface', 'Read', { file_path: '<root>/profile/.claude/agents/helper.md' }],
+  ['a read of a persistence surface', 'Bash', { command: 'cat ~/.claude/agents/helper.md' }],
+  ['a read inside the workspace', 'Read', { file_path: '<root>/ws/notes.md' }],
+  ['a read inside the workspace', 'Bash', { command: 'cat notes.md' }],
+  ['a Keychain line', 'Bash', { command: KEYCHAIN_LINE }, KEYCHAIN],
+  ['an answer-file write', 'Write', { file_path: '<root>/ws/.rundock/permissions.json', content: '{}' }],
+  ['an answer-file write', 'Bash', { command: 'echo {} > .rundock/permissions.json' }],
+  ['a connector send', 'mcp__example_mail__send_message', { text: 'hello' }],
+];
+// [mode, what, tool, input, env]: credential reads already refused with nobody
+// to ask, for a reason that comes first, keep that reason's words.
+const ALREADY_REFUSED = [
+  ['Code mode', 'a credential file directly in the home folder', 'Read', { file_path: '<root>/profile/.claude.json' }],
+  ['Code mode', 'a credential file directly in the home folder', 'Bash', { command: 'cat ~/.claude.json.backup' }],
+  ['Code mode', 'a copy of a credential file', 'Bash', { command: 'cp ~/.codex/auth.json ./copy.json' }],
+  ...MODES.map(([label]) => [label, 'a copy of a credential file onto an answer file', 'Bash', { command: 'cp ~/.claude/.credentials.json .rundock/permissions.json' }]),
+  ...MODES.map(([label]) => [label, 'a credential read beside a Keychain line', 'Bash', { command: `cat ~/.claude/.config.json && ${KEYCHAIN_LINE}` }, KEYCHAIN]),
+  ['Notes mode', 'a delete of a credential file', 'Bash', { command: 'rm ~/.claude/.credentials.json' }],
+];
+
+const asked = new Map();
+let recording;
 let garbled;
 let closed;
 let runs = 0;
+const recorded = {};
+const onMain = RECORD ? {} : JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
 
 // A server that answers card requests with `reply`, and nothing else.
 function listen(reply) {
@@ -74,18 +124,25 @@ function listen(reply) {
   return new Promise(r => s.listen(0, '127.0.0.1', () => r(s)));
 }
 before(async () => {
+  recording = await listen((body, res) => {
+    const request = JSON.parse(body);
+    if (!asked.has(request.session_id)) asked.set(request.session_id, []);
+    asked.get(request.session_id).push(request);
+    res.end(JSON.stringify({ allow: false }));
+  });
   garbled = await listen((body, res) => res.end('this is not a reply'));
   closed = await closedPort();
 });
 after(async () => {
-  if (garbled) await new Promise(r => garbled.close(r));
+  for (const s of [recording, garbled]) if (s) await new Promise(r => s.close(r));
+  if (RECORD) fs.writeFileSync(FIXTURE, JSON.stringify(Object.fromEntries(Object.keys(recorded).sort().map(k => [k, recorded[k]])), null, 1) + '\n');
   fs.rmSync(root, { recursive: true, force: true });
 });
 const portOf = s => s.address().port;
 
 // The real hook, given one tool call, as the runtime spawns it. A routine has
 // no conversation id; a conversation has one.
-function run(tool, input, { port, mode, convo = '', session = `s${++runs}` }) {
+function run(tool, input, { port, mode, convo = '', env = {}, session = `s${++runs}` }) {
   return new Promise((resolve) => {
     const proc = spawn(process.execPath, [HOOK], {
       cwd: ws,
@@ -93,7 +150,7 @@ function run(tool, input, { port, mode, convo = '', session = `s${++runs}` }) {
         ...process.env, HOME: home, USERPROFILE: home, NODE_V8_COVERAGE: '',
         RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: convo,
         RUNDOCK_CODE_MODE: mode === 'code' ? '1' : '', RUNDOCK_EXTRA_DIRS: '', RUNDOCK_HOOK_TOKEN: '',
-        RUNDOCK_TEST_SEAMS: '', RUNDOCK_TEST_PLATFORM: '',
+        RUNDOCK_TEST_SEAMS: '', RUNDOCK_TEST_PLATFORM: '', ...env,
       },
     });
     let out = '';
@@ -101,7 +158,8 @@ function run(tool, input, { port, mode, convo = '', session = `s${++runs}` }) {
     proc.on('close', () => {
       let answer = null;
       try { answer = JSON.parse(out); } catch (e) { /* asserted by the caller */ }
-      resolve(normal({ answer }));
+      const cards = (asked.get(session) || []).map(({ session_id: _drop, ...rest }) => rest);
+      resolve(normal({ answer, cards }));
     });
     proc.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: session, tool_name: tool, tool_input: input }));
   });
@@ -174,5 +232,65 @@ describe('the refusal says a sign-in credential is never touched without asking'
         cases.forEach((c, i) => assert.deepStrictEqual(said(got[i]), { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason }, named(c)));
       });
     }
+  }
+});
+
+describe('with Rundock unreachable, every other access keeps the answer main gives', { skip: POSIX, concurrency: 8 }, () => {
+  for (const [label, mode] of MODES) {
+    for (const [what, tool, input, env] of UNCHANGED) {
+      test(`${label}: ${what} (${tool})`, async () => {
+        const got = await run(tool, live(input), { port: closed, mode, env });
+        const key = keyOf(label, 'unreachable', [tool, input]);
+        if (RECORD) { recorded[key] = got; return; }
+        assert.ok(onMain[key], 'measured on main');
+        assert.deepStrictEqual(got, onMain[key], 'the whole answer, field by field, as main gives it');
+      });
+    }
+  }
+});
+
+describe('a credential read already refused for another reason keeps that reason', { skip: POSIX, concurrency: 8 }, () => {
+  for (const [label, what, tool, input, env] of ALREADY_REFUSED) {
+    test(`${label}: ${what} (${tool})`, async () => {
+      const got = await run(tool, live(input), { port: closed, mode: label === 'Code mode' ? 'code' : 'notes', env });
+      const key = keyOf(label, 'unreachable', [tool, input]);
+      if (RECORD) { recorded[key] = got; return; }
+      assert.ok(onMain[key], 'measured on main');
+      assert.strictEqual(said(onMain[key]).permissionDecision, 'deny', 'refused on main');
+      assert.deepStrictEqual(got, onMain[key], 'the whole answer, field by field, as main gives it');
+    });
+  }
+});
+
+describe('with Rundock reachable, a credential read draws the card main draws', { skip: POSIX }, () => {
+  for (const [label, mode] of MODES) {
+    test(`${label}: Read and cat of each credential file send main's secret card request`, async () => {
+      const cases = REGISTRY.flatMap(cardReads);
+      const got = await each(cases, ([tool, input]) => run(tool, input, { port: portOf(recording), mode }));
+      cases.forEach((c, i) => {
+        const key = keyOf(label, 'reachable', c);
+        if (RECORD) { recorded[key] = got[i]; return; }
+        assert.ok(onMain[key], `${named(c)}: measured on main`);
+        assert.ok(got[i].cards.length === 1 && got[i].cards[0].crossings.some(x => x.secret), `${named(c)}: one secret card`);
+        assert.deepStrictEqual(got[i], onMain[key], `${named(c)}: the answer and the card request, as main sends them`);
+      });
+    });
+  }
+});
+
+describe('once Rundock is back, a credential read refused while it was unreachable draws its card', { skip: POSIX || (RECORD ? 'recording' : false) }, () => {
+  for (const [label, mode] of MODES) {
+    test(`${label}: nothing remembers the refusal`, async () => {
+      const cases = REGISTRY.flatMap(cardReads);
+      const got = await each(cases, async ([tool, input], i) => {
+        const session = `again-${mode}-${i}`;
+        const refused = await run(tool, input, { port: closed, mode, session });
+        return { refused, again: await run(tool, input, { port: portOf(recording), mode, session }) };
+      });
+      cases.forEach((c, i) => {
+        assert.strictEqual(said(got[i].refused).permissionDecision, 'deny', `${named(c)}: refused while unreachable`);
+        assert.deepStrictEqual(got[i].again, onMain[keyOf(label, 'reachable', c)], `${named(c)}: the same card as ever, once it is back`);
+      });
+    });
   }
 });
