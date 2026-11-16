@@ -39,6 +39,7 @@ const MANIFEST = {
     "createSummarisedDivider",
     "describeToolRequest",
     "dispatchMessage",
+    "drawCompactionDivider",
     "endPermissionRequest",
     "finishProcessing",
     "formatToolName",

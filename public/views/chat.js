@@ -1827,6 +1827,46 @@ function createSummarisedDivider(opts) {
   return divider;
 }
 
+// Where a row goes in the conversation on screen: after what the agent has
+// said so far, and before the thinking indicator, which stays last while the
+// agent works.
+function placeSummarisedRow(m, row) {
+  const t = document.getElementById('thinking-indicator');
+  if (t && t.parentNode === m) t.before(row);
+  else m.appendChild(row);
+}
+
+// A summary the runtime finished, drawn in the conversation on screen and
+// nowhere else. One divider per key, whatever is already drawn. A summary in
+// the middle of a reply ends that reply's bubble here: the divider follows it,
+// and the rest of the reply starts a new bubble below with its own sender
+// line. streamTextAfterCut keeps the two apart, as it does for a put-back card.
+function drawCompactionDivider(convoId, key) {
+  const m = document.getElementById('messages');
+  if (!m || typeof key !== 'string' || !key || activeConversation?.id !== convoId) return null;
+  if ([...m.querySelectorAll('.msg-summarised')].some(el => el.dataset.compactionKey === key)) return null;
+  const divider = createSummarisedDivider({ key });
+  placeSummarisedRow(m, divider);
+  let state = null;
+  try { state = typeof getConvoState === 'function' ? getConvoState(convoId) : null; } catch (e) { state = null; }
+  const live = state && state.currentStreamingMsg && state.currentStreamingMsg.parentNode === m ? state.currentStreamingMsg : null;
+  const FOLLOWING = 4; // Node.DOCUMENT_POSITION_FOLLOWING
+  if (live && (live.compareDocumentPosition(divider) & FOLLOWING)) {
+    const next = live.cloneNode(true);
+    const text = next.querySelector('.streaming-text');
+    if (text) text.replaceChildren();
+    next.querySelectorAll('.activity-summary').forEach(el => el.remove());
+    // Hidden by the stylesheet until the rest of the reply arrives, so no
+    // empty bubble sits under the divider while the agent picks up again.
+    next.classList.add('summarised-continuation');
+    divider.after(next);
+    state.streamPrefix = typeof state.streamedText === 'string' ? state.streamedText : '';
+    state.currentStreamingMsg = next;
+  }
+  scrollBottom();
+  return divider;
+}
+
 return {
   dispatchMessage, sendMessage, startProcessing, finishProcessing,
   cancelProcessing, handleActiveProcesses, addAgentMsg, addUserMsg,
@@ -1838,6 +1878,6 @@ return {
   resolvePermissionCard, handleOwnerlessPermissionRequest, endPermissionRequest,
   reconcilePendingPermissions,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,
-  createSummarisedDivider,
+  createSummarisedDivider, drawCompactionDivider,
 };
 }));

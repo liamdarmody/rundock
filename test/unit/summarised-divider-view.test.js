@@ -294,6 +294,141 @@ describe('a reopened conversation', () => {
   });
 });
 
+// A summary finishing while its conversation is on screen. The bubble and the
+// thinking indicator are built as the app's own executors build them; the
+// text that streams afterwards is put in the bubble the state names, after
+// the cut, as the stream executor puts it. The wiring from the runtime's event
+// to this function is proven in the browser by the e2e spec.
+describe('a summary finishing while the conversation is on screen', () => {
+  const CONVO = 'convo-live';
+  let state;
+  const bubble = (text) => {
+    const el = document.createElement('div');
+    el.className = 'msg msg-agent';
+    el.innerHTML = global.RundockChatMarkup.agentStreamingMessageHtml(global.agents[0], text, '');
+    messages().appendChild(el);
+    return el;
+  };
+  const thinking = () => {
+    const el = document.createElement('div');
+    el.className = 'msg msg-agent';
+    el.id = 'thinking-indicator';
+    el.innerHTML = global.RundockChatMarkup.thinkingIndicatorHtml(global.agents[0]);
+    messages().appendChild(el);
+    return el;
+  };
+  const stream = (full) => {
+    state.streamedText = full;
+    state.currentStreamingMsg.querySelector('.streaming-text').textContent = chat.streamTextAfterCut(state, full);
+  };
+  const kinds = () => [...messages().children].map((el) => {
+    if (el.classList.contains('msg-summarised')) return `divider:${el.dataset.compactionKey}`;
+    if (el.id === 'thinking-indicator') return 'thinking';
+    const text = el.querySelector('.streaming-text, .msg-bubble');
+    return `${el.className.split(' ').slice(0, 2).join(' ')}:${text ? text.textContent.trim() : ''}`;
+  });
+  beforeEach(() => {
+    messages().replaceChildren();
+    state = { currentStreamingMsg: null, isProcessing: true, streamedText: '', streamPrefix: '' };
+    global.getConvoState = () => state;
+    global.activeConversation = { id: CONVO, agent: global.agents[0] };
+  });
+
+  test('in the middle of a reply: the bubble ends at the divider, and the rest of the reply starts a new bubble below with its own sender line', () => {
+    chat.addUserMsg('A long question');
+    state.currentStreamingMsg = bubble('');
+    thinking();
+    stream('The first part of the answer.');
+    const divider = chat.drawCompactionDivider(CONVO, 'k1');
+    assert.ok(divider);
+    const next = state.currentStreamingMsg;
+    assert.notStrictEqual(next, messages().children[1], 'the reply goes on in a new bubble');
+    assert.strictEqual(next.previousElementSibling, divider, 'the new bubble sits right under the divider');
+    assert.strictEqual(next.querySelectorAll('.msg-sender').length, 1, 'with its own sender line');
+    assert.strictEqual(next.querySelector('.streaming-text').textContent, '', 'starting empty');
+    assert.ok(next.classList.contains('summarised-continuation'));
+    assert.strictEqual(state.streamPrefix, 'The first part of the answer.');
+
+    stream('The first part of the answer.\n\nThe rest of it, after the summary.');
+    assert.deepStrictEqual(kinds(), [
+      'msg msg-user:A long question',
+      'msg msg-agent:The first part of the answer.',
+      'divider:k1',
+      'msg msg-agent:The rest of it, after the summary.',
+      'thinking',
+    ]);
+  });
+
+  test('the new bubble keeps none of the first one\'s activity, and is hidden by the stylesheet until it has words', () => {
+    state.currentStreamingMsg = bubble('Before.');
+    state.streamedText = 'Before.';
+    const summary = document.createElement('details');
+    summary.className = 'activity-summary';
+    state.currentStreamingMsg.appendChild(summary);
+    chat.drawCompactionDivider(CONVO, 'k1');
+    assert.strictEqual(state.currentStreamingMsg.querySelectorAll('.activity-summary').length, 0);
+    assert.ok(CHAT_CSS.includes('.msg-agent.summarised-continuation:has(.streaming-text:empty):not(:has(.activity-summary)) { display: none; }'));
+  });
+
+  test('between replies: the divider follows the last message, before the thinking indicator, and nothing is split', () => {
+    chat.addUserMsg('A question');
+    thinking();
+    chat.drawCompactionDivider(CONVO, 'k1');
+    assert.deepStrictEqual(kinds(), ['msg msg-user:A question', 'divider:k1', 'thinking']);
+    assert.strictEqual(state.currentStreamingMsg, null);
+    assert.strictEqual(state.streamPrefix, '');
+  });
+
+  test('the next message, and the reply to it, come below the divider', () => {
+    chat.addUserMsg('A question');
+    chat.addAgentMsg('An answer', 'example-writer');
+    chat.drawCompactionDivider(CONVO, 'k1');
+    chat.addUserMsg('The next question');
+    chat.addAgentMsg('The next answer', 'example-writer');
+    assert.deepStrictEqual(kinds(), [
+      'msg msg-user:A question', 'msg msg-agent:An answer', 'divider:k1',
+      'msg msg-user:The next question', 'msg msg-agent:The next answer',
+    ]);
+  });
+
+  test('the same summary twice is one divider, and one split', () => {
+    state.currentStreamingMsg = bubble('');
+    stream('Before.');
+    assert.ok(chat.drawCompactionDivider(CONVO, 'k1'));
+    const next = state.currentStreamingMsg;
+    assert.strictEqual(chat.drawCompactionDivider(CONVO, 'k1'), null);
+    assert.strictEqual(messages().querySelectorAll('.msg-summarised').length, 1);
+    assert.strictEqual(state.currentStreamingMsg, next);
+    assert.strictEqual(messages().querySelectorAll('.msg-agent').length, 2);
+  });
+
+  test('two summaries in one reply are two dividers, each with the reply going on below it', () => {
+    state.currentStreamingMsg = bubble('');
+    stream('One.');
+    chat.drawCompactionDivider(CONVO, 'k1');
+    stream('One.\n\nTwo.');
+    chat.drawCompactionDivider(CONVO, 'k2');
+    stream('One.\n\nTwo.\n\nThree.');
+    assert.deepStrictEqual(kinds(), ['msg msg-agent:One.', 'divider:k1', 'msg msg-agent:Two.', 'divider:k2', 'msg msg-agent:Three.']);
+  });
+
+  test('a conversation not on screen draws nothing here, and its reply is left alone', () => {
+    const live = bubble('');
+    state.currentStreamingMsg = live;
+    stream('Before.');
+    global.activeConversation = { id: 'another-convo' };
+    assert.strictEqual(chat.drawCompactionDivider(CONVO, 'k1'), null);
+    assert.strictEqual(messages().querySelectorAll('.msg-summarised').length, 0);
+    assert.strictEqual(state.currentStreamingMsg, live);
+    assert.strictEqual(state.streamPrefix, '');
+  });
+
+  test('a key that is missing or not text draws nothing', () => {
+    for (const key of [undefined, null, '', 42]) assert.strictEqual(chat.drawCompactionDivider(CONVO, key), null);
+    assert.strictEqual(messages().children.length, 0);
+  });
+});
+
 describe('the message count', () => {
   test('a conversation\'s count on the agent profile leaves the divider out', () => {
     const dom = new JSDOM('<!doctype html><html><body><div id="view-profile"><div id="profile-content"></div></div></body></html>', { runScripts: 'dangerously' });
