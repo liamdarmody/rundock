@@ -2304,11 +2304,10 @@ document.getElementById('palette-input')?.addEventListener('keydown', (e) => {
 // by their place in it, and Cmd/Ctrl+, opens Settings (nav-shortcuts.js). The
 // modifier is this client's, read from the navigator, never the server's
 // platform. A key goes through switchNav, the path a click takes, and does
-// nothing while the palette is open. Call applyNavShortcutHints again after
-// the rail changes.
+// nothing while the palette is open. The hints rebuild themselves whenever
+// the rail's main group changes.
 const NAV_SHORTCUT_MODIFIER = RundockNavShortcuts.modifierFor(navigator);
-function applyNavShortcutHints() { RundockNavShortcuts.applyHints(document, NAV_SHORTCUT_MODIFIER); }
-applyNavShortcutHints();
+RundockNavShortcuts.installHints(document, NAV_SHORTCUT_MODIFIER);
 document.addEventListener('keydown', RundockNavShortcuts.createKeydownHandler({
   doc: document,
   modifier: NAV_SHORTCUT_MODIFIER,

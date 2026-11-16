@@ -50,6 +50,9 @@ const digit = (n, mods) => keydown(`Digit${n}`, String(n), mods);
 const comma = (mods) => keydown('Comma', ',', mods);
 const held = (modifier) => (modifier === 'Meta' ? { metaKey: true } : { ctrlKey: true });
 
+// Lets the page's mutation observers run.
+const settle = () => new Promise(setImmediate);
+
 const mainNavs = (doc) => Array.from(doc.querySelectorAll('.nav-main button.nav-item[data-nav]'), (b) => b.getAttribute('data-nav'));
 const navOf = (item) => (item ? item.getAttribute('data-nav') : null);
 
@@ -149,31 +152,49 @@ describe('binding by position', () => {
     assert.strictEqual(navOf(N.match(keydown('Digit6', '6', { ctrlKey: true }), 'Control', doc)), mainNavs(doc)[5]);
   });
 
-  test('reordering the rail moves the bindings and the hints with it', () => {
+  test('reordering the rail moves the bindings and the hints with it, with nothing called', async () => {
     const doc = page();
     const main = doc.querySelector('.nav-main');
     const items = main.querySelectorAll('button.nav-item[data-nav]');
     const last = items[items.length - 1];
     const first = items[0];
-    N.applyHints(doc, 'Meta');
+    N.installHints(doc, 'Meta');
     main.insertBefore(last, first);
     // The binding follows at once, because it reads the rail at the key press.
     assert.strictEqual(N.match(digit(1, { metaKey: true }), 'Meta', doc), last);
     assert.strictEqual(N.match(digit(2, { metaKey: true }), 'Meta', doc), first);
-    // The hints follow once rebuilt, from the same read.
-    N.applyHints(doc, 'Meta');
-    assert.strictEqual(last.getAttribute('data-tooltip'), `${last.getAttribute('data-nav-label')} (⌘1)`);
-    assert.strictEqual(last.getAttribute('aria-keyshortcuts'), 'Meta+1');
+    // The hints follow on their own, from the same read.
+    await settle();
+    const now = Array.from(main.querySelectorAll('button.nav-item[data-nav]'));
+    assert.strictEqual(now[0], last);
+    now.forEach((item, i) => {
+      assert.strictEqual(item.getAttribute('data-tooltip'), `${item.getAttribute('data-nav-label')} (⌘${i + 1})`);
+      assert.strictEqual(item.getAttribute('aria-keyshortcuts'), `Meta+${i + 1}`);
+    });
     assert.strictEqual(first.getAttribute('data-tooltip'), 'Conversations (⌘2)');
-    assert.strictEqual(first.getAttribute('aria-keyshortcuts'), 'Meta+2');
   });
 
-  test('an item moved out of the main group loses its hint when the hints are rebuilt', () => {
+  test('an item added to the main group gets its hint, with nothing called', async () => {
     const doc = page();
-    N.applyHints(doc, 'Control');
+    N.installHints(doc, 'Control');
+    const main = doc.querySelector('.nav-main');
+    const added = doc.createElement('button');
+    added.className = 'nav-item';
+    added.setAttribute('data-nav', 'extra');
+    added.setAttribute('data-tooltip', 'Extra');
+    main.insertBefore(added, main.querySelector('[data-nav="team"]'));
+    await settle();
+    assert.strictEqual(added.getAttribute('data-tooltip'), 'Extra (Ctrl 2)');
+    assert.strictEqual(added.getAttribute('aria-keyshortcuts'), 'Control+2');
+    assert.strictEqual(main.querySelector('[data-nav="team"]').getAttribute('aria-keyshortcuts'), 'Control+3');
+  });
+
+  test('an item moved out of the main group loses its hint, with nothing called', async () => {
+    const doc = page();
+    N.installHints(doc, 'Control');
     const map = doc.querySelector('.nav-main [data-nav="map"]');
     doc.querySelector('.nav-bottom').appendChild(map);
-    N.applyHints(doc, 'Control');
+    await settle();
     assert.strictEqual(map.getAttribute('data-tooltip'), 'Map');
     assert.strictEqual(map.hasAttribute('aria-keyshortcuts'), false);
     assert.strictEqual(N.match(digit(7, { ctrlKey: true }), 'Control', doc), null);

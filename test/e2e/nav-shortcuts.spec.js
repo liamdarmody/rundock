@@ -179,19 +179,22 @@ for (const client of ['mac', 'windows']) {
 
 // ── Order, modifier and hints ───────────────────────────────────────────────
 
-test('reordering the rail moves the shortcuts and their hints with it', async ({ page }) => {
+test('reordering the rail moves the shortcuts and their hints with it, with nothing else called', async ({ page }) => {
   await boot(page, 'mac');
   await page.evaluate(() => {
     const main = document.querySelector('.nav-main');
     main.insertBefore(main.querySelector('[data-nav="map"]'), main.firstElementChild);
-    applyNavShortcutHints();
   });
-  const map = page.locator('.nav-main [data-nav="map"]');
-  const conversations = page.locator('.nav-main [data-nav="conversations"]');
-  await expect(map).toHaveAttribute('data-tooltip', 'Map (⌘1)');
-  await expect(map).toHaveAttribute('aria-keyshortcuts', 'Meta+1');
-  await expect(conversations).toHaveAttribute('data-tooltip', 'Conversations (⌘2)');
-  await expect(conversations).toHaveAttribute('aria-keyshortcuts', 'Meta+2');
+  const reordered = ['map', ...RAIL.filter((nav) => nav !== 'map')];
+  const hints = () => page.$$eval('.nav-main button.nav-item[data-nav]', (els) => els.map((el) => ({
+    nav: el.getAttribute('data-nav'),
+    tooltip: el.getAttribute('data-tooltip'),
+    keys: el.getAttribute('aria-keyshortcuts'),
+  })));
+  const label = (nav) => nav.charAt(0).toUpperCase() + nav.slice(1);
+  await expect.poll(hints).toEqual(reordered.map((nav, i) => ({
+    nav, tooltip: `${label(nav)} (⌘${i + 1})`, keys: `Meta+${i + 1}`,
+  })));
   await page.keyboard.press('Meta+1');
   await expectSection(page, 'map');
   await page.keyboard.press('Meta+2');

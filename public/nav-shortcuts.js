@@ -73,8 +73,8 @@
   }
 
   // Each item's tooltip and aria-keyshortcuts, from the same read a key press
-  // makes. Call it again after the rail changes: every hint is rebuilt from
-  // the item's own label, kept aside the first time.
+  // makes. Every hint is rebuilt from the item's own label, kept aside the
+  // first time, so applying them again replaces them.
   function applyHints(doc, modifier) {
     doc.querySelectorAll('.nav-rail [data-nav-label]').forEach((item) => {
       item.setAttribute('data-tooltip', item.getAttribute('data-nav-label'));
@@ -85,6 +85,16 @@
       item.setAttribute('data-tooltip', `${item.getAttribute('data-nav-label')} (${hintFor(key, modifier)})`);
       item.setAttribute('aria-keyshortcuts', `${modifier}+${key}`);
     }
+  }
+
+  // The hints now and whenever an item joins, leaves or moves within the
+  // rail's main group, so a hint never names a key that opens something else.
+  // Rebuilding them changes only attributes, which this does not watch.
+  function installHints(doc, modifier) {
+    applyHints(doc, modifier);
+    const main = doc.querySelector('.nav-main');
+    const Observer = doc.defaultView && doc.defaultView.MutationObserver;
+    if (main && Observer) new Observer(() => applyHints(doc, modifier)).observe(main, { childList: true });
   }
 
   // The keydown listener. Everything it needs from the page is passed in:
@@ -110,5 +120,5 @@
     };
   }
 
-  return { modifierFor, bindings, match, hintFor, applyHints, createKeydownHandler };
+  return { modifierFor, bindings, match, hintFor, applyHints, installHints, createKeydownHandler };
 }));
