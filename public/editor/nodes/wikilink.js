@@ -14,7 +14,10 @@
 
 import { Node, mergeAttributes, InputRule } from '../../vendor/tiptap-bundle.mjs';
 
-const WIKILINK_INLINE_RE = /\[\[([^\[\]\|\n]+?)(?:\|([^\[\]\|\n]+?))?\]\]/g;
+// The input rule's pattern: a [[target]] or [[target|alias]] that the key
+// just typed closes, so it is anchored at the end of the text before the
+// cursor. No g flag: a global pattern keeps lastIndex between calls.
+const WIKILINK_INLINE_RE = /\[\[([^\[\]\|\n]+?)(?:\|([^\[\]\|\n]+?))?\]\]$/;
 
 function escapeHtmlAttr(s) {
   return String(s)
@@ -144,13 +147,16 @@ export const Wikilink = Node.create({
           // Only fire on literal typed text. Tiptap also runs input rules on
           // Enter, reconstructing the block's text with each leaf node's
           // renderText, so an EXISTING wikilink atom re-serialises to
-          // `[[target]]` and this rule matches its own output. The matched
-          // range then spans that atom (1 position rendering as many chars),
-          // and replacing it deletes the surrounding text and sibling atoms.
-          // Requiring the doc text under the range to equal the literal match
-          // means an atom in the range (which contributes no text) fails the
-          // check, so only genuinely typed `[[...]]` is ever replaced.
-          if (state.doc.textBetween(range.from, range.to) !== match[0]) return;
+          // `[[target]]` and this rule could match its own output. The matched
+          // range would then span that atom (1 position rendering as many
+          // chars), and replacing it deletes the surrounding text and sibling
+          // atoms. Enter adds "\n", which the end anchor never matches. The
+          // key being typed is not in the doc yet, so the range holds the
+          // match less that key: requiring the doc text under the range to
+          // equal that much of the match means an atom in the range (which
+          // contributes no text) fails the check, so only genuinely typed
+          // `[[...]]` is ever replaced.
+          if (state.doc.textBetween(range.from, range.to) !== match[0].slice(0, range.to - range.from)) return;
           const target = (match[1] || '').trim();
           const alias  = match[2] ? match[2].trim() : null;
           if (!target) return;

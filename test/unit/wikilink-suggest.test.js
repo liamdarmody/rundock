@@ -489,27 +489,85 @@ describe('where the list never opens', () => {
     properties.remove();
   });
 
-  // A link typed or pasted whole stays as typed text while editing and is
-  // saved as written, so the saved file reads back as exactly one link.
+  // A link typed or pasted whole is one link in the editor as soon as it
+  // lands, with the text around it as it was, before anything is saved.
+  const paragraph = (ed) => {
+    const parts = [];
+    ed.view.state.doc.firstChild.forEach((n) => parts.push(n.isText ? n.text : `<${n.type.name} ${n.attrs.target}>`));
+    return parts;
+  };
+  // An ordinary paste of text, as the browser hands it to the editor.
+  const pasteEvent = (text) => {
+    const event = new env.window.Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: { getData: (type) => (type === 'text/plain' ? text : '') } });
+    return event;
+  };
+
   test('[[Page]] typed in full makes exactly one link and leaves the line as typed', async () => {
     const ed = mount();
     ed.type(' see [[Plan]] today');
     await tick();
     assert.equal(ed.popup(), null, 'the closing ] closed the list');
+    assert.deepEqual(ed.links(), ['Plan'], 'one link, in the editor itself');
+    assert.equal(ed.view.state.doc.childCount, 1);
+    assert.deepEqual(paragraph(ed), ['Intro see ', '<wikilink Plan>', ' today']);
     const saved = ed.markdown();
     assert.equal(saved, 'Intro see [[Plan]] today\n');
     assert.deepEqual(mount(saved, null).links(), ['Plan']);
   });
 
+  test('[[Page]] typed after another link on the line makes a second link', async () => {
+    const ed = mount('Intro [[Roadmap]]\n');
+    ed.type(' and [[Plan]] today');
+    await tick();
+    assert.equal(ed.popup(), null);
+    assert.deepEqual(paragraph(ed), ['Intro ', '<wikilink Roadmap>', ' and ', '<wikilink Plan>', ' today']);
+  });
+
+  test('a closing ]] typed around other inline content leaves the line as typed', async () => {
+    // Inline math counts as several characters to the input rule but takes
+    // one place in the line, so a link around it would reach back too far.
+    const ed = mount('Intro see [[a$x$b]\n');
+    assert.equal(ed.view.state.doc.firstChild.child(1).type.name, 'mathInline');
+    ed.type(']');
+    await tick();
+    assert.deepEqual(ed.links(), []);
+    assert.equal(ed.markdown(), 'Intro see [[a$x$b]]\n');
+  });
+
   test('[[Page]] pasted makes exactly one link and leaves the line as it was', async () => {
+    const ed = mount();
+    ed.view.dom.dispatchEvent(pasteEvent(' see [[Plan]] today'));
+    await tick();
+    assert.equal(ed.popup(), null);
+    assert.equal(ed.calls(), 0, 'a paste never opens the list');
+    assert.deepEqual(ed.links(), ['Plan'], 'one link, in the editor itself');
+    assert.equal(ed.view.state.doc.childCount, 1);
+    assert.deepEqual(paragraph(ed), ['Intro see ', '<wikilink Plan>', ' today']);
+    const saved = ed.markdown();
+    assert.equal(saved, 'Intro see [[Plan]] today\n');
+    assert.deepEqual(mount(saved, null).links(), ['Plan']);
+  });
+
+  test('[[Page]] pasted as plain text keeps the characters pasted, and reads back as one link', async () => {
+    // Paste as plain text (Shift with the paste keys) skips markdown on purpose.
     const ed = mount();
     ed.view.pasteText(' see [[Plan]] today');
     await tick();
     assert.equal(ed.popup(), null);
     assert.equal(ed.calls(), 0, 'a paste never opens the list');
+    assert.deepEqual(paragraph(ed), ['Intro see [[Plan]] today']);
     const saved = ed.markdown();
     assert.equal(saved, 'Intro see [[Plan]] today\n');
     assert.deepEqual(mount(saved, null).links(), ['Plan']);
+  });
+
+  test('Enter at the end of a line holding links keeps every link and all its text', async () => {
+    const ed = mount('See also: [[Roadmap]] and [[Plan|the plan]]\n', null);
+    assert.equal(ed.press('Enter'), true);
+    assert.equal(ed.view.state.doc.childCount, 2, 'the line was split');
+    assert.deepEqual(ed.links(), ['Roadmap', 'Plan']);
+    assert.deepEqual(paragraph(ed), ['See also: ', '<wikilink Roadmap>', ' and ', '<wikilink Plan>']);
   });
 });
 
