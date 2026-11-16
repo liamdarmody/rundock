@@ -775,6 +775,13 @@
     return ids;
   }
 
+  // Whether a conversation still holds a request waiting on an answer. One
+  // that does is never empty, whatever has been said in it.
+  function holdsOpenRequest(byConvo, convoId) {
+    const m = byConvo.get(convoId);
+    return !!(m && m.size);
+  }
+
   // Drop every queued request for one conversation (the server's cancel
   // sweep has already answered them). Returns how many were dropped.
   function clearPendingPermissions(byConvo, convoId) {
@@ -1045,6 +1052,6 @@
     MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend, isTeamCard,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
-    routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions, waitingConversations,
+    routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions, waitingConversations, holdsOpenRequest,
     permissionOwner, markPermissionEnded, markPermissionAnswered, permissionEnded, endedPermissionCopy, staleRequestIds, findPendingPermission };
 }));

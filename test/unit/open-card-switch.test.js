@@ -61,6 +61,24 @@ describe('the conversations left waiting on the person', () => {
   });
 });
 
+describe('a conversation holding an open request', () => {
+  const payload = id => ({ request_id: id, request: { tool_name: 'Bash', input: { command: 'npm test' } } });
+
+  test('holds one until its last request is taken out, and an unknown conversation holds none', () => {
+    const byConvo = new Map();
+    P.queuePendingPermission(byConvo, 'convo-a', 'r1', payload('r1'));
+    P.queuePendingPermission(byConvo, 'convo-a', 'r2', payload('r2'));
+    assert.strictEqual(P.holdsOpenRequest(byConvo, 'convo-a'), true);
+    P.removePendingPermission(byConvo, 'r1');
+    assert.strictEqual(P.holdsOpenRequest(byConvo, 'convo-a'), true, 'one left is still one');
+    P.removePendingPermission(byConvo, 'r2');
+    assert.strictEqual(P.holdsOpenRequest(byConvo, 'convo-a'), false);
+    byConvo.set('convo-b', new Map());
+    assert.strictEqual(P.holdsOpenRequest(byConvo, 'convo-b'), false, 'an empty bucket holds nothing');
+    assert.strictEqual(P.holdsOpenRequest(byConvo, 'convo-c'), false);
+  });
+});
+
 describe('an answer given on a card in this window', () => {
   test('reads as the answer it was, never as another window\'s', () => {
     assert.deepStrictEqual(P.endedPermissionCopy('answered-here', true, false), { allowed: true, label: '✓', why: '' });
@@ -375,6 +393,47 @@ describe('a request that ends while its conversation is in the background', () =
       assert.strictEqual(copies(id), 0, 'and not shown again');
     });
   }
+});
+
+// Leaving a conversation the person has not written in drops it from the list
+// (conversations.js, discardIfEmpty, called on every switch). One that holds
+// an open card is not empty: dropped, its card could never be reached again.
+describe('a conversation with no message from the person, left with an open card', () => {
+  const VIEW_SRC = fs.readFileSync(path.join(ROOT, 'public', 'views', 'conversations.js'), 'utf-8');
+  assert.ok(VIEW_SRC.includes('if (activeConversation && activeConversation.id !== id) discardIfEmpty();'), 'a switch still drops an empty conversation');
+  const discardSrc = VIEW_SRC.match(/function discardIfEmpty\(\) \{[\s\S]*?\n\}/);
+  assert.ok(discardSrc, 'the client no longer carries discardIfEmpty');
+  // The list itself is the shell's: drawing it is no part of what is dropped.
+  const discard = new Function('renderConvoList', `${discardSrc[0]} return discardIfEmpty;`)(() => {});
+  const views = () => ({ discardIfEmpty: discard });
+  const other = () => ({ id: B, messages: [{ role: 'user', content: 'hello' }], persisted: true });
+
+  test('stays in the list, and its card comes back live and answerable', () => {
+    const setup = { id: A, messages: [{ role: 'system', content: 'Starting' }] };
+    global.conversations = [setup, other()];
+    open(A);
+    global.activeConversation = setup;
+    const id = nextId();
+    arrive(id, A);
+    assert.ok(live(id), 'drawn live while its conversation is on screen');
+    views().discardIfEmpty();
+    open(B);
+    assert.ok(global.conversations.some(c => c.id === A), 'still in the list');
+    open(A);
+    assert.strictEqual(copies(id), 1, 'drawn again on return');
+    assert.ok(live(id), 'and still answerable');
+    click(id, 'allow');
+    assert.deepStrictEqual(answers().map(m => [m.requestId, m.conversationId, m.allow]), [[id, A, true]]);
+  });
+
+  test('one left with nothing open is still dropped', () => {
+    const empty = { id: C, messages: [] };
+    global.conversations = [empty, other()];
+    global.activeConversation = empty;
+    views().discardIfEmpty();
+    assert.ok(!global.conversations.some(c => c.id === C), 'dropped from the list');
+    assert.strictEqual(global.activeConversation, null);
+  });
 });
 
 // Stopping a conversation reaches the window as two messages: each open

@@ -800,7 +800,9 @@ function renderConvoItem(c, variant) {
 function discardIfEmpty() {
   if (!activeConversation) return;
   const hasUserMsg = activeConversation.messages.some(m => m.role === 'user');
-  if (!hasUserMsg && !activeConversation.persisted) {
+  // An open card keeps it: dropped, its card could never be reached again.
+  const holdsCard = RundockPermissions.holdsOpenRequest(pendingPermissionsByConvo, activeConversation.id);
+  if (!hasUserMsg && !activeConversation.persisted && !holdsCard) {
     conversations = conversations.filter(c => c.id !== activeConversation.id);
     activeConversation = null;
     renderConvoList();
