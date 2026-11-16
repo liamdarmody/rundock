@@ -304,7 +304,13 @@ describe('a delegate whose resume is refused before it reads its brief', () => {
     assertServerUp('a brief written to a delegate that was refused and exited');
     assert.strictEqual(stdinLines.length, 1, `one line, for the one failed write: ${JSON.stringify(stdinLines)}`);
     assert.match(stdinLines[0], /content-lead/, 'naming the delegate');
-    assert.match(stdinLines[0], /EPIPE/, 'and the error');
+    // The brief is larger than the pipe holds, so part of it is still queued
+    // when the delegate exits, and Node closes a child's stdin when the child
+    // exits. When that close comes before the kernel refuses the write, the
+    // queued write is cancelled rather than failed, with ECANCELED: the reader
+    // is gone either way.
+    assert.match(stdinLines[0], /\((EPIPE|ENOTCONN|ECONNRESET|ECANCELED): /,
+      'and the error: refused by the pipe, or cancelled by the close on exit');
 
     const lead = spawnsFor(convoId).filter((i) => i.agent === 'content-lead');
     assert.deepStrictEqual(lead.map((i) => i.resume), [`dead-lead-${prefix}`, null],
@@ -362,9 +368,12 @@ describe('a delegate whose resume is refused before it reads its brief', () => {
         assert.match(line, new RegExp(`^\\[Stdin\\] claude \\(agent content-lead, conversation ${convoId}\\) pid=${refusedProcess.pid}: a write failed `),
           'each naming the stopped delegate');
       }
-      assert.match(stdinLines[0], /\((EPIPE|ENOTCONN|ECONNRESET): /, 'the first refused by the pipe');
+      // The brief is still queued when the delegate stops, so, as in the test
+      // above, the close on exit can cancel it (ECANCELED) before the pipe
+      // refuses it. The two writes queued behind it fail with the same error.
+      assert.match(stdinLines[0], /\((EPIPE|ENOTCONN|ECONNRESET|ECANCELED): /, 'the first refused by the pipe, or cancelled by the close');
       for (const line of stdinLines.slice(1)) {
-        assert.match(line, /\((EPIPE|ENOTCONN|ECONNRESET|ERR_STREAM_DESTROYED): /, 'the rest by the pipe, or by the stream the first failure closed');
+        assert.match(line, /\((EPIPE|ENOTCONN|ECONNRESET|ECANCELED|ERR_STREAM_DESTROYED): /, 'the rest with the first one\'s error, or by the stream the first failure closed');
       }
       const lead = spawnsFor(convoId).filter((i) => i.agent === 'content-lead');
       assert.deepStrictEqual(lead.map((i) => i.resume), [`dead-lead-${prefix}`, null], 'started fresh once, not once per failed write');

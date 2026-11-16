@@ -1690,7 +1690,11 @@ describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its c
     }
     assert.deepStrictEqual(uncaught, [], 'nothing reaches the server as an uncaught exception');
     assert.strictEqual(lines.length, 1, 'one line, for the one failed write');
-    assert.match(lines[0], /a child that never reads pid=\d+: a write failed \((EPIPE|ECONNRESET): /, 'naming the process and the error');
+    // Part of the write is still queued when the child exits, and Node closes a
+    // child's stdin when the child exits. When that close comes before the
+    // kernel refuses the write, the queued write is cancelled rather than
+    // failed, with ECANCELED.
+    assert.match(lines[0], /a child that never reads pid=\d+: a write failed \((EPIPE|ECONNRESET|ECANCELED): /, 'naming the process and the error');
   });
 
   test('both start paths hand back a stdin that already has its handler', { timeout: 30000 }, async () => {

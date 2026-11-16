@@ -110,7 +110,11 @@ describe('a write to a child that has stopped', () => {
     await tick();
     noUncaught('a write going when the child exited');
     assert.strictEqual(lines.length, 1, JSON.stringify(lines));
-    assert.match(lines[0], /^\[Stdin\] a deaf child pid=\d+: a write failed \((EPIPE|ECONNRESET): /);
+    // Part of the write is still queued when the child exits, and Node closes a
+    // child's stdin when the child exits. When that close comes before the
+    // kernel refuses the write, the queued write is cancelled rather than
+    // failed, with ECANCELED.
+    assert.match(lines[0], /^\[Stdin\] a deaf child pid=\d+: a write failed \((EPIPE|ECONNRESET|ECANCELED): /);
   });
 
   test('the retry: a second write to the same stopped child logs once more, and nothing is thrown', LIMIT, async () => {
