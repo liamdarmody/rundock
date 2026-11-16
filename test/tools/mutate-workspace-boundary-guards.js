@@ -4712,6 +4712,12 @@ const MUTATIONS = [
   [SAVED_ANSWER, 'Saved answer: the verdict is dropped from the decision',
     '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
     '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), undefined, { toolName: data.tool_name, input });'],
+  // The request reaches the decision as the window passes it, so a saved
+  // PowerShell key is matched part by part: dropped, a chain whose every
+  // command is saved has no key and waits on a card.
+  [SAVED_ANSWER, 'Saved answer: a PowerShell request is matched by its key alone',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict, { toolName: data.tool_name, input });',
+    '    const answer = decision.decidePermission(risk, key, savedAnswers(workspace), verdict);'],
   // A save or revoke builds on what the guard accepted, never the disk.
   [SAVED_WRITER, 'Saved answer: a save or revoke merges the permissions file as it stands on disk',
     '    const accepted = answerFileToBuildOn(getWorkspace(), file);',

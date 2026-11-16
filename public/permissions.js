@@ -31,7 +31,9 @@
 // answers a request only when every part is a read or starts with a command a
 // saved key names. The catch-all `PowerShell:PowerShell` an earlier release
 // saved answers nothing. A command runner (POWERSHELL_RUNNERS) is never keyed,
-// and no saved key answers it. Bash keys are still the first word.
+// and no saved key answers it. The server matches its saved answers the same
+// way, handed the request as the window hands it. Bash keys are still the
+// first word.
 //
 // What this module decides (pinned by test/unit/permissions.test.js):
 //   classifyRisk()        low / medium / high per tool request
