@@ -14,6 +14,7 @@
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
@@ -78,6 +79,34 @@ async function notStarted(npm, runtime, why) {
     const chat = await startChat(npm.bin);
     assert.deepStrictEqual(chat.calls, [], `${why}: the chat started nothing`);
     assert.deepStrictEqual(chat.errors.map((e) => e.message), [refusalFor(runtime.label, runtime.pkg, npm.bin)], `${why}: and said why`);
+    const check = await checkFrom(npm.bin);
+    assert.deepStrictEqual(check.calls, [], `${why}: the connection check started nothing`);
+    assert.deepStrictEqual(check.answer, { connected: false, known: false }, `${why}: and could not tell`);
+  }
+}
+
+// ── The connection check (checkConnection) ──
+
+const CHECK_ARGS = ['--print', 'test', '--output-format', 'text'];
+
+// One connection check, with the platform stood in and spawn recorded, inside
+// the Electron app or under node server.js. Each start closes at once, as a
+// signed-in Claude Code's would.
+async function checkFrom(bin, { platform = 'win32', electron = false } = {}) {
+  const { checkConnection } = require('../../lib/runtime/claude-console.js');
+  const calls = [];
+  const spawn = (file, args, options) => {
+    const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
+    calls.push({ file, args, options, inherited: { ...process.env } });
+    setImmediate(() => child.emit('close', 0));
+    return child;
+  };
+  const before = process.env.RUNDOCK_ELECTRON;
+  try {
+    if (electron) process.env.RUNDOCK_ELECTRON = '1'; else delete process.env.RUNDOCK_ELECTRON;
+    return { calls, answer: await checkConnection({ bin, spawn, platform, timeoutMs: 5000 }) };
+  } finally {
+    if (before === undefined) delete process.env.RUNDOCK_ELECTRON; else process.env.RUNDOCK_ELECTRON = before;
   }
 }
 
@@ -436,5 +465,51 @@ describe('a chat started through spawnClaude', () => {
     try { chat = await startChat(npm.bin); } finally { fs.statSync = real; }
     assert.deepStrictEqual(chat.calls, [], 'nothing started, the launcher least of all');
     assert.deepStrictEqual(chat.errors.map((e) => [e.code, e.path]), [['NPM_PACKAGE_UNREADABLE', npm.bin]]);
+  });
+});
+
+describe('the connection check', () => {
+  test('with only an npm claude.cmd found on Windows, it starts this Node with the entry point first, as a chat does, and no shell', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const npm = npmFolder(CLAUDE_CODE, { pkg: claudePackage(), files: { 'cli.js': '' } });
+    const { calls, answer } = await checkFrom(npm.bin);
+    assert.deepStrictEqual(answer, { connected: true, known: true });
+    assert.strictEqual(calls.length, 1, 'one start');
+    const [{ file, args, options }] = calls;
+    assert.strictEqual(file, process.execPath, 'the Node Rundock runs on');
+    assert.deepStrictEqual(args, [npm.entry('cli.js'), ...CHECK_ARGS], 'the entry point first, then the check\'s own words');
+    assert.deepStrictEqual(options, { cwd: os.homedir(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }, 'from the home folder, as before');
+    assert.strictEqual('shell' in options, false, 'no shell');
+  });
+
+  test('inside the Electron app the Node start carries ELECTRON_RUN_AS_NODE, and under node server.js nothing is added', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const npm = npmFolder(CLAUDE_CODE, { pkg: claudePackage(), files: { 'cli.js': '' } });
+    const app = await checkFrom(npm.bin, { electron: true });
+    assert.deepStrictEqual(app.calls[0].options.env, { ...app.calls[0].inherited, ELECTRON_RUN_AS_NODE: '1' }, 'the app\'s own environment, and the one variable');
+    const server = await checkFrom(npm.bin, { electron: false });
+    assert.strictEqual('env' in server.calls[0].options, false, 'the app\'s own environment, nothing added');
+  });
+
+  test('a .exe on Windows, and any copy on macOS or Linux, is checked as before, inside the Electron app too', async () => {
+    for (const [platform, bin] of [['win32', '/opt/example/claude.exe'], ['darwin', '/opt/example/claude'], ['linux', '/opt/example/claude'], ['linux', '/opt/example/claude.cmd']]) {
+      for (const electron of [false, true]) {
+        const why = `${path.basename(bin)} on ${platform}${electron ? ' inside the Electron app' : ''}`;
+        const { calls, answer } = await checkFrom(bin, { platform, electron });
+        assert.deepStrictEqual(answer, { connected: true, known: true }, why);
+        assert.deepStrictEqual(calls.map((c) => [c.file, c.args, c.options]), [[bin, CHECK_ARGS, { cwd: os.homedir(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }]], why);
+      }
+    }
+  });
+
+  test('fixed after a refusal, the package is checked on the next try, with nothing remembered', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const npm = npmFolder(CLAUDE_CODE, { pkg: { name: '@anthropic-ai/claude-code' }, files: { 'cli.js': '' } });
+    const refused = await checkFrom(npm.bin);
+    assert.deepStrictEqual([refused.calls.length, refused.answer], [0, { connected: false, known: false }]);
+    fs.writeFileSync(path.join(npm.folder, 'package.json'), JSON.stringify(claudePackage()));
+    const checked = await checkFrom(npm.bin);
+    assert.deepStrictEqual(checked.calls.map((c) => [c.file, c.args[0]]), [[process.execPath, npm.entry('cli.js')]]);
+    assert.deepStrictEqual(checked.answer, { connected: true, known: true });
   });
 });
