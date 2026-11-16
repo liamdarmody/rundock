@@ -8,13 +8,17 @@
 // that package's folder, and starts it with the Node Rundock runs on. Anything
 // it cannot read is refused, never started some other way.
 //
-// Every case stands win32 in through the helper's own argument, and lays the
-// npm folder out in a real temp folder.
+// Every case stands win32 in through the helper's own argument, or through
+// the runtime's own seam for the platform, and lays the npm folder out in a
+// real temp folder. No start is real: spawn is recorded in its place.
 const { test, describe, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
+const { PassThrough, Writable } = require('node:stream');
 const { makeTempDir, cleanup } = require('../helpers/workspace.js');
+const config = require('../../lib/config.js');
 
 after(cleanup);
 
@@ -64,6 +68,101 @@ function assertRefused(plan, npm, runtime, why) {
   assert.strictEqual(plan.refusal.code, 'NPM_PACKAGE_UNREADABLE', why);
   assert.strictEqual(plan.refusal.path, npm.bin, `${why}: names the launcher found`);
   assert.strictEqual(plan.refusal.message, refusalFor(runtime.label, runtime.pkg, npm.bin), why);
+}
+
+// Refused, and so never started: the start hands spawn nothing and surfaces
+// the refusal, word for word.
+async function notStarted(npm, runtime, why) {
+  assertRefused(launcher().launchPlan(npm.bin, runtime, WIN), npm, runtime, why);
+  if (runtime.command === 'claude') {
+    const chat = await startChat(npm.bin);
+    assert.deepStrictEqual(chat.calls, [], `${why}: the chat started nothing`);
+    assert.deepStrictEqual(chat.errors.map((e) => e.message), [refusalFor(runtime.label, runtime.pkg, npm.bin)], `${why}: and said why`);
+  }
+}
+
+// ── Starting a chat through spawnClaude ──
+
+const LIB_KEY = require.resolve('../../lib/runtime/claude.js');
+const CHAT_ARGS = ['--output-format', 'stream-json', '--verbose', '--agent', 'writer'];
+
+// A private copy of the runtime per test, so a path it found or a version it
+// read never carries from one test into the next.
+function freshClaude() {
+  const cached = require.cache[LIB_KEY];
+  delete require.cache[LIB_KEY];
+  const mod = require(LIB_KEY);
+  delete require.cache[LIB_KEY];
+  if (cached) require.cache[LIB_KEY] = cached;
+  return mod;
+}
+
+// The runtime asks `where.exe` for Claude Code only on a real Windows, and
+// `which` everywhere else, so a `which` that names `bin`, first on PATH,
+// stands in for the lookup.
+function finderFor(bin) {
+  const dir = makeTempDir('npm-launcher-which-');
+  fs.writeFileSync(path.join(dir, 'which'), `#!/bin/sh\nprintf '%s\\n' '${bin}'\n`);
+  fs.chmodSync(path.join(dir, 'which'), 0o755);
+  return dir;
+}
+
+// A binary that answers --version as a current Claude Code, for the version
+// floor to read where it runs the copy found: a .exe on Windows, and any copy
+// on macOS and Linux. Nothing else runs it: spawn is recorded.
+function runnable(name) {
+  const bin = path.join(makeTempDir('npm-launcher-bin-'), name);
+  fs.writeFileSync(bin, `#!${process.execPath}\nprocess.stdout.write('2.1.318 (Claude Code)\\n');\n`);
+  fs.chmodSync(bin, 0o755);
+  return bin;
+}
+
+// spawn, recorded in place of a start, with the environment the start would
+// have inherited. Each start hands back a child that closes when the test
+// says so.
+function recordedSpawn() {
+  const calls = [];
+  const spawn = (file, args, options) => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 70000 + calls.length,
+      stdin: new Writable({ write: (chunk, encoding, done) => done() }),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      kill: () => true,
+    });
+    calls.push({ file, args, options, inherited: { ...process.env }, child });
+    return child;
+  };
+  return { calls, spawn };
+}
+
+// One chat started through spawnClaude, on a private runtime with the
+// platform stood in, spawn recorded and a workspace for the pid file, inside
+// the Electron app or under node server.js. Settles once anything the start
+// surfaces has been surfaced, with what it handed spawn, the errors it
+// surfaced, and the pid file as it started and once it closed.
+async function startChat(bin, { platform = 'win32', args = CHAT_ARGS, options = { stdio: 'ignore' }, electron = false, rt = freshClaude(), onError } = {}) {
+  const previousWs = config.getWorkspace();
+  config.setWorkspace(makeTempDir('npm-launcher-ws-'));
+  const { calls, spawn } = recordedSpawn();
+  const prev = rt.wireClaudeRuntimeDeps({ onClaudeSpawn: () => {}, platform: () => platform, spawn });
+  const before = { PATH: process.env.PATH, RUNDOCK_ELECTRON: process.env.RUNDOCK_ELECTRON };
+  const errors = [];
+  try {
+    process.env.PATH = [finderFor(bin), '/usr/bin', '/bin'].join(path.delimiter);
+    if (electron) process.env.RUNDOCK_ELECTRON = '1'; else delete process.env.RUNDOCK_ELECTRON;
+    rt.spawnClaude(args, options, (err) => { errors.push(err); if (onError) onError(err); });
+    const tracked = rt.loadPidFile();
+    await new Promise((resolve) => setImmediate(resolve));
+    for (const c of calls) c.child.emit('close', 0, null);
+    return { calls, errors, tracked, left: rt.loadPidFile() };
+  } finally {
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+    rt.wireClaudeRuntimeDeps(prev);
+    config.setWorkspace(previousWs);
+  }
 }
 
 describe('the entry point read from the package beside the launcher', () => {
@@ -145,30 +244,30 @@ describe('the entry point read from the package beside the launcher', () => {
 // One test per cause, each named after it. A refusal is never a plan to start
 // the launcher, so nothing can fall back to a shell.
 describe('a package that cannot be read is refused, and nothing is started', () => {
-  test('the package folder is missing', () => {
-    const { launchPlan, CLAUDE_CODE, CODEX } = launcher();
+  test('the package folder is missing', async () => {
+    const { CLAUDE_CODE, CODEX } = launcher();
     for (const runtime of [CLAUDE_CODE, CODEX]) {
       const npm = npmFolder(runtime);
-      assertRefused(launchPlan(npm.bin, runtime, WIN), npm, runtime, runtime.label);
+      await notStarted(npm, runtime, runtime.label);
     }
   });
 
-  test('its package.json is missing', () => {
-    const { launchPlan, CLAUDE_CODE } = launcher();
+  test('its package.json is missing', async () => {
+    const { CLAUDE_CODE } = launcher();
     const npm = npmFolder(CLAUDE_CODE, { files: { 'cli.js': '' } });
-    assertRefused(launchPlan(npm.bin, CLAUDE_CODE, WIN), npm, CLAUDE_CODE, 'no package.json');
+    await notStarted(npm, CLAUDE_CODE, 'no package.json');
   });
 
-  test('its package.json does not parse', () => {
-    const { launchPlan, CLAUDE_CODE } = launcher();
+  test('its package.json does not parse', async () => {
+    const { CLAUDE_CODE } = launcher();
     for (const text of ['{ "bin": { "claude": "cli.js" }, ', '', 'not json']) {
       const npm = npmFolder(CLAUDE_CODE, { pkg: text, files: { 'cli.js': '' } });
-      assertRefused(launchPlan(npm.bin, CLAUDE_CODE, WIN), npm, CLAUDE_CODE, JSON.stringify(text));
+      await notStarted(npm, CLAUDE_CODE, JSON.stringify(text));
     }
   });
 
-  test('it has no bin entry for the runtime\'s command', () => {
-    const { launchPlan, CLAUDE_CODE, CODEX } = launcher();
+  test('it has no bin entry for the runtime\'s command', async () => {
+    const { CLAUDE_CODE, CODEX } = launcher();
     const cases = [
       [CLAUDE_CODE, { name: '@anthropic-ai/claude-code', version: '2.1.318' }, 'no bin at all'],
       [CLAUDE_CODE, claudePackage({ 'claude-code': 'cli.js' }), 'a bin for another command'],
@@ -180,12 +279,12 @@ describe('a package that cannot be read is refused, and nothing is started', () 
     ];
     for (const [runtime, pkg, why] of cases) {
       const npm = npmFolder(runtime, { pkg, files: { 'cli.js': '' } });
-      assertRefused(launchPlan(npm.bin, runtime, WIN), npm, runtime, why);
+      await notStarted(npm, runtime, why);
     }
   });
 
-  test('the entry is not a file inside the folder', () => {
-    const { launchPlan, CLAUDE_CODE } = launcher();
+  test('the entry is not a file inside the folder', async () => {
+    const { CLAUDE_CODE } = launcher();
     const outside = makeTempDir('npm-launcher-outside-');
     fs.writeFileSync(path.join(outside, 'evil.js'), '');
     const cases = [
@@ -199,7 +298,7 @@ describe('a package that cannot be read is refused, and nothing is started', () 
     for (const [bin, lay, why] of cases) {
       const npm = npmFolder(CLAUDE_CODE, { pkg: claudePackage(bin) });
       lay(npm);
-      assertRefused(launchPlan(npm.bin, CLAUDE_CODE, WIN), npm, CLAUDE_CODE, why);
+      await notStarted(npm, CLAUDE_CODE, why);
     }
   });
 
@@ -224,5 +323,118 @@ describe('a package that cannot be read is refused, and nothing is started', () 
       assertRefused(plan, npm, CLAUDE_CODE, name);
       assert.match(String(plan.refusal.cause && plan.refusal.cause.message), new RegExp(`${name} broke`), `${name}: the cause is kept for the log`);
     }
+  });
+});
+
+describe('a chat started through spawnClaude', () => {
+  test('with only an npm claude.cmd found on Windows, a chat starts this Node with the entry point first, and no shell', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const npm = npmFolder(CLAUDE_CODE, { pkg: claudePackage(), files: { 'cli.js': '' } });
+    const given = { cwd: npm.dir, env: { ...process.env, MARKER: 'given' }, stdio: ['pipe', 'pipe', 'pipe'] };
+    const chat = await startChat(npm.bin, { options: given });
+    assert.deepStrictEqual(chat.errors, []);
+    assert.strictEqual(chat.calls.length, 1, 'one start');
+    const [{ file, args, options }] = chat.calls;
+    assert.strictEqual(file, process.execPath, 'the Node Rundock runs on');
+    assert.deepStrictEqual(args, [npm.entry('cli.js'), ...CHAT_ARGS], 'the entry point first, then the arguments as given');
+    assert.deepStrictEqual(options, { ...given, detached: process.platform !== 'win32' }, 'the options the caller gave');
+    assert.strictEqual('shell' in options, false, 'no shell');
+    assert.strictEqual(options.env, given.env, 'the very environment the caller built');
+    assert.deepStrictEqual(chat.tracked.map((r) => [r.pid, r.cmd]), [[70000, 'cli.js']], 'recorded by the entry point it runs');
+    assert.deepStrictEqual(chat.left, [], 'and forgotten when it closed');
+  });
+
+  test('a prompt holding &, |, %, ^ and an unbalanced quote reaches spawn byte for byte, with no shell', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const npm = npmFolder(CLAUDE_CODE, { pkg: claudePackage(), files: { 'cli.js': '' } });
+    const prompt = 'Tidy the notes & echo x > y.txt | more %PATH% ^ and "a quote left open';
+    const args = ['--print', prompt, '--append-system-prompt', prompt, ...CHAT_ARGS];
+    const chat = await startChat(npm.bin, { args });
+    assert.strictEqual(chat.calls.length, 1);
+    const [{ args: handed, options }] = chat.calls;
+    assert.deepStrictEqual(handed, [npm.entry('cli.js'), ...args]);
+    for (const at of [2, 4]) assert.ok(Buffer.from(handed[at], 'utf8').equals(Buffer.from(prompt, 'utf8')), `argument ${at} is the prompt, byte for byte`);
+    assert.strictEqual('shell' in options, false, 'shell is not set');
+  });
+
+  test('inside the Electron app the Node start carries ELECTRON_RUN_AS_NODE, and under node server.js nothing is added', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const npm = npmFolder(CLAUDE_CODE, { pkg: claudePackage(), files: { 'cli.js': '' } });
+    const given = { env: { ...process.env, MARKER: 'given' }, stdio: 'ignore' };
+    const app = await startChat(npm.bin, { options: given, electron: true });
+    assert.deepStrictEqual(app.calls[0].options.env, { ...given.env, ELECTRON_RUN_AS_NODE: '1' }, 'the caller\'s environment, and the one variable');
+    assert.strictEqual('ELECTRON_RUN_AS_NODE' in given.env, false, 'the caller\'s own object is left as it was');
+    const inherited = await startChat(npm.bin, { options: { stdio: 'ignore' }, electron: true });
+    assert.deepStrictEqual(inherited.calls[0].options.env, { ...inherited.calls[0].inherited, ELECTRON_RUN_AS_NODE: '1' }, 'with no environment given, the inherited one and the variable');
+    const server = await startChat(npm.bin, { options: given, electron: false });
+    assert.strictEqual(server.calls[0].options.env, given.env, 'under node server.js, the very environment given');
+    const bare = await startChat(npm.bin, { options: { stdio: 'ignore' }, electron: false });
+    assert.strictEqual('env' in bare.calls[0].options, false, 'and none added where none was given');
+  });
+
+  test('a .exe on Windows, and any copy on macOS or Linux, is started as before: the same program, arguments and options, field by field', async () => {
+    const cases = [['win32', runnable('claude.exe')], ['darwin', runnable('claude')], ['linux', runnable('claude')], ['linux', runnable('claude.cmd')]];
+    for (const [platform, bin] of cases) {
+      for (const electron of [false, true]) {
+        const why = `${path.basename(bin)} on ${platform}${electron ? ' inside the Electron app' : ''}`;
+        const given = { cwd: path.dirname(bin), env: { ...process.env, MARKER: 'given' }, stdio: ['pipe', 'pipe', 'ignore'] };
+        const chat = await startChat(bin, { platform, options: given, electron });
+        assert.deepStrictEqual(chat.errors, [], why);
+        assert.strictEqual(chat.calls.length, 1, why);
+        const [{ file, args, options }] = chat.calls;
+        assert.strictEqual(file, bin, `${why}: the program`);
+        assert.deepStrictEqual(args, CHAT_ARGS, `${why}: the arguments`);
+        assert.deepStrictEqual(Object.keys(options), ['cwd', 'env', 'stdio', 'detached'], `${why}: the option names`);
+        assert.strictEqual(options.cwd, given.cwd, `${why}: cwd`);
+        assert.strictEqual(options.env, given.env, `${why}: env, the very object`);
+        assert.strictEqual(options.stdio, given.stdio, `${why}: stdio, the very array`);
+        assert.strictEqual(options.detached, process.platform !== 'win32', `${why}: detached`);
+        assert.deepStrictEqual(chat.tracked.map((r) => r.cmd), [path.basename(bin)], `${why}: recorded by its own name`);
+      }
+    }
+  });
+
+  test('a package that cannot be read is said in the conversation, word for word, and nothing is started', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const srv = require('../../server.js')._internal;
+    const npm = npmFolder(CLAUDE_CODE);
+    const said = [];
+    const client = { readyState: 1, send: (raw) => said.push(JSON.parse(raw)) };
+    srv.connectedClients.add(client);
+    const convo = `npm-launcher-${Date.now()}`;
+    let chat;
+    try {
+      chat = await startChat(npm.bin, { onError: (err) => srv.handleChatSpawnError(err, convo) });
+    } finally { srv.connectedClients.delete(client); }
+    assert.deepStrictEqual(chat.calls, [], 'nothing started');
+    const info = said.filter((m) => m._conversationId === convo && m.subtype === 'info');
+    assert.deepStrictEqual(info.map((m) => m.content), [refusalFor('Claude Code', '@anthropic-ai/claude-code', npm.bin)], 'the refusal, and only it');
+    assert.ok(said.some((m) => m._conversationId === convo && m.subtype === 'done'), 'and the conversation stops waiting');
+  });
+
+  test('fixed after a refusal, the package starts on the next chat, with no restart', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const npm = npmFolder(CLAUDE_CODE, { pkg: 'not json', files: { 'cli.js': '' } });
+    const rt = freshClaude();
+    const refused = await startChat(npm.bin, { rt });
+    assert.deepStrictEqual([refused.calls.length, refused.errors.map((e) => e.code)], [0, ['NPM_PACKAGE_UNREADABLE']]);
+    fs.writeFileSync(path.join(npm.folder, 'package.json'), JSON.stringify(claudePackage()));
+    const started = await startChat(npm.bin, { rt });
+    assert.deepStrictEqual(started.errors, []);
+    assert.deepStrictEqual(started.calls.map((c) => [c.file, c.args[0]]), [[process.execPath, npm.entry('cli.js')]]);
+  });
+
+  test('an unexpected failure while reading the package refuses the chat, and the launcher is never started', async () => {
+    const { CLAUDE_CODE } = launcher();
+    const npm = npmFolder(CLAUDE_CODE, { pkg: claudePackage(), files: { 'cli.js': '' } });
+    const real = fs.statSync;
+    fs.statSync = function (p, ...rest) {
+      if (String(p).endsWith('cli.js')) throw new TypeError('statSync broke unexpectedly');
+      return real.call(this, p, ...rest);
+    };
+    let chat;
+    try { chat = await startChat(npm.bin); } finally { fs.statSync = real; }
+    assert.deepStrictEqual(chat.calls, [], 'nothing started, the launcher least of all');
+    assert.deepStrictEqual(chat.errors.map((e) => [e.code, e.path]), [['NPM_PACKAGE_UNREADABLE', npm.bin]]);
   });
 });

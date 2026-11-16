@@ -90,8 +90,8 @@ const AGENT_SPAWNS = [
 // processes they start), and the hook decides nothing outside Rundock. Each
 // says why it cannot be driven end to end, and which test here covers it.
 const OTHER_CLAUDE_LAUNCHES = [
-  { at: 'lib/runtime/claude.js | spawnClaude | spawn(resolveClaudeBin())',
-    why: 'the one function every agent spawn above starts through: it passes on the environment it is given and adds nothing, so each agent spawn\'s own test drives it',
+  { at: 'lib/runtime/claude.js | spawnClaude | spawn(launch.program)',
+    why: 'the one function every agent spawn above starts through: it passes on the environment it is given and adds nothing but ELECTRON_RUN_AS_NODE to a start through Node inside the Electron app, so each agent spawn\'s own test drives it',
     testedBy: [ENVIRONMENTS, 'the funnel every agent spawn goes through passes on the environment it is given'] },
   { at: 'lib/runtime/claude-console.js | checkConnection | spawn(bin)',
     why: 'the reconnect card\'s check: a one-word turn from the home folder, with no --settings, so none of the workspace\'s hooks are configured for it, and the app\'s own environment',
