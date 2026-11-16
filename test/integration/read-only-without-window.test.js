@@ -256,9 +256,10 @@ describe('the server and the window give the same answer', () => {
     ['mcp__example__send_email', { to: 'someone' }],
   ];
 
-  // What the window decides, with no saved answers.
+  // What the window decides, with no saved answers, handed the request as the
+  // window hands it.
   const windowSays = (tool, input) => {
-    const d = P.decidePermission(P.classifyRisk(tool, input), P.toolAllowKey(tool, input), new Set());
+    const d = P.decidePermission(P.classifyRisk(tool, input), P.toolAllowKey(tool, input), new Set(), undefined, { toolName: tool, input });
     return d.action === 'allow' ? 'allow' : 'card';
   };
   // What the server does with the same request: answers it, or stores it to

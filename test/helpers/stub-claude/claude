@@ -58,6 +58,8 @@
 // hold the rest (the message's end and the result) until that file exists,
 // and "finishOnSigterm": true to have a SIGTERM write the rest at once and
 // exit, as a runtime that finishes its turn when asked to stop: see emitTurn.
+// Such a rule may give "pauseAfterTextMs": n to wait that long once its text
+// is out, so a test can land a SIGTERM there every time. No rule, no pause.
 // A turn may give a block { "holdUntil": "<path>" } to write the turn up to
 // that block and hold the rest until the file exists, so a test decides the
 // moment between two events of one turn: see writeEvents.
@@ -618,26 +620,36 @@ function finishTranscript(rule, prompt, shellRan = []) {
 }
 
 function emitTurn(rule, prompt) {
+  // Every signal handler this stub installs goes in before the first write of
+  // the branch it serves, so no signal can find the process between the two.
   const shellRan = (rule.shell || []).map(runShell);
   if (FIXED_SESSION) finishTranscript(rule, prompt, shellRan);
   const events = buildEnvelopes(rule);
+  // A REPLY STILL BEING FINISHED. `holdAfterText` writes the turn up to the
+  // end of its text and holds the rest, the message's end and the result,
+  // until the named file exists. With `finishOnSigterm`, a SIGTERM no longer
+  // ends the process where it stands: what is still held is written at once
+  // and the process exits once it has left, so the output log counts it. The
+  // handler goes in before the turn writes anything, stderr included, so no
+  // SIGTERM can find the process without it; until the text is out the whole
+  // turn is held, so a SIGTERM handled then writes all of it.
+  let held = events;
+  const finish = () => { for (const e of held) writeOut(JSON.stringify(e) + '\n'); held = []; };
+  if (rule.holdAfterText && rule.finishOnSigterm) process.on('SIGTERM', () => { finish(); exitWhenWritten(0); });
   // A run that ends normally can still have written to stderr: warnings,
   // progress, deprecation notices. Modelled because stderr is a pipe like any
   // other and fills like any other, and a scenario that can only reach it by
   // crashing cannot exercise that at all.
   if (rule.stderr) writeErr(String(rule.stderr));
-  // A REPLY STILL BEING FINISHED. `holdAfterText` writes the turn up to the
-  // end of its text and holds the rest, the message's end and the result,
-  // until the named file exists. With `finishOnSigterm`, a SIGTERM no longer
-  // ends the process where it stands: the rest of the turn is written at once
-  // and the process exits once it has left, so the output log counts it.
   if (rule.holdAfterText) {
     const at = events.findIndex((e) => e.type === 'stream_event' && e.event && e.event.type === 'message_delta');
     for (const e of events.slice(0, at)) writeOut(JSON.stringify(e) + '\n');
-    let held = events.slice(at);
-    const finish = () => { for (const e of held) writeOut(JSON.stringify(e) + '\n'); held = []; };
-    if (rule.finishOnSigterm) process.on('SIGTERM', () => { finish(); exitWhenWritten(0); });
-    whenFileExists(rule.holdAfterText, () => { finish(); if (PRINT) exitWhenWritten(0); });
+    held = events.slice(at);
+    // `pauseAfterTextMs` waits that long once the text is out.
+    const carryOn = () => whenFileExists(rule.holdAfterText, () => { finish(); if (PRINT) exitWhenWritten(0); });
+    const pause = Number(rule.pauseAfterTextMs) || 0;
+    if (pause > 0) setTimeout(carryOn, pause);
+    else carryOn();
     return;
   }
   if (events.some((e) => HOLDS.has(e))) {
