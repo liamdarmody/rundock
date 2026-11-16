@@ -296,6 +296,24 @@ describe('what is inserted and saved', () => {
     assert.equal(ed.markdown(), raw.replace('First line here', 'First line here [[Plan]]'));
   });
 
+  // A link's text counts as its whole [[target]] where the editor checks what
+  // was typed, but it takes one position in the doc, so a long target near
+  // the top of a note once made each other key typed after it vanish.
+  test('typing straight after an inserted link keeps every key', async () => {
+    const ed = mount('Intro\n');
+    ed.type(' [[beta/road');
+    await tick();
+    ed.press('Enter');
+    await tick();
+    assert.deepEqual(ed.links(), ['example/beta/Roadmap']);
+    ed.type(' and then [[pl');
+    await tick();
+    ed.press('Enter');
+    await tick();
+    ed.type(' x y');
+    assert.equal(ed.markdown(), 'Intro [[example/beta/Roadmap]] and then [[Plan]] x y\n');
+  });
+
   test('the insert command replaces the range with a wikilink node in one transaction', () => {
     const ed = mount('Intro [[Roa\n');
     const end = ed.view.state.doc.content.size - 1;

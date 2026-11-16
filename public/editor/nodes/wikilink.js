@@ -133,6 +133,12 @@ export const Wikilink = Node.create({
       new InputRule({
         find: WIKILINK_INLINE_RE,
         handler: ({ state, range, match }) => {
+          // Tiptap places the range by the match's length alone, and an
+          // existing link counts there as its whole [[target]] while taking
+          // one position in the doc. Typing after a long link near the top
+          // of a note puts range.from before the doc start; resolving that
+          // throws, and the browser drops the key that was typed.
+          if (range.from < 0 || range.to > state.doc.content.size) return;
           const $pos = state.doc.resolve(range.from);
           if ($pos.parent.type.spec.code) return; // inside a code block
           // Only fire on literal typed text. Tiptap also runs input rules on
