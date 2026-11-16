@@ -24,6 +24,7 @@
   const MAIN_ITEMS = '.nav-main button.nav-item[data-nav]';
   const SETTINGS_ITEM = '.nav-rail button.nav-item[data-nav="settings"]';
   const OPEN_MODAL = '[aria-modal="true"], dialog[open]';
+  const BARE_MODIFIERS = ['Meta', 'Control', 'Shift', 'Alt'];
 
   // 'Meta' on Apple platforms, 'Control' everywhere else and whenever the
   // platform cannot be read: userAgentData first, then navigator.platform.
@@ -103,15 +104,30 @@
   //   isShown      (el) => whether an element is on screen
   function createKeydownHandler({ doc, modifier, switchNav, blocked, isShown }) {
     const shown = isShown || ((el) => el.getClientRects().length > 0);
+    // The item the last shortcut opened, kept until anything else happens on
+    // the page: a pointerdown, an input, or a key other than these shortcuts
+    // and a modifier pressed on its own, which is how each of them starts.
+    // Heard on the way down, so a listener that stops one cannot hide it.
+    let last = null;
+    const forget = () => { last = null; };
+    doc.addEventListener('pointerdown', forget, true);
+    doc.addEventListener('input', forget, true);
+    doc.addEventListener('keydown', (event) => {
+      if (last && !BARE_MODIFIERS.includes(event.key) && !match(event, modifier, doc)) forget();
+    }, true);
     return function onNavShortcut(event) {
       if (event.defaultPrevented || blocked() || Array.from(doc.querySelectorAll(OPEN_MODAL)).some(shown)) return;
       const item = match(event, modifier, doc);
       if (!item || !shown(item)) return;
       event.preventDefault();
-      // A held key repeats its keydown, and only the first is a press. Every
-      // fresh press arrives, as every click on the rail does, even on the view
-      // already open: a click there resets what the view holds.
-      if (!event.repeat) switchNav(item.getAttribute('data-nav'));
+      // A held key repeats its keydown, and only the first is a press. A fresh
+      // press for the item the last one opened, still open with nothing done
+      // since, is the same request again and loads nothing twice. Once
+      // anything has happened, the view may hold something a click on the
+      // rail would reset, so the press takes the click's path.
+      if (event.repeat || (item === last && item.classList.contains('active'))) return;
+      switchNav(item.getAttribute('data-nav'));
+      last = item;
     };
   }
 

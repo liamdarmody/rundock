@@ -422,7 +422,7 @@ test('the undo: undo after a shortcut acts on the text field as before, and the 
   await composer.fill('');
 });
 
-test('the retry: holding the key down leaves the view open once, with no repeated load, and each fresh press does what a click does', async ({ page }) => {
+test('the retry: holding the key down, or pressing it five times, leaves the view open once, with no repeated load', async ({ page }) => {
   await boot(page, 'mac');
   await page.keyboard.down('Meta');
   for (let i = 0; i < 5; i++) await page.keyboard.down('Digit7');
@@ -431,18 +431,12 @@ test('the retry: holding the key down leaves the view open once, with no repeate
   await expectSection(page, 'map');
   expect(await arrivals(page)).toEqual(['map']);
   expect(await page.evaluate(() => window.mapArrivals)).toBe(1);
-  // Pressing again is asking again, as clicking again is: five clicks on the
-  // open view as the control, then five presses.
-  const counts = () => page.evaluate(() => ({ arrivals: window.navArrivals.length, loads: window.mapArrivals }));
-  const since = (a, b) => ({ arrivals: b.arrivals - a.arrivals, loads: b.loads - a.loads });
-  const start = await counts();
-  for (let i = 0; i < 5; i++) await page.locator('.nav-item[data-nav="map"]').click();
-  const afterClicks = await counts();
+  // Five fresh presses, Cmd let go between them, with nothing else done.
   for (let i = 0; i < 5; i++) await page.keyboard.press('Meta+7');
   await expectSection(page, 'map');
-  const byClicks = since(start, afterClicks);
-  expect(byClicks.arrivals).toBe(5);
-  expect(since(afterClicks, await counts())).toEqual(byClicks);
+  expect((await lastKey(page)).prevented, 'each press is still the shortcut\'s own').toBe(true);
+  expect(await arrivals(page)).toEqual(['map']);
+  expect(await page.evaluate(() => window.mapArrivals)).toBe(1);
 });
 
 // Two owners' routines, so the Routines panel draws a scope row for each

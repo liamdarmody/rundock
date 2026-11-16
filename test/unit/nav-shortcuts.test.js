@@ -56,8 +56,9 @@ const settle = () => new Promise(setImmediate);
 const mainNavs = (doc) => Array.from(doc.querySelectorAll('.nav-main button.nav-item[data-nav]'), (b) => b.getAttribute('data-nav'));
 const navOf = (item) => (item ? item.getAttribute('data-nav') : null);
 
-// The handler wired as app.js wires it, with a switchNav that does what the
-// real one does to the rail: lights the section it arrives on.
+// The handler wired as app.js wires it, a keydown listener on the document,
+// with a switchNav that does what the real one does to the rail: lights the
+// section it arrives on.
 function wired(doc, modifier, { blocked = () => false } = {}) {
   const calls = [];
   const onKey = N.createKeydownHandler({
@@ -70,8 +71,24 @@ function wired(doc, modifier, { blocked = () => false } = {}) {
     blocked,
     isShown: shown,
   });
+  doc.addEventListener('keydown', onKey);
   return { calls, onKey };
 }
+
+// A real event fired at an element of the page, as a browser fires it, so the
+// document sees it on the way down and, unless something stops it, back up.
+function fire(doc, type, init = {}, target = doc.body) {
+  const win = doc.defaultView;
+  const Kind = { keydown: win.KeyboardEvent, input: win.InputEvent }[type] || win.Event;
+  const event = new Kind(type, { bubbles: true, cancelable: true, ...init });
+  target.dispatchEvent(event);
+  return event;
+}
+const MOD_FLAG = { Meta: 'metaKey', Control: 'ctrlKey', Shift: 'shiftKey', Alt: 'altKey' };
+// A shortcut's own keydown, and a modifier pressed on its own, which is how
+// every shortcut starts.
+const press = (doc, n, modifier = 'Meta') => fire(doc, 'keydown', { key: String(n), code: `Digit${n}`, [MOD_FLAG[modifier]]: true });
+const bare = (doc, key) => fire(doc, 'keydown', { key, code: `${key}Left`, [MOD_FLAG[key]]: true });
 
 describe('the modifier comes from the client', () => {
   test('a Mac client answers Meta, from userAgentData or from navigator.platform alone', () => {
@@ -354,14 +371,92 @@ describe('the handler', () => {
     assert.deepStrictEqual(calls, ['map', 'team']);
   });
 
-  test('a fresh press of the key for the open view arrives again, as a click on it does', () => {
-    // A click on the rail item for the view already open calls switchNav
-    // again, which resets what the view holds, such as the Routines scope.
+  test('a held key is one press even when something happens on the page while it is held', () => {
     const doc = page();
-    const { calls, onKey } = wired(doc, 'Meta');
+    const { calls } = wired(doc, 'Meta');
+    press(doc, 7);
+    fire(doc, 'pointerdown');
+    fire(doc, 'input', {}, doc.getElementById('msg-input'));
+    const repeats = Array.from({ length: 4 }, () => fire(doc, 'keydown', { key: '7', code: 'Digit7', metaKey: true, repeat: true }));
+    assert.ok(repeats.every((e) => e.defaultPrevented), 'every repeat of its own key is still its own');
+    assert.deepStrictEqual(calls, ['map']);
+  });
+
+  test('pressing the key for the open view five times, with nothing else done between, arrives once', () => {
+    const doc = page();
+    const { calls } = wired(doc, 'Meta');
+    const presses = Array.from({ length: 5 }, () => press(doc, 7));
+    assert.ok(presses.every((e) => e.defaultPrevented), 'every press is still its own');
+    assert.deepStrictEqual(calls, ['map']);
+  });
+
+  test('the modifier pressed on its own before each press is not something done between', () => {
+    for (const modifier of ['Meta', 'Control']) {
+      const doc = page();
+      const { calls } = wired(doc, modifier);
+      for (let i = 0; i < 5; i++) {
+        bare(doc, modifier);
+        press(doc, 7, modifier);
+      }
+      for (const key of ['Meta', 'Control', 'Shift', 'Alt']) bare(doc, key);
+      press(doc, 7, modifier);
+      assert.deepStrictEqual(calls, ['map'], `with ${modifier}`);
+    }
+  });
+
+  test('a pointerdown anywhere on the page lets the next press arrive again, as a click on the rail would', () => {
+    // A click within the view, such as on an agent scope in Routines, can
+    // change what it holds, and a click on the rail item resets that.
+    const doc = page();
+    const { calls } = wired(doc, 'Meta');
     const routines = mainNavs(doc)[3];
-    for (let i = 0; i < 3; i++) onKey(digit(4, { metaKey: true }));
+    const sidebar = doc.getElementById('sidebar-routines');
+    press(doc, 4);
+    press(doc, 4);
+    assert.deepStrictEqual(calls, [routines], 'the control: nothing done between');
+    fire(doc, 'pointerdown', {}, sidebar);
+    press(doc, 4);
+    assert.deepStrictEqual(calls, [routines, routines]);
+    // Even one that its own listener stops before it bubbles to the document.
+    sidebar.addEventListener('pointerdown', (e) => e.stopPropagation());
+    fire(doc, 'pointerdown', {}, sidebar);
+    press(doc, 4);
+    press(doc, 4);
     assert.deepStrictEqual(calls, [routines, routines, routines]);
+  });
+
+  test('any other key between two presses lets the second arrive again', () => {
+    const doc = page();
+    const { calls } = wired(doc, 'Meta');
+    const composer = doc.getElementById('msg-input');
+    press(doc, 7);
+    press(doc, 7);
+    assert.deepStrictEqual(calls, ['map'], 'the control: nothing done between');
+    for (const init of [{ key: 'Tab', code: 'Tab' }, { key: 'a', code: 'KeyA' }, { key: 'z', code: 'KeyZ', metaKey: true }]) {
+      fire(doc, 'keydown', init, composer);
+      press(doc, 7);
+      press(doc, 7);
+    }
+    assert.deepStrictEqual(calls, ['map', 'map', 'map', 'map']);
+  });
+
+  test('an input between two presses lets the second arrive again', () => {
+    const doc = page();
+    const { calls } = wired(doc, 'Meta');
+    press(doc, 7);
+    press(doc, 7);
+    assert.deepStrictEqual(calls, ['map'], 'the control: nothing done between');
+    fire(doc, 'input', { inputType: 'insertText', data: 'a' }, doc.getElementById('msg-input'));
+    press(doc, 7);
+    press(doc, 7);
+    assert.deepStrictEqual(calls, ['map', 'map']);
+  });
+
+  test('a shortcut to another item, then back, arrives each time', () => {
+    const doc = page();
+    const { calls } = wired(doc, 'Meta');
+    for (const n of [7, 7, 2, 2, 7, 7]) press(doc, n);
+    assert.deepStrictEqual(calls, ['map', 'team', 'map']);
   });
 
   test('pressing a key after leaving by other means arrives again', () => {
