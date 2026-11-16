@@ -601,6 +601,8 @@ function finishTranscript(rule, prompt, shellRan = []) {
 }
 
 function emitTurn(rule, prompt) {
+  // Every signal handler this stub installs goes in before the first write of
+  // the branch it serves, so no signal can find the process between the two.
   const shellRan = (rule.shell || []).map(runShell);
   if (FIXED_SESSION) finishTranscript(rule, prompt, shellRan);
   const events = buildEnvelopes(rule);
