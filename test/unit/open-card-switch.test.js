@@ -377,6 +377,46 @@ describe('a request that ends while its conversation is in the background', () =
   }
 });
 
+// The record of which requests have ended keeps only the latest. A card kept
+// to be shown settled carries how it ended, so it is never drawn live however
+// many other requests end before its conversation is opened again.
+describe('a settled card kept while more requests end than the record of ended requests holds', () => {
+  const FLOOD = 600;
+  const flood = () => { for (let i = 0; i < FLOOD; i++) chat.endPermissionRequest(`${A}-other-${i}`, 'ended'); };
+
+  test('the record forgets the oldest request once that many more have ended', () => {
+    const ended = new Map();
+    P.markPermissionEnded(ended, 'first', 'timeout');
+    for (let i = 0; i < FLOOD; i++) P.markPermissionEnded(ended, `other-${i}`, 'ended');
+    assert.strictEqual(P.permissionEnded(ended, 'first'), null);
+  });
+
+  const THEN = [
+    { name: 'it timed out in the background', act: (id) => { open(B); chat.endPermissionRequest(id, 'timeout'); }, says: /Timed out[\s\S]*Nobody answered in time/, sent: 0 },
+    { name: 'it was answered here', act: (id) => { click(id, 'allow'); open(B); }, says: /✓/, sent: 1 },
+    { name: 'it was answered here too late', act: (id) => { click(id, 'allow'); open(B); chat.endPermissionRequest(id, 'not-pending'); }, says: /Too late[\s\S]*nothing was approved/, sent: 1 },
+  ];
+  for (const t of THEN) {
+    test(`comes back once, settled, never live: ${t.name}`, () => {
+      open(A);
+      const id = nextId();
+      arrive(id, A);
+      t.act(id);
+      flood();
+      open(A);
+      assert.strictEqual(copies(id), 1, 'shown once');
+      assert.ok(!live(id), 'with no answer buttons');
+      assert.ok(!pendingPermissions.has(id), 'and nothing that could send for it');
+      assert.match(card(id).textContent, t.says);
+      pokeAt(id);
+      assert.strictEqual(answers().length, t.sent, 'nothing on it sends');
+      open(B);
+      open(A);
+      assert.strictEqual(copies(id), 0, 'and a later return draws none');
+    });
+  }
+});
+
 describe('open cards in two conversations', () => {
   test('each card is drawn only in its own conversation, and answering one leaves the other open', () => {
     open(A);

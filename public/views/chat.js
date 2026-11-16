@@ -962,16 +962,19 @@ function connectorFieldsElement(f, toolName) {
   return frag;
 }
 
-function renderPermissionCard(d, convoId, host) {
+function renderPermissionCard(d, convoId, host, settled) {
   const req = d.request || {};
   const requestId = d.request_id || '';
   // A WS reconnect re-sends control_request for every pending request, but the
   // DOM (and any existing card) survive the reconnect, so guard against a
   // duplicate card, exactly as renderPendingPermissionCards does.
   if (requestId && document.getElementById('perm-' + requestId)) return;
+  // How the request ended, if it has. A card kept to be shown settled brings
+  // its own, since the record of ended requests keeps only the latest.
+  const ended = settled || RundockPermissions.permissionEnded(endedPermissions, requestId);
   // A change Rundock has already put back has a card of its own, unless the
   // request has ended, which is drawn settled like any other.
-  if (req.put_back && !RundockPermissions.permissionEnded(endedPermissions, requestId)) { renderPutBackCard(d, convoId, host); return; }
+  if (req.put_back && !ended) { renderPutBackCard(d, convoId, host); return; }
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
@@ -981,7 +984,6 @@ function renderPermissionCard(d, convoId, host) {
   // reconnect. A request that timed out, was answered, or lost its asker is
   // drawn settled, saying why, with nothing to click. One answered on a card
   // here says what that card said when it settled.
-  const ended = RundockPermissions.permissionEnded(endedPermissions, requestId);
   if (ended) {
     const copy = RundockPermissions.endedPermissionCopy(ended.reason, ended.allow, ended.always);
     const m0 = host || document.getElementById('messages');
@@ -1532,7 +1534,7 @@ function renderPendingPermissionCards(convoId) {
   const ended = endedQueuedPermissions.get(convoId);
   if (ended) {
     endedQueuedPermissions.delete(convoId);
-    for (const d of ended.values()) renderPermissionCard(d, convoId);
+    for (const kept of ended.values()) renderPermissionCard(kept.payload, convoId, undefined, kept.outcome);
   }
   for (const d of RundockPermissions.pendingPermissionsFor(pendingPermissionsByConvo, convoId)) {
     if (document.getElementById('perm-' + (d.request_id || ''))) continue;
@@ -1613,6 +1615,11 @@ function endPermissionRequest(requestId, reason, allow) {
   pendingPermissions.delete(requestId);
   const convoId = RundockPermissions.removePendingPermission(pendingPermissionsByConvo, requestId);
   if (queued && convoId) keepEndedCard(convoId, requestId, queued.payload);
+  // A card already kept says how it ended last: answered here, then too late.
+  for (const kept of endedQueuedPermissions.values()) {
+    const entry = kept.get(requestId);
+    if (entry) entry.outcome = RundockPermissions.permissionEnded(endedPermissions, requestId);
+  }
   // L4: a background card that ended must clear its own contribution to the
   // unread badge. Only once the conversation has no other pending card, and
   // only the permission reason so a co-occurring unread message survives.
@@ -1627,11 +1634,12 @@ function endPermissionRequest(requestId, reason, allow) {
 
 // A request that ended, or was answered, while its card was held for a
 // conversation, kept to be shown once, settled, the next time that
-// conversation is opened.
+// conversation is opened. It keeps how it ended, so it never depends on the
+// record of ended requests, which forgets the oldest.
 function keepEndedCard(convoId, requestId, payload) {
   let m = endedQueuedPermissions.get(convoId);
   if (!m) { m = new Map(); endedQueuedPermissions.set(convoId, m); }
-  m.set(requestId, payload);
+  m.set(requestId, { payload, outcome: RundockPermissions.permissionEnded(endedPermissions, requestId) });
 }
 
 // After a reconnect the server names every request still pending. Anything
