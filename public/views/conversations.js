@@ -15,9 +15,9 @@
 // Shared state stays in app.js and is reached through the global lexical
 // environment at call time: ws, agents, conversations, activeConversation,
 // convoState, conversationsLoaded, lastActiveConversationId,
-// pendingActiveProcesses, pendingMessageAnchor, workingConvos, unread,
-// convoLists, activeSidebarPill, workspaceAnalysis, workspaceMode,
-// setupComplete, and pendingListAdd (openConvoListMenu writes it; the WS lists
+// pendingActiveProcesses, pendingMessageAnchor, pendingPermissionsByConvo,
+// workingConvos, unread, convoLists, activeSidebarPill, workspaceAnalysis,
+// workspaceMode, setupComplete, and pendingListAdd (openConvoListMenu writes it; the WS lists
 // handler reads and clears it, so its declaration stays in app.js). Helpers
 // reached the same way: esc, escAttr, stripMd, formatMd, persist,
 // getConvoState, getGuide, getTeamAgents, pickDefaultConversation,
@@ -25,8 +25,9 @@
 // createHistoryDivider, renderPendingPermissionCards, scrollBottom, setNavState,
 // switchNav, showView, closeFindBar, and the section 9 chat surface
 // (addUserMsg, addAgentMsg, addSystemMsg, sendMessage, cancelProcessing,
-// startProcessing, handleActiveProcesses), plus the classic-script global
-// RundockConvoList (ordering and filtering, unit-tested separately).
+// startProcessing, handleActiveProcesses), plus the classic-script globals
+// RundockConvoList (ordering and filtering, unit-tested separately) and
+// RundockPermissions.
 //
 // Every function body is byte-identical to the app.js original at column 0.
 (/** @param {any} root @param {() => object} factory */ function (root, factory) {
@@ -152,6 +153,8 @@ function createConversation(agentId, title) {
   const convo = { id: Date.now().toString(), agentId: agent.id, agent, title: title || `Chat with ${agent.displayName}`, messages: [], status: 'active', createdAt: new Date().toISOString() };
   conversations.unshift(convo);
   activeConversation = convo;
+  // Leaving for a new conversation leaves the last one waiting, as any switch does.
+  renderPendingPermissionCards(convo.id);
   // Don't persist yet: conversation is saved on first message send (lazy creation)
   renderConvoList();
   setupChat(convo);
@@ -416,6 +419,8 @@ function deleteConversation(id, evt) {
   conversations = conversations.filter(c => c.id !== id);
   delete convoState[id];
   unread.clearConvo(id);
+  // Its open requests can never be drawn again, so they must not mark it waiting.
+  RundockPermissions.clearPendingPermissions(pendingPermissionsByConvo, id);
   workingConvos.delete(id);
   updateUnreadBadge();
   if (activeConversation?.id === id) {
@@ -925,8 +930,9 @@ function openConversation(id, withAnchor) {
     document.getElementById('msg-input').disabled=false;
     document.getElementById('msg-input').focus();
   }
-  // Approval cards that arrived while this conversation was in the
-  // background render now, at the bottom of the thread, still answerable
+  // Approval cards this conversation holds, whether they arrived in the
+  // background or were drawn before the person left, render now, at the
+  // bottom of the thread, still answerable
   // until the server's permission timeout expires them. (Session-history
   // loads prepend above existing content, so these cards keep their place.)
   renderPendingPermissionCards(id);

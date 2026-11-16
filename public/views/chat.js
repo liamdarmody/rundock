@@ -739,6 +739,11 @@ function handlePermissionRequest(d, convoId) {
     return;
   }
   renderPermissionCard(d, convoId);
+  // Drawn on screen, and held as a background arrival is: switching
+  // conversations replaces the page, and the redraw on return draws only what
+  // is held. A copy of a card already answered here draws nothing and is not
+  // held again.
+  if (pendingPermissions.has(requestId)) RundockPermissions.queuePendingPermission(pendingPermissionsByConvo, convoId, requestId, d);
 }
 
 // Render one approval card into the active conversation's message list.
@@ -1504,13 +1509,19 @@ function streamTextAfterCut(state, text) {
   return prefix && t.startsWith(prefix) ? t.slice(prefix.length) : t;
 }
 
-// Append cards for any approval requests that arrived while this
-// conversation was in the background. Idempotent: a card already in the DOM
-// is skipped, and entries stay queued until answered or timed out, so
-// switching away and back re-renders them. Called when a conversation
-// becomes the active view (openConversation).
+// Append cards for every approval request this conversation holds, whether it
+// arrived in the background or was drawn while the conversation was on
+// screen. Idempotent: a card already in the DOM is skipped, and entries stay
+// held until answered or ended, so switching away and back re-renders them.
+// Called when a conversation becomes the active view (openConversation, and
+// createConversation for a new one).
 function renderPendingPermissionCards(convoId) {
   if (activeConversation?.id !== convoId) return;
+  // A conversation left with a card still open waits on the person, as one
+  // whose card arrived in the background does.
+  const waiting = RundockPermissions.waitingConversations(pendingPermissionsByConvo, convoId);
+  for (const id of waiting) unread.markPermission(id);
+  if (waiting.length) updateUnreadBadge();
   if (!document.getElementById('messages')) return;
   // Requests that ended while this conversation was in the background are
   // shown once, as ended, so the thread says it asked and why nothing came of

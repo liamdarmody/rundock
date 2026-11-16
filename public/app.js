@@ -1339,9 +1339,10 @@ setInterval(() => {
 
 // Pending permission callbacks (avoids inline onclick injection)
 const pendingPermissions = new Map();
-// Permission requests for conversations that are not on screen, awaiting
-// render when their conversation opens: convoId -> Map(requestId -> the raw
-// control_request payload). Entries leave on answer (respondPermission),
+// Every open permission request a conversation holds, whether it arrived in
+// the background or was drawn on screen, drawn again when the conversation
+// opens: convoId -> Map(requestId -> the raw control_request payload).
+// Entries leave on answer (respondPermission),
 // server timeout (permission_timeout), or cancel (the server's cancel sweep
 // already answered them). The store's decisions are pure functions in
 // permissions.js (unit-tested); this map is the app's single instance.
