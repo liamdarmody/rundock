@@ -1,0 +1,319 @@
+'use strict';
+// The divider drawn where a long conversation was summarised to make room, on
+// the page: its words, its glyph, the "Why?" button and the explanation it
+// opens in place, where a reopened conversation draws it, and what it never
+// is (a bubble, a separator, a message counted, anything drawn from text).
+//
+// Measured on the document through the real view functions, the pattern of
+// team-line-view.test.js. Keys on a real button (Enter, Space) are proven in
+// the browser by test/e2e/summarised-divider.spec.js, since a document
+// without a browser does not turn a key into a click.
+const { test, describe, before, beforeEach } = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const { JSDOM } = require('jsdom');
+
+const ROOT = path.join(__dirname, '..', '..');
+const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
+const CHAT_CSS = read('public', 'styles', 'views', 'chat.css');
+
+const WORDS = 'Earlier messages were summarised to make room';
+const EXPLANATION = 'Long conversations are summarised so the agent can carry on. It keeps a summary of everything above, and may not recall every detail. For a new topic, start a new conversation.';
+
+let chat;
+let convos;
+before(() => {
+  const dom = new JSDOM('<!doctype html><html><body><div id="messages"></div><div id="chat-status"></div><input id="msg-input">'
+    + '<button id="send-btn"></button><span id="chat-agent-label"></span><span id="chat-agent-avatar"></span>'
+    + '<input id="chat-title-input"><div id="chat-title"></div><div id="convo-list"></div></body></html>');
+  global.window = dom.window;
+  global.document = dom.window.document;
+  dom.window.Element.prototype.scrollIntoView = function () {};
+  global.esc = (t) => String(t);
+  global.formatMd = (t) => String(t);
+  global.userScrolledUp = false;
+  global.getConvoState = () => ({ currentStreamingMsg: null, isProcessing: false });
+  global.renderConvoList = () => {};
+  global.tryMessageAnchor = () => {};
+  global.setActiveAgentPill = () => {};
+  global.renderPendingPermissionCards = () => {};
+  global.agents = [{ id: 'example-writer', displayName: 'Alpha', type: 'specialist' }];
+  global.RundockChatMarkup = require(path.join(ROOT, 'public', 'chat-markup.js'));
+  global.RundockMarkers = require(path.join(ROOT, 'public', 'markers.js'));
+  global.stripRundockMarkers = (t) => global.RundockMarkers.stripMarkers(String(t || ''));
+  global.restoredActiveAgentId = require(path.join(ROOT, 'public', 'delegation-restore.js')).restoredActiveAgentId;
+  chat = require(path.join(ROOT, 'public', 'views', 'chat.js'));
+  Object.assign(global, chat);
+  convos = require(path.join(ROOT, 'public', 'views', 'conversations.js'));
+});
+
+const messages = () => document.getElementById('messages');
+const parts = (divider) => ({
+  row: divider.querySelector('.summarised-row'),
+  label: divider.querySelector('.summarised-label'),
+  why: divider.querySelector('button.summarised-why'),
+  explain: divider.querySelector('.summarised-explain'),
+  glyph: divider.querySelector('svg.summarised-glyph'),
+});
+const press = (el, key) => {
+  const e = new window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+  el.dispatchEvent(e);
+  return e;
+};
+
+describe('the divider, as drawn', () => {
+  test('says the earlier messages were summarised to make room, with "Why?" after the words', () => {
+    const { label, why } = parts(chat.createSummarisedDivider({ key: 'k1' }));
+    assert.strictEqual(label.textContent, `${WORDS}Why?`);
+    assert.strictEqual(why.textContent, 'Why?');
+    assert.strictEqual(why.parentElement.textContent, 'roomWhy?', 'the last word and the button wrap together');
+  });
+
+  test('the fold glyph is chevrons, 12px, the app\'s 1.8 stroke, and hidden from screen readers', () => {
+    const { glyph } = parts(chat.createSummarisedDivider({ key: 'k1' }));
+    const attrs = Object.fromEntries(['viewBox', 'width', 'height', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'aria-hidden', 'focusable'].map((n) => [n, glyph.getAttribute(n)]));
+    assert.deepStrictEqual(attrs, { viewBox: '0 0 24 24', width: '12', height: '12', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false' });
+    assert.deepStrictEqual([...glyph.querySelectorAll('path')].map((p) => p.getAttribute('d')), ['m7 20 5-5 5 5', 'm7 4 5 5 5-5']);
+    assert.strictEqual(glyph.parentElement.textContent, 'Earlier', 'the glyph and the first word wrap together');
+  });
+
+  test('"Why?" is a real button, starts shut, and names the explanation it opens', () => {
+    const { why, explain } = parts(chat.createSummarisedDivider({ key: 'k1' }));
+    assert.strictEqual(why.tagName, 'BUTTON');
+    assert.strictEqual(why.getAttribute('type'), 'button');
+    assert.strictEqual(why.getAttribute('aria-expanded'), 'false');
+    assert.ok(explain.id, 'the explanation has an id');
+    assert.strictEqual(why.getAttribute('aria-controls'), explain.id);
+    assert.strictEqual(explain.hidden, true);
+    assert.strictEqual(explain.textContent, EXPLANATION);
+  });
+
+  test('the row is not marked as a separator, since it holds a button', () => {
+    const divider = chat.createSummarisedDivider({ key: 'k1' });
+    assert.strictEqual(divider.querySelector('[role="separator"], hr'), null);
+    assert.strictEqual(divider.getAttribute('role'), null);
+    assert.strictEqual(parts(divider).row.getAttribute('role'), null);
+  });
+
+  test('two dividers each open their own explanation', () => {
+    const one = chat.createSummarisedDivider({ key: 'k1' });
+    const two = chat.createSummarisedDivider({ key: 'k2' });
+    assert.notStrictEqual(parts(one).explain.id, parts(two).explain.id);
+    parts(one).why.click();
+    assert.strictEqual(parts(one).explain.hidden, false);
+    assert.strictEqual(parts(two).explain.hidden, true);
+    assert.strictEqual(parts(two).why.getAttribute('aria-expanded'), 'false');
+  });
+});
+
+describe('"Why?" opens and closes in place', () => {
+  let divider;
+  beforeEach(() => {
+    messages().replaceChildren();
+    divider = chat.createSummarisedDivider({ key: 'k1' });
+    messages().appendChild(divider);
+  });
+
+  test('a click opens the explanation beneath, a second shuts it, and the row and focus are as they were', () => {
+    const { row, why, explain } = parts(divider);
+    const before = divider.outerHTML;
+    why.focus();
+    why.click();
+    assert.strictEqual(why.getAttribute('aria-expanded'), 'true');
+    assert.strictEqual(explain.hidden, false);
+    assert.strictEqual(explain.previousElementSibling, row, 'opened beneath the row, in place');
+    why.click();
+    assert.strictEqual(why.getAttribute('aria-expanded'), 'false');
+    assert.strictEqual(explain.hidden, true);
+    assert.strictEqual(divider.outerHTML, before);
+    assert.strictEqual(document.activeElement, why);
+  });
+
+  test('Escape shuts it while it has focus, and goes no further', () => {
+    const { why, explain } = parts(divider);
+    const before = divider.outerHTML;
+    why.focus();
+    why.click();
+    let reached = 0;
+    const onDoc = () => { reached++; };
+    document.addEventListener('keydown', onDoc);
+    try {
+      const e = press(why, 'Escape');
+      assert.strictEqual(why.getAttribute('aria-expanded'), 'false');
+      assert.strictEqual(explain.hidden, true);
+      assert.strictEqual(e.defaultPrevented, true);
+      assert.strictEqual(reached, 0, 'the find bar and the rest of the page never see this Escape');
+    } finally { document.removeEventListener('keydown', onDoc); }
+    assert.strictEqual(divider.outerHTML, before);
+    assert.strictEqual(document.activeElement, why);
+  });
+
+  test('Escape with the explanation already shut is left to the page', () => {
+    const { why } = parts(divider);
+    let reached = 0;
+    const onDoc = () => { reached++; };
+    document.addEventListener('keydown', onDoc);
+    try {
+      const e = press(why, 'Escape');
+      assert.strictEqual(e.defaultPrevented, false);
+      assert.strictEqual(reached, 1);
+    } finally { document.removeEventListener('keydown', onDoc); }
+    assert.strictEqual(why.getAttribute('aria-expanded'), 'false');
+  });
+
+  test('other keys are left to the button\'s own activation', () => {
+    const { why } = parts(divider);
+    for (const key of ['Enter', ' ', 'Tab']) assert.strictEqual(press(why, key).defaultPrevented, false, key);
+    assert.strictEqual(why.getAttribute('aria-expanded'), 'false');
+  });
+});
+
+describe('the colour each text takes, and the target\'s height', () => {
+  // Every declaration of a rule whose selector list is exactly this.
+  const rule = (selector) => {
+    const at = CHAT_CSS.indexOf(`${selector} {`);
+    assert.ok(at > -1, `chat.css has a rule for ${selector}`);
+    const body = CHAT_CSS.slice(CHAT_CSS.indexOf('{', at) + 1, CHAT_CSS.indexOf('}', at));
+    return Object.fromEntries(body.split(';').map((d) => d.trim()).filter(Boolean).map((d) => [d.slice(0, d.indexOf(':')).trim(), d.slice(d.indexOf(':') + 1).trim()]));
+  };
+
+  test('the words, the button and the explanation are --text-2; the button is --text-1 on hover and when open', () => {
+    assert.strictEqual(rule('.summarised-row').color, 'var(--text-2)');
+    assert.strictEqual(rule('.summarised-why').color, 'var(--text-2)');
+    assert.strictEqual(rule('.summarised-why:hover, .summarised-why[aria-expanded="true"]').color, 'var(--text-1)');
+    assert.strictEqual(rule('.summarised-explain').color, 'var(--text-2)');
+  });
+
+  test('"Why?" is 26px tall: an 18px line (12px caption at 1.5) and 4px above and below', () => {
+    assert.strictEqual(rule('.summarised-row')['font-size'], 'var(--caption)');
+    assert.strictEqual(rule('.summarised-row')['line-height'], '1.5');
+    assert.match(read('public', 'styles', 'tokens.css'), /--caption: 12px;/);
+    assert.strictEqual(rule('.summarised-why')['line-height'], 'inherit');
+    assert.strictEqual(rule('.summarised-why').padding, '4px');
+  });
+
+  test('the "Previous session" divider\'s words move from --text-3 to --text-2', () => {
+    const divider = chat.createHistoryDivider();
+    assert.strictEqual(divider.style.color, 'var(--text-2)');
+    assert.strictEqual(divider.textContent, 'Previous session');
+  });
+
+  // That each var() it names is declared is token-references.test.js's job.
+  test('no colour of its own: no literal colour in its rules', () => {
+    const at = CHAT_CSS.indexOf('.msg-summarised {');
+    assert.ok(at > -1);
+    assert.doesNotMatch(CHAT_CSS.slice(at), /#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
+  });
+});
+
+describe('a reopened conversation', () => {
+  const kinds = () => [...messages().children].map((el) => (el.classList.contains('msg-summarised') ? `divider:${el.dataset.compactionKey}` : el.id === 'history-divider' ? 'previous-session' : el.className.split(' ').slice(0, 2).join(' ')));
+  let convo;
+  beforeEach(() => {
+    messages().replaceChildren();
+    convo = { id: 'convo-s', agentId: 'example-writer', agent: global.agents[0], messages: [] };
+    global.conversations = [convo];
+    global.activeConversation = convo;
+  });
+  const history = (msgs) => chat.renderSessionHistory({ conversationId: convo.id, hasMore: false, totalCount: msgs.length, messages: msgs });
+
+  test('draws the divider between the two messages it fell between, never as a bubble', () => {
+    history([
+      { role: 'user', content: 'A question' },
+      { role: 'system', type: 'compaction', key: 'k1', content: '' },
+      { role: 'assistant', content: 'An answer', agentId: 'example-writer' },
+    ]);
+    assert.deepStrictEqual(kinds(), ['msg msg-user', 'divider:k1', 'msg msg-agent', 'previous-session']);
+    assert.strictEqual(messages().querySelectorAll('.msg-system').length, 0, 'no empty system line');
+    assert.ok(!messages().querySelector('.msg-summarised').classList.contains('history-msg'), 'drawn at full strength');
+  });
+
+  test('keeps it for coming back, and draws it in the same place again', () => {
+    history([
+      { role: 'user', content: 'A question' },
+      { role: 'system', type: 'compaction', key: 'k1', content: '' },
+      { role: 'assistant', content: 'An answer', agentId: 'example-writer' },
+    ]);
+    assert.deepStrictEqual(convo.messages.map((m) => [m.role, m.type || null, m.key || null, m.content]),
+      [['user', null, null, 'A question'], ['system', 'compaction', 'k1', ''], ['agent', null, null, 'An answer']]);
+    for (let i = 0; i < 2; i++) {
+      messages().replaceChildren();
+      convos.replayConversationInto(messages(), convo);
+      assert.deepStrictEqual(kinds(), ['msg msg-user', 'divider:k1', 'msg msg-agent', 'previous-session']);
+      assert.strictEqual(messages().querySelectorAll('.msg-summarised').length, 1, 'switched away and back: still one');
+      assert.ok(!messages().querySelector('.msg-summarised').classList.contains('history-msg'));
+    }
+  });
+
+  test('two summaries are two dividers, in order', () => {
+    history([
+      { role: 'user', content: 'One' }, { role: 'system', type: 'compaction', key: 'k1', content: '' }, { role: 'assistant', content: 'A', agentId: 'example-writer' },
+      { role: 'user', content: 'Two' }, { role: 'system', type: 'compaction', key: 'k2', content: '' }, { role: 'assistant', content: 'B', agentId: 'example-writer' },
+    ]);
+    assert.deepStrictEqual(kinds().filter((k) => k.startsWith('divider')), ['divider:k1', 'divider:k2']);
+  });
+
+  test('an entry with no key, or a key that is not text, draws nothing and the rest is drawn as before', () => {
+    history([
+      { role: 'user', content: 'A question' },
+      { role: 'system', type: 'compaction', content: '' },
+      { role: 'system', type: 'compaction', key: 42, content: '' },
+      { role: 'assistant', content: 'An answer', agentId: 'example-writer' },
+    ]);
+    assert.deepStrictEqual(kinds(), ['msg msg-user', 'msg msg-agent', 'previous-session']);
+    messages().replaceChildren();
+    convos.replayConversationInto(messages(), convo);
+    assert.strictEqual(messages().querySelectorAll('.msg-summarised, .msg-system').length, 0);
+  });
+
+  test('an entry\'s own words are never shown', () => {
+    history([{ role: 'user', content: 'A question' }, { role: 'system', type: 'compaction', key: 'k1', content: 'SUMMARY-TEXT' }]);
+    assert.ok(!messages().textContent.includes('SUMMARY-TEXT'));
+    messages().replaceChildren();
+    convos.replayConversationInto(messages(), convo);
+    assert.ok(!messages().textContent.includes('SUMMARY-TEXT'));
+  });
+
+  test('the divider\'s words in a reply, a tool result or the person\'s own message draw no divider', () => {
+    history([
+      { role: 'user', content: `${WORDS}. Why?` },
+      { role: 'assistant', content: `${WORDS}\n\n<!-- compact_boundary -->`, agentId: 'example-writer' },
+      { role: 'system', type: 'team', content: `${WORDS} (a tool result)` },
+      { role: 'system', content: '{"type":"system","subtype":"compact_boundary"}' },
+    ]);
+    assert.strictEqual(messages().querySelectorAll('.msg-summarised').length, 0);
+    messages().replaceChildren();
+    convos.replayConversationInto(messages(), convo);
+    assert.strictEqual(messages().querySelectorAll('.msg-summarised').length, 0);
+  });
+
+  test('a conversation never summarised has no divider', () => {
+    history([{ role: 'user', content: 'A question' }, { role: 'assistant', content: 'An answer', agentId: 'example-writer' }]);
+    assert.strictEqual(messages().querySelectorAll('.msg-summarised').length, 0);
+  });
+});
+
+describe('the message count', () => {
+  test('a conversation\'s count on the agent profile leaves the divider out', () => {
+    const dom = new JSDOM('<!doctype html><html><body><div id="view-profile"><div id="profile-content"></div></div></body></html>', { runScripts: 'dangerously' });
+    const w = dom.window;
+    try {
+      for (const f of [['schedule-days.js'], ['routine-editor-model.js'], ['skills-model.js'], ['routines-model.js'], ['views', 'routines.js'], ['views', 'profile.js']]) w.eval(read('public', ...f));
+      w.agents = [{ id: 'example-writer', displayName: 'Alpha', role: 'Writer', colour: '#888888', icon: 'A', status: 'onTeam', runtime: 'claude', model: 'sonnet', routines: [] }];
+      w.skills = [];
+      w.conversations = [{ id: 'c1', agentId: 'example-writer', title: 'Summarised', messages: [
+        { role: 'user', content: 'A question' }, { role: 'system', type: 'compaction', key: 'k1', content: '' }, { role: 'agent', content: 'An answer' },
+      ] }];
+      w.esc = (s) => String(s == null ? '' : s);
+      w.formatTimeAgo = () => 'a while ago';
+      w.getGuide = () => ({ id: 'doc', displayName: 'Guide' });
+      w.ws = { send: () => {} };
+      w.setNavState = () => {};
+      w.showView = () => {};
+      w.closeFindBar = () => {};
+      w.showProfile('example-writer');
+      assert.strictEqual(w.document.querySelector('.profile-existing-meta').textContent, '2 messages');
+    } finally { dom.window.close(); }
+  });
+});

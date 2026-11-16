@@ -446,7 +446,7 @@ function renderCodexErrorPill(convoId, d) {
 function createHistoryDivider() {
   const divider = document.createElement('div');
   divider.id = 'history-divider';
-  divider.style.cssText = 'display:flex;align-items:center;gap:8px;padding:16px 0;color:var(--text-3);font-size:var(--caption)';
+  divider.style.cssText = 'display:flex;align-items:center;gap:8px;padding:16px 0;color:var(--text-2);font-size:var(--caption)';
   divider.innerHTML = `<div style="flex:1;height:1px;background:var(--border)"></div><span>Previous session</span><div style="flex:1;height:1px;background:var(--border)"></div>`;
   return divider;
 }
@@ -504,6 +504,12 @@ function renderSessionHistory(d) {
     // carries the visible handoff. Update lastAgentId so the divider triggers.
     if (msg.type === 'routing') {
       lastAgentId = msg.agentId || lastAgentId;
+      continue;
+    }
+    // Where the conversation was summarised to make room: its own divider,
+    // never a bubble, and never any words the entry carries.
+    if (msg.type === 'compaction') {
+      if (typeof msg.key === 'string' && msg.key) frag.appendChild(createSummarisedDivider({ key: msg.key }));
       continue;
     }
     const div = document.createElement('div');
@@ -574,7 +580,8 @@ function renderSessionHistory(d) {
     content: m.role !== 'user' ? stripRundockMarkers(m.content || '').trim() : m.content,
     agentId: m.agentId || convo.agentId,
     timestamp: m.timestamp || null,
-    isHistory: true
+    isHistory: true,
+    ...(m.type === 'compaction' ? { type: 'compaction', key: m.key } : {})
   }));
   // Prepend to existing messages (load-more adds older messages before existing ones)
   convo.messages = [...historyMsgs, ...convo.messages];
@@ -1747,6 +1754,79 @@ function scrollBottom(force) {
   if (!userScrolledUp) m.scrollTop=m.scrollHeight;
 }
 
+// ===== SUMMARISED DIVIDER =====
+// Where a long conversation was summarised to make room: the runtime kept a
+// summary of the turns above and carries on from it. Drawn only from a
+// compaction entry, live or stored, never from any text. The row holds a
+// button, so it is not marked as a separator. "Why?" opens the explanation
+// beneath, in place, and closes it again.
+let summarisedExplainSeq = 0;
+const SUMMARISED_EXPLANATION = 'Long conversations are summarised so the agent can carry on. It keeps a summary of everything above, and may not recall every detail. For a new topic, start a new conversation.';
+
+function summarisedGlyph() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  const attrs = { class: 'summarised-glyph', viewBox: '0 0 24 24', width: '12', height: '12', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false' };
+  for (const [name, value] of Object.entries(attrs)) svg.setAttribute(name, value);
+  for (const d of ['m7 20 5-5 5 5', 'm7 4 5 5 5-5']) {
+    const p = document.createElementNS(ns, 'path');
+    p.setAttribute('d', d);
+    svg.appendChild(p);
+  }
+  return svg;
+}
+
+function summarisedNowrap(...parts) {
+  const span = document.createElement('span');
+  span.className = 'summarised-nowrap';
+  span.append(...parts);
+  return span;
+}
+
+// The words and the "Why?" button, written into a divider's label.
+function fillSummarisedLabel(divider) {
+  const label = divider.querySelector('.summarised-label');
+  const explain = divider.querySelector('.summarised-explain');
+  const why = document.createElement('button');
+  why.type = 'button';
+  why.className = 'summarised-why';
+  why.setAttribute('aria-expanded', 'false');
+  why.setAttribute('aria-controls', explain.id);
+  why.textContent = 'Why?';
+  const setOpen = (open) => { why.setAttribute('aria-expanded', String(open)); explain.hidden = !open; };
+  why.addEventListener('click', () => setOpen(why.getAttribute('aria-expanded') !== 'true'));
+  // Escape closes it while it has focus, and does nothing else: the find bar's
+  // document-level Escape is left for when the explanation is already shut.
+  why.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || why.getAttribute('aria-expanded') !== 'true') return;
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(false);
+  });
+  label.replaceChildren(summarisedNowrap(summarisedGlyph(), 'Earlier'), ' messages were summarised to make ', summarisedNowrap('room', why));
+}
+
+function createSummarisedDivider(opts) {
+  const o = opts || {};
+  const divider = document.createElement('div');
+  divider.className = 'msg-summarised';
+  if (typeof o.key === 'string' && o.key) divider.dataset.compactionKey = o.key;
+  const row = document.createElement('div');
+  row.className = 'summarised-row';
+  const line = () => { const l = document.createElement('div'); l.className = 'summarised-line'; return l; };
+  const label = document.createElement('div');
+  label.className = 'summarised-label';
+  row.append(line(), label, line());
+  const explain = document.createElement('div');
+  explain.className = 'summarised-explain';
+  explain.id = `summarised-explain-${++summarisedExplainSeq}`;
+  explain.hidden = true;
+  explain.textContent = SUMMARISED_EXPLANATION;
+  divider.append(row, explain);
+  fillSummarisedLabel(divider);
+  return divider;
+}
+
 return {
   dispatchMessage, sendMessage, startProcessing, finishProcessing,
   cancelProcessing, handleActiveProcesses, addAgentMsg, addUserMsg,
@@ -1758,5 +1838,6 @@ return {
   resolvePermissionCard, handleOwnerlessPermissionRequest, endPermissionRequest,
   reconcilePendingPermissions,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,
+  createSummarisedDivider,
 };
 }));

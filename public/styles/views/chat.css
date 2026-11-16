@@ -272,3 +272,18 @@ body.light .permission-fields { background: var(--elevated); }
 .delegation-badge { display: flex; align-items: center; gap: 6px; font-size: var(--caption); font-weight: 600; white-space: nowrap; }
 .section-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 8px; text-align: left; }
 
+/* Where a long conversation was summarised to make room. Existing tokens only:
+   --text-2 holds 4.5:1 on the conversation background in both themes, where
+   --text-3 does not. "Why?" is 26px tall (18px line, 4px padding each side). */
+.msg-summarised { padding: 16px 0; }
+.summarised-row { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--caption); line-height: 1.5; }
+.summarised-line { flex: 1 1 0; min-width: 24px; height: 1px; background: var(--border); }
+.summarised-label { flex: 0 1 auto; min-width: 0; text-align: center; }
+.summarised-nowrap { white-space: nowrap; }
+.summarised-glyph { display: inline-block; vertical-align: -2px; margin-right: 6px; }
+.summarised-why { font-size: var(--caption); font-weight: 600; line-height: inherit; color: var(--text-2); text-decoration: underline; text-underline-offset: 2px; padding: 4px; margin: -4px -4px -4px 4px; border-radius: var(--radius-sm); }
+.summarised-why:hover, .summarised-why[aria-expanded="true"] { color: var(--text-1); }
+.summarised-why:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+.summarised-explain { max-width: 460px; margin: 6px auto 0; text-align: center; font-size: var(--caption); line-height: 1.55; color: var(--text-2); }
+.summarised-explain[hidden] { display: none; }
+

@@ -36,6 +36,7 @@ const MANIFEST = {
     "classifyRisk",
     "copyAuthCmd",
     "createHistoryDivider",
+    "createSummarisedDivider",
     "describeToolRequest",
     "dispatchMessage",
     "endPermissionRequest",
