@@ -12,7 +12,9 @@
 // there, and after switching away and back it is drawn again, once, still
 // answerable: Allow on it sends one answer naming its own request and
 // conversation, and the server takes it before its timeout. Answered, it is
-// never live again. One that timed out while its conversation was away comes
+// never live again: the next return shows it once, settled as it was
+// answered, and the one after shows nothing. One that timed out while its
+// conversation was away comes
 // back settled, saying so, and clicking it sends nothing. A conversation left
 // with a card open is marked waiting in the list until the card is answered
 // or ends, and never once the conversation is deleted. Each conversation's
@@ -118,11 +120,26 @@ test('a card drawn while its conversation is on screen is drawn again after swit
   await settled.click();
   await settled.press('Enter');
   await settled.press('Space');
-  // Answered, then switched away and back again: never live.
+  // Answered, then switched away and back again: shown once more, settled as
+  // it was answered, and never live.
+  const said = await settled.innerText();
+  await open(page, 'c2');
+  expect(await markedWaiting(page, 'c1'), 'an answered card leaves nothing waiting').toBe(false);
+  await open(page, 'c1');
+  const back = page.locator(`#messages [id="perm-${requestId}"]`);
+  await expect(cards(page), 'shown once on return').toHaveCount(1);
+  await expect(back.locator('.permission-resolved.allowed'), 'settled as allowed').toHaveCount(1);
+  await expect(back.locator('.permission-resolved > span')).toHaveText('✓');
+  expect(await back.innerText(), 'it says what it said when it was answered').toBe(said);
+  await expect(live(page)).toHaveCount(0);
+  await back.click();
+  await back.press('Enter');
+  await back.press('Space');
+  expect(sent.length, 'one answer, and only one').toBe(1);
+  // And a later return draws nothing.
   await open(page, 'c2');
   await open(page, 'c1');
-  await expect(live(page)).toHaveCount(0);
-  expect(sent.length, 'one answer, and only one').toBe(1);
+  await expect(cards(page), 'drawn once, then not again').toHaveCount(0);
 });
 
 test('the retry: five switches away and back leave one live copy, and one click sends one answer', async ({ page }) => {
