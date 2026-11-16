@@ -64,6 +64,9 @@ async function openDraft(page, name) {
   await caretAtEndOf(page, 'Start here.');
 }
 
+// Tiptap's focus command hands the browser's focus to the editor on the next
+// animation frame, so this waits until the editor has it: a key typed before
+// then goes to the page and is lost.
 async function caretAtEndOf(page, text) {
   await expect(page.locator('#tiptap-editor .ProseMirror p', { hasText: text })).toBeVisible();
   await page.evaluate((needle) => {
@@ -75,6 +78,7 @@ async function caretAtEndOf(page, text) {
     ed.commands.focus();
     ed.commands.setTextSelection(at);
   }, text);
+  await expect(page.locator('#tiptap-editor .ProseMirror')).toBeFocused();
 }
 
 const popup = (page) => page.locator('.wikilink-suggest');
