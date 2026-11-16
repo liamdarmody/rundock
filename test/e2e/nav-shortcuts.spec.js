@@ -17,6 +17,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');
+const WebSocket = require('ws');
+const credentials = require('./credentials.js');
+
+const PORT = Number(process.env.E2E_PORT || 34517);
 
 const CLIENTS = {
   mac: { platform: 'MacIntel', hints: 'macOS' },
@@ -411,16 +415,90 @@ test('the undo: undo after a shortcut acts on the text field as before, and the 
   await composer.fill('');
 });
 
-test('the retry: holding the key or pressing it five times leaves the view open once, with no repeated load', async ({ page }) => {
+test('the retry: holding the key down leaves the view open once, with no repeated load, and each fresh press does what a click does', async ({ page }) => {
   await boot(page, 'mac');
   await page.keyboard.down('Meta');
   for (let i = 0; i < 5; i++) await page.keyboard.down('Digit7');
   await page.keyboard.up('Digit7');
-  for (let i = 0; i < 5; i++) await page.keyboard.press('Digit7');
   await page.keyboard.up('Meta');
   await expectSection(page, 'map');
   expect(await arrivals(page)).toEqual(['map']);
   expect(await page.evaluate(() => window.mapArrivals)).toBe(1);
+  // Pressing again is asking again, as clicking again is: five clicks on the
+  // open view as the control, then five presses.
+  const counts = () => page.evaluate(() => ({ arrivals: window.navArrivals.length, loads: window.mapArrivals }));
+  const since = (a, b) => ({ arrivals: b.arrivals - a.arrivals, loads: b.loads - a.loads });
+  const start = await counts();
+  for (let i = 0; i < 5; i++) await page.locator('.nav-item[data-nav="map"]').click();
+  const afterClicks = await counts();
+  for (let i = 0; i < 5; i++) await page.keyboard.press('Meta+7');
+  await expectSection(page, 'map');
+  const byClicks = since(start, afterClicks);
+  expect(byClicks.arrivals).toBe(5);
+  expect(since(afterClicks, await counts())).toEqual(byClicks);
+});
+
+// Two owners' routines, so the Routines panel draws a scope row for each
+// beside All. Written through the real save road over the spec's own socket,
+// each on a weekly slot three days out so the scheduler cannot fire one
+// during the spec, and taken back afterwards.
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const SCHEDULE = `every ${WEEKDAYS[(new Date().getDay() + 3) % 7]} at 07:00`;
+const SCOPED = [
+  { agentId: 'wren', name: 'Shortcut scope wren', prompt: 'shortcut scope e2e wren' },
+  { agentId: 'default', name: 'Shortcut scope lead', prompt: 'shortcut scope e2e lead' },
+];
+
+function overWs(fn) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://localhost:${PORT}`, { headers: credentials.sessionHeaders() });
+    const messages = [];
+    const waitFor = (pred) => new Promise((ok, no) => {
+      const timer = setTimeout(() => no(new Error('timed out waiting over the socket')), 10000);
+      const check = () => { const m = messages.find(pred); if (m) { clearTimeout(timer); ok(m); return true; } return false; };
+      if (!check()) ws.on('message', check);
+    });
+    ws.on('message', (data) => messages.push(JSON.parse(data.toString())));
+    ws.on('error', reject);
+    ws.on('open', () => fn({ send: (o) => ws.send(JSON.stringify(o)), waitFor }).then((v) => { ws.close(); resolve(v); }, reject));
+  });
+}
+
+test('a fresh press of the key for the open view does what a click does: back to All routines from an agent\'s scope', async ({ page }) => {
+  await overWs(async ({ send, waitFor }) => {
+    for (const { agentId, name, prompt } of SCOPED) {
+      send({ type: 'save_routine', agentId, routine: { name, schedule: SCHEDULE, prompt, runOn: 'local' } });
+      await waitFor((m) => m.type === 'routine_saved' && m.name === name);
+    }
+  });
+  try {
+    await boot(page, 'mac');
+    const activeScope = () => page.locator('#sidebar-routines .scope-item.active').getAttribute('data-scope');
+    const wren = page.locator('#sidebar-routines .scope-item[data-scope="wren"]');
+    // By the rail, as the control.
+    await page.locator('.nav-item[data-nav="routines"]').click();
+    await expectSection(page, 'routines');
+    await wren.click();
+    await expect.poll(activeScope).toBe('wren');
+    await page.locator('.nav-item[data-nav="routines"]').click();
+    await expect.poll(activeScope, { message: 'a click on the rail returns to All' }).toBe('all');
+    // By the key.
+    await page.keyboard.press('Meta+4');
+    await expectSection(page, 'routines');
+    await expect.poll(activeScope).toBe('all');
+    await wren.click();
+    await expect.poll(activeScope).toBe('wren');
+    await page.keyboard.press('Meta+4');
+    await expect.poll(activeScope, { message: 'the key returns to All, as the click did' }).toBe('all');
+    expect(await arrivals(page)).toEqual(['routines', 'routines', 'routines', 'routines']);
+  } finally {
+    await overWs(async ({ send, waitFor }) => {
+      for (const { agentId, name } of SCOPED) {
+        send({ type: 'delete_routine', agentId, name, occurrence: 0 });
+        await waitFor((m) => m.type === 'routine_deleted' && m.name === name);
+      }
+    });
+  }
 });
 
 test('the most common next step: from Files with a note being edited, Cmd+1 opens Conversations and saves the edit as a rail click does', async ({ page }) => {

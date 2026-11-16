@@ -2312,7 +2312,6 @@ document.addEventListener('keydown', RundockNavShortcuts.createKeydownHandler({
   doc: document,
   modifier: NAV_SHORTCUT_MODIFIER,
   switchNav: (nav) => switchNav(nav),
-  currentView: () => currentView,
   blocked: () => paletteOpen,
 }));
 

@@ -99,24 +99,19 @@
 
   // The keydown listener. Everything it needs from the page is passed in:
   //   switchNav    the rail's own switch, the path a click takes
-  //   currentView  () => the view on screen
   //   blocked      () => true while the search palette is open
   //   isShown      (el) => whether an element is on screen
-  function createKeydownHandler({ doc, modifier, switchNav, currentView, blocked, isShown }) {
+  function createKeydownHandler({ doc, modifier, switchNav, blocked, isShown }) {
     const shown = isShown || ((el) => el.getClientRects().length > 0);
-    let landed = null;
     return function onNavShortcut(event) {
       if (event.defaultPrevented || blocked() || Array.from(doc.querySelectorAll(OPEN_MODAL)).some(shown)) return;
       const item = match(event, modifier, doc);
       if (!item || !shown(item)) return;
       event.preventDefault();
-      if (event.repeat) return;
-      const nav = item.getAttribute('data-nav');
-      // A second press that would arrive where the first one left you, with
-      // nothing moved since, is not a second arrival.
-      if (landed && landed.nav === nav && landed.view === currentView() && item.classList.contains('active')) return;
-      switchNav(nav);
-      landed = { nav, view: currentView() };
+      // A held key repeats its keydown, and only the first is a press. Every
+      // fresh press arrives, as every click on the rail does, even on the view
+      // already open: a click there resets what the view holds.
+      if (!event.repeat) switchNav(item.getAttribute('data-nav'));
     };
   }
 

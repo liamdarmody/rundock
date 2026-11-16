@@ -60,20 +60,17 @@ const navOf = (item) => (item ? item.getAttribute('data-nav') : null);
 // real one does to the rail: lights the section it arrives on.
 function wired(doc, modifier, { blocked = () => false } = {}) {
   const calls = [];
-  let view = 'chat';
   const onKey = N.createKeydownHandler({
     doc,
     modifier,
     switchNav: (nav) => {
       calls.push(nav);
-      view = `${nav}-view`;
       doc.querySelectorAll('.nav-item[data-nav]').forEach((n) => n.classList.toggle('active', n.getAttribute('data-nav') === nav));
     },
-    currentView: () => view,
     blocked,
     isShown: shown,
   });
-  return { calls, onKey, moveTo(v) { view = v; } };
+  return { calls, onKey };
 }
 
 describe('the modifier comes from the client', () => {
@@ -345,30 +342,26 @@ describe('the handler', () => {
     assert.deepStrictEqual(calls, []);
   });
 
-  test('the retry: holding the key or pressing it five times arrives once', () => {
+  test('the retry: holding the key down arrives once, however long it is held', () => {
     const doc = page();
-    const { calls, onKey, moveTo } = wired(doc, 'Meta');
-    const held7 =[digit(7, { metaKey: true }), ...Array.from({ length: 4 }, () => digit(7, { metaKey: true, repeat: true }))];
+    const { calls, onKey } = wired(doc, 'Meta');
+    const held7 = [digit(7, { metaKey: true }), ...Array.from({ length: 4 }, () => digit(7, { metaKey: true, repeat: true }))];
     for (const event of held7) onKey(event);
     assert.ok(held7.every((e) => e.prevented === 1), 'every repeat of its own key is still its own');
-    for (let i = 0; i < 5; i++) onKey(digit(7, { metaKey: true }));
     assert.deepStrictEqual(calls, ['map']);
-    // A view that finishes loading while the key is still held moves on
-    // under it; the held key is still one press.
     onKey(digit(2, { metaKey: true }));
-    moveTo('profile');
     for (let i = 0; i < 4; i++) onKey(digit(2, { metaKey: true, repeat: true }));
     assert.deepStrictEqual(calls, ['map', 'team']);
   });
 
-  test('pressing the same key after moving within the section arrives again, as a click would', () => {
+  test('a fresh press of the key for the open view arrives again, as a click on it does', () => {
+    // A click on the rail item for the view already open calls switchNav
+    // again, which resets what the view holds, such as the Routines scope.
     const doc = page();
-    const { calls, onKey, moveTo } = wired(doc, 'Meta');
-    const team = mainNavs(doc)[1];
-    onKey(digit(2, { metaKey: true }));
-    moveTo('profile');
-    onKey(digit(2, { metaKey: true }));
-    assert.deepStrictEqual(calls, [team, team]);
+    const { calls, onKey } = wired(doc, 'Meta');
+    const routines = mainNavs(doc)[3];
+    for (let i = 0; i < 3; i++) onKey(digit(4, { metaKey: true }));
+    assert.deepStrictEqual(calls, [routines, routines, routines]);
   });
 
   test('pressing a key after leaving by other means arrives again', () => {
