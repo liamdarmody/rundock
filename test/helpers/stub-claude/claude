@@ -44,13 +44,16 @@
 //     "refusalPreamble": "...",      // stderr written just before the refusal
 //     "refusalPreambleJoined": false, // write that preamble and the first piece
 //                                    // of the refusal in ONE write
+//     "refusalPreambleSplitAt": 0,   // write the preamble itself in two pieces,
+//                                    // cut at that character
 //     "refusalAfterInit": false,     // send the init envelope before refusing
 //     "loadAgentFiles": false,       // read agent files as Claude Code does, and
 //                                    // refuse an --agent no file loads for
 //                                    // (see AGENT_NOT_LOADED below)
 //     "refusalUntilFile": "..." }    // hold that refusal open until this file
 //                                    // exists, then exit as it would have
-// A crash rule may give "stderrChunks": [...] to write its stderr in pieces.
+// A rule may give "stderrChunks": [...] to write stderr in pieces: a crash
+// rule before it exits, an ordinary turn before it answers.
 // A crash rule may give "beforeSession": true to fail at startup, before the
 // session's transcript exists, as an expired login does.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
@@ -410,11 +413,16 @@ if (REFUSED_RESUME) {
   // such as Claude Code's warning that it read no stdin. `refusalPreambleJoined`
   // writes it in the same write as the first piece of the refusal (the whole
   // line when it is not split), so the server reads both in one chunk.
+  // `refusalPreambleSplitAt` cuts the preamble itself at that character into
+  // two writes, and only its second piece is joined to the refusal.
   const line = `No conversation found with session ID: ${RESUME}`;
   const cut = Number(TOP.refusalSplitAt) || 0;
   const pieces = cut > 0 ? [line.slice(0, cut), line.slice(cut), '\n'] : [`${line}\n`];
-  if (TOP.refusalPreamble && TOP.refusalPreambleJoined) pieces[0] = String(TOP.refusalPreamble) + pieces[0];
-  else if (TOP.refusalPreamble) pieces.unshift(String(TOP.refusalPreamble));
+  const preamble = TOP.refusalPreamble ? String(TOP.refusalPreamble) : '';
+  const preambleCut = Number(TOP.refusalPreambleSplitAt) || 0;
+  const before = !preamble ? [] : preambleCut > 0 ? [preamble.slice(0, preambleCut), preamble.slice(preambleCut)] : [preamble];
+  if (before.length > 0 && TOP.refusalPreambleJoined) pieces[0] = before.pop() + pieces[0];
+  pieces.unshift(...before);
   const wait = Number(TOP.refusalExitMs) || 0;
   const finish = () => (wait > 0 ? setTimeout(() => exitWhenWritten(1), wait) : exitWhenWritten(1));
   // `refusalAfterInit` sends the init envelope for the refused id first. The
@@ -764,9 +772,15 @@ function handleUserMessage(content) {
     return;
   }
   const delay = rule.delayMs || 0;
-  const speak = () => whenFileExists(rule.untilFile, () => {
+  const answer = () => {
     if (delay > 0) setTimeout(() => emitTurn(rule, content), delay);
     else emitTurn(rule, content);
+  };
+  // `stderrChunks` on an ordinary turn writes that stderr in those pieces, a
+  // moment apart, before the turn answers, as a warning printed at startup is.
+  const speak = () => whenFileExists(rule.untilFile, () => {
+    if (Array.isArray(rule.stderrChunks)) writePieces(rule.stderrChunks, answer);
+    else answer();
   });
   if (Array.isArray(rule.hooks)) runHookCalls(rule.hooks, speak);
   else speak();

@@ -1166,6 +1166,101 @@ describe('a refusal that reaches the pipe in pieces', () => {
     assert.deepStrictEqual(spawnsFor(convoId).map(i => i.resume), ['dead-orch-g9', null], 'refused once, then started fresh');
     h.reapConvo(convoId);
   });
+
+  // THE PIPE CAN CUT THE WARNING ITSELF. Its opening alone holds neither of the
+  // words it is known by, so each piece is judged by the whole line it belongs
+  // to. Cut inside "no stdin", inside "no stdin data", and just after
+  // "Warning:".
+  const cutAt = (n) => [WARNING.slice(0, n), WARNING.slice(n)];
+
+  /** A run that is not refused, `chunks` written to its stderr before it answers, run until it has ended. */
+  async function liveRun(tag, chunks) {
+    const convoId = h.freshConvoId(`stale-grouped-${tag}`);
+    const live = `live-orch-${tag}`;
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: live, sessionIds: [{ agentId: 'chief-of-staff', sessionId: live }] });
+    scenario([
+      { match: { resume: true, promptIncludes: `ASK-${tag}` }, stderrChunks: chunks, turn: [{ text: `LIVE-${tag}` }], exitAfterTurn: 0 },
+    ], []);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: `ASK-${tag} hi`, sessionId: live });
+    await waitForResult(convoId, `LIVE-${tag}`, since, 'the resumed turn answers');
+    assert.ok(await h.waitUntil(() => !h.internal.chatProcesses.has(convoId), { timeout: 15000 }), 'the run has ended');
+    await settled();
+    const mine = messagesFor(convoId, since);
+    assert.deepStrictEqual(mine.filter(m => m.type === 'error').map(m => m.content), [], 'no piece of the warning is shown');
+    assert.ok(!mine.some(m => m.subtype === 'session_expired' || m.subtype === 'info'), 'nothing is forgotten or started again');
+    assert.ok(idsIn(stored(convoId)).includes(live), 'the session is kept');
+    assert.deepStrictEqual(spawnsFor(convoId).map(i => i.resume), [live], 'resumed once');
+    h.reapConvo(convoId);
+  }
+
+  test('the warning cut inside "no stdin", on a run that is not refused: nothing shown, nothing forgotten', async () => {
+    await liveRun('w1', cutAt('Warning: no stdin'.length));
+  });
+
+  test('the warning cut inside "no stdin data", on a run that is not refused: nothing shown, nothing forgotten', async () => {
+    await liveRun('w2', cutAt('Warning: no stdin da'.length));
+  });
+
+  test('the warning cut just after "Warning:", on a run that is not refused: nothing shown, nothing forgotten', async () => {
+    await liveRun('w3', cutAt('Warning:'.length));
+  });
+
+  test('the warning cut inside "no stdin data", then the refusal: recognized, nothing shown, forgotten once', async () => {
+    const r = await refusedDelegate('w4', { refusalPreamble: WARNING, refusalPreambleSplitAt: 'Warning: no stdin da'.length });
+    assertRefusalHandled(r);
+    h.reapConvo(r.convoId);
+  });
+
+  test('the warning cut just after "Warning:", then the refusal: recognized, nothing shown, forgotten once', async () => {
+    const r = await refusedDelegate('w5', { refusalPreamble: WARNING, refusalPreambleSplitAt: 'Warning:'.length });
+    assertRefusalHandled(r);
+    h.reapConvo(r.convoId);
+  });
+
+  test('the opening of the warning, then its rest and the refusal in one write: recognized, nothing shown, forgotten once', async () => {
+    const r = await refusedDelegate('w6', { refusalPreamble: WARNING, refusalPreambleSplitAt: 'Warning:'.length, refusalPreambleJoined: true });
+    assertRefusalHandled(r);
+    h.reapConvo(r.convoId);
+  });
+
+  test('an opening of the warning the process never finished is not shown when the stream ends, a real error before it still is', async () => {
+    const convoId = h.freshConvoId('stale-grouped-w7');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-w7', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-w7' }] });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-W7' }, crash: 1, stderrChunks: ['Error: the run stopped before it could answer\n', 'Warning: no stdin'] },
+    ], []);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-W7 hi', sessionId: 'live-orch-w7' });
+    await client.waitForEvent('system', 'done', convoId, { since, label: 'the failed turn ends', timeout: 15000 });
+    await settled();
+    assert.deepStrictEqual(messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content),
+      ['Error: the run stopped before it could answer\n'], 'the error is shown, and the unfinished opening of the warning is not');
+    assert.ok(!messagesFor(convoId, since).some(m => m.subtype === 'session_expired'), 'and nothing is forgotten');
+    assert.ok(idsIn(stored(convoId)).includes('live-orch-w7'));
+    h.reapConvo(convoId);
+  });
+
+  test('stderr that only began like the warning is shown whole as soon as it is clearly something else', async () => {
+    // Its line is never finished, so only its own words can let it out: an
+    // opening held until a newline, or until the stream ends, is never shown.
+    const convoId = h.freshConvoId('stale-grouped-w8');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-w8', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-w8' }] });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-W8' }, crash: 1, stderrChunks: ['Warning:', ' the configuration file could not be read'] },
+    ], []);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-W8 hi', sessionId: 'live-orch-w8' });
+    await client.waitForEvent('system', 'done', convoId, { since, label: 'the failed turn ends', timeout: 15000 });
+    await settled();
+    const shown = messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content);
+    assert.strictEqual(shown.join(''), 'Warning: the configuration file could not be read', 'all of it is shown, once');
+    assert.ok(shown[0].startsWith('Warning: the'), `its opening is shown with the words that proved it is not the warning, never on its own: ${JSON.stringify(shown)}`);
+    assert.ok(!messagesFor(convoId, since).some(m => m.subtype === 'session_expired'), 'and nothing is forgotten');
+    assert.ok(idsIn(stored(convoId)).includes('live-orch-w8'));
+    h.reapConvo(convoId);
+  });
 });
 
 describe('an agent with no name to give', () => {
