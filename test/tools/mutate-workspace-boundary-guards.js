@@ -700,22 +700,22 @@ const MUTATIONS = [
     '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
   // Forget a length a build wrote and every workspace carrying it is stranded.
   [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22, 23, 36, 38, 41, 43];'],
   [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22, 23, 36, 38, 41, 43];'],
   [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22, 23, 36, 38, 41, 43];'],
   // Leave the current length out and the day a longer list ships, every block
   // this build wrote reads as a person's edit and never upgrades.
   [SCAFFOLD_SETTINGS, 'the current deny list\'s length is recorded as written',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 38, 41, 43];'],
   [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-two-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 23, 36, 38, 41, 43];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.
@@ -3160,17 +3160,17 @@ const MUTATIONS = [
   // Forget the length the last build wrote and every workspace carrying it is
   // stranded: never rewritten, never given the new entries.
   [SCAFFOLD_SETTINGS, 'What runs: the nineteen-entry list is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 38, 41, 43];'],
   [SCAFFOLD, 'What runs: the nineteen-entry list upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 38, 41, 43];'],
   [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-one-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 38, 41, 43];'],
   [SCAFFOLD, 'Connector secrets: the twenty-one-entry list upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 38, 41, 43];'],
   // An inherited Code-mode flag puts a Notes workspace under Code-mode grading;
   // an inherited conversation id names a conversation the agent does not have.
   [SPAWN_ENV, 'Spawn env: an inherited RUNDOCK_CODE_MODE reaches the agent',
@@ -4488,11 +4488,11 @@ const MUTATIONS = [
     '    ...shellStartupEntries(home).map(e => e.path),\n',
     ''],
   [STARTUP_SANDBOX, 'Startup files: the twenty-three-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 36, 38, 41, 43];'],
   [STARTUP_SANDBOX, "Startup files: the list with ZDOTDIR's zsh files is recorded as written",
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 43];'],
   // The record of the startup files is accepted in the spelling either way of
   // running writes, and in no other: break each spelling and each refusal.
   // The record found anywhere in the block, rather than where this run writes
@@ -4533,8 +4533,8 @@ const MUTATIONS = [
     'Array.isArray(block.filesystem.denyWrite) ? block.filesystem.denyWrite[at] : undefined',
     'block.filesystem.denyWrite[at]'],
   [STARTUP_SANDBOX, 'Record spelling: an earlier deny list that carries the record has the same latitude',
-    'const rebuilt = recordAsWritten(sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode), block, claimedHome);\n  if (sameSandbox(block, rebuilt)) return true;',
-    'const rebuilt = sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode);\n  if (sameSandbox(block, recordAsWritten(rebuilt, block, claimedHome))) return true;'],
+    'const rebuilt = recordAsWritten(sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode, relocated), block, claimedHome);\n  if (sameSandbox(block, rebuilt)) return true;',
+    'const rebuilt = sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode, relocated);\n  if (sameSandbox(block, recordAsWritten(rebuilt, block, claimedHome))) return true;'],
   [STARTUP_SANDBOX, 'Record spelling: recognising a block never changes it',
     '  return recordSpelling(theirs, home) ? withDenyWrite(rebuilt, deny.map((e, i) => (i === at ? theirs : e))) : rebuilt;',
     '  if (recordSpelling(theirs, home)) block.filesystem.denyWrite[at] = deny[at];\n  return rebuilt;'],
@@ -4898,6 +4898,75 @@ const MUTATIONS = [
   [JOINED_WORDS, 'Joined words: a lexer failure is treated as no crossing',
     '  } catch (e) { found.unread = true; joined = []; }',
     '  } catch (e) { joined = []; }'],
+  // ===== WHERE A SECRET SITS =====
+  // A file tool's path inside the workspace is taken as inside work, secret
+  // or not, so a workspace at home reads and writes its secrets unasked.
+  // Caught by: at home, the Read, Write and Edit tools on each secret ask.
+  [SECRET_REACH, 'Secret reach: the workspace hides a secret from the file tools',
+    "  if (inside && !secretInside) return { where: 'inside', resolvedPath };",
+    "  if (inside) return { where: 'inside', resolvedPath };"],
+  // A secret a command names inside the workspace is dropped as inside work,
+  // so a workspace at home lets a command read, replace or remove one
+  // unasked. Caught by: at home, a shell read and a shell write of each
+  // secret ask as a secret, however spelled.
+  [SECRET_REACH, 'Secret reach: a secret a command names in the workspace is dropped',
+    '    if (opts.credentialReads && !writeOnly) opts.credentialReads.add(r);\n    if (seen.has(r)) return true;',
+    '    if (opts.credentialReads && !writeOnly) opts.credentialReads.add(r);\n    if (insideWorkspaceRoot(r, workspaceRoot, path)) return false;\n    if (seen.has(r)) return true;'],
+  // A path the command names that stays in the workspace but is a secret
+  // there (a link to a backup copy not made yet, which the secret forms do
+  // not reach) is skipped as inside work. Caught by: a workspace link to a
+  // backup copy not there yet asks as a secret.
+  [SECRET_REACH, 'Secret reach: a secret the workspace holds is skipped as inside work',
+    '    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod) && !secretHere()) continue;',
+    '    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) continue;'],
+  // A bare word is never followed through a link, so a link in the workspace
+  // that leads to a secret is read as the link. Caught by: the link name,
+  // bare and with separators, asks as the secret it leads to.
+  [SECRET_REACH, 'Secret reach: a bare link name is not followed to a secret',
+    '    if (bare && !(pmod === path && !winWorld && linkHops(spelled).length && secretHere())) continue;',
+    '    if (bare) continue;'],
+  // The backups folder is dropped from the registry. Caught by: each read of
+  // the folder or a copy in it, by every tool and spelling, asks as a secret.
+  [SECRET_REACH, 'Secret reach: the backups folder is not a secret',
+    "const SECRET_RELATIVE_DIRS = ['backups'];",
+    'const SECRET_RELATIVE_DIRS = [];'],
+  // A secret folder names only itself, not what it holds, so a copy in it
+  // falls under a standing grant over the runtime home. Caught by: the grant
+  // over the whole runtime home leaves each copy, at any depth, asking.
+  [HOOK, 'Secret reach: a secret folder does not hold its files',
+    '    const dir = at(d);\n    return c === dir || c.startsWith(dir + path.sep);',
+    '    const dir = at(d);\n    return c === dir;'],
+  // A home moved by CLAUDE_CONFIG_DIR is read in place of the default homes,
+  // not beside them. Caught by: the default backups folder keeps its place.
+  [SECRET_REACH, 'Secret reach: the moved runtime home replaces the default ones',
+    '  if (relocatedRuntimeHomes().some(r => holdsSecret(r, c, foldsCase))) return true;',
+    '  const moved = relocatedRuntimeHomes(); if (moved.length) return moved.some(r => holdsSecret(r, c, foldsCase));'],
+  // The moved home is taken as a runtime home, so an ordinary file there is
+  // judged as one in the runtime's folder: following the variable must only
+  // add secrets. Caught by: an ordinary file there is judged as it was
+  // without the variable.
+  [SECRET_REACH, 'Secret reach: the moved runtime home is taken as a runtime home',
+    '  return runtimeHomes(home).find(h => {',
+    '  return [...runtimeHomes(home), ...relocatedRuntimeHomes().map(r => ({ ...r, dirs: [], files: [] }))].find(h => {'],
+  // A block is recognized only as written without the variable, so one
+  // written with it set is no longer seen as Rundock's once it is unset.
+  // Caught by: a block written with the variable set is Rundock's when
+  // reopened with it unset, and the undo.
+  [SCAFFOLD_SETTINGS, 'Secret reach: a block written with the variable set is not recognized',
+    '  const relocated = plain ? relocatedAsWritten(block.filesystem.denyWrite, plain.filesystem.denyWrite.length) : [];',
+    '  const relocated = [];'],
+  // A working folder covers a secret its link leads into. Caught by: a
+  // credential file that links into a named working folder, by the Read tool.
+  [SECRET_REACH, 'Secret reach: a named working folder covers its secrets',
+    '  if (pmod === path && isSecretPath(resolvedPath, home, foldsCase, spelled)) return false;',
+    ''],
+  // Both stops gone, so home, ~/.claude or ~/.codex named as a working folder
+  // covers the secrets in it. Either stop alone still refuses them, which is
+  // why the pins need this row. Caught by: with each folder named, each
+  // registry file still asks.
+  [SECRET_REACH, 'Secret reach: a named working folder at a runtime home covers its secrets',
+    '  if (homeFor(resolvedPath, home, foldsCase)) return false;\n  // NOR A CREDENTIAL FILE REACHED THROUGH A LINK, wherever the link leads: a\n  // named `~/dotfiles` that holds the target of `~/.claude/.credentials.json`\n  // must not exempt it either.\n  if (pmod === path && isSecretPath(resolvedPath, home, foldsCase, spelled)) return false;',
+    ''],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 
