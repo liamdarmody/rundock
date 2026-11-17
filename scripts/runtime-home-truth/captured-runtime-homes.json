@@ -1,0 +1,52 @@
+{
+  "about": "Where the installed Claude Code and Codex put their account state and credential files when CLAUDE_CONFIG_DIR and CODEX_HOME name a folder, measured by scripts/runtime-home-truth/capture.js. test/unit/runtime-home-capture.test.js holds it to what it claims.",
+  "method": "Fresh, empty folders for HOME, the variable's folder (a sibling of HOME), the workspace and the temp folder, and a placeholder API key. Claude Code ran twice in print mode (-p --output-format stream-json --verbose --strict-mcp-config --max-turns 1) against a stand-in for the messages API on 127.0.0.1 that answered every request with one line of text. Codex was given the placeholder key with codex login --with-api-key, told to keep it in a file (cli_auth_credentials_store=\"file\"). No account was used, no model was called, and the Keychain was never touched. Then every file and folder under HOME and under the variable's folder was listed: \"home\" and \"relocated\" say where each named file landed. Names made from a time, an id or a folder's path are written as placeholders.",
+  "runtimes": {
+    "claude": {
+      "variable": "CLAUDE_CONFIG_DIR",
+      "runtimeVersion": "2.1.326",
+      "measured": true,
+      "cliExitCodes": [
+        0,
+        0
+      ],
+      "credentialSent": [
+        "the placeholder key"
+      ],
+      "created": {
+        "home": [],
+        "relocated": [
+          ".claude.json",
+          "backups/",
+          "backups/.claude.json.backup.<time>",
+          "plugins/",
+          "plugins/store/",
+          "plugins/store/cc-plugin-agents-md_builtin-b049b47b3618.json",
+          "projects/",
+          "projects/<case>/",
+          "projects/<case>/<id>.jsonl",
+          "projects/<case>/memory/",
+          "sessions/"
+        ]
+      },
+      "files": {
+        ".claude.json": [
+          "relocated"
+        ],
+        ".claude.json.backup": [],
+        "backups/": [
+          "relocated"
+        ],
+        ".credentials.json": []
+      },
+      "notMeasured": {
+        ".credentials.json": "Claude Code writes its credential file only when a person signs in, which this harness never does, and on macOS it keeps the credential in the Keychain, which this harness never touches."
+      }
+    },
+    "codex": {
+      "variable": "CODEX_HOME",
+      "measured": false,
+      "reason": "no codex CLI could be found or opened on this machine"
+    }
+  }
+}
