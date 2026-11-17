@@ -61,6 +61,31 @@ async function replay(turn) {
   return events;
 }
 
+// The summary Codex ran as a turn of its own when asked with
+// thread/compact/start, which Rundock never sends: the notifications it sent
+// from that request to the capture's next marker.
+function capturedCompactTurn(file) {
+  const lines = fs.readFileSync(path.join(CAPTURES, file), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const asked = lines.findIndex((l) => l.dir === 'sent' && l.msg.method === 'thread/compact/start');
+  const out = [];
+  for (const line of lines.slice(asked + 1)) {
+    if (line.dir === 'mark') break;
+    if (line.dir === 'recv' && line.msg.method && line.msg.id == null) out.push(line.msg);
+  }
+  return out;
+}
+const insideTurn = (records) => records.slice(
+  records.findIndex((r) => r.method === 'turn/started') + 1,
+  records.findIndex((r) => r.method === 'turn/completed'));
+// A record moved onto another thread and, when given, another turn.
+function renamed(record, threadId, turnId) {
+  const copy = JSON.parse(JSON.stringify(record));
+  copy.params.threadId = threadId;
+  if (turnId && copy.params.turnId) copy.params.turnId = turnId;
+  if (turnId && copy.params.turn) copy.params.turn.id = turnId;
+  return copy;
+}
+
 // A turn of Rundock's in the protocol's own shapes, with the given records
 // between the reply's start and its end: for shapes neither source stages.
 const THREAD = 'thread-alpha';
@@ -114,6 +139,27 @@ describe('the captured lines', () => {
       assert.deepStrictEqual(compactions(events), []);
       assert.strictEqual(events[events.length - 1].type, 'done');
     }
+  });
+
+  test('the summary Codex ran as a turn of its own, its records inside a turn of Rundock\'s: one start, one finish keyed by its item', async () => {
+    const records = insideTurn(capturedCompactTurn('codex-compact.jsonl')).map((r) => renamed(r, THREAD, TURN));
+    assert.deepStrictEqual(records.filter((r) => r.params.item).map((r) => [r.method, r.params.item.type]),
+      [['item/started', 'contextCompaction'], ['item/completed', 'contextCompaction']], 'the captured records, as captured');
+    const events = await replay(turnWith(records));
+    assert.deepStrictEqual(compactions(events), [
+      { type: 'compactionStarted' },
+      { type: 'compacted', key: '00000000-0000-4000-8000-040000000003' },
+    ]);
+    assert.strictEqual(events.find((e) => e.type === 'text').text, 'Still here.');
+    assert.strictEqual(events[events.length - 1].type, 'done');
+  });
+
+  test('the same records as Codex sent them, naming its own turn, during a turn of Rundock\'s: nothing, and that turn carries on to its own end', async () => {
+    const records = capturedCompactTurn('codex-compact.jsonl').map((r) => renamed(r, THREAD));
+    const events = await replay(turnWith(records));
+    assert.deepStrictEqual(compactions(events), []);
+    assert.strictEqual(events.find((e) => e.type === 'text').text, 'Still here.', 'its turn/completed did not end this turn');
+    assert.deepStrictEqual(events.filter((e) => e.type === 'done').map((e) => e.status), ['completed']);
   });
 });
 

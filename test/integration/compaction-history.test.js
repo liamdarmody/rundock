@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const h = require('../helpers/harness.js');
+const glue = require('../../lib/runtime/codex-glue.js');
 const { agentFile, standardTeam } = require('../helpers/workspace.js');
 const { seedSummarisedConversation, SUMMARY_ONLY_WORD, BOUNDARY_UUID } = require('../helpers/compaction-seed.js');
 
@@ -137,6 +138,73 @@ describe('a Codex conversation', () => {
     assert.deepStrictEqual(out.map((e) => e[0]), ['user', 'divider', 'divider', 'assistant']);
     assert.match(out[1][1], /^cmp_.*_0$/);
     assert.match(out[2][1], /^cmp_.*_1$/);
+  });
+});
+
+// The summary Codex ran as a turn of its own when asked with
+// thread/compact/start (test/fixtures/compaction/codex-compact.jsonl), which
+// Rundock never sends: the notifications from that request to the next marker.
+const COMPACT_TURN = (() => {
+  const lines = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'compaction', 'codex-compact.jsonl'), 'utf8')
+    .trim().split('\n').map((l) => JSON.parse(l));
+  const asked = lines.findIndex((l) => l.dir === 'sent' && l.msg.method === 'thread/compact/start');
+  const out = [];
+  for (const line of lines.slice(asked + 1)) {
+    if (line.dir === 'mark') break;
+    if (line.dir === 'recv' && line.msg.method && line.msg.id == null) out.push(line.msg);
+  }
+  return out;
+})();
+const COMPACT_ITEM = COMPACT_TURN.find((r) => r.method === 'item/completed').params.item.id;
+function renamed(record, threadId, turnId) {
+  const copy = JSON.parse(JSON.stringify(record));
+  copy.params.threadId = threadId;
+  if (turnId && copy.params.turnId) copy.params.turnId = turnId;
+  if (turnId && copy.params.turn) copy.params.turn.id = turnId;
+  return copy;
+}
+
+describe('the summary Codex runs as a turn of its own', () => {
+  // A Codex turn held open before its reply, the records sent into the real
+  // protocol client while it waits, then let go.
+  async function heldTurn(convoId, prompt, records) {
+    const release = path.join(h.workspaceDir, `release-${convoId}`);
+    h.writeCodexScenario([
+      { match: { promptIncludes: `${prompt}-HELD` }, untilFile: release, deltas: ['Carrying on.'] },
+      { match: { promptIncludes: `${prompt}-NEXT` }, deltas: ['Next answer.'] },
+    ]);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'example-codex', content: `${prompt}-HELD go` });
+    const server = await glue.getCodexAppServer();
+    let state = null;
+    assert.ok(await h.waitUntil(() => (state = [...server._activeTurns.values()].find((s) => s.turnId && !s.finished))), 'the turn is running');
+    for (const r of records(state)) server._onNotification(r.method, r.params);
+    fs.writeFileSync(release, '');
+    await client.waitForEvent('system', 'done', convoId, { since });
+    return { server, threadId: state.threadId };
+  }
+
+  test('its records inside a turn of Rundock\'s draw one divider, kept and drawn again on every reopen', async () => {
+    const convoId = open('cmph-codex-own');
+    const inside = COMPACT_TURN.slice(COMPACT_TURN.findIndex((r) => r.method === 'turn/started') + 1, COMPACT_TURN.findIndex((r) => r.method === 'turn/completed'));
+    await heldTurn(convoId, 'HIST-OWN', (s) => inside.map((r) => renamed(r, s.threadId, s.turnId)));
+    const expected = [['user', 'HIST-OWN-HELD go'], ['divider', COMPACT_ITEM, ''], ['assistant', 'Carrying on.']];
+    assert.deepStrictEqual(shape(await reopen(convoId)), expected);
+    assert.deepStrictEqual(shape(await reopen(convoId)), expected, 'reopened again: still one divider');
+  });
+
+  test('as Codex sent them, naming its own turn, they draw nothing, during a turn of Rundock\'s or between turns, and the next turn still works', async () => {
+    const convoId = open('cmph-codex-foreign');
+    const since = client.messages.length;
+    const { server, threadId } = await heldTurn(convoId, 'HIST-FOREIGN', (s) => COMPACT_TURN.map((r) => renamed(r, s.threadId)));
+    for (const r of COMPACT_TURN.map((rec) => renamed(rec, threadId))) server._onNotification(r.method, r.params);
+    await chat(convoId, 'example-codex', 'HIST-FOREIGN-NEXT go');
+    assert.deepStrictEqual(shape(await reopen(convoId)), [
+      ['user', 'HIST-FOREIGN-HELD go'], ['assistant', 'Carrying on.'],
+      ['user', 'HIST-FOREIGN-NEXT go'], ['assistant', 'Next answer.'],
+    ]);
+    assert.ok(!client.messages.slice(since).some((m) => m._conversationId === convoId && m.subtype === 'compact_boundary'), 'no divider sent to the window');
+    assert.ok(!h.internal.loadTranscript(convoId).some((t) => t.type === 'compaction'), 'none kept');
   });
 });
 
