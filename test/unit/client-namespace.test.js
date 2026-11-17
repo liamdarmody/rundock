@@ -172,8 +172,10 @@ const MANIFEST = {
     "treeIconSvg",
     "updateEditorBackButton",
     "viewStateReplyArrived",
+    "wikilinkCandidates",
     "wikilinkResolves",
     "wikilinkSearchName",
+    "wikilinkTargetFor",
   ],
   "find.js": [
     "clearArtifactFind",

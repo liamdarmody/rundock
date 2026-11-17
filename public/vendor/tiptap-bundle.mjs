@@ -17045,6 +17045,9 @@ function canInsertNode(state, nodeType) {
   }
   return false;
 }
+function escapeForRegEx(string) {
+  return string.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+}
 var markdown_exports = {};
 __export2(markdown_exports, {
   createAtomBlockMarkdownSpec: () => createAtomBlockMarkdownSpec,
@@ -38047,6 +38050,364 @@ var Markdown = Extension.create({
   }
 });
 
+// node_modules/@tiptap/suggestion/dist/index.js
+function findSuggestionMatch(config2) {
+  var _a2;
+  const { char, allowSpaces: allowSpacesOption, allowToIncludeChar, allowedPrefixes, startOfLine, $position } = config2;
+  const allowSpaces = allowSpacesOption && !allowToIncludeChar;
+  const escapedChar = escapeForRegEx(char);
+  const suffix = new RegExp(`\\s${escapedChar}$`);
+  const prefix = startOfLine ? "^" : "";
+  const finalEscapedChar = allowToIncludeChar ? "" : escapedChar;
+  const regexp = allowSpaces ? new RegExp(`${prefix}${escapedChar}.*?(?=\\s${finalEscapedChar}|$)`, "gm") : new RegExp(`${prefix}(?:^)?${escapedChar}[^\\s${finalEscapedChar}]*`, "gm");
+  const text2 = ((_a2 = $position.nodeBefore) == null ? void 0 : _a2.isText) && $position.nodeBefore.text;
+  if (!text2) {
+    return null;
+  }
+  const textFrom = $position.pos - text2.length;
+  const match2 = Array.from(text2.matchAll(regexp)).pop();
+  if (!match2 || match2.input === void 0 || match2.index === void 0) {
+    return null;
+  }
+  const matchPrefix = match2.input.slice(Math.max(0, match2.index - 1), match2.index);
+  const matchPrefixIsAllowed = new RegExp(`^[${allowedPrefixes == null ? void 0 : allowedPrefixes.join("")}\0]?$`).test(matchPrefix);
+  if (allowedPrefixes !== null && !matchPrefixIsAllowed) {
+    return null;
+  }
+  const from2 = textFrom + match2.index;
+  let to = from2 + match2[0].length;
+  if (allowSpaces && suffix.test(text2.slice(to - 1, to + 1))) {
+    match2[0] += " ";
+    to += 1;
+  }
+  if (from2 < $position.pos && to >= $position.pos) {
+    return {
+      range: {
+        from: from2,
+        to
+      },
+      query: match2[0].slice(char.length),
+      text: match2[0]
+    };
+  }
+  return null;
+}
+function hasInsertedWhitespace(transaction) {
+  if (!transaction.docChanged) {
+    return false;
+  }
+  return transaction.steps.some((step) => {
+    const slice2 = step.slice;
+    if (!(slice2 == null ? void 0 : slice2.content)) {
+      return false;
+    }
+    const inserted = slice2.content.textBetween(0, slice2.content.size, "\n");
+    return /\s/.test(inserted);
+  });
+}
+var SuggestionPluginKey = new PluginKey("suggestion");
+function Suggestion({
+  pluginKey = SuggestionPluginKey,
+  editor,
+  char = "@",
+  allowSpaces = false,
+  allowToIncludeChar = false,
+  allowedPrefixes = [" "],
+  startOfLine = false,
+  decorationTag = "span",
+  decorationClass = "suggestion",
+  decorationContent = "",
+  decorationEmptyClass = "is-empty",
+  command: command3 = () => null,
+  items = () => [],
+  render = () => ({}),
+  allow = () => true,
+  findSuggestionMatch: findSuggestionMatch2 = findSuggestionMatch,
+  shouldShow,
+  shouldResetDismissed
+}) {
+  let props;
+  const renderer = render == null ? void 0 : render();
+  const effectiveAllowSpaces = allowSpaces && !allowToIncludeChar;
+  const getAnchorClientRect = () => {
+    const pos = editor.state.selection.$anchor.pos;
+    const coords = editor.view.coordsAtPos(pos);
+    const { top, right, bottom, left } = coords;
+    try {
+      return new DOMRect(left, top, right - left, bottom - top);
+    } catch {
+      return null;
+    }
+  };
+  const clientRectFor = (view, decorationNode) => {
+    if (!decorationNode) {
+      return getAnchorClientRect;
+    }
+    return () => {
+      const state = pluginKey.getState(editor.state);
+      const decorationId = state == null ? void 0 : state.decorationId;
+      const currentDecorationNode = view.dom.querySelector(`[data-decoration-id="${decorationId}"]`);
+      return (currentDecorationNode == null ? void 0 : currentDecorationNode.getBoundingClientRect()) || null;
+    };
+  };
+  const shouldKeepDismissed = ({
+    match: match2,
+    dismissedRange,
+    state,
+    transaction
+  }) => {
+    if (shouldResetDismissed == null ? void 0 : shouldResetDismissed({
+      editor,
+      state,
+      range: dismissedRange,
+      match: match2,
+      transaction,
+      allowSpaces: effectiveAllowSpaces
+    })) {
+      return false;
+    }
+    if (effectiveAllowSpaces) {
+      return match2.range.from === dismissedRange.from;
+    }
+    return match2.range.from === dismissedRange.from && !hasInsertedWhitespace(transaction);
+  };
+  function dispatchExit(view, pluginKeyRef) {
+    var _a2;
+    try {
+      const state = pluginKey.getState(view.state);
+      const decorationNode = (state == null ? void 0 : state.decorationId) ? view.dom.querySelector(`[data-decoration-id="${state.decorationId}"]`) : null;
+      const exitProps = {
+        // @ts-ignore editor is available in closure
+        editor,
+        range: (state == null ? void 0 : state.range) || { from: 0, to: 0 },
+        query: (state == null ? void 0 : state.query) || null,
+        text: (state == null ? void 0 : state.text) || null,
+        items: [],
+        command: (commandProps) => {
+          return command3({ editor, range: (state == null ? void 0 : state.range) || { from: 0, to: 0 }, props: commandProps });
+        },
+        decorationNode,
+        clientRect: clientRectFor(view, decorationNode)
+      };
+      (_a2 = renderer == null ? void 0 : renderer.onExit) == null ? void 0 : _a2.call(renderer, exitProps);
+    } catch {
+    }
+    const tr2 = view.state.tr.setMeta(pluginKeyRef, { exit: true });
+    view.dispatch(tr2);
+  }
+  const plugin = new Plugin({
+    key: pluginKey,
+    view() {
+      return {
+        update: async (view, prevState) => {
+          var _a2, _b, _c, _d, _e, _f, _g;
+          const prev = (_a2 = this.key) == null ? void 0 : _a2.getState(prevState);
+          const next = (_b = this.key) == null ? void 0 : _b.getState(view.state);
+          const moved = prev.active && next.active && prev.range.from !== next.range.from;
+          const started = !prev.active && next.active;
+          const stopped = prev.active && !next.active;
+          const changed = !started && !stopped && prev.query !== next.query;
+          const handleStart = started || moved && changed;
+          const handleChange = changed || moved;
+          const handleExit = stopped || moved && changed;
+          if (!handleStart && !handleChange && !handleExit) {
+            return;
+          }
+          const state = handleExit && !handleStart ? prev : next;
+          const decorationNode = view.dom.querySelector(`[data-decoration-id="${state.decorationId}"]`);
+          props = {
+            editor,
+            range: state.range,
+            query: state.query,
+            text: state.text,
+            items: [],
+            command: (commandProps) => {
+              return command3({
+                editor,
+                range: state.range,
+                props: commandProps
+              });
+            },
+            decorationNode,
+            clientRect: clientRectFor(view, decorationNode)
+          };
+          if (handleStart) {
+            (_c = renderer == null ? void 0 : renderer.onBeforeStart) == null ? void 0 : _c.call(renderer, props);
+          }
+          if (handleChange) {
+            (_d = renderer == null ? void 0 : renderer.onBeforeUpdate) == null ? void 0 : _d.call(renderer, props);
+          }
+          if (handleChange || handleStart) {
+            props.items = await items({
+              editor,
+              query: state.query
+            });
+          }
+          if (handleExit) {
+            (_e = renderer == null ? void 0 : renderer.onExit) == null ? void 0 : _e.call(renderer, props);
+          }
+          if (handleChange) {
+            (_f = renderer == null ? void 0 : renderer.onUpdate) == null ? void 0 : _f.call(renderer, props);
+          }
+          if (handleStart) {
+            (_g = renderer == null ? void 0 : renderer.onStart) == null ? void 0 : _g.call(renderer, props);
+          }
+        },
+        destroy: () => {
+          var _a2;
+          if (!props) {
+            return;
+          }
+          (_a2 = renderer == null ? void 0 : renderer.onExit) == null ? void 0 : _a2.call(renderer, props);
+        }
+      };
+    },
+    state: {
+      // Initialize the plugin's internal state.
+      init() {
+        const state = {
+          active: false,
+          range: {
+            from: 0,
+            to: 0
+          },
+          query: null,
+          text: null,
+          composing: false,
+          dismissedRange: null
+        };
+        return state;
+      },
+      // Apply changes to the plugin state from a view transaction.
+      apply(transaction, prev, _oldState, state) {
+        const { isEditable } = editor;
+        const { composing } = editor.view;
+        const { selection } = transaction;
+        const { empty: empty2, from: from2 } = selection;
+        const next = { ...prev };
+        const meta = transaction.getMeta(pluginKey);
+        if (meta && meta.exit) {
+          next.active = false;
+          next.decorationId = null;
+          next.range = { from: 0, to: 0 };
+          next.query = null;
+          next.text = null;
+          next.dismissedRange = prev.active ? { ...prev.range } : prev.dismissedRange;
+          return next;
+        }
+        next.composing = composing;
+        if (transaction.docChanged && next.dismissedRange !== null) {
+          next.dismissedRange = {
+            from: transaction.mapping.map(next.dismissedRange.from),
+            to: transaction.mapping.map(next.dismissedRange.to)
+          };
+        }
+        if (isEditable && (empty2 || editor.view.composing)) {
+          if ((from2 < prev.range.from || from2 > prev.range.to) && !composing && !prev.composing) {
+            next.active = false;
+          }
+          const match2 = findSuggestionMatch2({
+            char,
+            allowSpaces,
+            allowToIncludeChar,
+            allowedPrefixes,
+            startOfLine,
+            $position: selection.$from
+          });
+          const decorationId = `id_${Math.floor(Math.random() * 4294967295)}`;
+          if (match2 && allow({
+            editor,
+            state,
+            range: match2.range,
+            isActive: prev.active
+          }) && (!shouldShow || shouldShow({
+            editor,
+            range: match2.range,
+            query: match2.query,
+            text: match2.text,
+            transaction
+          }))) {
+            if (next.dismissedRange !== null && !shouldKeepDismissed({
+              match: match2,
+              dismissedRange: next.dismissedRange,
+              state,
+              transaction
+            })) {
+              next.dismissedRange = null;
+            }
+            if (next.dismissedRange === null) {
+              next.active = true;
+              next.decorationId = prev.decorationId ? prev.decorationId : decorationId;
+              next.range = match2.range;
+              next.query = match2.query;
+              next.text = match2.text;
+            } else {
+              next.active = false;
+            }
+          } else {
+            if (!match2) {
+              next.dismissedRange = null;
+            }
+            next.active = false;
+          }
+        } else {
+          next.active = false;
+        }
+        if (!next.active) {
+          next.decorationId = null;
+          next.range = { from: 0, to: 0 };
+          next.query = null;
+          next.text = null;
+        }
+        return next;
+      }
+    },
+    props: {
+      // Call the keydown hook if suggestion is active.
+      handleKeyDown(view, event) {
+        var _a2, _b;
+        const { active, range } = plugin.getState(view.state);
+        if (!active) {
+          return false;
+        }
+        if (event.key === "Escape" || event.key === "Esc") {
+          const state = plugin.getState(view.state);
+          (_a2 = renderer == null ? void 0 : renderer.onKeyDown) == null ? void 0 : _a2.call(renderer, { view, event, range: state.range });
+          dispatchExit(view, pluginKey);
+          return true;
+        }
+        const handled = ((_b = renderer == null ? void 0 : renderer.onKeyDown) == null ? void 0 : _b.call(renderer, { view, event, range })) || false;
+        return handled;
+      },
+      // Setup decorator on the currently active suggestion.
+      decorations(state) {
+        const { active, range, decorationId, query } = plugin.getState(state);
+        if (!active) {
+          return null;
+        }
+        const isEmpty3 = !(query == null ? void 0 : query.length);
+        const classNames = [decorationClass];
+        if (isEmpty3) {
+          classNames.push(decorationEmptyClass);
+        }
+        return DecorationSet.create(state.doc, [
+          Decoration.inline(range.from, range.to, {
+            nodeName: decorationTag,
+            class: classNames.join(" "),
+            "data-decoration-id": decorationId,
+            "data-decoration-content": decorationContent
+          })
+        ]);
+      }
+    }
+  });
+  return plugin;
+}
+function exitSuggestion(view, pluginKeyRef = SuggestionPluginKey) {
+  const tr2 = view.state.tr.setMeta(pluginKeyRef, { exit: true });
+  view.dispatch(tr2);
+}
+
 // node_modules/js-yaml/dist/js-yaml.mjs
 var js_yaml_exports = {};
 __export(js_yaml_exports, {
@@ -40704,6 +41065,7 @@ export {
   Plugin,
   PluginKey,
   index_default2 as StarterKit,
+  Suggestion,
   Table,
   TableCell,
   TableHeader,
@@ -40711,6 +41073,8 @@ export {
   TaskItem2 as TaskItem,
   TaskList2 as TaskList,
   Text2 as Text,
+  exitSuggestion,
+  findSuggestionMatch,
   mergeAttributes,
   js_yaml_exports as yaml
 };
