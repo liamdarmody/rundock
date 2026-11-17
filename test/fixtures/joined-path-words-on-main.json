@@ -752,7 +752,7 @@
     },
     "conversation_id": "",
     "advisory_outside_paths": [
-     "/private/etc/hosts"
+     "/etc/hosts"
     ]
    }
   ]

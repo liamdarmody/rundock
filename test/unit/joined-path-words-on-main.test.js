@@ -21,7 +21,9 @@
 //   RUNDOCK_RECORD_HOOK="$PWD/scripts/.main-hook.js" node --test test/unit/joined-path-words-on-main.test.js
 //
 // Paths under the temporary folder are written as `<root>`, and each request's
-// session id, which differs per run, is left out.
+// session id, which differs per run, is left out. A card names a path by its
+// real location, and on macOS `/etc` is a link to `/private/etc`, so that real
+// folder is written as `/etc` and one recording holds on every POSIX host.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -63,7 +65,8 @@ const WRITES = [
   ['echo x > ~/.claude/".credentials.json"', 'echo x > ~/.claude/.credentials.json'],
 ];
 const keyOf = (label, command) => `${label} | ${command}`;
-const normal = v => JSON.parse(JSON.stringify(v).split(root).join('<root>'));
+const ETC = process.platform === 'win32' ? '/etc' : fs.realpathSync('/etc');
+const normal = v => JSON.parse(JSON.stringify(v).split(root).join('<root>').split(`"${ETC}/`).join('"/etc/'));
 const drawn = ({ tool_input: _input, advisory_outside_paths: _label, ...card }) => card;
 
 const asked = new Map();

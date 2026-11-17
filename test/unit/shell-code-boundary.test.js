@@ -67,6 +67,16 @@ describe('a backslash in a Bash word on a POSIX host is not a Windows separator'
     assert.deepStrictEqual(places('cat ..\\/..\\/secret.txt'), [real(path.join(root, 'secret.txt'))]);
   });
 
+  // Each word is also read as bash joins it, which takes the escape out too.
+  // The line's own reading must still do so when that reading cannot read the
+  // line, or the card names no file at all.
+  test('the line\'s own reading still takes an unquoted escape out when the joined reading cannot read the line', (t) => {
+    const parse = require('../../scripts/code-mode-parse.js');
+    t.mock.method(parse, 'lexWords', () => { throw new Error('forced failure'); });
+    assert.deepStrictEqual(places('cat \\/etc/hosts'), [real('/etc/hosts')]);
+    assert.deepStrictEqual(places('cat ..\\/..\\/secret.txt'), [real(path.join(root, 'secret.txt'))]);
+  });
+
   // A doubled backslash is two backslashes here, and a network path only on a
   // Windows host or in PowerShell (inline-script-readings.test.js).
   test('a drive letter is still a Windows path, and a UNC name only on a Windows host', () => {
