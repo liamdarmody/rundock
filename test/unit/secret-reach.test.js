@@ -1,7 +1,7 @@
 'use strict';
 // A CREDENTIAL FILE IS ASKED ABOUT HOWEVER IT IS SPELLED. The secrets tier
-// cards on any access to the runtime's credential files, and the sandbox
-// beneath it refuses writes only, so for a read the card is the whole guard.
+// cards on any access to the runtime's credential files, and wherever the
+// sandbox beneath it is off, for a read the card is the whole guard.
 // It was reached with no card at all by two spellings an agent writes
 // naturally:
 //

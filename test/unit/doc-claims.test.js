@@ -2743,3 +2743,54 @@ describe('rundock-guide.md: Doc types <, > and & as the characters themselves', 
     assert.doesNotMatch(rule, /iz(?:e|es|ed|ing|ation)\b|yz(?:e|es|ed|ing)\b|\b(?:color|behavior|favor|honor|center|catalog|canceled|traveled|license)\b/i, 'UK spelling');
   });
 });
+
+// THE SANDBOX REFUSES READS OF THE SIGN-IN FILES WHERE IT IS ON. Both
+// documents said it refuses writes only, which stopped being true when the
+// block gained a read deny from the same registry. Each claim is read beside
+// the block it describes, and the limits are pinned with it.
+describe('ARCHITECTURE.md and SECURITY.md: the sandbox refuses reads of the sign-in files where it is on, and the card alone guards them where it is off', () => {
+  const { sandboxSettings } = require('../../lib/workspace/scaffold.js');
+  const { secretsRegistry } = require('../../scripts/permission-hook.js');
+  const HOME = '/Users/someone';
+  const WS = '/Users/someone/ws';
+  const security = fs.readFileSync(path.join(ROOT, 'SECURITY.md'), 'utf-8');
+  const model = security.slice(security.indexOf('## What protects what'), security.indexOf('## Accepted dependency advisories'));
+  const passage = architecture.slice(architecture.indexOf('<!-- boundary-registry-start -->'), architecture.indexOf('<!-- boundary-registry-end -->'));
+  const start = architecture.indexOf('**The guarantee is the operating-system row, and only that row.**');
+  const guarantee = architecture.slice(start, architecture.indexOf('\n', start));
+
+  test('where the sandbox is on, both say it refuses a read of each sign-in file, as the block does', () => {
+    const on = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], 'knowledge');
+    assert.strictEqual(on.enabled, true, 'sanity: the Notes mode block turns the sandbox on');
+    assert.deepStrictEqual(on.filesystem.denyRead, secretsRegistry(HOME), 'sanity: and refuses reads of every sign-in file');
+    assert.match(guarantee, /\*\*governs writes and not reads\*\*, with one exception: a `denyRead` list/,
+      'the guarantee names the one read the operating system refuses');
+    assert.match(passage, /A read of each, which is all that stealing a token takes, is refused there too/,
+      'the registry passage says the operating system refuses the read as well as the write');
+    assert.doesNotMatch(passage, /The deny covers writes only/, 'and no longer says the deny covers writes only');
+    assert.match(model, /in Notes mode, or wherever the sandbox is on, they refuse a read of the runtimes' sign-in files as well as a write/,
+      'the permission model says the same');
+  });
+
+  test('where it is off, as in Code mode, both say the card alone guards those reads', () => {
+    const off = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], 'code');
+    assert.strictEqual(off.enabled, false, 'sanity: the Code mode block turns nothing on');
+    assert.match(passage, /the permission card alone holds the line for reads and writes/,
+      'the registry passage says the card alone guards where no block runs');
+    assert.match(model, /Code mode without the sandbox relies on the card alone for those reads/,
+      'the permission model says Code mode relies on the card alone');
+  });
+
+  test('both name the known limits: a runtime that drops the key, and a hard link, claimed neither way', () => {
+    assert.ok(fs.existsSync(path.join(ROOT, 'test', 'integration', 'credential-reads-real-sandbox.test.js')),
+      'the separate measurement the documents cite is there');
+    assert.match(passage, /holds only while the installed runtime honours `denyRead` \(measured on Claude Code [\d.]+; Rundock pins no version/,
+      'the registry passage names a runtime that drops the key');
+    assert.match(passage, /hard link[^.]*measured separately, by `test\/integration\/credential-reads-real-sandbox\.test\.js`, and this paragraph claims neither outcome/,
+      'and the hard link, claimed neither way');
+    assert.match(model, /a runtime version that stops honouring the sandbox's read rule/,
+      'the permission model names a runtime that drops the key as a known limit');
+    assert.match(model, /a hard link to a sign-in file[^.]*not claimed either way/,
+      'and the hard link, claimed neither way');
+  });
+});
