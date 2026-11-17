@@ -277,6 +277,26 @@ const MUTATIONS = [
     "const TREE_RECORDS_KEPT = 50;",
     "const TREE_RECORDS_KEPT = 5;"],
 
+  // ===== THE GATE SEES EVERY UNSTAGED CHANGE, THE FIRST ONE LISTED INCLUDED =====
+  // Read through git(), which trims, the first entry ` M name` lost its
+  // leading space and the one file that differed was dropped, so the checks
+  // ran on a tree the record did not name.
+  [GATE, "the status is read whole, never trimmed through git()",
+    "execFileSync('git', ['status', '--porcelain', '-z'], { cwd: root, encoding: 'utf8' })",
+    "git(['status', '--porcelain', '-z'], root)"],
+  [GATE, "an unstaged change is drift by its working-tree column",
+    "entry.startsWith('??') || (entry[1] && entry[1] !== ' ')",
+    "entry.startsWith('??')"],
+  [GATE, "a name is read from after its status columns",
+    "drift.push(entry.slice(3))",
+    "drift.push(entry.slice(2))"],
+  [GATE, "the first status entry is read",
+    "for (let i = 0; i < fields.length; i += 1) {",
+    "for (let i = 1; i < fields.length; i += 1) {"],
+  [GATE, "the status is read with -z, so no name comes back quoted",
+    "['status', '--porcelain', '-z'], { cwd: root, encoding: 'utf8' }).split('\\0')",
+    "['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).split('\\n')"],
+
   // ===== THE RELEASE GATE TAKES THE SUITE FROM CI, FOR THIS TREE ONLY =====
   [RELEASE_CI, "a required check CI has not passed refuses the gate",
     "  if (missing.length) {",

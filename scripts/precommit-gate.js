@@ -317,13 +317,24 @@ function currentTree(root = ROOT) {
  * the index and would not be in the record.
  *
  * Returns the offending paths, empty when the two agree.
+ *
+ * READ WHOLE, NOT THROUGH git(), which trims. A committed file changed and not
+ * staged is listed as ` M name`; first in the list and trimmed, its
+ * working-tree column read as a space and the one file that differed was
+ * dropped. `-z` also keeps every name exactly as it is on disk, where the plain
+ * format quotes a name with a space, a double quote or a non-ASCII character.
  */
 function workingTreeDrift(root = ROOT) {
-  const lines = git(['status', '--porcelain'], root).split('\n').filter(Boolean);
-  return lines
+  const fields = execFileSync('git', ['status', '--porcelain', '-z'], { cwd: root, encoding: 'utf8' }).split('\0');
+  const drift = [];
+  for (let i = 0; i < fields.length; i += 1) {
+    const entry = fields[i];
+    // A rename or a copy is followed by its old name, a field and not an entry.
+    if (/[RC]/.test(entry.slice(0, 2))) i += 1;
     // Column two is the working tree against the index; '??' is untracked.
-    .filter(line => line.startsWith('??') || (line[1] && line[1] !== ' '))
-    .map(line => line.slice(3));
+    if (entry.startsWith('??') || (entry[1] && entry[1] !== ' ')) drift.push(entry.slice(3));
+  }
+  return drift;
 }
 
 function readRecord(file = RECORD) {

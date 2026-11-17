@@ -9,9 +9,9 @@
 // refusal, the dead id must be gone from what the window holds and from what
 // the server stores, and the next message must carry the fresh session.
 //
-// IN A CONVERSATION OF ITS OWN, deleted afterwards, never a seeded one: the
-// specs share one server and one workspace, and a turn gives its conversation
-// a transcript.
+// IN A CONVERSATION OF ITS OWN, under ids made fresh for every run and deleted
+// afterwards, never a seeded one: the specs share one server and one
+// workspace, and a turn gives its conversation a transcript.
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -20,9 +20,22 @@ const credentials = require('./credentials.js');
 
 const PORT = Number(process.env.E2E_PORT || 34517);
 const STUB_VERSION = '2.1.318-stub';
-const CONVO = 'stale-session-e2e';
-const LIVE = 'e2e-live-orch-session';
-const DEAD = 'e2e-removed-lead-session';
+
+// IDS THAT NO EARLIER RUN HAS USED. Deleting a conversation does not clear
+// what the server keeps in memory under its ids for as long as it runs: the
+// lead's process stays alive and still takes the conversation's next message,
+// the transcript stays cached and is read back as the previous session, and a
+// session found dead stays known as dead, so saving it again drops it before
+// it can be refused. A repeat in the same server that reused the ids would
+// find all three. Under ids of its own, every run starts with none of them.
+function idsForThisRun() {
+  const run = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    CONVO: `stale-session-e2e-${run}`,
+    LIVE: `e2e-live-orch-session-${run}`,
+    DEAD: `e2e-removed-lead-session-${run}`,
+  };
+}
 
 function overWs(fn) {
   return new Promise((resolve, reject) => {
@@ -40,6 +53,7 @@ function overWs(fn) {
 }
 
 test('delegating to an agent whose stored session is gone answers fresh, says so plainly, and never sends the dead id again', async ({ page }) => {
+  const { CONVO, LIVE, DEAD } = idsForThisRun();
   const workspace = await overWs(async ({ send, waitFor }) => {
     send({ type: 'get_runtime_status' });
     const status = await waitFor((m) => m.type === 'runtime_status');
@@ -111,5 +125,7 @@ test('delegating to an agent whose stored session is gone answers fresh, says so
     fs.rmSync(scenario, { force: true });
     // Leave the shared workspace as the next spec expects it.
     await page.evaluate((id) => deleteConversation(id, { stopPropagation() {} }), CONVO).catch(() => {});
+    // Deleting keeps the conversation's transcript on disk, so it goes too.
+    fs.rmSync(path.join(workspace, '.rundock', 'transcripts', `${CONVO}.json`), { force: true });
   }
 });
