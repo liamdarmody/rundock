@@ -19,10 +19,10 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const {
   refusal, buildRecord, writeRecord, writeTreeRecord, readRecord, currentTree, defaultBranch,
-  isReleaseCommit, RELEASE_FOOTPRINT, stagedPaths, STEPS, OWNED_BY_CI,
+  isReleaseCommit, RELEASE_FOOTPRINT, stagedPaths, STEPS, OWNED_BY_CI, workingTreeDrift,
 } = require('../../scripts/precommit-gate.js');
 
 const TREE = 'a'.repeat(40);
@@ -481,6 +481,272 @@ describe('the tree that was checked is the tree that gets recorded', () => {
       const { code, out } = spawnGate(['--verify'], dir);
       assert.notStrictEqual(code, 0);
       assert.match(out, /is for branch "fix\/card"/, 'the refusal names the branch the record belongs to');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // WHAT FOLLOWS A REFUSAL, on one repository. Each test above is one run on a
+  // fresh repository, which proves a refusal and nothing about what comes
+  // next: that doing what it says clears it, that undoing the change clears
+  // it, and that asking again does not wear it down. Each step below is the
+  // real gate on the same repository, and every pass is held to the tree
+  // `git write-tree` gives at that moment, which is what a commit would take.
+  const recordFile = (dir) => path.join(dir, '.precommit-gate.json');
+  const keptRecords = (dir) => path.join(dir, '.precommit-gate');
+  const writeTree = (dir) => execFileSync('git', ['write-tree'], { cwd: dir, encoding: 'utf8' }).trim();
+
+  // A committed file changed and not staged, listed ` M a.txt`: the first and
+  // only entry `git status` prints.
+  function repoWithOneUnstagedChange() {
+    const { dir, run } = repoWithScripts(allStepsPass());
+    run('commit', '-q', '-m', 'initial');
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'changed, not staged\n');
+    return { dir, run };
+  }
+
+  function assertRefused(dir, { code, out }, step) {
+    assert.strictEqual(code, 1, `${step}: the unstaged change is refused\n${out}`);
+    assert.match(out, /does not match what is staged/, `${step}: and the refusal says why`);
+    assert.match(out, /^ {13}a\.txt$/m, `${step}: and names the file`);
+    assert.doesNotMatch(out, /\[precommit\] PASS/, `${step}: and claims no pass`);
+    assert.ok(!fs.existsSync(recordFile(dir)), `${step}: no record is written`);
+    assert.ok(!fs.existsSync(keptRecords(dir)), `${step}: and none is kept under a tree's name`);
+  }
+
+  function assertPassed(dir, { code, out }, step) {
+    assert.strictEqual(code, 0, `${step}: the gate passes\n${out}`);
+    const tree = writeTree(dir);
+    const record = readRecord(recordFile(dir));
+    assert.ok(record, `${step}: a record is written`);
+    assert.strictEqual(record.tree, tree, `${step}: naming the tree a commit would take now`);
+    assert.strictEqual(record.branch, 'fix/card', `${step}: on this branch`);
+    assert.match(out, new RegExp(`^\\[precommit\\] PASS\\. Record written for tree ${tree.slice(0, 12)} on fix/card\\.$`, 'm'),
+      `${step}: and the pass printed names that tree`);
+    return tree;
+  }
+
+  test('refused, then staged, the gate passes and records the tree now staged', () => {
+    const { dir, run } = repoWithOneUnstagedChange();
+    try {
+      const committed = writeTree(dir);
+      assertRefused(dir, spawnGate([], dir), 'refused');
+      assert.strictEqual(writeTree(dir), committed, 'the refusal leaves the index as it was');
+      // What the refusal says to do.
+      run('add', '-A');
+      const recorded = assertPassed(dir, spawnGate([], dir), 'staged');
+      assert.notStrictEqual(recorded, committed,
+        'the tree recorded holds the change just staged, not the tree as it was committed');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('refused, then the change undone, the gate passes and records the tree as committed', () => {
+    const { dir } = repoWithOneUnstagedChange();
+    try {
+      const committed = writeTree(dir);
+      assertRefused(dir, spawnGate([], dir), 'refused');
+      // Undone by hand, as an editor would: the same bytes written back, so
+      // the file is touched but no longer changed.
+      fs.writeFileSync(path.join(dir, 'a.txt'), 'first\n');
+      const recorded = assertPassed(dir, spawnGate([], dir), 'undone');
+      assert.strictEqual(recorded, committed,
+        'the tree recorded is the tree as it was committed, with nothing of the undone change');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('refused, then run again with nothing changed, the gate still refuses and still writes no record', () => {
+    const { dir } = repoWithOneUnstagedChange();
+    try {
+      const committed = writeTree(dir);
+      assertRefused(dir, spawnGate([], dir), 'first run');
+      assertRefused(dir, spawnGate([], dir), 'second run');
+      assert.strictEqual(writeTree(dir), committed, 'and neither refusal staged anything');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a status read that fails stops the gate with no record and no pass, though a change is left unstaged', () => {
+    // The status read is the only thing that sees the drift. Were its failure
+    // caught and read as nothing to report, as the index refresh before
+    // write-tree is, the gate would run the checks on the working tree and
+    // record the staged tree as checked. A status that cannot be read is not
+    // a status with nothing in it.
+    const { dir, run } = repoWithOneUnstagedChange();
+    try {
+      // An untracked-files mode git does not know. `git status` exits with an
+      // error, while the other git commands the gate runs read no status
+      // settings and still work. It needs no stand-in for git on the PATH, so
+      // it behaves the same on every platform.
+      run('config', 'status.showUntrackedFiles', 'not-a-mode');
+      const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+      assert.notStrictEqual(git('status', '--porcelain', '-z').status, 0, 'sanity: the status read fails here');
+      for (const args of [['branch', '--show-current'], ['update-index', '-q', '--refresh'], ['write-tree']]) {
+        assert.strictEqual(git(...args).status, 0,
+          `sanity: git ${args.join(' ')} still works, so the status read is the one thing that fails`);
+      }
+      const { code, out } = spawnGate([], dir);
+      assert.notStrictEqual(code, 0, `a status that cannot be read stops the gate\n${out}`);
+      assert.ok(!fs.existsSync(recordFile(dir)), 'no record is written');
+      assert.ok(!fs.existsSync(keptRecords(dir)), 'and none is kept under a tree\'s name');
+      assert.doesNotMatch(out, /\[precommit\] PASS/, 'and no pass is claimed');
+      assert.match(out, /git status/, 'and the failure reported is the status read');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('every unstaged change is seen, the first file git lists included', () => {
+  // A COMMITTED file changed and not staged is listed as ` M name`, and the
+  // leading space is its whole meaning: the index agrees with HEAD, the working
+  // tree does not. Read through a trim, the first such entry lost that space,
+  // read as no working-tree change, and was dropped, so the checks ran on one
+  // tree while the record named another. The test above stages a.txt without
+  // committing it, which lists as `AM` and never reached the case.
+  //
+  // Each repository here commits its files first, so a change is ` M`.
+  function committedRepo(names) {
+    const { dir, run } = tempRepo();
+    // Rename detection is git's default; set here so a global config that
+    // turns it off cannot change what these tests read.
+    run('config', 'status.renames', 'true');
+    for (const name of names) fs.writeFileSync(path.join(dir, name), 'first\n');
+    run('add', '-A');
+    run('commit', '-q', '-m', 'initial');
+    return { dir, run };
+  }
+
+  const change = (dir, name) => fs.writeFileSync(path.join(dir, name), 'changed, not staged\n');
+
+  // One committed file, changed and not staged, as the only entry: the gate
+  // must name it exactly as it is on disk.
+  function driftOfOneChange(name) {
+    const { dir } = committedRepo([name]);
+    try {
+      change(dir, name);
+      return workingTreeDrift(dir);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('a committed file changed and not staged, the only entry, is named exactly', () => {
+    assert.deepStrictEqual(driftOfOneChange('a.txt'), ['a.txt']);
+  });
+
+  test('the real gate refuses that change, names the file, and writes no record', () => {
+    const { dir, run } = repoWithScripts(allStepsPass());
+    try {
+      run('commit', '-q', '-m', 'initial');
+      change(dir, 'a.txt');
+      const { code, out } = spawnGate([], dir);
+      assert.notStrictEqual(code, 0, 'the one unstaged change is refused');
+      assert.match(out, /does not match what is staged/);
+      assert.match(out, /^ {13}a\.txt$/m, 'and the file is named on a line of its own');
+      assert.ok(!fs.existsSync(path.join(dir, '.precommit-gate.json')), 'no record is written');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the first of several unstaged changes is named, with every one after it', () => {
+    const names = ['a.txt', 'b.txt', 'c.txt'];
+    const { dir } = committedRepo(names);
+    try {
+      for (const name of names) change(dir, name);
+      assert.deepStrictEqual(workingTreeDrift(dir), names);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The plain status format quotes a name with a space, a double quote or a
+  // non-ASCII character as a C string, and shows a rename as `old -> new`.
+  // Each kind of name must come back as the file is named on disk.
+  test('a name with spaces comes back exactly as it is on disk', () => {
+    assert.deepStrictEqual(driftOfOneChange('two words.txt'), ['two words.txt']);
+  });
+
+  test('a name with a leading space keeps it', () => {
+    assert.deepStrictEqual(driftOfOneChange(' leading.txt'), [' leading.txt']);
+  });
+
+  test('a name with a double quote comes back unquoted and unescaped', {
+    skip: process.platform === 'win32' && 'Windows does not allow a double quote in a file name',
+  }, () => {
+    assert.deepStrictEqual(driftOfOneChange('say "hi".txt'), ['say "hi".txt']);
+  });
+
+  test('a non-ASCII name comes back as its characters, not as escaped bytes', () => {
+    assert.deepStrictEqual(driftOfOneChange('smørbrød.txt'), ['smørbrød.txt']);
+  });
+
+  test('a renamed file changed again is named by its new name, and its old name is not read as an entry', () => {
+    const { dir, run } = committedRepo(['before.txt']);
+    try {
+      run('mv', 'before.txt', 'after.txt');
+      change(dir, 'after.txt');
+      assert.deepStrictEqual(workingTreeDrift(dir), ['after.txt']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // What the gate allowed it still allows, and what it refused it still refuses.
+  test('a change staged whole passes', () => {
+    const { dir, run } = committedRepo(['a.txt']);
+    try {
+      change(dir, 'a.txt');
+      fs.writeFileSync(path.join(dir, 'b.txt'), 'new, staged\n');
+      run('add', '-A');
+      assert.deepStrictEqual(workingTreeDrift(dir), []);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a rename staged whole passes, its old name not read as a change', () => {
+    const { dir, run } = committedRepo(['before.txt']);
+    try {
+      run('mv', 'before.txt', 'after.txt');
+      assert.deepStrictEqual(workingTreeDrift(dir), []);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a file staged and then changed again is refused', () => {
+    const { dir, run } = committedRepo(['a.txt']);
+    try {
+      fs.writeFileSync(path.join(dir, 'a.txt'), 'staged\n');
+      run('add', 'a.txt');
+      change(dir, 'a.txt');
+      assert.deepStrictEqual(workingTreeDrift(dir), ['a.txt']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an untracked file is refused', () => {
+    const { dir } = committedRepo(['a.txt']);
+    try {
+      fs.writeFileSync(path.join(dir, 'new-test.js'), '// never staged\n');
+      assert.deepStrictEqual(workingTreeDrift(dir), ['new-test.js']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a file deleted from the working tree but not from the index is refused', () => {
+    const { dir } = committedRepo(['a.txt']);
+    try {
+      fs.rmSync(path.join(dir, 'a.txt'));
+      assert.deepStrictEqual(workingTreeDrift(dir), ['a.txt']);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
