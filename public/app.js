@@ -748,6 +748,22 @@ function handle(d) {
         renderCodexErrorPill(convoId, d);
         finishProcessing(convoId);
       }
+      // The runtime saying a summary has started, or that one stopped short.
+      if(d.subtype==='status' && convoId) {
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+      }
+      // A summary the runtime finished: one divider where it fell, and none
+      // for a summary this conversation already holds.
+      if(d.subtype==='compact_boundary' && convoId) {
+        const convo = conversations.find(c => c.id === convoId);
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {
+          knownCompactionKeys: (convo?.messages || []).filter(m => m && m.type === 'compaction').map(m => m.key),
+        });
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+      }
       break;
     case 'stream_event':
       if(convoId && !isStaleProcess(d, convoId)) handleStreamEvent(d, convoId);
@@ -1142,6 +1158,18 @@ const EFFECT_EXECUTORS = {
     const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime);
     if (actSummary && msgEl) msgEl.appendChild(actSummary);
   },
+  // Kept where it fell, as the server keeps it: in a conversation whose
+  // messages are loaded, so coming back draws it again (a conversation not
+  // loaded yet brings it with its history), and drawn only when on screen.
+  'insert-compaction-divider': (convoId, ef) => {
+    const convo = conversations.find(c => c.id === convoId);
+    if (convo && convo.messages.length) {
+      convo.messages.push({ role: 'system', type: 'compaction', key: ef.key, content: '', agentId: null, timestamp: new Date().toISOString() });
+    }
+    drawCompactionDivider(convoId, ef.key);
+  },
+  'show-summarising': (convoId) => { showSummarising(convoId); },
+  'clear-summarising': (convoId) => clearSummarising(convoId),
 };
 
 function executeEffects(convoId, effects) {

@@ -66,7 +66,19 @@
 //                                            // only alive for a few milliseconds
 //         "noise": true,                     // malformed line + unknown notification + ghost delta
 //         "crashMidTurn": true,              // exit(1) after the deltas
-//         "hangAfterDeltas": true            // never complete (interrupt tests)
+//         "hangAfterDeltas": true,           // never complete (interrupt tests)
+//         "compaction": {                    // the thread summarised to make room
+//           "afterDeltas": 0,                // 0: before the reply; N: the reply's
+//                                            // first item closes after N deltas and
+//                                            // a second item carries the rest
+//           "count": 1,                      // summaries in this turn
+//           "item": true,                    // contextCompaction item/started (+completed)
+//           "finish": true,                  // false: started, never completed
+//           "duplicate": false,              // the item/completed sent twice
+//           "notice": false,                 // the older thread/compacted notice too;
+//                                            // a number sends it that many times,
+//                                            // as a replay would
+//           "malformed": false }             // shapes missing their fields, instead
 //   } ] } }
 // First matching rule wins. Every invocation and every incoming app-server
 // request is appended to `stub-invocations.jsonl` (cwd) for spawn-argument,
@@ -263,7 +275,38 @@ function runAppServer() {
       send(asfx.agentMessageDelta(threadId, turnId, 'item_ghost', 'GHOST'));
     }
 
-    const agentItemId = `msg_${shortId}`;
+    // CONTEXT COMPACTION, in the order codex-cli 0.156.1 sends it
+    // (test/fixtures/compaction/codex-auto-compact.jsonl): a contextCompaction
+    // item started and completed BETWEEN agentMessage items, never inside one.
+    const cmp = rule.compaction || null;
+    const sendCompaction = async () => {
+      if (cmp.malformed) {
+        send({ method: 'item/started', params: { item: { type: 'contextCompaction' }, threadId, turnId } });
+        send({ method: 'item/completed', params: { item: { type: 'contextCompaction', id: 7 }, threadId, turnId } });
+        // An item with its id but no turn named.
+        send({ method: 'item/started', params: { item: { type: 'contextCompaction', id: `cmp_${shortId}_unrouted` }, threadId } });
+        send({ method: 'item/completed', params: { item: { type: 'contextCompaction', id: `cmp_${shortId}_unrouted` }, threadId } });
+        send({ method: 'thread/compacted', params: { threadId } });
+        send({ method: 'thread/compacted', params: { threadId, turnId: 'turn-of-another-thread' } });
+        send({ method: 'thread/compacted' });
+        return;
+      }
+      for (let i = 0; i < (cmp.count || 1); i++) {
+        const itemId = `cmp_${shortId}_${i}`;
+        if (cmp.item !== false) send(asfx.itemStartedContextCompaction(threadId, turnId, itemId));
+        await tick();
+        if (cmp.finish === false) continue;
+        if (cmp.item !== false) send(asfx.itemCompletedContextCompaction(threadId, turnId, itemId));
+        if (cmp.duplicate) send(asfx.itemCompletedContextCompaction(threadId, turnId, itemId));
+        const notices = cmp.notice === true ? 1 : (cmp.notice || 0);
+        for (let n = 0; n < notices; n++) send(asfx.threadCompacted(threadId, turnId));
+      }
+    };
+    if (cmp && !(cmp.afterDeltas > 0)) await sendCompaction();
+    if (t.finished) return;
+
+    let agentItemId = `msg_${shortId}`;
+    let splitAt = 0;
     send(asfx.itemStartedAgentMessage(threadId, turnId, agentItemId));
     let streamed = 0;
     for (const d of rule.deltas || []) {
@@ -272,6 +315,14 @@ function runAppServer() {
       if (t.finished) return;
       send(asfx.agentMessageDelta(threadId, turnId, agentItemId, d));
       streamed += 1;
+      if (cmp && streamed === cmp.afterDeltas) {
+        send(asfx.itemCompletedAgentMessage(threadId, turnId, agentItemId, rule.deltas.slice(0, streamed).join('')));
+        await sendCompaction();
+        if (t.finished) return;
+        splitAt = streamed;
+        agentItemId = `msg_${shortId}_after`;
+        send(asfx.itemStartedAgentMessage(threadId, turnId, agentItemId));
+      }
       // HOLD THE TURN OPEN UNTIL THE INTERRUPT LANDS, for a rule that asks.
       //
       // Without this a scripted turn is alive for about four milliseconds
@@ -296,7 +347,7 @@ function runAppServer() {
     await tick();
     await zombieGate();
     if (t.finished) return;
-    const finalText = text || (rule.deltas || []).join('');
+    const finalText = (splitAt ? '' : text) || (rule.deltas || []).slice(splitAt).join('');
     send(asfx.itemCompletedAgentMessage(threadId, turnId, agentItemId, finalText));
     send(asfx.tokenUsageUpdated(threadId, turnId, rule.usage || {}));
     send(asfx.accountRateLimitsUpdated());

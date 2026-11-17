@@ -185,6 +185,8 @@ function finishProcessing(convoId) {
     persistConversation(convo);
   }
 
+  // A summary still showing as under way when the turn ends never finished.
+  clearSummarising(convoId);
   if(isActive) {
     const tt=document.getElementById('thinking-indicator'); if(tt) tt.remove();
     document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
@@ -450,7 +452,7 @@ function renderCodexErrorPill(convoId, d) {
 function createHistoryDivider() {
   const divider = document.createElement('div');
   divider.id = 'history-divider';
-  divider.style.cssText = 'display:flex;align-items:center;gap:8px;padding:16px 0;color:var(--text-3);font-size:var(--caption)';
+  divider.style.cssText = 'display:flex;align-items:center;gap:8px;padding:16px 0;color:var(--text-2);font-size:var(--caption)';
   divider.innerHTML = `<div style="flex:1;height:1px;background:var(--border)"></div><span>Previous session</span><div style="flex:1;height:1px;background:var(--border)"></div>`;
   return divider;
 }
@@ -508,6 +510,12 @@ function renderSessionHistory(d) {
     // carries the visible handoff. Update lastAgentId so the divider triggers.
     if (msg.type === 'routing') {
       lastAgentId = msg.agentId || lastAgentId;
+      continue;
+    }
+    // Where the conversation was summarised to make room: its own divider,
+    // never a bubble, and never any words the entry carries.
+    if (msg.type === 'compaction') {
+      if (typeof msg.key === 'string' && msg.key) frag.appendChild(createSummarisedDivider({ key: msg.key }));
       continue;
     }
     const div = document.createElement('div');
@@ -578,7 +586,8 @@ function renderSessionHistory(d) {
     content: m.role !== 'user' ? stripRundockMarkers(m.content || '').trim() : m.content,
     agentId: m.agentId || convo.agentId,
     timestamp: m.timestamp || null,
-    isHistory: true
+    isHistory: true,
+    ...(m.type === 'compaction' ? { type: 'compaction', key: m.key } : {})
   }));
   // Prepend to existing messages (load-more adds older messages before existing ones)
   convo.messages = [...historyMsgs, ...convo.messages];
@@ -1797,6 +1806,173 @@ function scrollBottom(force) {
   if (!userScrolledUp) m.scrollTop=m.scrollHeight;
 }
 
+// ===== SUMMARISED DIVIDER =====
+// Where a long conversation was summarised to make room: the runtime kept a
+// summary of the turns above and carries on from it. Drawn only from a
+// compaction entry, live or stored, never from any text. The row holds a
+// button, so it is not marked as a separator. "Why?" opens the explanation
+// beneath, in place, and closes it again.
+let summarisedExplainSeq = 0;
+const SUMMARISED_EXPLANATION = 'Long conversations are summarised so the agent can carry on. It keeps a summary of everything above, and may not recall every detail. For a new topic, start a new conversation.';
+
+function summarisedGlyph() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  const attrs = { class: 'summarised-glyph', viewBox: '0 0 24 24', width: '12', height: '12', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false' };
+  for (const [name, value] of Object.entries(attrs)) svg.setAttribute(name, value);
+  for (const d of ['m7 20 5-5 5 5', 'm7 4 5 5 5-5']) {
+    const p = document.createElementNS(ns, 'path');
+    p.setAttribute('d', d);
+    svg.appendChild(p);
+  }
+  return svg;
+}
+
+function summarisedNowrap(...parts) {
+  const span = document.createElement('span');
+  span.className = 'summarised-nowrap';
+  span.append(...parts);
+  return span;
+}
+
+// The words and the "Why?" button, written into a divider's label.
+function fillSummarisedLabel(divider) {
+  const label = divider.querySelector('.summarised-label');
+  const explain = divider.querySelector('.summarised-explain');
+  const why = document.createElement('button');
+  why.type = 'button';
+  why.className = 'summarised-why';
+  why.setAttribute('aria-expanded', 'false');
+  why.setAttribute('aria-controls', explain.id);
+  why.textContent = 'Why?';
+  const setOpen = (open) => { why.setAttribute('aria-expanded', String(open)); explain.hidden = !open; };
+  why.addEventListener('click', () => setOpen(why.getAttribute('aria-expanded') !== 'true'));
+  // Escape closes it while it has focus, and does nothing else: the find bar's
+  // document-level Escape is left for when the explanation is already shut.
+  why.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || why.getAttribute('aria-expanded') !== 'true') return;
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(false);
+  });
+  label.replaceChildren(summarisedNowrap(summarisedGlyph(), 'Earlier'), ' messages were summarised to make ', summarisedNowrap('room', why));
+}
+
+function createSummarisedDivider(opts) {
+  const o = opts || {};
+  const divider = document.createElement('div');
+  divider.className = 'msg-summarised';
+  if (typeof o.key === 'string' && o.key) divider.dataset.compactionKey = o.key;
+  const row = document.createElement('div');
+  row.className = 'summarised-row';
+  const line = () => { const l = document.createElement('div'); l.className = 'summarised-line'; return l; };
+  const label = document.createElement('div');
+  label.className = 'summarised-label';
+  row.append(line(), label, line());
+  const explain = document.createElement('div');
+  explain.className = 'summarised-explain';
+  explain.id = `summarised-explain-${++summarisedExplainSeq}`;
+  explain.hidden = true;
+  explain.textContent = SUMMARISED_EXPLANATION;
+  divider.append(row, explain);
+  fillSummarisedLabel(divider);
+  return divider;
+}
+
+// Where a row goes in the conversation on screen: after what the agent has
+// said so far, and before the thinking indicator, which stays last while the
+// agent works.
+function placeSummarisedRow(m, row) {
+  const t = document.getElementById('thinking-indicator');
+  if (t && t.parentNode === m) t.before(row);
+  else m.appendChild(row);
+}
+
+// A summary the runtime finished, drawn in the conversation on screen and
+// nowhere else. One divider per key, whatever is already drawn. A summary in
+// the middle of a reply ends that reply's bubble here: the divider follows it,
+// and the rest of the reply starts a new bubble below with its own sender
+// line. streamTextAfterCut keeps the two apart, as it does for a put-back card.
+function drawCompactionDivider(convoId, key) {
+  const m = document.getElementById('messages');
+  if (!m || typeof key !== 'string' || !key || activeConversation?.id !== convoId) return null;
+  if ([...m.querySelectorAll('.msg-summarised')].some(el => el.dataset.compactionKey === key)) { clearSummarising(convoId); return null; }
+  const settling = summarisingRow(m, convoId);
+  const divider = settling ? settleSummarising(settling, key) : createSummarisedDivider({ key });
+  if (!settling) placeSummarisedRow(m, divider);
+  let state = null;
+  try { state = typeof getConvoState === 'function' ? getConvoState(convoId) : null; } catch (e) { state = null; }
+  const live = state && state.currentStreamingMsg && state.currentStreamingMsg.parentNode === m ? state.currentStreamingMsg : null;
+  const FOLLOWING = 4; // Node.DOCUMENT_POSITION_FOLLOWING
+  if (live && (live.compareDocumentPosition(divider) & FOLLOWING)) {
+    const next = live.cloneNode(true);
+    const text = next.querySelector('.streaming-text');
+    if (text) text.replaceChildren();
+    next.querySelectorAll('.activity-summary').forEach(el => el.remove());
+    // Hidden by the stylesheet until the rest of the reply arrives, so no
+    // empty bubble sits under the divider while the agent picks up again.
+    next.classList.add('summarised-continuation');
+    divider.after(next);
+    state.streamPrefix = typeof state.streamedText === 'string' ? state.streamedText : '';
+    state.currentStreamingMsg = next;
+  }
+  scrollBottom();
+  return divider;
+}
+
+// WHILE THE RUNTIME SUMMARISES, only from its own announcement that it has
+// started: the row the divider will settle into, saying so in a status region
+// a screen reader hears, with the reconnect card's waiting dot (held still
+// under reduced motion). One per conversation, drawn only when on screen.
+function summarisingRow(m, convoId) {
+  return [...m.querySelectorAll('.msg-summarised.summarising')].find(el => el.dataset.summarisingConvo === convoId) || null;
+}
+
+function showSummarising(convoId) {
+  const m = document.getElementById('messages');
+  if (!m || typeof convoId !== 'string' || activeConversation?.id !== convoId) return null;
+  const existing = summarisingRow(m, convoId);
+  if (existing) return existing;
+  const row = document.createElement('div');
+  row.className = 'msg-summarised summarising';
+  row.dataset.summarisingConvo = convoId;
+  const inner = document.createElement('div');
+  inner.className = 'summarised-row';
+  const line = () => { const l = document.createElement('div'); l.className = 'summarised-line'; return l; };
+  const label = document.createElement('div');
+  label.className = 'summarised-label';
+  label.setAttribute('role', 'status');
+  const dot = document.createElement('span');
+  dot.className = 'auth-pulse';
+  dot.setAttribute('aria-hidden', 'true');
+  label.append(dot, 'Summarising earlier messages…');
+  inner.append(line(), label, line());
+  row.append(inner);
+  placeSummarisedRow(m, row);
+  scrollBottom();
+  return row;
+}
+
+// Finished: the same row becomes the divider in place. Its label stays the
+// status region, so a screen reader hears the finish as it heard the start.
+function settleSummarising(row, key) {
+  const done = createSummarisedDivider({ key });
+  row.classList.remove('summarising');
+  delete row.dataset.summarisingConvo;
+  row.dataset.compactionKey = key;
+  row.querySelector('.summarised-label').replaceChildren(...done.querySelector('.summarised-label').childNodes);
+  row.append(done.querySelector('.summarised-explain'));
+  return row;
+}
+
+// A summary that will not finish: the runtime said so, or the turn ended,
+// failed or was stopped first. The live row goes, and no divider is drawn.
+function clearSummarising(convoId) {
+  const m = document.getElementById('messages');
+  const row = m ? summarisingRow(m, convoId) : null;
+  if (row) row.remove();
+}
+
 return {
   dispatchMessage, sendMessage, startProcessing, finishProcessing,
   cancelProcessing, handleActiveProcesses, addAgentMsg, addUserMsg,
@@ -1808,5 +1984,6 @@ return {
   resolvePermissionCard, handleOwnerlessPermissionRequest, endPermissionRequest,
   reconcilePendingPermissions,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,
+  createSummarisedDivider, drawCompactionDivider, showSummarising, clearSummarising,
 };
 }));

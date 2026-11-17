@@ -180,7 +180,7 @@ function showProfile(agentId) {
   if(existing.length) {
     h+=`<div class="profile-existing"><div class="profile-section-label">Existing conversations</div>`;
     for(const c of existing) {
-      const n = c.messageCount ?? c.messages.length;
+      const n = c.messageCount ?? c.messages.filter(m => m.type !== 'compaction').length;
       h+=`<div class="profile-existing-item" data-convo-id="${escA(c.id)}" onclick="openConversation(this.dataset.convoId)"><span class="profile-existing-title">${esc(c.title)}</span><span class="profile-existing-meta">${n} message${n === 1 ? '' : 's'}</span></div>`;
     }
     h+=`</div>`;

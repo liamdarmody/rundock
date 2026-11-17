@@ -421,6 +421,41 @@
     return { state: { ...state, lastStreamActivity: ctx.now }, effects: [] };
   }
 
+  // ── a long conversation summarised to make room ──────────────────────────
+
+  // FROM THE RUNTIME'S OWN EVENTS, NEVER FROM TEXT. Claude Code announces a
+  // summary with a status line (status 'compacting'), clears that status
+  // (null, with compact_result) and marks the finished summary with a
+  // compact_boundary system message. The server sends a Codex summary on in
+  // the same two shapes. Text an agent reads or writes arrives as stream
+  // deltas, assistant and user messages and tool results, none of which reach
+  // these reducers, so no words can draw a divider.
+  function reduceStatus(state, message) {
+    if (isStale(state, message)) return none(state);
+    if (message.status === 'compacting') {
+      return { state, effects: [{ type: 'show-summarising', agentId: message._agent || null }] };
+    }
+    // Cleared without success: the summary did not finish, and no divider
+    // follows. A success leaves the live line up for the boundary to settle.
+    if (message.status == null && message.compact_result != null && message.compact_result !== 'success') {
+      return { state, effects: [{ type: 'clear-summarising' }] };
+    }
+    return none(state);
+  }
+
+  // One divider per summary. The key is the runtime's own id for it (the
+  // boundary's uuid, or the Codex item id the server sends as the uuid), and
+  // ctx.knownCompactionKeys lists those this conversation already holds, so a
+  // repeat, a replay after a reconnect, or one already drawn from the history
+  // draws nothing. Not gated on the process: the server stored this summary
+  // when it saw it, so the live view shows what a reopen would.
+  function reduceCompactBoundary(state, message, ctx) {
+    const key = message.uuid;
+    if (typeof key !== 'string' || !key) return none(state);
+    if ((ctx.knownCompactionKeys || []).includes(key)) return { state, effects: [{ type: 'clear-summarising' }] };
+    return { state, effects: [{ type: 'insert-compaction-divider', key, agentId: message._agent || null }] };
+  }
+
   function reduceSystem(state, message, ctx) {
     switch (message.subtype) {
       case 'process_started': return reduceProcessStarted(state, message);
@@ -439,6 +474,8 @@
       // own turn.
       case 'agent_turn': return reduceAgentTurn(state, message, ctx);
       case 'keepalive': return reduceKeepalive(state, message, ctx);
+      case 'status': return reduceStatus(state, message);
+      case 'compact_boundary': return reduceCompactBoundary(state, message, ctx);
       default: return none(state);
     }
   }
