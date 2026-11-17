@@ -4955,15 +4955,21 @@ const MUTATIONS = [
   [SCAFFOLD_SETTINGS, 'Secret reach: a block written with the variable set is not recognized',
     '  const relocated = plain ? relocatedAsWritten(block.filesystem.denyWrite, plain.filesystem.denyWrite.length) : [];',
     '  const relocated = [];'],
-  // A working folder covers a secret its link leads into. Caught by: a
-  // credential file that links into a named working folder, by the Read tool.
+  // A working folder covers a secret its link leads into. A file tool path, or
+  // a shell word that names the secret, is still caught after this check, so
+  // only a workspace link by another name rests on it alone. Caught by: a
+  // credential file that links into a named working folder, read through a
+  // workspace link to it by another name, and a moved runtime home named as a
+  // working folder, its account file read the same way.
   [SECRET_REACH, 'Secret reach: a named working folder covers its secrets',
     '  if (pmod === path && isSecretPath(resolvedPath, home, foldsCase, spelled)) return false;',
     ''],
   // Both stops gone, so home, ~/.claude or ~/.codex named as a working folder
   // covers the secrets in it. Either stop alone still refuses them, which is
-  // why the pins need this row. Caught by: with each folder named, each
-  // registry file still asks.
+  // why the pins need this row. As above, only a workspace link by another
+  // name rests on these stops alone. Caught by: with each folder named, a
+  // shell read through a workspace link by another name, and the row above's
+  // tests.
   [SECRET_REACH, 'Secret reach: a named working folder at a runtime home covers its secrets',
     '  if (homeFor(resolvedPath, home, foldsCase)) return false;\n  // NOR A CREDENTIAL FILE REACHED THROUGH A LINK, wherever the link leads: a\n  // named `~/dotfiles` that holds the target of `~/.claude/.credentials.json`\n  // must not exempt it either.\n  if (pmod === path && isSecretPath(resolvedPath, home, foldsCase, spelled)) return false;',
     ''],

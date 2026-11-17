@@ -63,6 +63,15 @@ fs.mkdirSync(path.join(namedLinked, '.claude'), { recursive: true });
 fs.mkdirSync(path.join(namedLinked, 'dotfiles'));
 fs.writeFileSync(path.join(namedLinked, 'dotfiles', 'claude-credentials.json'), '{}');
 fs.symlinkSync(path.join(namedLinked, 'dotfiles', 'claude-credentials.json'), path.join(namedLinked, '.claude', '.credentials.json'));
+// A workspace that links to that credential file, and to an ordinary file in
+// the same folder, by names the registry does not hold: `alpha.json` and
+// `beta.md`. Nothing in either word names a secret, so only where the link
+// leads can tell them apart.
+const namedLinkWs = path.join(root, 'named-link-ws');
+fs.mkdirSync(namedLinkWs);
+fs.writeFileSync(path.join(namedLinked, 'dotfiles', 'example.md'), '');
+fs.symlinkSync(path.join(namedLinked, '.claude', '.credentials.json'), path.join(namedLinkWs, 'alpha.json'));
+fs.symlinkSync(path.join(namedLinked, 'dotfiles', 'example.md'), path.join(namedLinkWs, 'beta.md'));
 
 const POSIX = process.platform === 'win32' ? 'the home folder and links are read the POSIX way here' : false;
 const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
@@ -260,6 +269,15 @@ describe('a credential file that links into a named working folder is not covere
       const r = await ask(null, env, { homeDir: namedLinked, tool: 'Read', input: { file_path: path.join(namedLinked, 'dotfiles', 'notes.md') } });
       assert.strictEqual(r.decision, 'allow');
       assert.strictEqual(r.cards.length, 0);
+    });
+    // A workspace link to the credential file, by a name the registry does not
+    // hold, leads into the named folder too. No word names a secret, so the
+    // folder's own refusal to cover a secret is all that keeps it asking.
+    test(`${label}: a workspace link to it, by another name, asks as the secret`, async () => {
+      const opts = { homeDir: namedLinked, workspace: namedLinkWs };
+      for (const command of ['cat alpha.json', 'cat ./alpha.json']) assertSecretCrossing(await ask(command, env, opts), file, command);
+      // The control: a link to an ordinary file there is covered, as on main.
+      for (const command of ['cat beta.md', 'cat ./beta.md']) await assertAsOnMain(label, command, env, opts);
     });
   }
 });
@@ -465,6 +483,13 @@ fs.symlinkSync(path.join(BACKUPS, '.claude.json.backup.1800000000000'), path.joi
 fs.symlinkSync(path.join(linkWs, 'loop-b.json'), path.join(linkWs, 'loop-a.json'));
 fs.symlinkSync(path.join(linkWs, 'loop-a.json'), path.join(linkWs, 'loop-b.json'));
 
+// A workspace that links to each registry file by a name the registry does not
+// hold, so no word in `cat alpha.json` names a secret: only where it leads does.
+const aliasWs = path.join(root, 'alias-ws');
+const ALIASES = [['alpha.json', AT.credentials], ['beta.json', AT.config], ['gamma.json', AT.codexAuth], ['delta.json', AT.claudeJson], ['epsilon.json', AT.claudeJsonBackup]];
+fs.mkdirSync(aliasWs);
+for (const [link, file] of ALIASES) fs.symlinkSync(file, path.join(aliasWs, link));
+
 // A home whose registry files are links that resolve to nothing: the account
 // file round a loop, the credential file to a place that is not there.
 const loopHome = path.join(root, 'loop-home');
@@ -485,6 +510,8 @@ fs.mkdirSync(path.join(moved, 'backups'), { recursive: true });
 fs.mkdirSync(path.join(moved, 'projects'), { recursive: true });
 for (const f of Object.values(MOVED)) fs.writeFileSync(f, '{}');
 const MOVE = { CLAUDE_CONFIG_DIR: moved };
+// And a link to its account file, by another name, in the workspace above.
+fs.symlinkSync(MOVED.claudeJson, path.join(aliasWs, 'zeta.json'));
 
 const AT_HOME = { homeDir: atHome, workspace: atHome };
 const ELSEWHERE = { homeDir: atHome, workspace: ws };
@@ -669,6 +696,12 @@ describe('a working folder at home or a runtime home leaves its secrets asking',
       test(`${label}, ${name} named: a shell read`, async () => {
         for (const file of files) assertSecretCrossing(await ask(`cat ${file}`, env, ELSEWHERE), file, `cat ${path.relative(atHome, file)}`);
       });
+      // Through a workspace link by another name, the word names no secret, so
+      // only the named folder's refusal to cover a runtime home or a secret
+      // keeps the read asking.
+      test(`${label}, ${name} named: a shell read through a workspace link by another name`, async () => {
+        for (const [link, file] of ALIASES) assertSecretCrossing(await ask(`cat ${link}`, env, { homeDir: atHome, workspace: aliasWs }), file, `cat ${link}`);
+      });
     }
     test(`${label}, each folder named: a backup copy, by file tool and shell`, async () => {
       for (const [name, folder] of NAMED) {
@@ -743,6 +776,14 @@ describe('a runtime home moved by CLAUDE_CONFIG_DIR keeps its secrets', { skip: 
         assertSecretCrossing(await fileTool(tool, MOVED.copy, env, ELSEWHERE), MOVED.copy, `${tool} a backup copy`);
       });
     }
+    // Named as a working folder, the moved home is not a runtime home to the
+    // named folder's check, and its account file reached through a link by
+    // another name names no secret in the word: only that check's refusal to
+    // cover a secret keeps the read asking.
+    test(`${label}: named as a working folder, its account file through a workspace link by another name`, async () => {
+      const named = { ...env, RUNDOCK_EXTRA_DIRS: moved };
+      assertSecretCrossing(await ask('cat zeta.json', named, { homeDir: atHome, workspace: aliasWs }), MOVED.claudeJson, 'cat zeta.json');
+    });
     test(`${label}: the default homes keep theirs`, async () => {
       for (const file of [AT.credentials, AT.claudeJson, AT.codexAuth]) {
         assertSecretCrossing(await ask(`cat ${file}`, env, ELSEWHERE), file, `cat ${path.relative(atHome, file)}`);
