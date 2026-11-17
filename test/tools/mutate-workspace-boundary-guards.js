@@ -110,6 +110,9 @@ const SCAFFOLD_SWITCH = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'
 // The deny-list lengths the recogniser accepts, against the release history
 // written out in the sandbox settings suite.
 const SCAFFOLD_SETTINGS = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-settings.test.js' };
+// The block's read deny of the credential files, and the shapes it is
+// recognised in.
+const READ_DENY = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/sandbox-read-deny.test.js' };
 const WORKSPACE_HANDLER_SWITCH = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'workspace.js'), suite: 'test/unit/sandbox-switch.test.js' };
 // What the Permissions row reports as in force, and the switch's own writes.
 const SANDBOX_STATUS = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: 'test/unit/sandbox-status.test.js' };
@@ -666,7 +669,7 @@ const MUTATIONS = [
   // Drop the credential entries and the OS layer permits a write the card
   // layer always asks about: the two layers disagree about the same file again.
   [SCAFFOLD, 'the block denies the runtimes\' credential files',
-    '    ...credentialDenyFor(home),\n',
+    '    ...module.exports.credentialDenyFor(home),\n',
     ''],
   // Join a registry onto the wrong home and the deny names a file that is not
   // the credential, while the real one stays writable. The tie test reads the
@@ -683,8 +686,8 @@ const MUTATIONS = [
   // is a prefix of the new list: every existing workspace reads as a person's
   // edit and is never upgraded.
   [SCAFFOLD, 'the credential deny is appended, so earlier blocks stay recognisable and upgrade',
-    '    ...[...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES].map(f => path.posix.join(workspaceDir, f)),\n    ...credentialDenyFor(home),\n',
-    '    ...credentialDenyFor(home),\n    ...[...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES].map(f => path.posix.join(workspaceDir, f)),\n'],
+    '    ...[...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES].map(f => path.posix.join(workspaceDir, f)),\n    ...module.exports.credentialDenyFor(home),\n',
+    '    ...module.exports.credentialDenyFor(home),\n    ...[...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES].map(f => path.posix.join(workspaceDir, f)),\n'],
   // Stop recognising the narrower deny lists and the block an earlier release
   // wrote is a stranger's edit: never rewritten, never given the new deny.
   [SCAFFOLD, 'a block carrying an earlier, shorter deny list is still recognised as ours',
@@ -777,8 +780,8 @@ const MUTATIONS = [
   // release wrote is no longer a prefix: every existing workspace reads as a
   // person's edit and never gains them.
   [SCAFFOLD, 'the escape paths are appended after the credential files, so earlier blocks upgrade',
-    '    ...credentialDenyFor(home),\n    ...escapeDenyFor(workspaceDir, home),\n',
-    '    ...escapeDenyFor(workspaceDir, home),\n    ...credentialDenyFor(home),\n'],
+    '    ...module.exports.credentialDenyFor(home),\n    ...escapeDenyFor(workspaceDir, home),\n',
+    '    ...escapeDenyFor(workspaceDir, home),\n    ...module.exports.credentialDenyFor(home),\n'],
 
   // ===== THE BLOCK IS DRIVEN BY MODE, AND ONLY BY MODE =====
   // Ignore the mode and the switch writes the block for code mode too.
@@ -4863,6 +4866,37 @@ const MUTATIONS = [
   [TEAM_FOLDERS, 'Team folders: only the first path field present is checked',
     "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
     "  const targets = [ti.file_path || ti.notebook_path || ti.path].filter((v) => typeof v === 'string' && v);"],
+  // ===== THE BLOCK REFUSES READS OF THE CREDENTIAL FILES =====
+  // No read deny, and a sandboxed command reads a token the write deny keeps.
+  // Caught by: a read of each credential file is refused, in every shape.
+  [READ_DENY, 'Read deny: the block carries none',
+    '  filesystem.denyRead = module.exports.credentialDenyFor(home);\n',
+    ''],
+  // One file left readable. Caught by: the read deny is the registry, in order.
+  [READ_DENY, 'Read deny: one credential file is dropped from it',
+    '  filesystem.denyRead = module.exports.credentialDenyFor(home);',
+    '  filesystem.denyRead = module.exports.credentialDenyFor(home).slice(1);'],
+  // A second list of the same files, which drifts from the write deny's the
+  // first time one changes. Caught by: both denies follow the one function,
+  // replaced in-process.
+  [READ_DENY, 'Read deny: built from the registry arrays rather than the one function',
+    '  filesystem.denyRead = module.exports.credentialDenyFor(home);',
+    "  filesystem.denyRead = [...SECRET_RELATIVE_PATHS.map(f => path.posix.join(home, '.claude', f)), ...CODEX_SECRET_RELATIVE_PATHS.map(f => path.posix.join(home, '.codex', f)), ...HOME_SECRET_FILES.map(f => path.posix.join(home, f))];"],
+  // Every block on disk has no read deny, so none is recognised and none
+  // gains it. Caught by: every earlier shape is recognised and upgraded.
+  [READ_DENY, 'Read deny: a block written before it is no longer recognised',
+    '  if (block.filesystem && block.filesystem.denyRead) {\n    return [...priorDenyShapes(block).filter(writtenWithReadDeny), ...priorShapes(withoutDenyRead(block))];\n  }\n',
+    ''],
+  // Ahead of the write deny, so dropping it moves a key and the serialised
+  // comparison no longer matches. Caught by: it is the last key.
+  [READ_DENY, 'Read deny: placed before the write deny',
+    '  const filesystem = { allowWrite, denyWrite: denyWriteFor(allowWrite[0], home) };',
+    '  const filesystem = { allowWrite, denyRead: [], denyWrite: denyWriteFor(allowWrite[0], home) };'],
+  // Code mode's shape without it, where another layer turned the sandbox on.
+  // Caught by: the Code-mode shape carries it.
+  [READ_DENY, 'Read deny: Code mode\'s shape leaves it out',
+    "  if (mode === 'code' || mode === 'off') return { enabled: false, filesystem };",
+    "  if (mode === 'code' || mode === 'off') return { enabled: false, filesystem: withoutDenyRead({ filesystem }).filesystem };"],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

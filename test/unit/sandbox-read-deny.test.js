@@ -58,6 +58,25 @@ describe('the block refuses reads of the credential files as well as writes', ()
     }
   });
 
+  test('both denies take their credential entries from the one function that lists them, never from a list of their own', (t) => {
+    // Values alone cannot tell a read deny that calls that function from one
+    // built beside it out of the same registry arrays: both name the same
+    // files. So the function is replaced, in-process, with one returning
+    // made-up entries, and both denies must carry exactly those and no
+    // credential path from anywhere else.
+    const made = ['/made-up/first-token.json', '/made-up/second-token.json'];
+    t.mock.method(scaffold, 'credentialDenyFor', () => [...made]);
+    for (const shape of [...SHAPES, 'knowledge', 'code']) {
+      const { denyWrite, denyRead } = blockFor(shape).filesystem;
+      assert.deepStrictEqual(denyRead, made, `${shape}: the read deny is what the function returned`);
+      const first = denyWrite.indexOf(made[0]);
+      assert.deepStrictEqual(denyWrite.slice(first, first + made.length), made,
+        `${shape}: and so is the write deny's credential run`);
+      const elsewhere = registry().filter((secret) => denyWrite.includes(secret) || denyRead.includes(secret));
+      assert.deepStrictEqual(elsewhere, [], `${shape}: no credential path reaches either deny by another route`);
+    }
+  });
+
   test('a credential added to the registry is refused for reads and writes, with no change to the block\'s code', () => {
     // The registry arrays are the hook's own, shared by reference with the
     // module that builds the block, so an entry pushed here is one the next
