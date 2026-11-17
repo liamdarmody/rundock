@@ -12,6 +12,7 @@ const { reconcileOnLaunch, recordDownloaded } = require('./update-launches.js');
 const { wizardSize } = require('./wizard-size.js');
 const { installWindowKey, debugSwitchIn } = require('./window-key.js');
 const { createShellConfigDir } = require('./shell-config-dir.js');
+const { createSignInReason } = require('./sign-in-reason.js');
 
 // A shipped build never starts with a debugging port open: whatever connected
 // to it could drive this process and read the key its window is given
@@ -64,6 +65,11 @@ if (userData.kind === 'path') {
 const shellConfigDir = createShellConfigDir({
   isPackaged: app.isPackaged, platform: process.platform, env: process.env, appData: app.getPath('userData'),
 });
+
+// Why the last Claude sign-in check failed, cleaned in this process before the
+// wizard may show it (electron/sign-in-reason.js). The check still answers
+// only true or false, so the routing above decides exactly as before.
+const signInReason = createSignInReason();
 
 // ===== SINGLE INSTANCE =====
 
@@ -150,11 +156,17 @@ function ensureClaudeOnUserPath(binDir) {
   }
 }
 
+// Every stream is piped, so the check's output reaches only signInReason and
+// never this process's own stderr. stdio: 'pipe' changes where stderr goes,
+// not how much is held: with no stdio option execSync pipes stderr too, holds
+// it under the same maxBuffer, and only then writes it to this stderr.
 function isClaudeAuthenticated() {
   try {
-    execSync('claude --print "test" --output-format text', { timeout: 15000 });
+    execSync('claude --print "test" --output-format text', { timeout: 15000, stdio: 'pipe' });
+    signInReason.passed();
     return true;
-  } catch {
+  } catch (err) {
+    signInReason.failed(err);
     return false;
   }
 }
@@ -264,7 +276,11 @@ function showWizard() {
         // Claude is installed: make sure its directory is on the user's PATH so
         // they can simply type `claude` in a new terminal to sign in.
         ensureClaudeOnUserPath(path.dirname(bin));
-        if (!(await shellConfigDir.checkAuthenticated(isClaudeAuthenticated))) return { status: 'not-authenticated' };
+        // Nothing runs between the check's last run and this read, so the
+        // reason is that run's own.
+        if (!(await shellConfigDir.checkAuthenticated(isClaudeAuthenticated))) {
+          return { status: 'not-authenticated', reason: signInReason.last() };
+        }
         return { status: 'ready' };
       })();
       return { claude, codex: detectCodexForWizard() };
