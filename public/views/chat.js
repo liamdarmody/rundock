@@ -185,6 +185,8 @@ function finishProcessing(convoId) {
     persistConversation(convo);
   }
 
+  // A summary still showing as under way when the turn ends never finished.
+  clearSummarising(convoId);
   if(isActive) {
     const tt=document.getElementById('thinking-indicator'); if(tt) tt.remove();
     document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
@@ -314,7 +316,9 @@ function buildDelegationDivider(agentData, opts = {}) {
 // notice by itself when they have finished: the server learns Claude Code is
 // connected only from a turn that works, so the card waits for "I've
 // reconnected" and runs that one check then. Where no console can be opened it
-// shows the steps to run. Every state is fixed copy, and none says "sign in".
+// shows the steps to run. Every state is fixed copy, and none says "sign in",
+// with one exception: a check that could not start Claude Code because its npm
+// package could not be read shows the server's own words for that, as text.
 const AUTH_DOCS = '<a href="https://docs.rundock.ai/troubleshooting/authentication" target="_blank" rel="noopener">';
 const authTitle = (t, pulse) => `<div class="auth-error-title">${pulse ? '<span class="auth-pulse" aria-hidden="true"></span>' : ''}${t}</div>`;
 const authBody = (t) => `<div class="auth-error-body">${t}</div>`;
@@ -354,10 +358,11 @@ const AUTH_CARD = {
     + `<ol class="auth-error-steps"><li>Open a terminal and run <code>${AUTH_LOGIN_CMD}</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li></ol>`
     + `<div class="auth-error-foot">Then resend your message. ${AUTH_DOCS}Full steps and details &#x2192;</a></div>`],
 };
-function drawAuthCard(el, state) {
+function drawAuthCard(el, state, said) {
   const [tone, html] = AUTH_CARD[state];
   el.className = 'auth-error-card' + (tone ? ` ${tone}` : '');
   el.innerHTML = html;
+  if (said) el.querySelector('.auth-error-body').textContent = said;
   el.querySelectorAll('[data-auth]').forEach(b => b.addEventListener('click', () => authCardAction(el, b.dataset.auth)));
 }
 // Open the console: through the desktop's main process where there is one,
@@ -372,7 +377,8 @@ async function authCardAction(el, action) {
   if (action === 'check') {
     drawAuthCard(el, 'checking');
     const r = await fetch('/api/claude/connection', { method: 'POST' }).then(x => (x.ok ? x.json() : null), () => null);
-    drawAuthCard(el, r && r.connected === true ? 'reconnected' : (!r || r.known === false ? 'unchecked' : 'notyet'));
+    const state = r && r.connected === true ? 'reconnected' : (!r || r.known === false ? 'unchecked' : 'notyet');
+    drawAuthCard(el, state, state === 'unchecked' && r && typeof r.message === 'string' ? r.message : '');
     return;
   }
   const r = await Promise.resolve().then(reconnectClaude).catch(() => null);
@@ -446,7 +452,7 @@ function renderCodexErrorPill(convoId, d) {
 function createHistoryDivider() {
   const divider = document.createElement('div');
   divider.id = 'history-divider';
-  divider.style.cssText = 'display:flex;align-items:center;gap:8px;padding:16px 0;color:var(--text-3);font-size:var(--caption)';
+  divider.style.cssText = 'display:flex;align-items:center;gap:8px;padding:16px 0;color:var(--text-2);font-size:var(--caption)';
   divider.innerHTML = `<div style="flex:1;height:1px;background:var(--border)"></div><span>Previous session</span><div style="flex:1;height:1px;background:var(--border)"></div>`;
   return divider;
 }
@@ -504,6 +510,12 @@ function renderSessionHistory(d) {
     // carries the visible handoff. Update lastAgentId so the divider triggers.
     if (msg.type === 'routing') {
       lastAgentId = msg.agentId || lastAgentId;
+      continue;
+    }
+    // Where the conversation was summarised to make room: its own divider,
+    // never a bubble, and never any words the entry carries.
+    if (msg.type === 'compaction') {
+      if (typeof msg.key === 'string' && msg.key) frag.appendChild(createSummarisedDivider({ key: msg.key }));
       continue;
     }
     const div = document.createElement('div');
@@ -574,7 +586,8 @@ function renderSessionHistory(d) {
     content: m.role !== 'user' ? stripRundockMarkers(m.content || '').trim() : m.content,
     agentId: m.agentId || convo.agentId,
     timestamp: m.timestamp || null,
-    isHistory: true
+    isHistory: true,
+    ...(m.type === 'compaction' ? { type: 'compaction', key: m.key } : {})
   }));
   // Prepend to existing messages (load-more adds older messages before existing ones)
   convo.messages = [...historyMsgs, ...convo.messages];
@@ -634,12 +647,13 @@ function renderSessionHistory(d) {
 // it, so a reload rebuilds rather than forgets.
 const alwaysAllowedTools = new Set();
 
-// Requests that have ended, by id, and the queued copies of background
-// requests that ended before their conversation was opened. View-local for
+// Requests that have ended, by id, and the held copies of requests that ended
+// or were answered before their conversation was next opened. View-local for
 // the reason alwaysAllowedTools is: nothing outside the cards reads them.
 // The first is what makes a late copy of a card render as over instead of
-// answerable; the second is what lets a card that timed out off screen be
-// seen as timed out when its conversation is opened, rather than vanishing.
+// answerable; the second is what lets a card that timed out off screen, or
+// was answered, be seen settled when its conversation is opened, rather than
+// vanishing.
 const endedPermissions = new Map();
 const endedQueuedPermissions = new Map();
 
@@ -714,9 +728,9 @@ function handlePermissionRequest(d, convoId) {
   // suppressed at the button, because a key stored from an UNRELATED Write or
   // Edit approval would otherwise answer this one from the session's set, and
   // the user would never see that it had happened.
-  const decision = (req.boundary || req.answer_file === true)
+  const decision = (req.boundary || req.answer_file === true || req.credential === true)
     ? { action: 'card' }
-    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict);
+    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict, { toolName, input });
   const isActive = activeConversation?.id === convoId;
   const route = RundockPermissions.routePermissionRequest(decision, isActive);
   // A card that will be shown, here or when its conversation opens, is
@@ -739,6 +753,11 @@ function handlePermissionRequest(d, convoId) {
     return;
   }
   renderPermissionCard(d, convoId);
+  // Drawn on screen, and held as a background arrival is: switching
+  // conversations replaces the page, and the redraw on return draws only what
+  // is held. A copy of a card already answered here draws nothing and is not
+  // held again.
+  if (pendingPermissions.has(requestId)) RundockPermissions.queuePendingPermission(pendingPermissionsByConvo, convoId, requestId, d);
 }
 
 // Render one approval card into the active conversation's message list.
@@ -956,16 +975,19 @@ function connectorFieldsElement(f, toolName) {
   return frag;
 }
 
-function renderPermissionCard(d, convoId, host) {
+function renderPermissionCard(d, convoId, host, settled) {
   const req = d.request || {};
   const requestId = d.request_id || '';
   // A WS reconnect re-sends control_request for every pending request, but the
   // DOM (and any existing card) survive the reconnect, so guard against a
   // duplicate card, exactly as renderPendingPermissionCards does.
   if (requestId && document.getElementById('perm-' + requestId)) return;
+  // How the request ended, if it has. A card kept to be shown settled brings
+  // its own, since the record of ended requests keeps only the latest.
+  const ended = settled || RundockPermissions.permissionEnded(endedPermissions, requestId);
   // A change Rundock has already put back has a card of its own, unless the
   // request has ended, which is drawn settled like any other.
-  if (req.put_back && !RundockPermissions.permissionEnded(endedPermissions, requestId)) { renderPutBackCard(d, convoId, host); return; }
+  if (req.put_back && !ended) { renderPutBackCard(d, convoId, host); return; }
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
@@ -973,17 +995,18 @@ function renderPermissionCard(d, convoId, host) {
   // ENDED BEFORE IT WAS SHOWN. Every road to a card passes through here: a
   // live request, one queued for a background conversation, one replayed on
   // reconnect. A request that timed out, was answered, or lost its asker is
-  // drawn settled, saying why, with nothing to click.
-  const ended = RundockPermissions.permissionEnded(endedPermissions, requestId);
+  // drawn settled, saying why, with nothing to click. One answered on a card
+  // here says what that card said when it settled.
   if (ended) {
-    const copy = RundockPermissions.endedPermissionCopy(ended.reason, ended.allow);
+    const copy = RundockPermissions.endedPermissionCopy(ended.reason, ended.allow, ended.always);
     const m0 = host || document.getElementById('messages');
     if (!m0) return;
     const done = document.createElement('div');
     done.className = 'msg msg-permission';
     done.id = 'perm-' + requestId;
     m0.appendChild(done);
-    resolvePermissionCard(requestId, copy.allowed, copy.label, false, [summary, copy.why].filter(Boolean).join('. '));
+    resolvePermissionCard(requestId, copy.allowed, copy.label, false,
+      typeof ended.text === 'string' ? ended.text : [summary, copy.why].filter(Boolean).join('. '));
     return;
   }
   // The command, kept beside a crossing path rather than replaced by it.
@@ -1011,6 +1034,9 @@ function renderPermissionCard(d, convoId, host) {
   const crossingList = Array.isArray(req.crossings) ? req.crossings : [];
   const answerFile = req.answer_file === true
     || (crossingList.length > 0 && crossingList.every(c => c && c.answerFile));
+  // A read of a credential file the workspace holds: asked every time, with
+  // nothing to remember, and worded as inside, which is where the file is.
+  const credential = req.credential === true && !boundary && !answerFile;
   // A standing folder grant is only on offer when the crossing HAS a folder.
   // A shell command denied by the runtime sandbox and retried with the sandbox
   // turned off is a crossing established by the operating system, not by a
@@ -1091,6 +1117,11 @@ function renderPermissionCard(d, convoId, host) {
     summary = RundockPermissions.answerFileSummary(named, startupLabel);
     detail = startupLabel || req.resolved_path || detail;
     context = RundockPermissions.answerFileCopy(named, startupLabel);
+  } else if (credential) {
+    summary = 'Wants to read a sign-in credential in your workspace';
+    if (toolName === 'Bash' && detail) commandDetail = detail;
+    detail = req.resolved_path || detail;
+    context = RundockPermissions.alwaysAskCopy({ secret: true });
   } else if (boundary) {
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
     // A shell crossing does not say which act it is. The command may read,
@@ -1176,7 +1207,7 @@ function renderPermissionCard(d, convoId, host) {
   // and the closing sentence follow the boundary text.
   if (verdictCopy && !answerFile) {
     const said = [verdictCopy.sentence, verdictCopy.closing].filter(Boolean).join(' ');
-    context = boundary && context ? `${context} ${said}` : said;
+    context = (boundary || credential) && context ? `${context} ${said}` : said;
   }
 
   // WHAT A CONNECTOR'S EMAIL OR EVENT SAYS, on the card that approves it. Only
@@ -1190,7 +1221,7 @@ function renderPermissionCard(d, convoId, host) {
   // reading or building it throws, the card is the plain one it would have been.
   let fields = null;
   let fieldsBox = null;
-  if (!boundary && !answerFile && !verdictCopy && typeof RundockConnectorFields !== 'undefined') {
+  if (!boundary && !answerFile && !credential && !verdictCopy && typeof RundockConnectorFields !== 'undefined') {
     try {
       fields = RundockConnectorFields.connectorFields(toolName, input);
       if (fields) {
@@ -1228,7 +1259,7 @@ function renderPermissionCard(d, convoId, host) {
   // outside path is not automatically dangerous, and grading it as though it
   // were would put a red card in front of ordinary work until the colour meant
   // nothing.
-  const renderRisk = boundary ? 'high'
+  const renderRisk = (boundary || credential) ? 'high'
     : (verdict && verdict.verdict === 'always-asks') ? 'high'
       : (verdict && verdict.verdict === 'asks-once') ? 'medium' : risk;
   // A connector send asks every time too: once a message has gone it cannot be
@@ -1284,7 +1315,7 @@ function renderPermissionCard(d, convoId, host) {
         <button class="btn-perm ${RundockPermissions.allowButtonClass(allowLabel, answerFile)}" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">${esc(allowLabel)}</button>
         ${wholeFolderOffered
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
-          : (!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
+          : (!boundary && !answerFile && !credential && key && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>
@@ -1504,22 +1535,27 @@ function streamTextAfterCut(state, text) {
   return prefix && t.startsWith(prefix) ? t.slice(prefix.length) : t;
 }
 
-// Append cards for any approval requests that arrived while this
-// conversation was in the background. Idempotent: a card already in the DOM
-// is skipped, and entries stay queued until answered or timed out, so
-// switching away and back re-renders them. Called when a conversation
-// becomes the active view (openConversation).
+// Append cards for every approval request this conversation holds, whether it
+// arrived in the background or was drawn while the conversation was on
+// screen. Idempotent: a card already in the DOM is skipped, and entries stay
+// held until answered or ended, so switching away and back re-renders them.
+// Called when a conversation becomes the active view (openConversation, and
+// createConversation for a new one).
 function renderPendingPermissionCards(convoId) {
   if (activeConversation?.id !== convoId) return;
+  // A conversation left with a card still open waits on the person, as one
+  // whose card arrived in the background does.
+  const waiting = RundockPermissions.waitingConversations(pendingPermissionsByConvo, convoId);
+  for (const id of waiting) unread.markPermission(id);
+  if (waiting.length) updateUnreadBadge();
   if (!document.getElementById('messages')) return;
-  // Requests that ended while this conversation was in the background are
-  // shown once, as ended, so the thread says it asked and why nothing came of
-  // it. Once drawn they are dropped, the way an answered card is not redrawn
-  // when a conversation is reopened.
+  // Requests that ended, or were answered here, since this conversation was
+  // last drawn are shown once, settled, so the thread says it asked and what
+  // came of it. Once drawn they are dropped, and a later return draws none.
   const ended = endedQueuedPermissions.get(convoId);
   if (ended) {
     endedQueuedPermissions.delete(convoId);
-    for (const d of ended.values()) renderPermissionCard(d, convoId);
+    for (const kept of ended.values()) renderPermissionCard(kept.payload, convoId, undefined, kept.outcome);
   }
   for (const d of RundockPermissions.pendingPermissionsFor(pendingPermissionsByConvo, convoId)) {
     if (document.getElementById('perm-' + (d.request_id || ''))) continue;
@@ -1566,10 +1602,11 @@ function handleOwnerlessPermissionRequest(d) {
   if (RundockPermissions.permissionEnded(endedPermissions, requestId)) return;
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
-  const decision = (req.boundary || req.answer_file === true)
+  const decision = (req.boundary || req.answer_file === true || req.credential === true)
     ? { action: 'card' }
     : RundockPermissions.decidePermission(classifyRisk(toolName, input),
-      RundockPermissions.verdictAllowKey(req.code_mode_verdict) || toolAllowKey(toolName, input), alwaysAllowedTools, req.code_mode_verdict || undefined);
+      RundockPermissions.verdictAllowKey(req.code_mode_verdict) || toolAllowKey(toolName, input), alwaysAllowedTools, req.code_mode_verdict || undefined,
+      { toolName, input });
   if (decision && decision.action === 'allow') {
     if (ws) ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: '', allow: true }));
     return;
@@ -1598,10 +1635,11 @@ function endPermissionRequest(requestId, reason, allow) {
   if (!answeredHere) resolvePermissionCard(requestId, copy.allowed, copy.label, false);
   pendingPermissions.delete(requestId);
   const convoId = RundockPermissions.removePendingPermission(pendingPermissionsByConvo, requestId);
-  if (queued && convoId) {
-    let m = endedQueuedPermissions.get(convoId);
-    if (!m) { m = new Map(); endedQueuedPermissions.set(convoId, m); }
-    m.set(requestId, queued.payload);
+  if (queued && convoId) keepEndedCard(convoId, requestId, queued.payload);
+  // A card already kept says how it ended last: answered here, then too late.
+  for (const kept of endedQueuedPermissions.values()) {
+    const entry = kept.get(requestId);
+    if (entry) entry.outcome = RundockPermissions.permissionEnded(endedPermissions, requestId);
   }
   // L4: a background card that ended must clear its own contribution to the
   // unread badge. Only once the conversation has no other pending card, and
@@ -1613,6 +1651,16 @@ function endPermissionRequest(requestId, reason, allow) {
   }
   const t = document.getElementById('thinking-indicator');
   if (t) t.style.display = '';
+}
+
+// A request that ended, or was answered, while its card was held for a
+// conversation, kept to be shown once, settled, the next time that
+// conversation is opened. It keeps how it ended, so it never depends on the
+// record of ended requests, which forgets the oldest.
+function keepEndedCard(convoId, requestId, payload) {
+  let m = endedQueuedPermissions.get(convoId);
+  if (!m) { m = new Map(); endedQueuedPermissions.set(convoId, m); }
+  m.set(requestId, { payload, outcome: RundockPermissions.permissionEnded(endedPermissions, requestId) });
 }
 
 // After a reconnect the server names every request still pending. Anything
@@ -1628,8 +1676,9 @@ function respondPermission(requestId, allow, always, allowFolder) {
   if (!pending || !ws) return;
   if (RundockPermissions.permissionEnded(endedPermissions, requestId)) return;
   pendingPermissions.delete(requestId);
-  // Answered: the queued copy (if this card was rendered from the
-  // background store) must never render again.
+  // Answered: the copy held for its conversation must never render live
+  // again. It is kept to be shown once more, settled, on the next return.
+  const held = RundockPermissions.findPendingPermission(pendingPermissionsByConvo, requestId);
   RundockPermissions.removePendingPermission(pendingPermissionsByConvo, requestId);
 
   ws.send(JSON.stringify({
@@ -1644,8 +1693,9 @@ function respondPermission(requestId, allow, always, allowFolder) {
     toolInput: pending.toolInput || {}
   }));
 
-  // Store always-allow pattern if requested
-  if (allow && always) {
+  // Store always-allow pattern if requested. A request with no key has no
+  // Always allow on its card, and saves nothing however it is answered.
+  if (allow && always && pending.key) {
     alwaysAllowedTools.add(pending.key);
     // Written back so the answer outlives this tab. The cache is updated first
     // so the next card in the same session is silent whether or not the write
@@ -1654,8 +1704,15 @@ function respondPermission(requestId, allow, always, allowFolder) {
     try { ws.send(JSON.stringify({ type: 'add_tool_allow', key: pending.key })); } catch (e) {}
   }
 
-  // Replace the card with a resolved indicator
-  resolvePermissionCard(requestId, allow, allow ? (always ? '✓ Always' : '✓') : '✕', true);
+  // Replace the card with a resolved indicator. One held for its conversation
+  // is recorded as answered, with what it said, so any later copy of it is
+  // drawn just as settled, and the next return to that conversation shows it.
+  const copy = RundockPermissions.endedPermissionCopy('answered-here', allow, always);
+  const said = resolvePermissionCard(requestId, copy.allowed, copy.label, true);
+  if (held) {
+    RundockPermissions.markPermissionAnswered(endedPermissions, requestId, allow, always, said);
+    keepEndedCard(held.convoId, requestId, held.payload);
+  }
 
   // Resume thinking indicator
   const t = document.getElementById('thinking-indicator');
@@ -1669,7 +1726,8 @@ function respondPermission(requestId, allow, always, allowFolder) {
 //
 // keepSummary decides whether the card's own summary text is carried into the
 // resolved state. The user-answered path keeps it so the thread still reads as
-// a record of what was approved; the timeout path never showed it.
+// a record of what was approved; the timeout path never showed it. Returns
+// the words the settled card shows beside its label.
 function resolvePermissionCard(requestId, allowed, label, keepSummary, text) {
   const card = document.getElementById('perm-' + requestId);
   if (!card) return;
@@ -1686,6 +1744,7 @@ function resolvePermissionCard(requestId, allowed, label, keepSummary, text) {
     setTimeout(() => { card.remove(); updateApprovalsDock(); }, 4000);
     updateApprovalsDock();
   }
+  return summary;
 }
 
 function formatToolName(name) {
@@ -1747,6 +1806,173 @@ function scrollBottom(force) {
   if (!userScrolledUp) m.scrollTop=m.scrollHeight;
 }
 
+// ===== SUMMARISED DIVIDER =====
+// Where a long conversation was summarised to make room: the runtime kept a
+// summary of the turns above and carries on from it. Drawn only from a
+// compaction entry, live or stored, never from any text. The row holds a
+// button, so it is not marked as a separator. "Why?" opens the explanation
+// beneath, in place, and closes it again.
+let summarisedExplainSeq = 0;
+const SUMMARISED_EXPLANATION = 'Long conversations are summarised so the agent can carry on. It keeps a summary of everything above, and may not recall every detail. For a new topic, start a new conversation.';
+
+function summarisedGlyph() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  const attrs = { class: 'summarised-glyph', viewBox: '0 0 24 24', width: '12', height: '12', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false' };
+  for (const [name, value] of Object.entries(attrs)) svg.setAttribute(name, value);
+  for (const d of ['m7 20 5-5 5 5', 'm7 4 5 5 5-5']) {
+    const p = document.createElementNS(ns, 'path');
+    p.setAttribute('d', d);
+    svg.appendChild(p);
+  }
+  return svg;
+}
+
+function summarisedNowrap(...parts) {
+  const span = document.createElement('span');
+  span.className = 'summarised-nowrap';
+  span.append(...parts);
+  return span;
+}
+
+// The words and the "Why?" button, written into a divider's label.
+function fillSummarisedLabel(divider) {
+  const label = divider.querySelector('.summarised-label');
+  const explain = divider.querySelector('.summarised-explain');
+  const why = document.createElement('button');
+  why.type = 'button';
+  why.className = 'summarised-why';
+  why.setAttribute('aria-expanded', 'false');
+  why.setAttribute('aria-controls', explain.id);
+  why.textContent = 'Why?';
+  const setOpen = (open) => { why.setAttribute('aria-expanded', String(open)); explain.hidden = !open; };
+  why.addEventListener('click', () => setOpen(why.getAttribute('aria-expanded') !== 'true'));
+  // Escape closes it while it has focus, and does nothing else: the find bar's
+  // document-level Escape is left for when the explanation is already shut.
+  why.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || why.getAttribute('aria-expanded') !== 'true') return;
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(false);
+  });
+  label.replaceChildren(summarisedNowrap(summarisedGlyph(), 'Earlier'), ' messages were summarised to make ', summarisedNowrap('room', why));
+}
+
+function createSummarisedDivider(opts) {
+  const o = opts || {};
+  const divider = document.createElement('div');
+  divider.className = 'msg-summarised';
+  if (typeof o.key === 'string' && o.key) divider.dataset.compactionKey = o.key;
+  const row = document.createElement('div');
+  row.className = 'summarised-row';
+  const line = () => { const l = document.createElement('div'); l.className = 'summarised-line'; return l; };
+  const label = document.createElement('div');
+  label.className = 'summarised-label';
+  row.append(line(), label, line());
+  const explain = document.createElement('div');
+  explain.className = 'summarised-explain';
+  explain.id = `summarised-explain-${++summarisedExplainSeq}`;
+  explain.hidden = true;
+  explain.textContent = SUMMARISED_EXPLANATION;
+  divider.append(row, explain);
+  fillSummarisedLabel(divider);
+  return divider;
+}
+
+// Where a row goes in the conversation on screen: after what the agent has
+// said so far, and before the thinking indicator, which stays last while the
+// agent works.
+function placeSummarisedRow(m, row) {
+  const t = document.getElementById('thinking-indicator');
+  if (t && t.parentNode === m) t.before(row);
+  else m.appendChild(row);
+}
+
+// A summary the runtime finished, drawn in the conversation on screen and
+// nowhere else. One divider per key, whatever is already drawn. A summary in
+// the middle of a reply ends that reply's bubble here: the divider follows it,
+// and the rest of the reply starts a new bubble below with its own sender
+// line. streamTextAfterCut keeps the two apart, as it does for a put-back card.
+function drawCompactionDivider(convoId, key) {
+  const m = document.getElementById('messages');
+  if (!m || typeof key !== 'string' || !key || activeConversation?.id !== convoId) return null;
+  if ([...m.querySelectorAll('.msg-summarised')].some(el => el.dataset.compactionKey === key)) { clearSummarising(convoId); return null; }
+  const settling = summarisingRow(m, convoId);
+  const divider = settling ? settleSummarising(settling, key) : createSummarisedDivider({ key });
+  if (!settling) placeSummarisedRow(m, divider);
+  let state = null;
+  try { state = typeof getConvoState === 'function' ? getConvoState(convoId) : null; } catch (e) { state = null; }
+  const live = state && state.currentStreamingMsg && state.currentStreamingMsg.parentNode === m ? state.currentStreamingMsg : null;
+  const FOLLOWING = 4; // Node.DOCUMENT_POSITION_FOLLOWING
+  if (live && (live.compareDocumentPosition(divider) & FOLLOWING)) {
+    const next = live.cloneNode(true);
+    const text = next.querySelector('.streaming-text');
+    if (text) text.replaceChildren();
+    next.querySelectorAll('.activity-summary').forEach(el => el.remove());
+    // Hidden by the stylesheet until the rest of the reply arrives, so no
+    // empty bubble sits under the divider while the agent picks up again.
+    next.classList.add('summarised-continuation');
+    divider.after(next);
+    state.streamPrefix = typeof state.streamedText === 'string' ? state.streamedText : '';
+    state.currentStreamingMsg = next;
+  }
+  scrollBottom();
+  return divider;
+}
+
+// WHILE THE RUNTIME SUMMARISES, only from its own announcement that it has
+// started: the row the divider will settle into, saying so in a status region
+// a screen reader hears, with the reconnect card's waiting dot (held still
+// under reduced motion). One per conversation, drawn only when on screen.
+function summarisingRow(m, convoId) {
+  return [...m.querySelectorAll('.msg-summarised.summarising')].find(el => el.dataset.summarisingConvo === convoId) || null;
+}
+
+function showSummarising(convoId) {
+  const m = document.getElementById('messages');
+  if (!m || typeof convoId !== 'string' || activeConversation?.id !== convoId) return null;
+  const existing = summarisingRow(m, convoId);
+  if (existing) return existing;
+  const row = document.createElement('div');
+  row.className = 'msg-summarised summarising';
+  row.dataset.summarisingConvo = convoId;
+  const inner = document.createElement('div');
+  inner.className = 'summarised-row';
+  const line = () => { const l = document.createElement('div'); l.className = 'summarised-line'; return l; };
+  const label = document.createElement('div');
+  label.className = 'summarised-label';
+  label.setAttribute('role', 'status');
+  const dot = document.createElement('span');
+  dot.className = 'auth-pulse';
+  dot.setAttribute('aria-hidden', 'true');
+  label.append(dot, 'Summarising earlier messages…');
+  inner.append(line(), label, line());
+  row.append(inner);
+  placeSummarisedRow(m, row);
+  scrollBottom();
+  return row;
+}
+
+// Finished: the same row becomes the divider in place. Its label stays the
+// status region, so a screen reader hears the finish as it heard the start.
+function settleSummarising(row, key) {
+  const done = createSummarisedDivider({ key });
+  row.classList.remove('summarising');
+  delete row.dataset.summarisingConvo;
+  row.dataset.compactionKey = key;
+  row.querySelector('.summarised-label').replaceChildren(...done.querySelector('.summarised-label').childNodes);
+  row.append(done.querySelector('.summarised-explain'));
+  return row;
+}
+
+// A summary that will not finish: the runtime said so, or the turn ended,
+// failed or was stopped first. The live row goes, and no divider is drawn.
+function clearSummarising(convoId) {
+  const m = document.getElementById('messages');
+  const row = m ? summarisingRow(m, convoId) : null;
+  if (row) row.remove();
+}
+
 return {
   dispatchMessage, sendMessage, startProcessing, finishProcessing,
   cancelProcessing, handleActiveProcesses, addAgentMsg, addUserMsg,
@@ -1758,5 +1984,6 @@ return {
   resolvePermissionCard, handleOwnerlessPermissionRequest, endPermissionRequest,
   reconcilePendingPermissions,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,
+  createSummarisedDivider, drawCompactionDivider, showSummarising, clearSummarising,
 };
 }));

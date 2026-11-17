@@ -36,6 +36,8 @@
 //   { type:'usage', usage }                           this turn's token usage
 //   { type:'approval', kind, requestId, params, respond(decision) }
 //   { type:'error', message, kind, willRetry }
+//   { type:'compactionStarted' }                       the thread is being summarised
+//   { type:'compacted', key }                          ...and was, once per summary
 //   { type:'done', status, usage, error }             terminal, exactly once
 
 const { EventEmitter } = require('node:events');
@@ -43,6 +45,7 @@ const { spawn } = require('node:child_process');
 
 const { classifyCodexError, resolveCodexBin } = require('./codex.js');
 const { guardChildStdin } = require('./lib/runtime/child-stdin.js');
+const { CODEX, launchPlan, unstarted } = require('./lib/runtime/npm-launcher.js');
 
 // The log a client is given when it is given none: it says nothing.
 const NO_LOG = () => {};
@@ -101,6 +104,12 @@ const TURN_OPT_KEYS = ['model', 'cwd', 'effort', 'summary', 'approvalPolicy', 's
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// A record names the running turn only by that turn's own id, and an empty
+// id names no turn, even when the turn/start reply gave the turn an empty one.
+function namesActiveTurn(state, turnId) {
+  return typeof turnId === 'string' && turnId !== '' && turnId === state.turnId;
+}
+
 // ── Client ──────────────────────────────────────────────────────────────────
 
 class CodexAppServer extends EventEmitter {
@@ -109,6 +118,10 @@ class CodexAppServer extends EventEmitter {
     this._binPath = opts.binPath || resolveCodexBin();
     this._spawnCwd = opts.cwd || process.cwd();
     this._spawnEnv = opts.env || process.env;
+    // The platform the start is planned for, and the Node an npm launcher's
+    // entry point is started with (_spawn). A test stands others in here.
+    this._platform = opts.platform || process.platform;
+    this._execPath = opts.execPath || process.execPath;
     this._clientName = opts.clientName || 'rundock';
     this._clientVersion = opts.clientVersion || PKG_VERSION;
     this._requestTimeoutMs = opts.requestTimeoutMs ?? 30000;
@@ -211,9 +224,15 @@ class CodexAppServer extends EventEmitter {
   }
 
   _spawn() {
-    const proc = spawn(this._binPath, ['app-server'], {
+    // On Windows an npm launcher (`codex.cmd`) is never started: the entry
+    // point it names is, with Node, and inside the Electron app with
+    // ELECTRON_RUN_AS_NODE added for that start only. A package that cannot
+    // be read starts nothing: a stand-in fails as a start that could not run
+    // would, with the reason (lib/runtime/npm-launcher.js).
+    const launch = launchPlan(this._binPath, CODEX, { platform: this._platform, execPath: this._execPath });
+    const proc = launch.refusal ? unstarted(launch.refusal) : spawn(launch.program, [...launch.args, 'app-server'], {
       cwd: this._spawnCwd,
-      env: this._spawnEnv,
+      env: launch.env ? { ...this._spawnEnv, ...launch.env } : this._spawnEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this._proc = proc;
@@ -281,6 +300,7 @@ class CodexAppServer extends EventEmitter {
         ? `codex app-server failed to start: ${spawnError.message}`
         : `codex app-server exited before responding to ${pending.method}`);
       if (spawnError && spawnError.code) err.code = spawnError.code;
+      if (spawnError) err.cause = spawnError;
       pending.reject(err);
     }
     this._pending.clear();
@@ -485,6 +505,7 @@ class CodexAppServer extends EventEmitter {
       startedPromise: null,
       interruptFailsafeTimer: null, // armed by interruptTurn; see _armInterruptFailsafe
       interruptRetryTimer: null,    // one halfway-point interrupt re-send
+      compaction: { byItem: new Map(), current: null, activity: false, count: 0 }, // see _onCompaction
     };
     this._activeTurns.set(threadId, state);
 
@@ -665,6 +686,12 @@ class CodexAppServer extends EventEmitter {
       this._log(`codex app-server: dropping ${method} for turn ${notifTurnId} on thread ${params.threadId} (active turn is ${state.turnId})`);
       return;
     }
+    // Anything else this turn does keeps the summary records on either side
+    // of it apart (see _onCompaction).
+    if (state && typeof method === 'string' && method.startsWith('item/') && namesActiveTurn(state, notifTurnId)
+      && !(params.item && params.item.type === 'contextCompaction')) {
+      state.compaction.activity = true;
+    }
     switch (method) {
       case 'turn/started': {
         // Backup turnId source: the notification can beat the turn/start
@@ -679,6 +706,7 @@ class CodexAppServer extends EventEmitter {
         if (state && params.item && params.item.type === 'agentMessage') {
           state.agentItemIds.add(params.item.id);
         }
+        if (state && params.item && params.item.type === 'contextCompaction') this._onCompaction(state, 'started', params);
         return;
       }
       case 'item/agentMessage/delta': {
@@ -694,6 +722,11 @@ class CodexAppServer extends EventEmitter {
         if (state && params.item && params.item.type === 'agentMessage') {
           this._emitTurnEvent(state, { type: 'text', text: params.item.text || '' });
         }
+        if (state && params.item && params.item.type === 'contextCompaction') this._onCompaction(state, 'completed', params);
+        return;
+      }
+      case 'thread/compacted': {
+        if (state) this._onCompaction(state, 'notice', params);
         return;
       }
       case 'thread/tokenUsage/updated': {
@@ -729,6 +762,59 @@ class CodexAppServer extends EventEmitter {
       default:
         return; // unknown notifications are expected and ignored
     }
+  }
+
+  // ONE SUMMARY, ONE EVENT. Codex records a summary twice over: the
+  // contextCompaction item (started, then completed) and, on servers that
+  // still send it, the deprecated thread/compacted notice for the same turn.
+  // An item names its summary by its id; a notice carries only its thread
+  // and turn ids (ContextCompactedNotification in the protocol schema), so a
+  // notice sent again and a second summary announced by a notice alone are
+  // told apart only by what came between them. A summary takes new
+  // conversation to trigger, so between two real summaries in one turn the
+  // turn always does something else: an item/* record that is not a
+  // summary's (a message delta, a tool item, a reasoning item). Hence:
+  // - two item ids are always two summaries;
+  // - otherwise, a record with nothing else since the last summary record
+  //   belongs to that summary (a repeat, or a notice and its item in either
+  //   order), and one after other activity starts a new summary.
+  // Each summary emits 'compacted' once, keyed by its item id or, when it was
+  // first announced by a notice, by the turn id and its place in the turn, so
+  // each key belongs to one summary and the window's key-based dedupe keeps
+  // two apart while still dropping a replay. Limit: a notice repeated after
+  // other activity counts as a second summary. A record missing its ids is
+  // not a summary, and every record must name this turn by a nonempty id:
+  // routing above drops one naming another turn but lets through one naming
+  // none, and a turn whose id is empty or unknown draws nothing.
+  _onCompaction(state, kind, params) {
+    if (!namesActiveTurn(state, params.turnId)) return;
+    const c = state.compaction;
+    const last = c.activity ? null : c.current;
+    let summary = null;
+    if (kind === 'notice') {
+      summary = last;
+    } else {
+      const id = params.item.id;
+      if (typeof id !== 'string' || !id) return;
+      summary = c.byItem.get(id) || (last && last.itemId == null ? last : null);
+      if (summary) summary.itemId = id;
+    }
+    if (!summary) {
+      c.count += 1;
+      summary = { itemId: kind === 'notice' ? null : params.item.id, ordinal: c.count, started: false, emitted: false };
+    }
+    if (summary.itemId) c.byItem.set(summary.itemId, summary);
+    c.current = summary;
+    c.activity = false;
+    if (kind === 'started') {
+      if (summary.started || summary.emitted) return;
+      summary.started = true;
+      this._emitTurnEvent(state, { type: 'compactionStarted' });
+      return;
+    }
+    if (summary.emitted) return;
+    summary.emitted = true;
+    this._emitTurnEvent(state, { type: 'compacted', key: summary.itemId || `${state.turnId}:compacted:${summary.ordinal}` });
   }
 
   // ── Server-to-client requests (approvals; RESEARCH.md section 5) ─────────

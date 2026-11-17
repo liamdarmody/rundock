@@ -54,12 +54,13 @@ function isValidThreadId(id) {
 // ── Binary resolution ──────────────────────────────────────────────────────
 
 // Resolve the absolute path of the codex binary. Mirrors the Claude binary
-// resolution: the absolute path lets Node spawn .cmd shims on Windows
-// WITHOUT `shell: true`, which would expose prompt-bearing argv to command
-// injection. On Windows, npm distributes `codex` as a .cmd shim, so the .cmd
+// resolution. On Windows, npm distributes `codex` as a .cmd shim, so the .cmd
 // branch is the EXPECTED case there; a standalone .exe is preferred when both
-// exist. On lookup failure the bare command is returned so spawn's 'error'
-// event surfaces the real ENOENT.
+// exist. Node refuses to start a .cmd without a shell, and a shell would read
+// prompt-bearing argv as a command, so a .cmd found here is never started:
+// the app server starts the entry point its npm package names, with Node
+// (codex-appserver.js _spawn). On lookup failure the bare command is returned
+// so spawn's 'error' event surfaces the real ENOENT.
 function resolveCodexBin(deps = {}) {
   const platform = deps.platform || process.platform;
   const exec = deps.execSync || execSync;

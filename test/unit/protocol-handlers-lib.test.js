@@ -17,6 +17,7 @@ const { buildDispatch } = require('../../lib/protocol/handlers/index.js');
 const team = require('../../lib/protocol/handlers/team.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
+const { scanMarkers } = require('../../public/markers.js');
 
 // The full routing surface of the dispatch table, frozen: 65 message types
 // plus save_agent's two legacy aliases, 67 keys in all.
@@ -250,6 +251,41 @@ describe('dispatch table', () => {
       card.answer(0, true);
       assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers['local-tools'].args, ['server.js', '--port', '3001'], 'written once allowed');
       assert.strictEqual(w.sent[0].type, 'connector_saved');
+    });
+  });
+
+  // A connector body reaches this handler from the window's marker scan
+  // (public/app.js forwards each SAVE_CONNECTOR action's name and content as
+  // they are), so the fence rule a save body follows decides what is parsed.
+  const connectorReply = (inner) => `Adding it.\n<!-- RUNDOCK:SAVE_CONNECTOR name=local-tools -->\n${inner}<!-- /RUNDOCK:SAVE_CONNECTOR -->`;
+  const scannedConnector = (reply) => {
+    const [action] = scanMarkers(reply).actions;
+    return { name: action.name, content: action.content };
+  };
+
+  test('a connector body wrapped in a fence is unwrapped, and written once allowed', () => {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-wrapped-');
+    inWorkspace(dir, () => {
+      const msg = scannedConnector(connectorReply(`\`\`\`json\n${STDIO}\n\`\`\`\n`));
+      assert.strictEqual(msg.content, STDIO, 'the wrapper is removed');
+      const w = captureWs();
+      buildDispatch().save_connector(ctx, w, msg);
+      card.answer(0, true);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers['local-tools'], JSON.parse(STDIO));
+      assert.strictEqual(w.sent[0].type, 'connector_saved');
+    });
+  });
+
+  test('a connector body ending with a fence it never opened keeps it, and is refused as not valid JSON', () => {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-unopened-');
+    inWorkspace(dir, () => {
+      const msg = scannedConnector(connectorReply(`${STDIO}\n\`\`\`\n`));
+      assert.strictEqual(msg.content, `${STDIO}\n\`\`\``, 'the closing fence is kept');
+      const w = captureWs();
+      buildDispatch().save_connector(ctx, w, msg);
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: 'The connector entry is not valid JSON, so nothing was changed.' }]);
+      assert.strictEqual(card.asked.length, 0, 'nobody is asked about a body that cannot be read');
+      assert.ok(!fs.existsSync(file), 'and nothing is written');
     });
   });
 

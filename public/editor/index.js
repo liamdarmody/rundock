@@ -22,6 +22,7 @@ import { replaceProperty, editListItem, onlyEditedKeyChanged } from './markdown/
 import { extractFrontmatter } from './markdown/frontmatter.js';
 import { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState } from './plugins/find.js';
 import { createMissingLinksPlugin } from './plugins/missing-links.js';
+import { createWikilinkSuggestPlugin } from './plugins/wikilink-suggest.js';
 
 export { setFindQuery, findNext, findPrev, setFindIndex, clearFind, getFindState };
 
@@ -97,6 +98,9 @@ export function createEditor({
   // Optional: (target) -> void, called instead of onWikilinkClick for a link
   // the resolver says is missing, so the host can create the note.
   onCreateWikilink = null,
+  // Optional: () -> notes as [{ path, name, target }], or a promise of them.
+  // Typing [[ in the body lists them; called once each time the list opens.
+  listWikilinkTargets = null,
 }) {
   if (!element) throw new Error('createEditor: element is required');
 
@@ -193,6 +197,12 @@ export function createEditor({
     editor.registerPlugin(createMissingLinksPlugin(resolveWikilink, typeof onCreateWikilink === 'function'));
   }
   const detachWikilinks = wireWikilinkClicks(element, onWikilinkClick, { resolveWikilink, onCreateWikilink });
+
+  // Typing [[ suggests notes to link to. Registered first so its keys (Enter,
+  // Tab, the arrows) win over the editor's own while the list is open.
+  if (typeof listWikilinkTargets === 'function') {
+    editor.registerPlugin(createWikilinkSuggestPlugin(editor, { listWikilinkTargets }), (p, plugins) => [p, ...plugins]);
+  }
 
   _editorHandles.set(editor, {
     parts,

@@ -33,7 +33,7 @@ const { extractLinks } = require('./lib/links.js');
 
 // Bumping this rebuilds every index on next open. That is the whole migration
 // story: rebuild, never migrate.
-const SCHEMA_VERSION = 4; // 4: links table; 3: HTML/SVG artifact content + frontmatter values in file indexing
+const SCHEMA_VERSION = 5; // 5: compact summaries left out; 4: links table; 3: HTML/SVG artifact content + frontmatter values in file indexing
 
 const MAX_QUERY_LENGTH = 256;
 const MAX_QUERY_TOKENS = 12;
@@ -125,62 +125,10 @@ function displayTitle(relPath) {
 
 // ── Fuzzy title matcher ──────────────────────────────────────────────────────
 
-/**
- * Fzf-style subsequence scorer for the title/name layer (file names,
- * conversation titles, agent/skill names: all small in-memory corpora).
- * Content-level search stays lexical in FTS5; fuzziness applies to titles
- * only (titles only).
- *
- * Returns a numeric score (higher = better) or null when `needle` is not an
- * in-order subsequence of `haystack`. Scoring favours: consecutive runs,
- * word-boundary starts, early matches, and shorter haystacks.
- */
-function fuzzyScore(needle, haystack) {
-  if (!needle || !haystack) return null;
-  const n = String(needle).toLowerCase();
-  const h = String(haystack).toLowerCase();
-  if (n.length > h.length) return null;
-
-  // Exact substring: strong score, earlier + tighter is better.
-  // Acronym pass: needle matching the word initials ("cs" → "Conversation
-  // Search") outranks any mid-word substring hit. Checked before the
-  // substring branch so multi-word-initial intent wins.
-  const initials = h.split(/[^\p{L}\p{N}]+/u).filter(Boolean).map(w => w[0]).join('');
-  if (n.length >= 2 && initials.includes(n)) {
-    return 140 + n.length * 4 - Math.min(initials.indexOf(n), 10);
-  }
-
-  const sub = h.indexOf(n);
-  if (sub !== -1) {
-    let score = 100 + n.length * 4;
-    if (sub === 0 || /[^\p{L}\p{N}]/u.test(h[sub - 1])) score += 30; // boundary start
-    score -= Math.min(sub, 20); // earlier is better
-    score -= Math.min(h.length - n.length, 20) * 0.5; // tighter is better
-    return score;
-  }
-
-  // Subsequence walk with consecutive-run and boundary bonuses.
-  let score = 0, hi = 0, prevMatch = -2, matched = 0;
-  for (let ni = 0; ni < n.length; ni++) {
-    const ch = n[ni];
-    let found = -1;
-    while (hi < h.length) {
-      if (h[hi] === ch) { found = hi; hi++; break; }
-      hi++;
-    }
-    if (found === -1) return null;
-    matched++;
-    let charScore = 1;
-    if (found === prevMatch + 1) charScore += 4; // consecutive
-    if (found === 0 || /[^\p{L}\p{N}]/u.test(h[found - 1])) charScore += 6; // word boundary
-    charScore -= Math.min(found, 30) * 0.05; // early bias
-    score += charScore;
-    prevMatch = found;
-  }
-  if (matched !== n.length) return null;
-  score -= Math.min(h.length - n.length, 40) * 0.2; // shorter haystack bias
-  return score;
-}
+// The scorer lives in public/fuzzy-score.js so the browser ranks names with
+// the same function (the editor's wikilink suggestions). Exported from here
+// unchanged for every server-side caller.
+const { fuzzyScore } = require('./public/fuzzy-score.js');
 
 // ── Highlight markers ────────────────────────────────────────────────────────
 // snippet() output uses control characters as highlight delimiters so the
@@ -362,6 +310,12 @@ CREATE TABLE IF NOT EXISTS session_marks (
  */
 function extractIndexableMessage(obj) {
   if (!obj || typeof obj !== 'object') return null;
+  // The summary Claude Code writes when it makes room: a user line nobody
+  // typed, which can repeat anything said earlier. Never shown, never found.
+  // Its session file line is marked isCompactSummary; the same summary in
+  // Claude Code's output stream is a user line marked isSynthetic.
+  if (obj.isCompactSummary === true) return null;
+  if (obj.type === 'user' && obj.isSynthetic === true) return null;
   const tsMs = obj.timestamp ? Date.parse(obj.timestamp) || null : null;
   if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
     const text = obj.message.content.trim();
