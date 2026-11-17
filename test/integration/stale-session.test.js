@@ -89,7 +89,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const h = require('../helpers/harness.js');
 const { createState, reduce, forgetSession, resumeSessionFor } = require('../../public/conversation-state.js');
-const { REFUSAL, startingFresh } = require('../../lib/runtime/missing-session.js');
+const { REFUSAL, startingFresh, isExpired } = require('../../lib/runtime/missing-session.js');
 
 /** The name the team uses for an agent, which is what a person is told. */
 function nameOf(agentId) {
@@ -976,11 +976,289 @@ describe('a refusal that reaches the pipe in pieces', () => {
     const win = windowFor(record);
     const since = client.messages.length;
     win.send('ASK-AC hello');
-    await waitForResult(convoId, 'LEAD-FRESH-AC', since, 'the fresh start answers');
-    await h.delay(200);
+    const { index } = await waitForResult(convoId, 'LEAD-FRESH-AC', since, 'the fresh start answers');
+    await client.waitForEvent('system', 'done', convoId, { since: index, label: 'the turn ends', timeout: 15000 });
     assert.deepStrictEqual(messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content), [],
       'no piece of the refusal is shown');
     assert.strictEqual(messagesFor(convoId, since).filter(m => m.subtype === 'session_expired').length, 1);
+    assert.ok(!idsIn(stored(convoId)).includes('dead-lead-ac'), 'and the dead id is forgotten');
+    h.reapConvo(convoId);
+  });
+
+  // THE PIPE DECIDES THE GROUPING, NOT CLAUDE CODE. Its warning that it read no
+  // stdin can reach the server in the same chunk as a refusal, or as a real
+  // error, and neither may be lost with it. Each grouping is written by the
+  // stub exactly as named: one write is one chunk, and pieces are written a
+  // moment apart.
+  const WARNING = 'Warning: no stdin data received in 3s, proceeding without it\n';
+
+  /**
+   * A delegate resumed by an id Claude Code no longer has, its stderr written
+   * as `grouping` says, run until the turn started in its place has ended.
+   * `beforeSend` runs once the conversation is stored.
+   */
+  async function refusedDelegate(tag, grouping, beforeSend = () => {}) {
+    const convoId = h.freshConvoId(`stale-grouped-${tag}`);
+    const dead = `dead-lead-${tag}`;
+    const live = `live-orch-${tag}`;
+    const record = seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: live,
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: live }, { agentId: 'content-lead', sessionId: dead }],
+    });
+    scenario([
+      { match: { agent: 'content-lead', promptIncludes: `ASK-${tag}` }, turn: [{ text: `LEAD-FRESH-${tag}` }] },
+    ], [dead], grouping);
+    beforeSend(convoId);
+    const since = client.messages.length;
+    windowFor(record).send(`ASK-${tag} hello`);
+    const { index } = await waitForResult(convoId, `LEAD-FRESH-${tag}`, since, 'the fresh start answers');
+    await client.waitForEvent('system', 'done', convoId, { since: index, label: 'the turn ends', timeout: 15000 });
+    const mine = messagesFor(convoId, since);
+    return {
+      convoId, since, dead, live,
+      shown: mine.filter(m => m.type === 'error').map(m => m.content),
+      notices: mine.filter(m => m.subtype === 'session_expired').map(m => m.sessionId),
+      info: mine.find(m => m.subtype === 'info') || null,
+      kept: idsIn(stored(convoId)),
+    };
+  }
+
+  /** Recognized, nothing of it or the warning shown, and forgotten once. */
+  function assertRefusalHandled(r) {
+    assert.deepStrictEqual(r.shown, [], 'neither the warning nor any piece of the refusal is shown');
+    assertNoRawRefusal(r.convoId, r.since);
+    assert.deepStrictEqual(r.notices, [r.dead], 'one notice, for the dead id');
+    assert.strictEqual(r.info && r.info.expiredSessionId, r.dead, 'the fresh start names the session the window must forget');
+    assert.ok(!r.kept.includes(r.dead), `the dead id is gone from the stored conversation: ${r.kept}`);
+    assert.ok(r.kept.includes(r.live), 'and the live one is kept');
+  }
+
+  test('the warning and the whole refusal in one write: recognized, nothing shown, forgotten once', async () => {
+    const r = await refusedDelegate('g1', { refusalPreamble: WARNING, refusalPreambleJoined: true });
+    assertRefusalHandled(r);
+    h.reapConvo(r.convoId);
+  });
+
+  test('the warning and the first piece of the refusal in one write, the rest later: recognized, nothing shown, forgotten once', async () => {
+    const r = await refusedDelegate('g2', { refusalPreamble: WARNING, refusalPreambleJoined: true, refusalSplitAt: 12 });
+    assertRefusalHandled(r);
+    h.reapConvo(r.convoId);
+  });
+
+  test('the warning, then the refusal: recognized, nothing shown, forgotten once', async () => {
+    const r = await refusedDelegate('g3', { refusalPreamble: WARNING });
+    assertRefusalHandled(r);
+    h.reapConvo(r.convoId);
+  });
+
+  test('the refusal with no warning: recognized, nothing shown, forgotten once', async () => {
+    const r = await refusedDelegate('g4', {});
+    assertRefusalHandled(r);
+    h.reapConvo(r.convoId);
+  });
+
+  test('the warning alone on a run that is not refused: nothing shown, nothing forgotten', async () => {
+    const convoId = h.freshConvoId('stale-grouped-g5');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-g5', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-g5' }] });
+    // The run ends once it has answered, so its stderr has all been read when
+    // the process is gone.
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-G5' }, stderr: WARNING, turn: [{ text: 'LIVE-G5' }], exitAfterTurn: 0 },
+    ], []);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-G5 hi', sessionId: 'live-orch-g5' });
+    await waitForResult(convoId, 'LIVE-G5', since, 'the resumed turn answers');
+    assert.ok(await h.waitUntil(() => !h.internal.chatProcesses.has(convoId), { timeout: 15000 }), 'the run has ended');
+    await settled();
+    assert.deepStrictEqual(messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content), [], 'the warning is not shown');
+    assert.ok(!messagesFor(convoId, since).some(m => m.subtype === 'session_expired' || m.subtype === 'info'), 'nothing is forgotten or started again');
+    assert.ok(idsIn(stored(convoId)).includes('live-orch-g5'), 'the session is kept');
+    assert.deepStrictEqual(spawnsFor(convoId).map(i => i.resume), ['live-orch-g5'], 'resumed once');
+    h.reapConvo(convoId);
+  });
+
+  test('the warning and a real error line in one write: the error shown, the warning not', async () => {
+    const convoId = h.freshConvoId('stale-grouped-g6');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-g6', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-g6' }] });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-G6' }, crash: 1, stderr: `${WARNING}Error: the run stopped before it could answer\n` },
+    ], []);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-G6 hi', sessionId: 'live-orch-g6' });
+    await client.waitForEvent('system', 'done', convoId, { since, label: 'the failed turn ends', timeout: 15000 });
+    assert.deepStrictEqual(messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content),
+      ['Error: the run stopped before it could answer\n'], 'the error is shown once, without the warning');
+    assert.ok(!messagesFor(convoId, since).some(m => m.subtype === 'session_expired'), 'and nothing is forgotten');
+    assert.ok(idsIn(stored(convoId)).includes('live-orch-g6'));
+    h.reapConvo(convoId);
+  });
+
+  test('in one write or apart, a refusal ends the same: one notice, the id named and forgotten, the team note put back', async () => {
+    const teamNotes = require('../../lib/agents/team-notes.js');
+    async function outcome(tag, grouping) {
+      const given = { kind: 'save_agent', name: `helper-${tag}`, author: 'content-lead', outcome: 'refused' };
+      const r = await refusedDelegate(tag, grouping, (convoId) => teamNotes.keepOutcomes(convoId, [given]));
+      const note = teamNotes.seams.build([given]);
+      const prompts = h.promptsFor('content-lead').filter(p => p.includes(`ASK-${tag}`));
+      h.reapConvo(r.convoId);
+      return {
+        shown: r.shown,
+        notices: r.notices.map(id => (id === r.dead ? 'the dead id' : id)),
+        infoNamesIt: Boolean(r.info && r.info.expiredSessionId === r.dead),
+        stillStored: r.kept.includes(r.dead),
+        notedExpired: isExpired(r.dead),
+        freshTurnTold: prompts.length === 1 && prompts[0].startsWith(note),
+      };
+    }
+    const apart = await outcome('g7a', { refusalPreamble: WARNING });
+    const together = await outcome('g7b', { refusalPreamble: WARNING, refusalPreambleJoined: true });
+    assert.deepStrictEqual(apart, {
+      shown: [], notices: ['the dead id'], infoNamesIt: true, stillStored: false, notedExpired: true, freshTurnTold: true,
+    }, 'written apart');
+    assert.deepStrictEqual(together, apart, 'in one write it ends the same as written apart');
+  });
+
+  /** A parent restored by an id Claude Code no longer has: nothing to start again with. */
+  async function refusedRestore(tag, convoId) {
+    h.internal.chatProcesses.set(convoId, {
+      agentId: 'chief-of-staff', processId: `p-gone-${tag}`, exited: true, scopeReturnSource: 'content-lead', toolCalls: [],
+    });
+    const since = client.messages.length;
+    h.internal.handleDelegation({
+      conversationId: convoId, targetAgent: 'content-lead', context: 'again', _intercepted: true,
+      _parentSessionId: `dead-orch-${tag}`, _parentAgentId: 'chief-of-staff',
+    }, h.internal.chatProcesses);
+    await client.waitForEvent('system', 'done', convoId, { since, label: 'the restored process ends', timeout: 15000 });
+    // The notice is sent once its close handlers have run: a round trip later
+    // it has arrived, if it was sent at all.
+    await settled();
+    return since;
+  }
+
+  test('in one write, a refused turn that cannot be started fresh still says once that it was not resumed', async () => {
+    const convoId = h.freshConvoId('stale-grouped-g8');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'dead-orch-g8', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-g8' }] });
+    scenario([], ['dead-orch-g8'], { refusalPreamble: WARNING, refusalPreambleJoined: true });
+    const since = await refusedRestore('g8', convoId);
+    const said = messagesFor(convoId, since).filter(m => m.subtype === 'notice' && /no longer available/.test(m.content || ''));
+    assert.strictEqual(said.length, 1, 'the person is told once that it was not resumed');
+    assert.deepStrictEqual(messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content), [], 'the warning is not shown');
+    assertNoRawRefusal(convoId, since);
+    assert.deepStrictEqual(messagesFor(convoId, since).filter(m => m.subtype === 'session_expired').map(m => m.sessionId), ['dead-orch-g8']);
+    assert.deepStrictEqual(idsIn(stored(convoId)), [], 'the dead id is forgotten');
+    h.reapConvo(convoId);
+  });
+
+  test('in one write, the next turn after a refused turn that could not be started fresh does not resume the dead id', async () => {
+    const convoId = h.freshConvoId('stale-grouped-g9');
+    const record = seed(convoId, { agentId: 'chief-of-staff', sessionId: 'dead-orch-g9', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-g9' }] });
+    scenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'ASK-G9' }, turn: [{ text: 'NEXT-G9' }] },
+    ], ['dead-orch-g9'], { refusalPreamble: WARNING, refusalPreambleJoined: true });
+    h.clearInvocations();
+    const win = windowFor(record);
+    await refusedRestore('g9', convoId);
+    const since = client.messages.length;
+    const sent = win.send('ASK-G9 carry on');
+    await waitForResult(convoId, 'NEXT-G9', since, 'the next turn answers');
+    assert.strictEqual(sent.sessionId, null, 'the window does not resume the dead id');
+    assert.deepStrictEqual(spawnsFor(convoId).map(i => i.resume), ['dead-orch-g9', null], 'refused once, then started fresh');
+    h.reapConvo(convoId);
+  });
+
+  // THE PIPE CAN CUT THE WARNING ITSELF. Its opening alone holds neither of the
+  // words it is known by, so each piece is judged by the whole line it belongs
+  // to. Cut inside "no stdin", inside "no stdin data", and just after
+  // "Warning:".
+  const cutAt = (n) => [WARNING.slice(0, n), WARNING.slice(n)];
+
+  /** A run that is not refused, `chunks` written to its stderr before it answers, run until it has ended. */
+  async function liveRun(tag, chunks) {
+    const convoId = h.freshConvoId(`stale-grouped-${tag}`);
+    const live = `live-orch-${tag}`;
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: live, sessionIds: [{ agentId: 'chief-of-staff', sessionId: live }] });
+    scenario([
+      { match: { resume: true, promptIncludes: `ASK-${tag}` }, stderrChunks: chunks, turn: [{ text: `LIVE-${tag}` }], exitAfterTurn: 0 },
+    ], []);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: `ASK-${tag} hi`, sessionId: live });
+    await waitForResult(convoId, `LIVE-${tag}`, since, 'the resumed turn answers');
+    assert.ok(await h.waitUntil(() => !h.internal.chatProcesses.has(convoId), { timeout: 15000 }), 'the run has ended');
+    await settled();
+    const mine = messagesFor(convoId, since);
+    assert.deepStrictEqual(mine.filter(m => m.type === 'error').map(m => m.content), [], 'no piece of the warning is shown');
+    assert.ok(!mine.some(m => m.subtype === 'session_expired' || m.subtype === 'info'), 'nothing is forgotten or started again');
+    assert.ok(idsIn(stored(convoId)).includes(live), 'the session is kept');
+    assert.deepStrictEqual(spawnsFor(convoId).map(i => i.resume), [live], 'resumed once');
+    h.reapConvo(convoId);
+  }
+
+  test('the warning cut inside "no stdin", on a run that is not refused: nothing shown, nothing forgotten', async () => {
+    await liveRun('w1', cutAt('Warning: no stdin'.length));
+  });
+
+  test('the warning cut inside "no stdin data", on a run that is not refused: nothing shown, nothing forgotten', async () => {
+    await liveRun('w2', cutAt('Warning: no stdin da'.length));
+  });
+
+  test('the warning cut just after "Warning:", on a run that is not refused: nothing shown, nothing forgotten', async () => {
+    await liveRun('w3', cutAt('Warning:'.length));
+  });
+
+  test('the warning cut inside "no stdin data", then the refusal: recognized, nothing shown, forgotten once', async () => {
+    const r = await refusedDelegate('w4', { refusalPreamble: WARNING, refusalPreambleSplitAt: 'Warning: no stdin da'.length });
+    assertRefusalHandled(r);
+    h.reapConvo(r.convoId);
+  });
+
+  test('the warning cut just after "Warning:", then the refusal: recognized, nothing shown, forgotten once', async () => {
+    const r = await refusedDelegate('w5', { refusalPreamble: WARNING, refusalPreambleSplitAt: 'Warning:'.length });
+    assertRefusalHandled(r);
+    h.reapConvo(r.convoId);
+  });
+
+  test('the opening of the warning, then its rest and the refusal in one write: recognized, nothing shown, forgotten once', async () => {
+    const r = await refusedDelegate('w6', { refusalPreamble: WARNING, refusalPreambleSplitAt: 'Warning:'.length, refusalPreambleJoined: true });
+    assertRefusalHandled(r);
+    h.reapConvo(r.convoId);
+  });
+
+  test('an opening of the warning the process never finished is not shown when the stream ends, a real error before it still is', async () => {
+    const convoId = h.freshConvoId('stale-grouped-w7');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-w7', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-w7' }] });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-W7' }, crash: 1, stderrChunks: ['Error: the run stopped before it could answer\n', 'Warning: no stdin'] },
+    ], []);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-W7 hi', sessionId: 'live-orch-w7' });
+    await client.waitForEvent('system', 'done', convoId, { since, label: 'the failed turn ends', timeout: 15000 });
+    await settled();
+    assert.deepStrictEqual(messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content),
+      ['Error: the run stopped before it could answer\n'], 'the error is shown, and the unfinished opening of the warning is not');
+    assert.ok(!messagesFor(convoId, since).some(m => m.subtype === 'session_expired'), 'and nothing is forgotten');
+    assert.ok(idsIn(stored(convoId)).includes('live-orch-w7'));
+    h.reapConvo(convoId);
+  });
+
+  test('stderr that only began like the warning is shown whole as soon as it is clearly something else', async () => {
+    // Its line is never finished, so only its own words can let it out: an
+    // opening held until a newline, or until the stream ends, is never shown.
+    const convoId = h.freshConvoId('stale-grouped-w8');
+    seed(convoId, { agentId: 'chief-of-staff', sessionId: 'live-orch-w8', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-w8' }] });
+    scenario([
+      { match: { resume: true, promptIncludes: 'ASK-W8' }, crash: 1, stderrChunks: ['Warning:', ' the configuration file could not be read'] },
+    ], []);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ASK-W8 hi', sessionId: 'live-orch-w8' });
+    await client.waitForEvent('system', 'done', convoId, { since, label: 'the failed turn ends', timeout: 15000 });
+    await settled();
+    const shown = messagesFor(convoId, since).filter(m => m.type === 'error').map(m => m.content);
+    assert.strictEqual(shown.join(''), 'Warning: the configuration file could not be read', 'all of it is shown, once');
+    assert.ok(shown[0].startsWith('Warning: the'), `its opening is shown with the words that proved it is not the warning, never on its own: ${JSON.stringify(shown)}`);
+    assert.ok(!messagesFor(convoId, since).some(m => m.subtype === 'session_expired'), 'and nothing is forgotten');
+    assert.ok(idsIn(stored(convoId)).includes('live-orch-w8'));
     h.reapConvo(convoId);
   });
 });
