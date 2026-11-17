@@ -251,9 +251,10 @@ describe('sandboxSettings: named working folders', () => {
         `${WS}/.claude/settings.json`, `${WS}/.mcp.json`, `${WS}/.rundock/permission-hook.sh`, `${WS}/.rundock/mcp-secrets.json`,
         `${HOME}/.rundock-console`, ...STARTUP_DENY],
       'the intended difference, named: every file that holds answers to permission questions, the workspace\'s own permission configuration included, then the runtimes\' credential files, then what the runtime acts on outside the sandbox, then the workspace\'s connector file, the launcher the permission hook is started through, the per-user connector file, Rundock\'s console folder, and the shell startup files with Rundock\'s record of them');
-    const { denyWrite, ...filesystem } = s.filesystem;
+    const { denyWrite, denyRead, ...filesystem } = s.filesystem;
+    assert.deepStrictEqual(denyRead, RELEASED_DENY.slice(3, 8), 'and reads of the runtimes\' credential files are refused too');
     assert.deepStrictEqual({ ...s, filesystem }, SHIPPED_KNOWLEDGE_BLOCK,
-      'and with it removed, key for key and value for value, the block that shipped');
+      'and with both removed, key for key and value for value, the block that shipped');
   });
 
   test('naming folders appends to the write list and changes nothing else', () => {
@@ -317,6 +318,7 @@ describe('sandboxSettings: named working folders', () => {
     const current = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], FOLDERS);
     const before = JSON.parse(JSON.stringify(current));
     delete before.filesystem.denyWrite;
+    delete before.filesystem.denyRead;
     assert.strictEqual(isRundockSandbox(before, 'darwin'), true);
   });
 
@@ -330,6 +332,7 @@ describe('sandboxSettings: named working folders', () => {
     assert.strictEqual(current.enabled, false, 'sanity: the current block states it');
     const older = JSON.parse(JSON.stringify(current));
     delete older.enabled;
+    delete older.filesystem.denyRead;
     assert.strictEqual(isRundockSandbox(older, 'darwin'), true,
       'the key-less Code mode block is one we wrote, and must be rewritten rather than preserved');
 
@@ -463,6 +466,7 @@ describe('the shell startup files join the deny list', () => {
       assert.deepStrictEqual(deny.slice(-STARTUP_DENY.length), STARTUP_DENY, `${mode}: the startup files, then the record, at the end`);
       const lastBuild = JSON.parse(JSON.stringify(current));
       lastBuild.filesystem.denyWrite = deny.slice(0, 23);
+      delete lastBuild.filesystem.denyRead;
       assert.strictEqual(lastBuild.filesystem.denyWrite[22], `${HOME}/.rundock-console`, 'sanity: the 23-entry list the last build wrote');
       assert.strictEqual(isRundockSandbox(lastBuild, 'darwin'), true, `${mode}: the last build's block is recognised as Rundock's`);
     }
@@ -492,6 +496,7 @@ describe('the shell startup files join the deny list', () => {
       const want = written.sandbox.filesystem.denyWrite;
       assert.ok(want.length > 23, 'sanity: this build writes the longer list');
       written.sandbox.filesystem.denyWrite = want.slice(0, 23);
+      delete written.sandbox.filesystem.denyRead;
       fs.writeFileSync(settings, JSON.stringify(written, null, 2));
       srv.scaffoldWorkspace(dir, { platform: 'darwin' });
       const after = JSON.parse(fs.readFileSync(settings, 'utf-8')).sandbox.filesystem.denyWrite;
@@ -636,12 +641,14 @@ describe('the record of the startup files, in either spelling', () => {
 
   test('the earlier shapes are recognised exactly as before, by either way of running', () => {
     // None of them carries the record, so neither way of running reads them
-    // differently, and the lengths no build wrote stay a person's edit.
+    // differently, and the lengths no build wrote stay a person's edit. None
+    // carries the read deny either, which shipped after all of them.
     const legacy = { enabled: true, autoAllowBashIfSandboxed: true, filesystem: { allowWrite: [WS, `${HOME}/.npm`] }, network: { allowedDomains: ['*'] } };
     for (const { name, read } of READERS) {
       assert.strictEqual(read(() => isRundockSandbox(legacy)), true, `${name}: the 0.12.0 block`);
       for (const shape of SHAPES) {
-        const current = written(shape);
+        const current = JSON.parse(JSON.stringify(written(shape)));
+        delete current.filesystem.denyRead;
         const without = JSON.parse(JSON.stringify(current));
         delete without.filesystem.denyWrite;
         assert.strictEqual(read(() => isRundockSandbox(without)), true, `${name}, ${shape}: no deny list`);
