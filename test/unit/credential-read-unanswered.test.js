@@ -71,7 +71,6 @@ const fileReads = f => [['Read', { file_path: f }], ['Grep', { pattern: 'token',
 const shellReads = (f, w = ws) => [['Bash', { command: `cat ${f}` }], ['Bash', { command: `head ${f}` }], ['Bash', { command: `cp ${f} ${path.join(w, 'copy.json')}` }]];
 const everyRead = (f, w = ws) => [...fileReads(f), ...(POSIX ? [] : shellReads(f, w))];
 const cardReads = f => [['Read', { file_path: f }], ['Bash', { command: `cat ${f}` }]];
-const homeCardReads = f => [['Read', { file_path: f }]];
 const credentialIn = ([, input]) => input.file_path || input.path || input.command.split(' ')[1];
 
 // Code mode already refused some credential reads with nobody to ask, as a
@@ -201,6 +200,7 @@ describe('with Rundock unreachable, every read of a credential file is refused',
     // A workspace that holds the file does not make reading it ordinary work.
     for (const [where, w] of WORKSPACES.slice(1)) {
       test(`${label}${where}: Read, Grep and Glob of each credential file are refused`, () => assertRefused(REGISTRY.flatMap(fileReads), mode, w));
+      test(`${label}${where}: cat, head and a copy within the workspace of each credential file are refused`, { skip: POSIX }, () => assertRefused(REGISTRY.flatMap(f => shellReads(f, w)), mode, w));
     }
   }
   // The tag does not tell a read from a write, so a write is refused too.
@@ -354,7 +354,7 @@ describe('with Rundock reachable, a credential read draws the card main draws', 
   // where the file is rather than calling it a crossing, and offers no grant.
   for (const [label, mode] of MODES) {
     test(`${label}${AT_HOME}: each read of each credential file asks, and Rundock's answer stands`, async () => {
-      const cases = REGISTRY.flatMap(homeCardReads);
+      const cases = REGISTRY.flatMap(cardReads);
       const got = await each(cases, ([tool, input]) => run(tool, input, { port: portOf(recording), mode, workspace: home }));
       cases.forEach(([tool, input], i) => {
         const c = [tool, input];
@@ -382,7 +382,7 @@ describe('once Rundock is back, a credential read refused while it was unreachab
       });
     });
     test(`${label}${AT_HOME}: nothing remembers the refusal`, async () => {
-      const cases = REGISTRY.flatMap(homeCardReads);
+      const cases = REGISTRY.flatMap(cardReads);
       const got = await each(cases, async ([tool, input], i) => {
         const session = `again-home-${mode}-${i}`;
         const refused = await run(tool, input, { port: closed, mode, session, workspace: home });

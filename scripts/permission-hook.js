@@ -3776,7 +3776,10 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   // raises. Answers whether it was reported, now or by an earlier word.
   // A credential file is never a development path or covered by a named
   // folder, so those two exemptions are not tried here.
-  const reportSecret = (r) => {
+  // Every credential file the line reads, the workspace's own included, is
+  // also noted in `opts.credentialReads` when given: a word the line writes is not.
+  const reportSecret = (r, raw) => {
+    if (opts.credentialReads && !(raw && writingWords.has(raw))) opts.credentialReads.add(r);
     if (insideWorkspaceRoot(r, workspaceRoot, path)) return false;
     if (seen.has(r)) return true;
     seen.add(r);
@@ -3952,7 +3955,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
       for (const form of forms) {
         for (const r of secretsReachedBy(form, { starts, unfollowed: unsure, relative, entries: secretEntries, folds: foldsCase })) reached.add(r);
       }
-      if ([...reached].map(reportSecret).some(Boolean)) continue;
+      if ([...reached].map(r => reportSecret(r, raw)).some(Boolean)) continue;
     }
 
     // Skip tokens that could not cross. A relative token resolves against the
@@ -4235,6 +4238,9 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
   // The first folders this command's code literals name, looked up afresh for
   // every classification (see literalIsPlace).
   const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home, foldsCase, { ...opts, windowsSwitches, shellTool: toolName, firstFolders: new Map() });
+  // Nothing crosses, but the line reads a credential file the workspace holds.
+  const reads = opts.credentialReads;
+  if (!crossings.length && reads && reads.size) return { where: 'inside', resolvedPath: [...reads][0], grantDir: null, credential: true };
   if (!crossings.length) return null;
   // `grantDir` AND `grantable` ARE DIFFERENT QUESTIONS, and conflating them is
   // why this offered nothing.
@@ -4597,17 +4603,20 @@ fetchAgentNotice((agentNotice) => {
   // short-circuit on purpose: code mode trusts commands inside the
   // workspace, it does not extend the workspace to the whole machine.
   // File tools and shell commands are classified by the same boundary and
-  // reach the same card. classifyShellAccess only ever answers 'outside' or
-  // null, so an ordinary command keeps whatever card it already had: the
-  // instant-allow branch below stays reachable only by file tools.
+  // reach the same card. classifyShellAccess answers 'outside', null, or a
+  // read of a credential file the workspace holds, so an ordinary command
+  // keeps whatever card it already had: the instant-allow branch below stays
+  // reachable only by file tools.
   // No refusal reaches here: both exit above, so this guard is the tool-name
   // check alone rather than restating them.
   // Where the command runs: the hook input's cwd follows the agent.
   const codeMode = process.env.RUNDOCK_CODE_MODE === '1';
   const cwd = (typeof data.cwd === 'string' && data.cwd) ? data.cwd : undefined;
+  // Every credential file a shell command reads, wherever it is.
+  const credentialReads = new Set();
   const access = (typeof data.tool_name === 'string')
     ? classifyFileAccess(data.tool_name, data.tool_input, wsRoot, extraDirs, undefined, undefined, undefined, { codeMode })
-      || classifyShellAccess(data.tool_name, data.tool_input, wsRoot, extraDirs, undefined, undefined, { cwd, codeMode })
+      || classifyShellAccess(data.tool_name, data.tool_input, wsRoot, extraDirs, undefined, undefined, { cwd, codeMode, credentialReads })
     : null;
   // THE SAME PRINCIPLE THE BRANCH ABOVE APPLIES TO ~/.claude, applied to the
   // workspace's own settings file, because the measurement is the same one.
