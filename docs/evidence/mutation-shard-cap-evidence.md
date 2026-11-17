@@ -1,6 +1,6 @@
 # The mutation shard cap, and the plans that call for it
 
-`MAX_SHARDS` in `scripts/mutation-scope.js` caps how many shards the full mutation set is cut into. `test/unit/mutation-scope.test.js` holds every shard of the full plan to fifteen minutes ("the full set, planned with the real costs, keeps every shard well under its limit"). This file records the plans behind each raise: from twelve to thirteen (2026-11-06), then from thirteen to fifteen (2026-11-09), then from fifteen to sixteen (2026-11-09), then from sixteen to seventeen (2026-11-10). There is no cap argument, so for each plan the cap was set by editing `MAX_SHARDS` in the export before running the command.
+`MAX_SHARDS` in `scripts/mutation-scope.js` caps how many shards the full mutation set is cut into. `test/unit/mutation-scope.test.js` holds every shard of the full plan to fifteen minutes ("the full set, planned with the real costs, keeps every shard well under its limit"). This file records the plans behind each raise: from twelve to thirteen (2026-11-06), then from thirteen to fifteen (2026-11-09), then from fifteen to sixteen (2026-11-09), then from sixteen to seventeen (2026-11-10), then from seventeen to nineteen (2026-11-17). There is no cap argument, so for each plan up to seventeen the cap was set by editing `MAX_SHARDS` in the export before running the command; the plans for nineteen pass the cap to `planShards` as `maxShards`.
 
 ## Raised to thirteen: the plans
 
@@ -141,3 +141,55 @@ Seventeen shards need no workflow change. Both workflows that run the full set r
 - **The nightly sweep** (`.github/workflows/mutation-nightly.yml`): `run: node scripts/mutation-scope.js --all --plan --out mutation-plan.json` (`:88`), `matrix: ${{ steps.plan.outputs.matrix }}` (`:65`), `matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}` (`:111`), and `timeout-minutes: 30` (`:108`).
 
 A pull request's scoped plan is the same at sixteen and seventeen unless it needs more than sixteen shards, which "a plan the cap does not reach is the same whatever the cap" in `test/unit/mutation-scope.test.js` pins.
+
+## Raised to nineteen
+
+Main at `3cb47720` plans the full set's longest shard at 900 s at seventeen, the most the planner suite allows, and at 900 s again at eighteen. Two changes add rows on top. Each alone plans its longest at 900 s at seventeen; together they plan one shard at 907 s, so once both land, the planner test fails at seventeen and the pre-commit gate refuses the commit. The trees, and how each is costed:
+
+- **Main at `3cb47720`** (3,263 rows) is costed by its committed table, `test/tools/mutation-costs.json`.
+- **Main with #475** (3,271 rows) adds #475's harness, `test/tools/mutate-shell-config-dir-guards.js` (blob `4fe36215` at `ca680776`), and the one entry #475's table (blob `a3460440`) adds for it: 7.72 s a row, one full run's seconds over its rows on a developer machine.
+- **Tree `e505cb96`** (3,274 rows) is main with a change that adds eleven `Secret reach:` rows to the boundary harness (blob `d2ee69db`, cost table blob `26c9c739`), each costed at the mean cost by label of the boundary rows on its suite: 28.8 s for the nine on `test/unit/secret-reach.test.js`, 4.76 s and 6.01 s for the other two.
+- **All three** (3,282 rows) is tree `e505cb96` with #475's harness and entry added the same way.
+
+Each plan is this script, saved as `plan-caps.js` and run as `node plan-caps.js <dir>` on an export (`git archive`) of the tree named. It plans the full set with `planShards`, passing each cap as `maxShards`. Measured 2026-11-17.
+
+```js
+const path = require('node:path');
+const root = path.resolve(process.argv[2]);
+const toolsDir = path.join(root, 'test', 'tools');
+const scope = require(path.join(root, 'scripts', 'mutation-scope.js'));
+const d = scope.decide(['--all'], { root, toolsDir });
+const harnesses = d.harnesses.filter((h) => d.selection.run.includes(h.tool));
+for (const maxShards of [17, 18, 19, 20]) {
+  const plan = scope.planShards(harnesses, { costs: scope.readCosts(toolsDir), maxShards });
+  const secs = plan.shards.map((s) => s.seconds);
+  const total = secs.reduce((a, b) => a + b, 0);
+  console.log(maxShards, plan.total, secs.length, total, Math.round(total / secs.length), Math.max(...secs));
+}
+```
+
+Each cell is the plan's longest shard, its average shard and its total. Every plan uses all the shards its cap allows, and only all three at seventeen plans a shard past 900 s. Totals differ by a second or two between caps because each slice's seconds are rounded.
+
+| Tree | Cap 17 | Cap 18 | Cap 19 | Cap 20 |
+|---|---|---|---|---|
+| main at `3cb47720` | 900 s, 871 s, 14,805 s | 900 s, 822 s, 14,803 s | 889 s, 779 s, 14,803 s | 889 s, 740 s, 14,803 s |
+| main with #475 | 900 s, 875 s, 14,867 s | 900 s, 826 s, 14,865 s | 889 s, 782 s, 14,865 s | 889 s, 743 s, 14,865 s |
+| tree `e505cb96` | 900 s, 887 s, 15,075 s | 900 s, 837 s, 15,074 s | 889 s, 793 s, 15,074 s | 889 s, 754 s, 15,072 s |
+| all three | 907 s, 890 s, 15,137 s | 900 s, 841 s, 15,136 s | 889 s, 797 s, 15,136 s | 889 s, 757 s, 15,134 s |
+
+## Why nineteen
+
+Nineteen is the smallest cap above seventeen at which every tree's longest shard plans under 900 s. At eighteen every tree still plans one at 900 s: rows 0:90 of `mutate-rundock-ui-guards.js` (458 s) with rows 0:140 of `mutate-sdlc-gate-guards.js` (442 s). At nineteen the longest shard of every tree is both slices of `mutate-sdlc-gate-guards.js`, rows 140:206 (447 s) and rows 0:140 (442 s), at 889 s, and the next is `mutate-routines-guards.js` (449 s) with `mutate-stale-session-guards.js` (377 s), at 826 s. Twenty plans those same two shards as its longest, at the same seconds, so a cap past nineteen buys no room on the longest shard.
+
+Headroom was found by adding rows of 28.8 s each, the cost nine of the eleven `Secret reach:` rows plan at, one at a time, and planning with `planShards` at the cap until a shard passes 900 s: once as a harness of their own, once as new rows at the end of the boundary harness. The packing is greedy, so some larger counts fit again; each figure is the smallest count that tips a shard. On all three, the heaviest tree, seventeen leaves none, since it is already 7 s past. At nineteen it takes 31 rows (893 s) as their own harness, the 32nd putting a shard at 907 s, and 49 rows (1,411 s) in the boundary harness, the 50th putting one at 904 s. At seventeen, main alone takes 4 rows (115 s) as their own harness and 10 (288 s) in the boundary harness, and tree `e505cb96` takes 1 (29 s) either way.
+
+Each shard beyond seventeen is another CI job on every run of the full set, so nineteen adds two to the nightly sweep and to every pull request that touches what every harness depends on. The planner's ten-minute target (`SECONDS_PER_SHARD`) would want about twenty-six shards for this set (15,136 s over 600 s), so the cap is what holds the count, as before.
+
+## The planner suite and both workflows, at nineteen
+
+With the cap at nineteen on main at `3cb47720`, `node --test test/unit/mutation-scope.test.js` passes 61 of 61 tests with none skipped, the suite unchanged, "the full set, planned with the real costs, keeps every shard well under its limit" included. Run 2026-11-17. Nineteen shards need no workflow change. On main at `3cb47720` the lines in `ci.yml` have moved since seventeen, and those in the nightly sweep have not:
+
+- **Pull requests** (`.github/workflows/ci.yml`): `node scripts/mutation-scope.js --plan --out mutation-plan.json --base "$BASE"` (`:225`) and `node scripts/mutation-scope.js --plan --out mutation-plan.json` (`:227`), `matrix: ${{ steps.plan.outputs.matrix }}` (`:163`), `matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}` (`:258`), and `timeout-minutes: 30` (`:255`).
+- **The nightly sweep** (`.github/workflows/mutation-nightly.yml`): `run: node scripts/mutation-scope.js --all --plan --out mutation-plan.json` (`:88`), `matrix: ${{ steps.plan.outputs.matrix }}` (`:65`), `matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}` (`:111`), and `timeout-minutes: 30` (`:108`).
+
+A pull request's scoped plan is the same at seventeen and nineteen unless it needs more than seventeen shards, which "a plan the cap does not reach is the same whatever the cap" in `test/unit/mutation-scope.test.js` pins.
