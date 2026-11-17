@@ -34,6 +34,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
+const { isDeepStrictEqual } = require('node:util');
 const { secretsRegistry } = require('../../scripts/permission-hook.js');
 const { unansweredNotice, UNATTENDED_NEXT } = require('../../scripts/refusal-notice.js');
 // A port nothing listens on: Rundock has quit, crashed or is restarting.
@@ -235,6 +236,63 @@ describe('with Rundock unreachable, every read of a credential file is refused',
     // Writing somewhere on the line does not make what the line reads a write.
     for (const [where, w] of WORKSPACES) {
       test(`${label}${where}: a command reading each credential file some other way is refused`, { skip: POSIX }, () => assertRefused([...REGISTRY.flatMap(f => otherReads(f, w)), ...copiedOutThenIn(w)], mode, w));
+    }
+  }
+});
+
+// WHAT ONE PLACE ON A LINE WRITES, ANOTHER CAN STILL READ. A path named as an
+// output target is written there and only there: named again on the same line,
+// an input redirect (`cat < f`) above all, it is read, whether the write comes
+// before or after it, sits in a subshell, or is in a branch that never runs,
+// in the line or in code the line runs, and `dd` reads its `if=` though its
+// `of=` names the same file. Each case is spelled with the full path and with
+// `~/`.
+const tildeOf = f => `~/${path.relative(home, f).split(path.sep).join('/')}`;
+const spellings = f => [f, tildeOf(f)];
+const writtenAndRead = f => spellings(f).flatMap(s => [
+  `false && echo x > ${s}; cat < ${s}`,
+  `true || echo x > ${s}; cat < ${s}`,
+  `echo x > ${s}; cat < ${s}`,
+  `( echo x > ${s} ); cat < ${s}`,
+  `(echo x > ${s}); cat < ${s}`,
+  `(cat < ${s}); echo x > ${s}`,
+  `echo x > ${s}; (cat < ${s})`,
+  `cat < ${s}; false && echo x > ${s}`,
+  `cat < ${s} > ${s}`,
+  `cat <${s} >${s}`,
+  `cp ${s} copy.json; echo > ${s}`,
+  `dd if=${s} of=${s}`,
+  `sh -c 'false && echo x > ${s}; cat < ${s}'`,
+  `echo $(echo x > ${s}; cat < ${s})`,
+]).map(command => ['Bash', { command }]);
+// The same lines with nothing reading the file: each keeps the answer main
+// gives `echo {} > f`, a plain write of it.
+const onlyWrites = f => spellings(f).flatMap(s => [
+  `echo x > ${s}`,
+  `echo x >${s}`,
+  `false && echo x > ${s}`,
+  `true || echo x > ${s}`,
+  `( echo x > ${s} )`,
+  `echo x > ${s}; echo y > ${s}`,
+  `cat notes.md > ${s}`,
+  `sh -c 'echo x > ${s}'`,
+]).map(command => ['Bash', { command }]);
+describe('a credential file one place on a line writes and another reads is refused', { skip: POSIX }, () => {
+  for (const [label, mode] of MODES) {
+    for (const [where, w] of WORKSPACES) {
+      test(`${label}${where}: an input redirect or copy from each credential file is refused, wherever the line also writes it`, () => assertRefused(REGISTRY.flatMap(writtenAndRead), mode, w));
+    }
+    for (const [where, w] of WORKSPACES.slice(0, 2)) {
+      test(`${label}${where}: a line that only writes each credential file keeps main's answer to a write`, async () => {
+        const cases = REGISTRY.flatMap(f => onlyWrites(f).map(c => [c, f]));
+        const got = await each(cases, ([[tool, input]]) => run(tool, input, { port: closed, mode, workspace: w }));
+        const changed = cases.flatMap(([c, f], i) => {
+          const main = onMain[keyOf(`${label}${where}`, 'unreachable', ['Bash', normal({ command: `echo {} > ${f}` })])];
+          assert.ok(main, `${named(c)}: a plain write of the file measured on main`);
+          return isDeepStrictEqual(got[i], main) ? [] : [`${named(c)}: ${said(got[i]).permissionDecision}: ${said(got[i]).permissionDecisionReason}`];
+        });
+        assert.deepStrictEqual(changed, [], 'the whole answer, field by field, as main gives a plain write');
+      });
     }
   }
 });
