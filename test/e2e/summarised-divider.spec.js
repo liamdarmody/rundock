@@ -182,20 +182,34 @@ test('a summary in the middle of a reply: the live state, then one divider split
     await expect(divider).toHaveCount(1);
 
     // Switching away and back, and a reload, draw it once more and no more:
-    // immediately before the reply it fell in.
+    // the reply is rebuilt from what was kept as one bubble, so the divider
+    // sits straight after the message it followed and straight before that
+    // reply, and the whole reply is there, each half shown once.
+    const rebuiltAroundReply = async () => {
+      await expect(page.locator('#messages > .msg-user + .msg-summarised')).toHaveCount(1);
+      const reply = page.locator('#messages > .msg-summarised + .msg-agent');
+      await expect(reply).toBeVisible();
+      await expect(reply).toContainText(FIRST_HALF);
+      await expect(reply).toContainText(SECOND_HALF);
+      const shown = await page.locator('#messages').innerText();
+      expect(shown.split(FIRST_HALF).length - 1, 'the first half is shown once').toBe(1);
+      expect(shown.split(SECOND_HALF).length - 1, 'the second half is shown once').toBe(1);
+    };
     const other = await page.evaluate(() => createConversation('rundock-guide', 'Summarised other e2e').id);
     ids.push(other);
     await expect(page.locator('#messages .msg-summarised'), 'a new conversation starts with no divider').toHaveCount(0);
     await page.evaluate((c) => openConversation(c), id);
     await expect(page.locator('#messages')).toContainText('A reply below the divider.');
     await expect(divider).toHaveCount(1);
+    expect(await kinds(page)).toEqual(['user', 'divider', 'agent', 'user', 'agent']);
+    await rebuiltAroundReply();
     await page.reload();
     await expect(page.locator('.convo-item').first()).toBeVisible();
     await page.evaluate((c) => openConversation(c), id);
     await expect(page.locator('#messages')).toContainText('A reply below the divider.');
     await expect(divider).toHaveCount(1);
     expect(await kinds(page)).toEqual(['user', 'divider', 'agent', 'user', 'agent', 'previous-session']);
-    await expect(page.locator('#messages > .msg-agent').first()).toContainText(SECOND_HALF);
+    await rebuiltAroundReply();
     // Drawn from the history, it is no status region: nothing is under way.
     await expect(divider.locator('.summarised-label')).toContainText(WORDS);
     expect(await divider.locator('[role="status"]').count()).toBe(0);
