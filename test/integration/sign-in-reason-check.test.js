@@ -63,14 +63,42 @@ function desktop({ execSync = childProcess.execSync, shellConfigDir = devRun() }
 }
 
 const KEYS = ['PATH', 'CLAUDE_CONFIG_DIR', 'STUB_CLAUDE_SIGNED_OUT', 'STUB_CLAUDE_SIGNED_IN_WITH', 'STUB_CLAUDE_CHECK_FAILS',
-  'STUB_CLAUDE_CHECK_HANGS', 'STUB_CLAUDE_CHECK_STDERR', 'STUB_CLAUDE_CHECK_STDOUT', 'STUB_CLAUDE_CHECK_EXIT'];
+  'STUB_CLAUDE_CHECK_HANGS', 'STUB_CLAUDE_CHECK_STDERR', 'STUB_CLAUDE_CHECK_STDOUT', 'STUB_CLAUDE_CHECK_EXIT',
+  'STUB_CLAUDE_CHECK_STDERR_TIMES'];
 
-// The stub fails its check with this output.
-function says(stderr, { stdout = '', exit = 1 } = {}) {
+// The stub answers its check with this output and exit code (a failure unless
+// told otherwise), writing the stderr `times` times in a row.
+function says(stderr, { stdout = '', exit = 1, times = 1 } = {}) {
   process.env.STUB_CLAUDE_CHECK_STDERR = Buffer.from(stderr).toString('base64');
   process.env.STUB_CLAUDE_CHECK_STDOUT = Buffer.from(stdout).toString('base64');
   process.env.STUB_CLAUDE_CHECK_EXIT = String(exit);
+  process.env.STUB_CLAUDE_CHECK_STDERR_TIMES = String(times);
 }
+
+// The check as it stood before the reason was kept, word for word. With no
+// stdio option execSync still pipes every stream and holds stderr under the
+// same maxBuffer, then writes it to this process's stderr, which is silenced
+// here for the call and handed back.
+function checkBeforeTheReason() {
+  const write = process.stderr.write;
+  let echoed = '';
+  process.stderr.write = (chunk) => { echoed += String(chunk); return true; };
+  try {
+    childProcess.execSync('claude --print "test" --output-format text', { timeout: 15000 });
+    return { passed: true, echoed };
+  } catch {
+    return { passed: false, echoed };
+  } finally {
+    process.stderr.write = write;
+  }
+}
+
+// execSync's default maxBuffer, the same in both forms of the check, and a
+// stderr half as large again: one long line, written over and over.
+const MAX_BUFFER = 1024 * 1024;
+const LONG_LINE = 'Request failed, retrying the session. '.repeat(10).trim();
+const LARGE_TIMES = Math.ceil((1.5 * MAX_BUFFER) / (LONG_LINE.length + 1));
+const WARNING = 'Warning: a status line command named in the settings was not found, so none is shown';
 function passes() {
   for (const key of KEYS.slice(2)) delete process.env[key];
 }
@@ -211,6 +239,44 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
     const { isClaudeAuthenticated } = desktop({ execSync: (cmd, opts) => { calls.push([cmd, opts]); return childProcess.execSync(cmd, opts); } });
     isClaudeAuthenticated();
     assert.deepStrictEqual(calls, [['claude --print "test" --output-format text', { timeout: 15000, stdio: 'pipe' }]]);
+  });
+
+  describe('pass and fail are decided as before, through the real execSync', () => {
+    test("a passing check's large stderr is decided as before", () => {
+      says(`${LONG_LINE}\n`, { stdout: 'ok\n', exit: 0, times: LARGE_TIMES });
+      const { isClaudeAuthenticated, signInReason } = desktop();
+      const before = checkBeforeTheReason();
+      assert.ok(before.echoed.length >= MAX_BUFFER, `sanity: the stub wrote more than maxBuffer, ${before.echoed.length} bytes came back`);
+      assert.strictEqual(isClaudeAuthenticated(), before.passed);
+      // Failed in both: stderr is held under execSync's maxBuffer whether or
+      // not stdio is given, so a check that writes more than that is ended and
+      // fails, however it would have exited.
+      assert.strictEqual(before.passed, false);
+      assert.deepStrictEqual(signInReason.last(), { kind: 'said', text: `${LONG_LINE.slice(0, sr.MAX_CHARS - 1)}\u2026`, signIn: false });
+    });
+
+    test("a failing check's large stderr is decided as before, and its reason is one bounded line", async () => {
+      says(`${LONG_LINE}\n`, { exit: 1, times: LARGE_TIMES });
+      const { answer, isClaudeAuthenticated } = desktop();
+      const before = checkBeforeTheReason();
+      assert.strictEqual(isClaudeAuthenticated(), before.passed);
+      assert.strictEqual(before.passed, false);
+      const res = await reasonFor(answer);
+      assert.deepStrictEqual(res,
+        { status: 'not-authenticated', reason: { kind: 'said', text: `${LONG_LINE.slice(0, sr.MAX_CHARS - 1)}\u2026`, signIn: false } });
+      assert.ok(JSON.stringify(res).length < 2 * sr.MAX_CHARS, 'nothing more of the output crosses');
+    });
+
+    test("a passing check's little stderr is decided as before, with no reason", async () => {
+      says(`${WARNING}\n`, { stdout: 'ok\n', exit: 0 });
+      const { answer, isClaudeAuthenticated, signInReason } = desktop();
+      const before = checkBeforeTheReason();
+      assert.ok(before.echoed.includes(WARNING), 'sanity: the check before the reason ran against the stub and echoed its stderr');
+      assert.strictEqual(isClaudeAuthenticated(), before.passed);
+      assert.strictEqual(before.passed, true);
+      assert.strictEqual(signInReason.last(), null);
+      assert.deepStrictEqual(await reasonFor(answer), { status: 'ready' });
+    });
   });
 
   test("the check's output never reaches the app's own stderr", () => {

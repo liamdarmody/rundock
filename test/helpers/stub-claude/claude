@@ -125,13 +125,17 @@ if (argv.includes('--print') && argv[argv.indexOf('--output-format') + 1] === 't
   // never replies, until whatever started it ends it. STUB_CLAUDE_CHECK_STDERR
   // and STUB_CLAUDE_CHECK_STDOUT (base64, so any bytes can be given) fail it
   // with that output, and STUB_CLAUDE_CHECK_EXIT gives its code (1 if unset).
+  // STUB_CLAUDE_CHECK_STDERR_TIMES writes the stderr that many times in a row,
+  // for more output than one environment variable can carry; every byte is
+  // written before the exit, however much each write takes.
   if (process.env.STUB_CLAUDE_CHECK_HANGS === '1') {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);
     process.exit(0);
   }
   const said = (name) => Buffer.from(process.env[name] || '', 'base64');
   if ('STUB_CLAUDE_CHECK_STDERR' in process.env || 'STUB_CLAUDE_CHECK_STDOUT' in process.env || process.env.STUB_CLAUDE_CHECK_EXIT) {
-    fs.writeSync(2, said('STUB_CLAUDE_CHECK_STDERR'));
+    const stderr = Buffer.concat(Array(Number(process.env.STUB_CLAUDE_CHECK_STDERR_TIMES || 1)).fill(said('STUB_CLAUDE_CHECK_STDERR')));
+    for (let at = 0; at < stderr.length;) at += fs.writeSync(2, stderr, at);
     fs.writeSync(1, said('STUB_CLAUDE_CHECK_STDOUT'));
     process.exit(Number(process.env.STUB_CLAUDE_CHECK_EXIT || 1));
   }

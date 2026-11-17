@@ -157,7 +157,9 @@ function ensureClaudeOnUserPath(binDir) {
 }
 
 // Every stream is piped, so the check's output reaches only signInReason and
-// never this process's own stderr.
+// never this process's own stderr. stdio: 'pipe' changes where stderr goes,
+// not how much is held: with no stdio option execSync pipes stderr too, holds
+// it under the same maxBuffer, and only then writes it to this stderr.
 function isClaudeAuthenticated() {
   try {
     execSync('claude --print "test" --output-format text', { timeout: 15000, stdio: 'pipe' });
