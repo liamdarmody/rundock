@@ -109,9 +109,11 @@ if (argv.includes('--version')) {
 // reconnect card's "I've reconnected" runs): answer at once, without a
 // scenario or a log line. A test signs the stub out with STUB_CLAUDE_SIGNED_OUT,
 // or fails the turn for a reason that is not the sign-in with
-// STUB_CLAUDE_CHECK_FAILS.
+// STUB_CLAUDE_CHECK_FAILS. STUB_CLAUDE_SIGNED_IN_WITH signs it in only when it
+// is started with that CLAUDE_CONFIG_DIR, as Claude Code finds its sign-in.
 if (argv.includes('--print') && argv[argv.indexOf('--output-format') + 1] === 'text') {
-  if (process.env.STUB_CLAUDE_SIGNED_OUT === '1') {
+  const signedInWith = process.env.STUB_CLAUDE_SIGNED_IN_WITH;
+  if (process.env.STUB_CLAUDE_SIGNED_OUT === '1' || (signedInWith && process.env.CLAUDE_CONFIG_DIR !== signedInWith)) {
     process.stderr.write('Invalid API key. Please run /login\n');
     process.exit(1);
   }
@@ -156,6 +158,8 @@ try {
       RUNDOCK_HOOK_TOKEN: process.env.RUNDOCK_HOOK_TOKEN || null,
       // The workspace the permission hook is told it is answering for.
       RUNDOCK_WORKSPACE: process.env.RUNDOCK_WORKSPACE || null,
+      // Where this copy looks for its sign-in.
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || null,
     },
     // The folder this process was started in, which is also where this log
     // and the scenario are read from.

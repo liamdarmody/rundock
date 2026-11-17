@@ -719,6 +719,9 @@ schedulerLib.wireSchedulerDeps({
 });
 const httpRouter = require('./lib/http-router.js');
 const claudeConsole = require('./lib/runtime/claude-console.js');
+// The desktop's handling of a failed sign-in check, given to startServer
+// (electron/shell-config-dir.js): it runs the check, and may run it once more.
+let _signInRetry = null;
 httpRouter.wireHttpRouterDeps({
   // Live state BY IDENTITY: the accessors return the root's own maps.
   chatProcesses: () => chatProcesses,
@@ -738,11 +741,14 @@ httpRouter.wireHttpRouterDeps({
   // because its npm package could not be read says so, in the refusal's own
   // words, for the card to show (lib/runtime/npm-launcher.js).
   openClaudeConsole: () => claudeConsole.openClaudeConsole({ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version, purpose: 'reconnect' }),
-  checkClaudeConnection: () => claudeConsole.checkConnection({ bin: resolveClaudeBin(), isAuthFailure: isAuthError }).then((r) => {
-    if (r.known) _claudeAuthEvidence = r.connected;
-    const answer = { connected: r.connected, known: r.known };
-    return r.message ? { ...answer, code: r.code, message: r.message } : answer;
-  }),
+  checkClaudeConnection: () => {
+    const check = () => claudeConsole.checkConnection({ bin: resolveClaudeBin(), isAuthFailure: isAuthError });
+    return (_signInRetry ? _signInRetry(check) : check()).then((r) => {
+      if (r.known) _claudeAuthEvidence = r.connected;
+      const answer = { connected: r.connected, known: r.known };
+      return r.message ? { ...answer, code: r.code, message: r.message } : answer;
+    });
+  },
 });
 
 // ===== AGENT HELPERS =====
@@ -3490,6 +3496,7 @@ async function runUniversalSearch(msg) {
 function startServer(options = {}) {
   armAgentsDirWatcher();
   armFileTreeWatcher();
+  if (typeof options.signInRetry === 'function') _signInRetry = options.signInRetry;
   const port = options.port != null ? options.port : PORT;
   return new Promise((resolve) => {
     server.listen(port, HOST, () => {
