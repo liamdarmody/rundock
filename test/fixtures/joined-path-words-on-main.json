@@ -1,0 +1,1132 @@
+{
+ "Code mode | IFS='/' read -r a b <<< \"$x\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | awk -F '/' '{print $2}' notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | cat \"notes/a b.md\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | cat \"notes/a b.md\" | head -5": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | cat './notes/a b.md'": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | cat notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | cat notes/\"a b\".md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | cat ~/.claude/.credentials.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat ~/.claude/.credentials.json"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.claude/.credentials.json"
+    ],
+    "code_mode_verdict": {
+     "verdict": "runs"
+    },
+    "boundary": true,
+    "resolved_path": "<root>/home/.claude/.credentials.json",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.claude/.credentials.json",
+      "agentHome": true,
+      "secret": true,
+      "persistenceSurface": false
+     }
+    ]
+   }
+  ]
+ },
+ "Code mode | cat ~/\\.claude/.credentials.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat ~/\\.claude/.credentials.json"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "/.credentials.json"
+    ],
+    "code_mode_verdict": {
+     "verdict": "runs"
+    },
+    "boundary": true,
+    "resolved_path": "<root>/home/.claude/.credentials.json",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.claude/.credentials.json",
+      "agentHome": true,
+      "secret": true,
+      "persistenceSurface": false
+     }
+    ]
+   }
+  ]
+ },
+ "Code mode | cd ~/.claude && cat .credentials.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ~/.claude && cat .credentials.json"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.claude"
+    ],
+    "code_mode_verdict": {
+     "verdict": "runs"
+    },
+    "boundary": true,
+    "resolved_path": "<root>/home/.claude/.credentials.json",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.claude/.credentials.json",
+      "agentHome": true,
+      "secret": true,
+      "persistenceSurface": false
+     }
+    ]
+   }
+  ]
+ },
+ "Code mode | cut -d '/' -f2 notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | date \"+%Y/%m/%d\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | echo \"$HOME\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | echo \"/etc/hosts\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | echo \"x\" > \"notes/out.md\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | echo x > ~/.claude/.credentials.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo x > ~/.claude/.credentials.json"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.claude/.credentials.json"
+    ],
+    "code_mode_verdict": {
+     "verdict": "runs"
+    },
+    "boundary": true,
+    "resolved_path": "<root>/home/.claude/.credentials.json",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.claude/.credentials.json",
+      "agentHome": true,
+      "secret": true,
+      "persistenceSurface": false,
+      "write": true
+     }
+    ]
+   }
+  ]
+ },
+ "Code mode | echo x >> ~/.claude/settings.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo x >> ~/.claude/settings.json"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.claude/settings.json"
+    ],
+    "code_mode_verdict": {
+     "verdict": "runs"
+    },
+    "boundary": true,
+    "resolved_path": "<root>/home/.claude/settings.json",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.claude/settings.json",
+      "agentHome": true,
+      "secret": false,
+      "persistenceSurface": true,
+      "write": true
+     }
+    ]
+   }
+  ]
+ },
+ "Code mode | echo x >> ~/.zshrc": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo x >> ~/.zshrc"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.zshrc"
+    ],
+    "code_mode_verdict": {
+     "verdict": "runs"
+    },
+    "startup_file": "~/.zshrc",
+    "boundary": true,
+    "resolved_path": "<root>/home/.zshrc",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.zshrc",
+      "answerFile": true,
+      "startupFile": "~/.zshrc"
+     }
+    ]
+   }
+  ]
+ },
+ "Code mode | echo ~/.claude/\".credentials.json\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | find . -name \"*.md\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | git commit -m \"fix: update notes\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | grep \"/etc/x\" notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | grep -e \"/etc/x\" notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | ls \"My Notes\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | ls 'My Notes'": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | printf '%s\\n' \"~/.claude/.credentials.json\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | python3 tool.py < .mcp.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | sed 's#/a#/b#' notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | sort -t '/' -k2 notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | tr '/' '_' < notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Code mode | tr -d '/' < notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
+ "Notes mode | IFS='/' read -r a b <<< \"$x\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "IFS='/' read -r a b <<< \"$x\""
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | awk -F '/' '{print $2}' notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "awk -F '/' '{print $2}' notes.md"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | cat \"notes/a b.md\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat \"notes/a b.md\""
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | cat \"notes/a b.md\" | head -5": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat \"notes/a b.md\" | head -5"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | cat './notes/a b.md'": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat './notes/a b.md'"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | cat notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat notes.md"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | cat notes/\"a b\".md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat notes/\"a b\".md"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | cat ~/.claude/.credentials.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat ~/.claude/.credentials.json"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.claude/.credentials.json"
+    ],
+    "boundary": true,
+    "resolved_path": "<root>/home/.claude/.credentials.json",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.claude/.credentials.json",
+      "agentHome": true,
+      "secret": true,
+      "persistenceSurface": false
+     }
+    ]
+   }
+  ]
+ },
+ "Notes mode | cat ~/\\.claude/.credentials.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cat ~/\\.claude/.credentials.json"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "/.credentials.json"
+    ],
+    "boundary": true,
+    "resolved_path": "<root>/home/.claude/.credentials.json",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.claude/.credentials.json",
+      "agentHome": true,
+      "secret": true,
+      "persistenceSurface": false
+     }
+    ]
+   }
+  ]
+ },
+ "Notes mode | cd ~/.claude && cat .credentials.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cd ~/.claude && cat .credentials.json"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.claude"
+    ],
+    "boundary": true,
+    "resolved_path": "<root>/home/.claude/.credentials.json",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.claude/.credentials.json",
+      "agentHome": true,
+      "secret": true,
+      "persistenceSurface": false
+     }
+    ]
+   }
+  ]
+ },
+ "Notes mode | cut -d '/' -f2 notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "cut -d '/' -f2 notes.md"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | date \"+%Y/%m/%d\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "date \"+%Y/%m/%d\""
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | echo \"$HOME\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo \"$HOME\""
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | echo \"/etc/hosts\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo \"/etc/hosts\""
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "/etc/hosts"
+    ]
+   }
+  ]
+ },
+ "Notes mode | echo \"x\" > \"notes/out.md\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo \"x\" > \"notes/out.md\""
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "/out.md"
+    ]
+   }
+  ]
+ },
+ "Notes mode | echo x > ~/.claude/.credentials.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo x > ~/.claude/.credentials.json"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.claude/.credentials.json"
+    ],
+    "boundary": true,
+    "resolved_path": "<root>/home/.claude/.credentials.json",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.claude/.credentials.json",
+      "agentHome": true,
+      "secret": true,
+      "persistenceSurface": false,
+      "write": true
+     }
+    ]
+   }
+  ]
+ },
+ "Notes mode | echo x >> ~/.claude/settings.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo x >> ~/.claude/settings.json"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.claude/settings.json"
+    ],
+    "boundary": true,
+    "resolved_path": "<root>/home/.claude/settings.json",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.claude/settings.json",
+      "agentHome": true,
+      "secret": false,
+      "persistenceSurface": true,
+      "write": true
+     }
+    ]
+   }
+  ]
+ },
+ "Notes mode | echo x >> ~/.zshrc": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo x >> ~/.zshrc"
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.zshrc"
+    ],
+    "startup_file": "~/.zshrc",
+    "boundary": true,
+    "resolved_path": "<root>/home/.zshrc",
+    "grant_dir": null,
+    "grantable": false,
+    "crossings": [
+     {
+      "path": "<root>/home/.zshrc",
+      "answerFile": true,
+      "startupFile": "~/.zshrc"
+     }
+    ]
+   }
+  ]
+ },
+ "Notes mode | echo ~/.claude/\".credentials.json\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "echo ~/.claude/\".credentials.json\""
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.claude"
+    ]
+   }
+  ]
+ },
+ "Notes mode | find . -name \"*.md\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "find . -name \"*.md\""
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | git commit -m \"fix: update notes\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "git commit -m \"fix: update notes\""
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | grep \"/etc/x\" notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "grep \"/etc/x\" notes.md"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | grep -e \"/etc/x\" notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "grep -e \"/etc/x\" notes.md"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | ls \"My Notes\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "ls \"My Notes\""
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | ls 'My Notes'": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "ls 'My Notes'"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | printf '%s\\n' \"~/.claude/.credentials.json\"": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "printf '%s\\n' \"~/.claude/.credentials.json\""
+    },
+    "conversation_id": "",
+    "advisory_outside_paths": [
+     "<root>/home/.claude/.credentials.json"
+    ]
+   }
+  ]
+ },
+ "Notes mode | python3 tool.py < .mcp.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "python3 tool.py < .mcp.json"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | sed 's#/a#/b#' notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "sed 's#/a#/b#' notes.md"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | sort -t '/' -k2 notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "sort -t '/' -k2 notes.md"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | tr '/' '_' < notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "tr '/' '_' < notes.md"
+    },
+    "conversation_id": ""
+   }
+  ]
+ },
+ "Notes mode | tr -d '/' < notes.md": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "tr -d '/' < notes.md"
+    },
+    "conversation_id": ""
+   }
+  ]
+ }
+}

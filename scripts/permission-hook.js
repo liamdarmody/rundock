@@ -1623,10 +1623,12 @@ function echoedArgsIn(command) {
 function shellPathTokens(command, posixEscapes = false) {
   return shellPathWords(command, posixEscapes).map(w => w.t);
 }
-// The same words, each with where it starts in the command (`at`), read as
-// they always were, quotes as written. A quote character that opens nothing
-// in bash (an escaped one among them) is a space in the line's view, which the
-// crossing check reads as well (shellCrossings), so none of them hides a path.
+// The same words, each with where it starts in the command (`at`), split at
+// every quote. Each word is also read as bash joins it (joinedPathWords), and
+// the crossings are the union of both readings. A quote character that opens
+// nothing in bash (an escaped one among them) is a space in the line's view,
+// which the crossing check reads as well (shellCrossings), so none of them
+// hides a path.
 function shellPathWords(command, posixEscapes = false) {
   const out = [];
   // Every argument sitting in a pattern position, counted per segment so the
@@ -1665,6 +1667,62 @@ function shellPathWords(command, posixEscapes = false) {
       if (!(/^IFS=/.test(t) && dropOne(value))) out.push({ t: value, at: m.index });
     }
   }
+  return out;
+}
+
+// EACH WORD AGAIN, AS BASH JOINS IT: quotes and escapes taken out and its
+// pieces put together, so `~/.claude/".credentials.json"` and
+// `"$HOME/.claude"/.credentials.json` are the path they name. Read by the
+// verdict's lexer, through its module, so a test can make it fail. Each piece
+// either side of a `<` or `>` is a word, a redirection's target included, and
+// the target is never skipped. The skips above are found by position: the
+// pattern, a separator `/`, and every word of an echo whose output goes
+// nowhere. `joined` marks a word that differs from its spelling; `expands`
+// one holding a variable or substitution. A line too long to read throws.
+const codeParse = require('./code-mode-parse.js');
+const JOINED_READ_LIMIT = 256 * 1024;
+function joinedPathWords(text, depth = 0, offset = 0, out = []) {
+  const s = String(text);
+  if (s.length > JOINED_READ_LIMIT) throw new Error('line too long to read');
+  if (depth > READ_DEPTH) {
+    for (const t of s.replace(/['"\\]/g, '').match(/[^\s;|&<>(){}`]+/g) || []) out.push({ t, at: offset, joined: true, expands: t.includes('$') });
+    return out;
+  }
+  const segs = codeParse.lexSegments(s, 'bash');
+  let from = 0;
+  segs.forEach((seg, k) => {
+    const start = s.indexOf(seg.text, from);
+    if (start >= 0) from = start + seg.text.length;
+    const at = offset + Math.max(0, start);
+    const targets = [];
+    const words = codeParse.lexWords(seg.text, 'bash', targets, true);
+    const lead = (words[0] ? words[0].text : '').split('/').pop();
+    const next = segs[k + 1];
+    const skip = new Set((lead === 'echo' || lead === 'printf') && !/[<>]|\$\(|`/.test(seg.text) && !(next && next.op === '|') ? words : []);
+    let sawE = false;
+    for (let i = 1; PATTERN_FIRST_ARG.has(lead) && i < words.length; i++) {
+      const t = words[i].text;
+      if (t === '-e' || t === '--regexp') { if (words[i + 1]) { skip.add(words[++i]); sawE = true; } continue; }
+      if (t === '-f' || t === '--file') { i++; continue; }
+      if (t[0] === '-' && t.length > 1) continue;
+      if (!sawE) skip.add(words[i]);
+      break;
+    }
+    const slash = delimiterArgsIn(seg.text).length > 0;
+    for (const body of codeParse.substitutions(seg.text, 'bash').bodies) joinedPathWords(body, depth + 1, at + Math.max(0, seg.text.indexOf(body)), out);
+    const placed = (list) => { let cur = 0; return list.map((w) => { const i = seg.text.indexOf(w.raw, cur); if (i >= 0) cur = i + w.raw.length; return [w, at + Math.max(0, i)]; }); };
+    for (const [w, wat] of [...placed(words), ...placed(targets)]) {
+      const close = { '(': ')', '{': '}' }[w.raw[0]];
+      if (close) joinedPathWords(w.raw.slice(1, w.raw.lastIndexOf(close)), depth + 1, wat + 1, out);
+      if (skip.has(w) || close) continue;
+      w.text.split(/([<>]+)/).forEach((piece, n, parts) => {
+        const eq = piece.indexOf('=');
+        for (const t of n % 2 ? [] : eq > 0 && eq < piece.length - 1 ? [piece, piece.slice(eq + 1)] : [piece]) {
+          if (t && !(slash && t === '/')) out.push({ t, at: wat, joined: w.text !== w.raw, expands: w.expands, target: (n ? parts[n - 1] : w.op || '').includes('>') });
+        }
+      });
+    }
+  });
   return out;
 }
 
@@ -3512,7 +3570,9 @@ function shellCrossings(command, workspaceRoot, extraDirs, home = os.homedir(), 
   // No write flag in the key: both readings take it from the one readOnly above.
   const keyOf = c => `${c.path}\u0000${c.answerFile ? 'a' : ''}`;
   const have = new Set(found.map(keyOf));
-  for (const c of crossingsIn(view, workspaceRoot, extraDirs, home, foldsCase, opts, readsPart, readOnly)) {
+  const more = crossingsIn(view, workspaceRoot, extraDirs, home, foldsCase, opts, readsPart, readOnly);
+  if (more.unread) found.unread = true;
+  for (const c of more) {
     if (!have.has(keyOf(c))) { have.add(keyOf(c)); found.push(c); }
   }
   return found;
@@ -3592,6 +3652,16 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   };
   const ran = view.commands.flatMap((c, k) => shellPathWords(c.text, posixText).map(w => ({ t: w.t, at: c.at, fromStart: true, writeOnly: writeOnlyAt(k + 1, w) })));
   const words = shellPathWords(view.text, posixText).map(w => ({ ...w, writeOnly: writeOnlyAt(0, w) })).concat(view.literals, ran).sort((a, b) => a.at - b.at);
+  // The same text as bash joins each word (joinedPathWords), read after the
+  // words above so the first crossing is the one it was. A line that reading
+  // cannot read is marked, and asked about (classifyShellAccess).
+  let joined = [];
+  try {
+    for (const [text, at] of posixText ? [[view.text, null], ...view.commands.map(c => [c.text, c.at])] : []) {
+      joined.push(...joinedPathWords(text).map(w => (at === null ? { ...w, fromStart: false } : { ...w, at, fromStart: true })));
+    }
+  } catch (e) { found.unread = true; joined = []; }
+  for (const w of joined) if (w.joined) { words.push(w); if (w.target && !readOnly) writingWords.add(w.t); }
   // The folder each word starts from, worked out once per path flavour, for
   // the command's own words and for the commands its code runs (which start
   // where the command does).
@@ -3909,6 +3979,30 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
       // may read, so it is only written where no place names it any other way.
       for (const h of homesReadBy(form, starts)) for (const e of entriesUnder(h)) reportSecret(e.path, onlyWritten.has(word));
     }
+  }
+  // A WORD HOLDING A VARIABLE OR A SUBSTITUTION is only known when the line
+  // runs, so this asks more. With each one standing for any text, it names a
+  // credential file when it starts at home and its literal parts could spell
+  // the file's path (`~/.claude/$X`, `~/.claude/.cred$E"entials.json"`), when
+  // its literal parts from one on could spell, to the end of the word, the
+  // file's name or its path below home (`$D.credentials.json`,
+  // `$D/.cred$E"entials.json"`), or when the text after the last one ends in
+  // that path; any ending the word may be empty (`$D/auth.json$(true)`). A
+  // word with no literal text but `/` (`$A/$B`) names nothing, nor does a name
+  // a variable begins (`$f.json`).
+  const fold = p => foldCase(p, foldsCase);
+  // A word's literal parts, split at each variable and substitution. A `$( )`
+  // runs to the parenthesis that closes it, or to the end when none does.
+  const literalParts = t => { const re = /\$\{[^}]*\}|\$[\w@*#?$!-]+|`[^`]*`/y, parts = ['']; for (let i = 0; i < t.length; i++) { const j = t.startsWith('$(', i) ? codeParse.closeParen(t, i + 1, 'bash') : (re.lastIndex = i, re.test(t)) ? re.lastIndex - 1 : null; if (j === null) parts[parts.length - 1] += t[i]; else { parts.push(''); i = j < 0 ? t.length : j; } } return parts; };
+  const fits = (parts, p) => { const last = parts[parts.length - 1]; let k = parts[0].length; for (const x of parts.slice(1, -1)) { const i = p.indexOf(x, k); if (i < 0) return false; k = i + x.length; } return p.startsWith(parts[0]) && p.endsWith(last) && (parts.length > 1 ? p.length - last.length >= k : p === last); };
+  const ends = secretEntries.map(e => { const rels = e.reach.flatMap(x => homeSpellings.map(h => path.relative(h, x))).filter(r => r && !r.startsWith('..') && !path.isAbsolute(r)).map(fold); return { e, rels, paths: [...rels.map(r => '~/' + r), ...e.reach.map(fold)], names: rels.flatMap(r => r.split('/').flatMap((_, i, a) => [a.slice(i).join('/'), '/' + a.slice(i).join('/')])) }; });
+  for (const w of joined) {
+    const parts = w.expands ? literalParts(fold(HOME_PREFIX.reduce((t, re) => t.replace(re, '~'), w.t))) : [];
+    let cut = parts.length; while (cut > 1 && !parts[cut - 1]) cut--;
+    const lit = parts.slice(0, cut), last = lit[cut - 1];
+    const homed = parts.length > 1 && (parts[0].startsWith('~/') || homeSpellings.some(h => (parts[0] + '/').startsWith(fold(h) + '/')));
+    if (parts.length < 2 || !/[^/]/.test(parts.join(''))) continue;
+    for (const { e, rels, paths, names } of ends) if ((homed && paths.some(p => fits(parts, p))) || (last && lit.some((x, i) => i && x.replace(/^\//, '') && names.some(n => fits(lit.slice(i), n)))) || rels.some(r => last.endsWith('/' + r))) reportSecret(e.path);
   }
   let previous = '';
   for (const { t: raw, at, fromStart, writeOnly } of words) {
@@ -4289,7 +4383,8 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
   // Nothing crosses, but the line reads a credential file the workspace holds.
   const reads = opts.credentialReads;
   if (!crossings.length && reads && reads.size) return { where: 'inside', resolvedPath: [...reads][0], grantDir: null, credential: true };
-  if (!crossings.length) return null;
+  // A line the joined reading could not read is asked about, as an escape is.
+  if (!crossings.length) return crossings.unread ? { where: 'outside', resolvedPath: null, grantDir: null, grantable: false, crossings: [] } : null;
   // `grantDir` AND `grantable` ARE DIFFERENT QUESTIONS, and conflating them is
   // why this offered nothing.
   //
