@@ -10,6 +10,7 @@ const path = require('node:path');
 
 const h = require('../helpers/harness.js');
 const glue = require('../../lib/runtime/codex-glue.js');
+const P = require('../fixtures/codex-appserver-protocol.js');
 const { agentFile, standardTeam } = require('../helpers/workspace.js');
 const { seedSummarisedConversation, SUMMARY_ONLY_WORD, BOUNDARY_UUID, seedCapturedSession, CAPTURED_SUMMARY_WORD } = require('../helpers/compaction-seed.js');
 
@@ -159,6 +160,164 @@ describe('a Codex conversation', () => {
   });
 });
 
+// A Codex turn of Rundock's whose records come from a list instead of the
+// stub: thread/start, thread/resume and turn/start are answered in-process
+// with the given thread and turn ids, and the records go into the real
+// protocol client as the server would send them, so the client's routing, the
+// glue, the stored transcript and the history handler are the path a live
+// turn takes. A later turn sends back the thread the window was told about,
+// as the window does, and resumes it. Returns what the window was sent for the
+// conversation.
+async function scriptedTurn(convoId, prompt, { threadId, turnId, notifications }, { resume = null } = {}) {
+  const server = await glue.getCodexAppServer();
+  const request = server.request;
+  const opened = [];
+  server.request = async (method, params, opts) => {
+    if (method === 'thread/start' || method === 'thread/resume') { opened.push([method, params.threadId]); return { thread: { id: threadId } }; }
+    if (method === 'turn/start') return { turn: { id: turnId } };
+    return request.call(server, method, params, opts);
+  };
+  const since = client.messages.length;
+  try {
+    client.send({ type: 'chat', conversationId: convoId, agent: 'example-codex', content: prompt, ...(resume ? { sessionId: resume } : {}) });
+    let state = null;
+    assert.ok(await h.waitUntil(() => (state = server._activeTurns.get(threadId)) && state.turnId === turnId), 'the turn runs under the given ids');
+    for (const n of notifications) server._onNotification(n.method, n.params);
+    await client.waitForEvent('system', 'done', convoId, { since });
+  } finally {
+    delete server.request;
+  }
+  assert.deepStrictEqual(opened, [resume ? ['thread/resume', resume] : ['thread/start', undefined]], 'the thread opened as the window asked');
+  return client.messages.slice(since).filter((m) => m._conversationId === convoId);
+}
+
+// What the window was shown live: how many times the summarising state, and
+// the dividers sent, by key.
+const live = (sent) => ({
+  summarising: sent.filter((m) => m.subtype === 'status' && m.status === 'compacting').length,
+  dividers: sent.filter((m) => m.subtype === 'compact_boundary').map((m) => m.uuid),
+});
+const keptKeys = (convoId) => h.internal.loadTranscript(convoId).filter((t) => t.type === 'compaction').map((t) => t.key);
+
+// Every turn Rundock started in a capture: the notifications the server sent
+// after Rundock's turn/start until the capture's next marker, and the thread
+// and turn they name.
+function capturedTurns(file) {
+  const lines = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'compaction', file), 'utf8')
+    .trim().split('\n').map((l) => JSON.parse(l));
+  const turns = [];
+  let current = null;
+  for (const line of lines) {
+    if (line.dir === 'mark') { current = null; continue; }
+    if (line.dir === 'sent' && line.msg.method === 'turn/start') { current = { notifications: [] }; turns.push(current); continue; }
+    if (!current || line.dir !== 'recv' || !line.msg.method || line.msg.id != null) continue;
+    current.notifications.push(line.msg);
+    if (line.msg.method === 'turn/started') current.turnId = line.msg.params.turn.id;
+    if (line.msg.params && line.msg.params.threadId) current.threadId = line.msg.params.threadId;
+  }
+  return turns;
+}
+
+// The ids codex-auto-compact.jsonl was captured with: one thread, two turns
+// Rundock started, a summary inside each.
+const CAPTURED_THREAD = '00000000-0000-4000-8000-020000000001';
+const CAPTURED_TURNS = ['00000000-0000-4000-8000-030000000001', '00000000-0000-4000-8000-030000000002'];
+const CAPTURED_ITEMS = ['00000000-0000-4000-8000-040000000004', '00000000-0000-4000-8000-040000000006'];
+
+describe('a summary Codex ran inside a turn of Rundock\'s, as captured', () => {
+  test('both captured turns, with the thread and turn ids they were captured with: for each summary, one live state, one divider sent, one entry kept, and its divider on every reopen', async () => {
+    const convoId = open('cmph-codex-captured');
+    const turns = capturedTurns('codex-auto-compact.jsonl');
+    assert.deepStrictEqual(turns.map((t) => [t.threadId, t.turnId]), CAPTURED_TURNS.map((id) => [CAPTURED_THREAD, id]), 'the ids as captured');
+    let resume = null;
+    for (const [i, turn] of turns.entries()) {
+      const sent = await scriptedTurn(convoId, `CAPTURED-${i + 1} go`, turn, { resume });
+      resume = sent.find((m) => m.subtype === 'init')._sessionId;
+      assert.strictEqual(resume, CAPTURED_THREAD, `turn ${i + 1}: the captured thread`);
+      assert.deepStrictEqual(live(sent), { summarising: 1, dividers: [CAPTURED_ITEMS[i]] }, `turn ${i + 1}`);
+      assert.deepStrictEqual(keptKeys(convoId), CAPTURED_ITEMS.slice(0, i + 1), `turn ${i + 1}: the entry kept`);
+    }
+    const expected = [
+      ['user', 'CAPTURED-1 go'], ['divider', CAPTURED_ITEMS[0], ''], ['assistant', 'ready done'],
+      ['user', 'CAPTURED-2 go'], ['divider', CAPTURED_ITEMS[1], ''], ['assistant', 'okay'],
+    ];
+    assert.deepStrictEqual(shape(await reopen(convoId)), expected);
+    assert.deepStrictEqual(shape(await reopen(convoId)), expected, 'reopened again: still one divider each');
+  });
+});
+
+// A turn in the protocol's own shapes: the given records, then a well-formed
+// summary, then the reply.
+const summaryItem = (threadId, turnId, id) => [P.itemStartedContextCompaction(threadId, turnId, id), P.itemCompletedContextCompaction(threadId, turnId, id)];
+const reply = (threadId, turnId, itemId, text) => [
+  P.itemStartedAgentMessage(threadId, turnId, itemId), P.agentMessageDelta(threadId, turnId, itemId, text), P.itemCompletedAgentMessage(threadId, turnId, itemId, text),
+];
+const turnWith = (threadId, turnId, records) => ({ threadId, turnId, notifications: [
+  P.turnStarted(threadId, turnId), ...records, ...summaryItem(threadId, turnId, 'c1'), ...reply(threadId, turnId, 'msg-1', 'Still here.'), P.turnCompleted(threadId, turnId),
+] });
+const noTurnId = (record) => { const params = { ...record.params }; delete params.turnId; return { method: record.method, params }; };
+
+describe('summary records that do not name the running turn by a nonempty id', () => {
+  const cases = {
+    'a summary item started with no turn id': (th, tu) => [noTurnId(summaryItem(th, tu, 'c1')[0])],
+    'a summary item finished with no turn id': (th, tu) => [noTurnId(summaryItem(th, tu, 'c1')[1])],
+    'a summary item and its notice naming another turn': (th) => [...summaryItem(th, 'turn-other', 'c1'), P.threadCompacted(th, 'turn-other')],
+  };
+  for (const [name, records] of Object.entries(cases)) {
+    test(`${name}: no live state, no divider sent, nothing kept, and a summary that follows draws exactly one, on every reopen`, async () => {
+      const convoId = open('cmph-codex-unnamed');
+      const threadId = `thread-${convoId}`;
+      const turnId = `turn-${convoId}`;
+      const sent = await scriptedTurn(convoId, 'UNNAMED go', turnWith(threadId, turnId, records(threadId, turnId)));
+      assert.deepStrictEqual(live(sent), { summarising: 1, dividers: ['c1'] });
+      assert.deepStrictEqual(keptKeys(convoId), ['c1']);
+      const expected = [['user', 'UNNAMED go'], ['divider', 'c1', ''], ['assistant', 'Still here.']];
+      assert.deepStrictEqual(shape(await reopen(convoId)), expected);
+      assert.deepStrictEqual(shape(await reopen(convoId)), expected, 'reopened again');
+    });
+  }
+
+  test('a turn whose id is empty, its summary records naming that empty id: no live state, no divider sent, nothing kept, and a summary in the next turn draws exactly one, on every reopen', async () => {
+    const convoId = open('cmph-codex-empty');
+    const threadId = `thread-${convoId}`;
+    const first = await scriptedTurn(convoId, 'EMPTY-1 go', { threadId, turnId: '', notifications: [
+      P.turnStarted(threadId, ''), ...summaryItem(threadId, '', 'c1'), P.threadCompacted(threadId, ''),
+      ...reply(threadId, '', 'msg-0', 'First.'), P.turnCompleted(threadId, ''),
+    ] });
+    assert.deepStrictEqual(live(first), { summarising: 0, dividers: [] });
+    assert.deepStrictEqual(keptKeys(convoId), []);
+    const next = await scriptedTurn(convoId, 'EMPTY-2 go', turnWith(threadId, `turn-${convoId}`, []), { resume: threadId });
+    assert.deepStrictEqual(live(next), { summarising: 1, dividers: ['c1'] });
+    assert.deepStrictEqual(keptKeys(convoId), ['c1']);
+    const expected = [['user', 'EMPTY-1 go'], ['assistant', 'First.'], ['user', 'EMPTY-2 go'], ['divider', 'c1', ''], ['assistant', 'Still here.']];
+    assert.deepStrictEqual(shape(await reopen(convoId)), expected);
+    assert.deepStrictEqual(shape(await reopen(convoId)), expected, 'reopened again');
+  });
+});
+
+describe('summaries announced only by the older notice', () => {
+  test('two in one turn, each notice sent twice, the reply carrying on between them: two dividers sent, in order, two entries kept, and both on every reopen', async () => {
+    const convoId = open('cmph-codex-notices');
+    const threadId = `thread-${convoId}`;
+    const turnId = `turn-${convoId}`;
+    const notice = P.threadCompacted(threadId, turnId);
+    const sent = await scriptedTurn(convoId, 'NOTICES go', { threadId, turnId, notifications: [
+      P.turnStarted(threadId, turnId),
+      notice, notice,
+      ...reply(threadId, turnId, 'msg-1', 'Between.'),
+      notice, notice,
+      ...reply(threadId, turnId, 'msg-2', 'After.'),
+      P.turnCompleted(threadId, turnId),
+    ] });
+    const keys = [`${turnId}:compacted:1`, `${turnId}:compacted:2`];
+    assert.deepStrictEqual(live(sent), { summarising: 0, dividers: keys });
+    assert.deepStrictEqual(keptKeys(convoId), keys);
+    const expected = [['user', 'NOTICES go'], ['divider', keys[0], ''], ['divider', keys[1], ''], ['assistant', 'Between. After.']];
+    assert.deepStrictEqual(shape(await reopen(convoId)), expected);
+    assert.deepStrictEqual(shape(await reopen(convoId)), expected, 'reopened again: still two dividers');
+  });
+});
+
 // The summary Codex ran as a turn of its own when asked with
 // thread/compact/start (test/fixtures/compaction/codex-compact.jsonl), which
 // Rundock never sends: the notifications from that request to the next marker.
@@ -173,16 +332,14 @@ const COMPACT_TURN = (() => {
   }
   return out;
 })();
-const COMPACT_ITEM = COMPACT_TURN.find((r) => r.method === 'item/completed').params.item.id;
-function renamed(record, threadId, turnId) {
+// A record moved onto another thread, its turn left as captured.
+function onThread(record, threadId) {
   const copy = JSON.parse(JSON.stringify(record));
   copy.params.threadId = threadId;
-  if (turnId && copy.params.turnId) copy.params.turnId = turnId;
-  if (turnId && copy.params.turn) copy.params.turn.id = turnId;
   return copy;
 }
 
-describe('the summary Codex runs as a turn of its own', () => {
+describe('a summary turn Rundock did not start', () => {
   // A Codex turn held open before its reply, the records sent into the real
   // protocol client while it waits, then let go.
   async function heldTurn(convoId, prompt, records) {
@@ -202,20 +359,11 @@ describe('the summary Codex runs as a turn of its own', () => {
     return { server, threadId: state.threadId };
   }
 
-  test('its records inside a turn of Rundock\'s draw one divider, kept and drawn again on every reopen', async () => {
-    const convoId = open('cmph-codex-own');
-    const inside = COMPACT_TURN.slice(COMPACT_TURN.findIndex((r) => r.method === 'turn/started') + 1, COMPACT_TURN.findIndex((r) => r.method === 'turn/completed'));
-    await heldTurn(convoId, 'HIST-OWN', (s) => inside.map((r) => renamed(r, s.threadId, s.turnId)));
-    const expected = [['user', 'HIST-OWN-HELD go'], ['divider', COMPACT_ITEM, ''], ['assistant', 'Carrying on.']];
-    assert.deepStrictEqual(shape(await reopen(convoId)), expected);
-    assert.deepStrictEqual(shape(await reopen(convoId)), expected, 'reopened again: still one divider');
-  });
-
-  test('as Codex sent them, naming its own turn, they draw nothing, during a turn of Rundock\'s or between turns, and the next turn still works', async () => {
+  test('draws nothing: its records as Codex sent them, naming the turn Codex ran them in, during a turn of Rundock\'s on the same thread or between turns, and the next turn still works', async () => {
     const convoId = open('cmph-codex-foreign');
     const since = client.messages.length;
-    const { server, threadId } = await heldTurn(convoId, 'HIST-FOREIGN', (s) => COMPACT_TURN.map((r) => renamed(r, s.threadId)));
-    for (const r of COMPACT_TURN.map((rec) => renamed(rec, threadId))) server._onNotification(r.method, r.params);
+    const { server, threadId } = await heldTurn(convoId, 'HIST-FOREIGN', (s) => COMPACT_TURN.map((r) => onThread(r, s.threadId)));
+    for (const r of COMPACT_TURN.map((rec) => onThread(rec, threadId))) server._onNotification(r.method, r.params);
     await chat(convoId, 'example-codex', 'HIST-FOREIGN-NEXT go');
     assert.deepStrictEqual(shape(await reopen(convoId)), [
       ['user', 'HIST-FOREIGN-HELD go'], ['assistant', 'Carrying on.'],

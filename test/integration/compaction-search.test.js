@@ -10,6 +10,7 @@ const h = require('../helpers/harness.js');
 const {
   seedSummarisedConversation, SUMMARY_ONLY_WORD, SHARED_WORD, DIVIDER_WORDS,
   seedCapturedSession, CAPTURED_SUMMARY_WORD, CAPTURED_PROMPT_WORDS,
+  seedStreamSummarySession, STREAM_SUMMARY_WORD, STREAM_PROMPT_WORD,
 } = require('../helpers/compaction-seed.js');
 
 const probe = require('../../search.js').probeSqlite();
@@ -20,8 +21,10 @@ if (!probe.available) {
 
 const CONVO = 'cmp-search';
 const CAPTURED = 'cmp-search-captured';
+const STREAM = 'cmp-search-stream';
 let client;
 let seeded;
+let streamSeeded;
 
 async function search(query, convoId = CONVO) {
   const since = client.messages.length;
@@ -34,6 +37,7 @@ before(async () => {
   await h.boot();
   seeded = seedSummarisedConversation(h, { convoId: CONVO, sessionId: 'sess-cmp-fts' });
   seedCapturedSession(h, { convoId: CAPTURED });
+  streamSeeded = seedStreamSummarySession(h, { convoId: STREAM });
   client = await h.connect();
 });
 after(async () => h.shutdown());
@@ -65,6 +69,21 @@ describe('the index, over the session file Claude Code kept', () => {
 
   test('never finds it by the summary Claude Code wrote', async () => {
     assert.deepStrictEqual(await search(CAPTURED_SUMMARY_WORD, CAPTURED), []);
+  });
+});
+
+describe('the index, over a session holding the summary as Claude Code\'s output stream carries it', () => {
+  test('finds the conversation by an ordinary prompt in that session', async () => {
+    const hits = await search(STREAM_PROMPT_WORD, STREAM);
+    assert.strictEqual(hits.length, 1);
+    assert.strictEqual(hits[0].matchType, 'content');
+  });
+
+  test('never finds it by the summary line, marked isSynthetic and not isCompactSummary', async () => {
+    const { summary } = streamSeeded;
+    assert.deepStrictEqual([summary.isSynthetic, summary.isCompactSummary], [true, undefined], 'the line as captured');
+    assert.ok(summary.message.content.toLowerCase().includes(STREAM_SUMMARY_WORD), 'the word is the summary\'s');
+    assert.deepStrictEqual(await search(STREAM_SUMMARY_WORD, STREAM), []);
   });
 });
 

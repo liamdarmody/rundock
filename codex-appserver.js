@@ -103,6 +103,12 @@ const TURN_OPT_KEYS = ['model', 'cwd', 'effort', 'summary', 'approvalPolicy', 's
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// A record names the running turn only by that turn's own id, and an empty
+// id names no turn, even when the turn/start reply gave the turn an empty one.
+function namesActiveTurn(state, turnId) {
+  return typeof turnId === 'string' && turnId !== '' && turnId === state.turnId;
+}
+
 // ── Client ──────────────────────────────────────────────────────────────────
 
 class CodexAppServer extends EventEmitter {
@@ -487,7 +493,7 @@ class CodexAppServer extends EventEmitter {
       startedPromise: null,
       interruptFailsafeTimer: null, // armed by interruptTurn; see _armInterruptFailsafe
       interruptRetryTimer: null,    // one halfway-point interrupt re-send
-      compaction: { started: new Set(), items: new Set(), noticed: false, emitted: 0 },
+      compaction: { byItem: new Map(), current: null, activity: false, count: 0 }, // see _onCompaction
     };
     this._activeTurns.set(threadId, state);
 
@@ -668,6 +674,12 @@ class CodexAppServer extends EventEmitter {
       this._log(`codex app-server: dropping ${method} for turn ${notifTurnId} on thread ${params.threadId} (active turn is ${state.turnId})`);
       return;
     }
+    // Anything else this turn does keeps the summary records on either side
+    // of it apart (see _onCompaction).
+    if (state && typeof method === 'string' && method.startsWith('item/') && namesActiveTurn(state, notifTurnId)
+      && !(params.item && params.item.type === 'contextCompaction')) {
+      state.compaction.activity = true;
+    }
     switch (method) {
       case 'turn/started': {
         // Backup turnId source: the notification can beat the turn/start
@@ -743,38 +755,54 @@ class CodexAppServer extends EventEmitter {
   // ONE SUMMARY, ONE EVENT. Codex records a summary twice over: the
   // contextCompaction item (started, then completed) and, on servers that
   // still send it, the deprecated thread/compacted notice for the same turn.
-  // An item names its summary; a notice names only its turn, so a notice sent
-  // again and a second summary announced by a notice alone look the same.
-  // Every notice in a turn is therefore one summary: a repeat never draws a
-  // second divider, and a server sending notices without items draws one
-  // divider for the turn however many summaries it ran. A turn has had as
-  // many summaries as its items, or one if it had only notices, and
-  // 'compacted' is emitted only when that number grows, so either record,
-  // both, or a repeat of either gives one event. A record missing its ids is
-  // not a summary, and every record must name this turn: routing above
-  // drops one naming another turn but lets through one naming none.
+  // An item names its summary by its id; a notice carries only its thread
+  // and turn ids (ContextCompactedNotification in the protocol schema), so a
+  // notice sent again and a second summary announced by a notice alone are
+  // told apart only by what came between them. A summary takes new
+  // conversation to trigger, so between two real summaries in one turn the
+  // turn always does something else: an item/* record that is not a
+  // summary's (a message delta, a tool item, a reasoning item). Hence:
+  // - two item ids are always two summaries;
+  // - otherwise, a record with nothing else since the last summary record
+  //   belongs to that summary (a repeat, or a notice and its item in either
+  //   order), and one after other activity starts a new summary.
+  // Each summary emits 'compacted' once, keyed by its item id or, when it was
+  // first announced by a notice, by the turn id and its place in the turn, so
+  // each key belongs to one summary and the window's key-based dedupe keeps
+  // two apart while still dropping a replay. Limit: a notice repeated after
+  // other activity counts as a second summary. A record missing its ids is
+  // not a summary, and every record must name this turn by a nonempty id:
+  // routing above drops one naming another turn but lets through one naming
+  // none, and a turn whose id is empty or unknown draws nothing.
   _onCompaction(state, kind, params) {
-    if (typeof params.turnId !== 'string' || params.turnId !== state.turnId) return;
+    if (!namesActiveTurn(state, params.turnId)) return;
     const c = state.compaction;
+    const last = c.activity ? null : c.current;
+    let summary = null;
     if (kind === 'notice') {
-      c.noticed = true;
+      summary = last;
     } else {
       const id = params.item.id;
       if (typeof id !== 'string' || !id) return;
-      if (kind === 'started') {
-        if (c.started.has(id) || c.items.has(id)) return;
-        c.started.add(id);
-        this._emitTurnEvent(state, { type: 'compactionStarted' });
-        return;
-      }
-      if (c.items.has(id)) return;
-      c.items.add(id);
+      summary = c.byItem.get(id) || (last && last.itemId == null ? last : null);
+      if (summary) summary.itemId = id;
     }
-    const seen = Math.max(c.items.size, c.noticed ? 1 : 0);
-    if (seen <= c.emitted) return;
-    c.emitted = seen;
-    const key = kind === 'notice' ? `${state.turnId}:compacted` : params.item.id;
-    this._emitTurnEvent(state, { type: 'compacted', key });
+    if (!summary) {
+      c.count += 1;
+      summary = { itemId: kind === 'notice' ? null : params.item.id, ordinal: c.count, started: false, emitted: false };
+    }
+    if (summary.itemId) c.byItem.set(summary.itemId, summary);
+    c.current = summary;
+    c.activity = false;
+    if (kind === 'started') {
+      if (summary.started || summary.emitted) return;
+      summary.started = true;
+      this._emitTurnEvent(state, { type: 'compactionStarted' });
+      return;
+    }
+    if (summary.emitted) return;
+    summary.emitted = true;
+    this._emitTurnEvent(state, { type: 'compacted', key: summary.itemId || `${state.turnId}:compacted:${summary.ordinal}` });
   }
 
   // ── Server-to-client requests (approvals; RESEARCH.md section 5) ─────────

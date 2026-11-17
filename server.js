@@ -3298,8 +3298,10 @@ async function grepSearchTranscripts(query, convos) {
       for await (const line of rl) {
         try {
           const obj = JSON.parse(line);
-          // The summary Claude Code writes to make room is never a match.
+          // The summary Claude Code writes to make room is never a match,
+          // marked as its session file marks it or as its output stream does.
           if (obj.isCompactSummary === true) continue;
+          if (obj.type === 'user' && obj.isSynthetic === true) continue;
           if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
             if (obj.message.content.toLowerCase().includes(q)) {
               rl.close();

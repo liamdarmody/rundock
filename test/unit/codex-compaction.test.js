@@ -49,9 +49,10 @@ function capturedTurns(file) {
 }
 
 // The real client with its transport replaced: turn/start answers with the
-// captured turn's id, and the captured notifications go in as they came.
-async function replay(turn) {
-  const server = createCodexAppServer({ binPath: 'codex-not-started', log: () => {} });
+// captured turn's id, and the captured notifications go in as they came. A
+// client passed in carries its earlier turns' state into this one.
+const newClient = () => createCodexAppServer({ binPath: 'codex-not-started', log: () => {} });
+async function replay(turn, server = newClient()) {
   server.request = async (method) => (method === 'turn/start' ? { turn: { id: turn.turnId } } : {});
   const sub = server.startTurn(turn.threadId, 'carry on');
   const events = [];
@@ -74,15 +75,10 @@ function capturedCompactTurn(file) {
   }
   return out;
 }
-const insideTurn = (records) => records.slice(
-  records.findIndex((r) => r.method === 'turn/started') + 1,
-  records.findIndex((r) => r.method === 'turn/completed'));
-// A record moved onto another thread and, when given, another turn.
-function renamed(record, threadId, turnId) {
+// A record moved onto another thread, its turn left as captured.
+function onThread(record, threadId) {
   const copy = JSON.parse(JSON.stringify(record));
   copy.params.threadId = threadId;
-  if (turnId && copy.params.turnId) copy.params.turnId = turnId;
-  if (turnId && copy.params.turn) copy.params.turn.id = turnId;
   return copy;
 }
 
@@ -141,21 +137,10 @@ describe('the captured lines', () => {
     }
   });
 
-  test('the summary Codex ran as a turn of its own, its records inside a turn of Rundock\'s: one start, one finish keyed by its item', async () => {
-    const records = insideTurn(capturedCompactTurn('codex-compact.jsonl')).map((r) => renamed(r, THREAD, TURN));
-    assert.deepStrictEqual(records.filter((r) => r.params.item).map((r) => [r.method, r.params.item.type]),
-      [['item/started', 'contextCompaction'], ['item/completed', 'contextCompaction']], 'the captured records, as captured');
-    const events = await replay(turnWith(records));
-    assert.deepStrictEqual(compactions(events), [
-      { type: 'compactionStarted' },
-      { type: 'compacted', key: '00000000-0000-4000-8000-040000000003' },
-    ]);
-    assert.strictEqual(events.find((e) => e.type === 'text').text, 'Still here.');
-    assert.strictEqual(events[events.length - 1].type, 'done');
-  });
-
-  test('the same records as Codex sent them, naming its own turn, during a turn of Rundock\'s: nothing, and that turn carries on to its own end', async () => {
-    const records = capturedCompactTurn('codex-compact.jsonl').map((r) => renamed(r, THREAD));
+  test('a summary turn Rundock did not start draws nothing: its records, naming the turn Codex ran them in, sent during a turn of Rundock\'s on the same thread, and that turn carries on to its own end', async () => {
+    const records = capturedCompactTurn('codex-compact.jsonl').map((r) => onThread(r, THREAD));
+    assert.deepStrictEqual(records.filter((r) => r.params.item && r.params.item.type === 'contextCompaction').map((r) => r.method),
+      ['item/started', 'item/completed'], 'the captured summary records are in what is replayed');
     const events = await replay(turnWith(records));
     assert.deepStrictEqual(compactions(events), []);
     assert.strictEqual(events.find((e) => e.type === 'text').text, 'Still here.', 'its turn/completed did not end this turn');
@@ -241,6 +226,44 @@ describe('one summary, one event', () => {
     assert.deepStrictEqual(events.filter((e) => e.type === 'compacted').map((e) => e.key), ['cmp-alpha', 'cmp-beta']);
   });
 
+  // A notice names no summary, only its turn. A summary needs new
+  // conversation to trigger, so two summaries always have the turn doing
+  // something else between them, and a repeat never does.
+  test('two summaries announced only by the older notice, the reply carrying on between them: two events, in order, each keyed by the turn and its place in it', async () => {
+    const events = await replay(turnWith([
+      P.threadCompacted(THREAD, TURN),
+      P.agentMessageDelta(THREAD, TURN, 'msg-alpha', ' More.'),
+      P.threadCompacted(THREAD, TURN),
+    ]));
+    assert.deepStrictEqual(compactions(events), [
+      { type: 'compacted', key: `${TURN}:compacted:1` },
+      { type: 'compacted', key: `${TURN}:compacted:2` },
+    ]);
+    assert.deepStrictEqual(kinds(events).filter((k) => k === 'delta' || k === 'compacted'), ['delta', 'compacted', 'delta', 'compacted']);
+  });
+
+  test('the older notice and then its item: one event, and no live state after the divider', async () => {
+    const events = await replay(turnWith([
+      P.threadCompacted(THREAD, TURN),
+      P.itemStartedContextCompaction(THREAD, TURN, 'cmp-alpha'),
+      P.itemCompletedContextCompaction(THREAD, TURN, 'cmp-alpha'),
+    ]));
+    assert.deepStrictEqual(compactions(events), [{ type: 'compacted', key: `${TURN}:compacted:1` }]);
+  });
+
+  test('two summaries, each with its item and then its notice, the reply carrying on between them: two events, keyed by the items', async () => {
+    const events = await replay(turnWith([
+      P.itemStartedContextCompaction(THREAD, TURN, 'cmp-alpha'),
+      P.itemCompletedContextCompaction(THREAD, TURN, 'cmp-alpha'),
+      P.threadCompacted(THREAD, TURN),
+      P.agentMessageDelta(THREAD, TURN, 'msg-alpha', ' More.'),
+      P.itemStartedContextCompaction(THREAD, TURN, 'cmp-beta'),
+      P.itemCompletedContextCompaction(THREAD, TURN, 'cmp-beta'),
+      P.threadCompacted(THREAD, TURN),
+    ]));
+    assert.deepStrictEqual(events.filter((e) => e.type === 'compacted').map((e) => e.key), ['cmp-alpha', 'cmp-beta']);
+  });
+
   test('a summary in the middle of a reply arrives between the reply\'s two items', async () => {
     const events = await runTurn({ deltas: ['Before ', 'the summary. ', 'After it.'], compaction: { afterDeltas: 2 } });
     const order = kinds(events).filter((k) => k === 'delta' || k === 'text' || k === 'compacted');
@@ -278,6 +301,38 @@ describe('what draws nothing', () => {
       assert.strictEqual(events.find((e) => e.type === 'text').text, 'Still here.', name);
       assert.strictEqual(events[events.length - 1].type, 'done', name);
     }
+  });
+
+  // Each case is followed by a well-formed summary in the same turn, which
+  // must still give exactly one start and one finish.
+  const wellFormed = [P.itemStartedContextCompaction(THREAD, TURN, 'c1'), P.itemCompletedContextCompaction(THREAD, TURN, 'c1')];
+  const unnamed = {
+    'a summary item started with no turn id': [withTurnId(wellFormed[0], undefined)],
+    'a summary item finished with no turn id': [withTurnId(wellFormed[1], undefined)],
+    'a summary item started and finished with no turn id': [withTurnId(wellFormed[0], undefined), withTurnId(wellFormed[1], undefined)],
+    'a summary item and its notice naming another turn': [withTurnId(wellFormed[0], 'turn-beta'), withTurnId(wellFormed[1], 'turn-beta'), P.threadCompacted(THREAD, 'turn-beta')],
+  };
+  for (const [name, records] of Object.entries(unnamed)) {
+    test(`${name}: no live state and no divider, and a summary that follows draws exactly one`, async () => {
+      const events = await replay(turnWith([...records, ...wellFormed]));
+      assert.deepStrictEqual(compactions(events), [{ type: 'compactionStarted' }, { type: 'compacted', key: 'c1' }]);
+      assert.strictEqual(events[events.length - 1].type, 'done');
+    });
+  }
+
+  test('a turn whose id is empty, its summary records naming that empty id: no live state and no divider, and a summary in the next turn draws exactly one', async () => {
+    const client = newClient();
+    const first = await replay({ threadId: THREAD, turnId: '', notifications: [
+      P.turnStarted(THREAD, ''),
+      P.itemStartedContextCompaction(THREAD, '', 'c1'),
+      P.itemCompletedContextCompaction(THREAD, '', 'c1'),
+      P.threadCompacted(THREAD, ''),
+      P.turnCompleted(THREAD, ''),
+    ] }, client);
+    assert.deepStrictEqual(compactions(first), []);
+    assert.strictEqual(first[first.length - 1].type, 'done');
+    const next = await replay(turnWith(wellFormed), client);
+    assert.deepStrictEqual(compactions(next), [{ type: 'compactionStarted' }, { type: 'compacted', key: 'c1' }]);
   });
 
   test('a reply that spells out the divider\'s words and either runtime\'s summary event is only text', async () => {

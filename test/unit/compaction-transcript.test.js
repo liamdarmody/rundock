@@ -79,7 +79,9 @@ describe('what an agent is told it missed', () => {
     }
   });
 
-  test('the entry as stored adds nothing either: no line, no count (main already behaves this way)', () => {
+  // This runs this branch's deltaSince. What main's does with the entry is
+  // recorded in docs/evidence/summarised-divider-older-release-evidence.md.
+  test('the entry as stored adds nothing either: no line, no count, on this branch\'s reader', () => {
     for (const arriving of [false, true]) {
       const withMark = deltaSince(transcript(STORED), 'other-agent', undefined, [], NAMES, arriving);
       const without = deltaSince(transcript(STORED).filter((t) => t !== STORED), 'other-agent', undefined, [], NAMES, arriving);

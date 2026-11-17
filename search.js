@@ -364,7 +364,10 @@ function extractIndexableMessage(obj) {
   if (!obj || typeof obj !== 'object') return null;
   // The summary Claude Code writes when it makes room: a user line nobody
   // typed, which can repeat anything said earlier. Never shown, never found.
+  // Its session file line is marked isCompactSummary; the same summary in
+  // Claude Code's output stream is a user line marked isSynthetic.
   if (obj.isCompactSummary === true) return null;
+  if (obj.type === 'user' && obj.isSynthetic === true) return null;
   const tsMs = obj.timestamp ? Date.parse(obj.timestamp) || null : null;
   if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
     const text = obj.message.content.trim();
