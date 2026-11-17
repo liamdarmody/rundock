@@ -1,7 +1,7 @@
 {
   "name": "rundock",
   "version": "0.15.8",
-  "description": "A visual workspace for your AI agent team. Built for people running their own businesses. Works with your Claude or ChatGPT subscription.",
+  "description": "A visual workspace for your AI agent team. Built for people running their own businesses. Works with your Claude and ChatGPT subscriptions.",
   "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
