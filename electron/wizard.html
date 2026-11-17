@@ -192,6 +192,7 @@
       margin-top: 8px;
     }
     .btn-secondary:hover { color: #F0EDE8; }
+    .btn-secondary:disabled { color: #9A9590; cursor: default; }
   </style>
 </head>
 <body>
@@ -229,6 +230,7 @@
     </div>
 
     <button class="btn" id="btn-signin" style="display:none" onclick="signIn()">Sign in to Claude</button>
+    <button class="btn-secondary" id="btn-signin-done" style="display:none" onclick="checkSignedIn()">I've finished signing in</button>
     <button class="btn" id="btn-codex-signin" style="display:none" onclick="signInCodex()">Sign in to Codex</button>
     <button class="btn" id="btn-check" onclick="checkNow()">Check again</button>
     <button class="btn-secondary" id="btn-codex-skip" style="display:none" onclick="skipCodex()">Skip for now</button>
@@ -364,12 +366,44 @@
       }
     }
 
-    async function checkStatus() {
-      const runtimes = await window.electronAPI.checkRuntimes();
+    // Only a check the person asks for shows why sign-in still fails: the
+    // automatic ones run while they are still in the terminal, where a failure
+    // is expected. Each sign-in that opens is counted, so an asked answer that
+    // arrives after a newer sign-in opened shows nothing.
+    let signInOpens = 0;
+    function showAsked(opens, reason) {
+      if (opens !== signInOpens) return;
+      showReason(reason);
+      const signinBtn = document.getElementById('btn-signin');
+      signinBtn.disabled = false;
+      signinBtn.textContent = 'Sign in to Claude';
+    }
+
+    async function checkSignedIn() {
+      const btn = document.getElementById('btn-signin-done');
+      btn.disabled = true;
+      btn.textContent = 'Checking...';
+      await checkStatus(true);
+      btn.disabled = false;
+      btn.textContent = "I've finished signing in";
+    }
+
+    async function checkStatus(asked) {
+      const opens = signInOpens;
+      let runtimes;
+      try {
+        runtimes = await window.electronAPI.checkRuntimes();
+      } catch {
+        // A check that could not run says nothing about sign-in, and never
+        // shows the error's text.
+        if (asked === true) showAsked(opens, { kind: 'no-reason' });
+        return false;
+      }
       const result = runtimes.claude;
       const codex = runtimes.codex || { installed: false, authenticated: false };
 
       const signinBtn = document.getElementById('btn-signin');
+      const askBtn = document.getElementById('btn-signin-done');
       const checkBtn = document.getElementById('btn-check');
 
       // A Codex user waiting on the Claude steps is told why Claude Code is
@@ -386,6 +420,7 @@
         renderCodexStep(codex, false);
         // Install step: Check again is the primary action.
         signinBtn.style.display = 'none';
+        askBtn.style.display = 'none';
         checkBtn.style.display = 'inline-block';
         return false;
       }
@@ -396,14 +431,11 @@
         renderCodexStep(codex, false);
         // Sign-in step: the Sign in button replaces Check again (single action).
         signinBtn.style.display = 'inline-block';
+        askBtn.style.display = signInStarted ? 'inline-block' : 'none';
         checkBtn.style.display = 'none';
-        // Before sign-in starts the step looks as it always has. After, a check
-        // that still fails says why, and sign-in can be started again.
-        showReason(signInStarted ? result.reason : null);
-        if (signInStarted && result.reason) {
-          signinBtn.disabled = false;
-          signinBtn.textContent = 'Sign in to Claude';
-        }
+        // An automatic check that fails leaves the step as it is. One the
+        // person asked for says why, and sign-in can be started again.
+        if (asked === true) showAsked(opens, result.reason || { kind: 'no-reason' });
         return false;
       }
 
@@ -412,6 +444,7 @@
         updateStep('auth', 'done');
         showReason(null);
         signinBtn.style.display = 'none';
+        askBtn.style.display = 'none';
         const { pendingCodex } = renderCodexStep(codex, true);
         if (pendingCodex) {
           // The optional Codex step holds the wizard open; Sign in to Codex
@@ -436,12 +469,19 @@
       const res = await window.electronAPI.signInClaude();
       if (res && res.ok) {
         signInStarted = true;
+        signInOpens += 1;
+        // A new sign-in starts quiet until the person asks again, even when an
+        // asked answer landed while the terminal was opening.
+        showReason(null);
+        btn.disabled = true;
         btn.textContent = 'Waiting for sign-in...';
+        document.getElementById('btn-signin-done').style.display = 'inline-block';
         const hint = document.getElementById('auth-hint');
         if (hint) hint.innerHTML =
           "A terminal opened with Claude's sign-in. Follow its prompts: press Enter when asked, "
           + "and if your browser doesn't open, copy the link it shows and open it. "
-          + "This screen continues automatically once you finish.";
+          + "This screen continues automatically once you finish. "
+          + "If it doesn't, click <strong>I've finished signing in</strong>.";
         // Make sure we're polling so the wizard advances the moment auth lands.
         if (!polling) polling = setInterval(checkStatus, 3000);
       } else {
