@@ -11,7 +11,8 @@
 // folder and a port nothing listens on, and the credential cases iterate the
 // registry, so an entry added later is covered without a new test.
 //
-// Everything else keeps its answer. Those cases, the credential reads that were
+// Everything else keeps its answer, a write to a credential file included. Those
+// cases, the credential reads that were
 // already refused for another reason, and the card a credential read draws when
 // the server answers are compared field by field with what main's hook returned
 // before this change, which also records where it started:
@@ -101,6 +102,36 @@ const UNCHANGED = [
   ['an answer-file write', 'Bash', { command: 'echo {} > .rundock/permissions.json' }],
   ['a connector send', 'mcp__example_mail__send_message', { text: 'hello' }],
 ];
+// [what, tool, input]: ordinary work in a workspace at the home folder, which
+// keeps main's answer whether Rundock can be asked or not.
+const UNCHANGED_AT_HOME = [
+  ['an ordinary file in the home folder', 'Read', { file_path: '<root>/profile/notes.md' }],
+  ['an ordinary file in the home folder', 'Bash', { command: 'cat notes.md' }],
+  ['a listing of the home folder', 'Glob', { pattern: '*', path: '<root>/profile' }],
+  ['a listing of the home folder', 'Bash', { command: 'ls' }],
+  ['a write in the home folder', 'Write', { file_path: '<root>/profile/notes.md', content: 'x' }],
+  ['a write in the home folder', 'Bash', { command: 'echo x > notes.md' }],
+];
+// Each credential file, written every way an agent writes one: replaced,
+// copied onto, emptied, removed, touched or given a mode. Only a read is
+// refused for reaching a credential: a write keeps the answer main gives it.
+const writes = f => [
+  ['Write', { file_path: f, content: '{}' }], ['Edit', { file_path: f, old_string: '{', new_string: '[' }],
+  ['Bash', { command: `echo {} > ${f}` }], ['Bash', { command: `cp notes.md ${f}` }],
+  ['Bash', { command: `truncate -s 0 ${f}` }], ['Bash', { command: `rm ${f}` }],
+  ['Bash', { command: `touch ${f}` }], ['Bash', { command: `chmod 600 ${f}` }],
+];
+// A folder that holds credential files, copied into, both ways of naming it.
+const FOLDER_WRITES = [['Bash', { command: 'cp -r y ~/.claude' }], ['Bash', { command: 'cp -r -t ~/.codex y' }]];
+// Each credential file read by a command that is neither a plain read nor a
+// copy: a script handed it, an archive, a move into the workspace, and a read
+// whose output goes back onto the file. Each reads what the file holds.
+const otherReads = (f, w = ws) => [
+  ['Bash', { command: `node read.js ${f}` }], ['Bash', { command: `tar -cf ${path.join(w, 'out.tar')} ${f}` }],
+  ['Bash', { command: `mv ${f} ${path.join(w, 'moved.json')}` }], ['Bash', { command: `cat ${f} >> ${f}` }],
+];
+// A folder of credential files copied out, then a folder copied into it.
+const copiedOutThenIn = w => [['Bash', { command: `cp -r ~/.codex ${path.join(w, 'stolen')} && cp -r ${path.join(w, 'y')} ~/.codex` }]];
 // [mode, what, tool, input, env]: credential reads already refused with nobody
 // to ask, for a reason that comes first, keep that reason's words.
 const ALREADY_REFUSED = [
@@ -202,17 +233,11 @@ describe('with Rundock unreachable, every read of a credential file is refused',
       test(`${label}${where}: Read, Grep and Glob of each credential file are refused`, () => assertRefused(REGISTRY.flatMap(fileReads), mode, w));
       test(`${label}${where}: cat, head and a copy within the workspace of each credential file are refused`, { skip: POSIX }, () => assertRefused(REGISTRY.flatMap(f => shellReads(f, w)), mode, w));
     }
+    // Writing somewhere on the line does not make what the line reads a write.
+    for (const [where, w] of WORKSPACES) {
+      test(`${label}${where}: a command reading each credential file some other way is refused`, { skip: POSIX }, () => assertRefused([...REGISTRY.flatMap(f => otherReads(f, w)), ...copiedOutThenIn(w)], mode, w));
+    }
   }
-  // The tag does not tell a read from a write, so a write is refused too.
-  test('Notes mode: a write to a credential file is refused too, in the same words', async () => {
-    const cases = REGISTRY.flatMap(f => [
-      ['Write', { file_path: f, content: '{}' }], ['Edit', { file_path: f, old_string: '{', new_string: '[' }],
-      ...(POSIX ? [] : [['Bash', { command: `echo {} > ${f}` }]]),
-    ]);
-    const got = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode: 'notes' }));
-    const expected = { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: unansweredNotice(`${UNREACHABLE} ${CREDENTIAL}`, { unattended: true }) };
-    cases.forEach((c, i) => assert.deepStrictEqual(said(got[i]), expected, named(c)));
-  });
 });
 
 describe('a reply that does not parse refuses every credential read', () => {
@@ -318,6 +343,29 @@ describe('with Rundock unreachable, every other access keeps the answer main giv
         if (RECORD) { recorded[key] = got; return; }
         assert.ok(onMain[key], 'measured on main');
         assert.deepStrictEqual(got, onMain[key], 'the whole answer, field by field, as main gives it');
+      });
+    }
+    for (const [what, tool, input] of UNCHANGED_AT_HOME) {
+      test(`${label}${AT_HOME}: ${what} (${tool}), whether Rundock can be asked or not`, async () => {
+        for (const [state, port] of [['unreachable', closed], ['reachable', portOf(recording)]]) {
+          const got = await run(tool, live(input), { port, mode, workspace: home });
+          const key = keyOf(`${label}${AT_HOME}`, state, [tool, input]);
+          if (RECORD) { recorded[key] = got; continue; }
+          assert.ok(onMain[key], `measured on main, ${state}`);
+          assert.deepStrictEqual(got, onMain[key], `the whole answer, field by field, as main gives it, ${state}`);
+        }
+      });
+    }
+    for (const [where, workspace] of WORKSPACES.slice(0, 2)) {
+      test(`${label}${where}: a write to each credential file, or into a folder of them, keeps main's answer`, async () => {
+        const cases = [...REGISTRY.flatMap(writes), ...FOLDER_WRITES].map(c => [c[0], normal(c[1])]);
+        const got = await each(cases, ([tool, input]) => run(tool, live(input), { port: closed, mode, workspace }));
+        cases.forEach((c, i) => {
+          const key = keyOf(`${label}${where}`, 'unreachable', c);
+          if (RECORD) { recorded[key] = got[i]; return; }
+          assert.ok(onMain[key], `${named(c)}: measured on main`);
+          assert.deepStrictEqual(got[i], onMain[key], `${named(c)}: the whole answer, field by field, as main gives it`);
+        });
       });
     }
   }

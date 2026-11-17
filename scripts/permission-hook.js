@@ -2053,6 +2053,9 @@ const COPIES_FROM_SOURCES = new Set(['cp', 'install']);
 // there: `into` carries each destination and its sources, for the caller to
 // resolve once it knows whether the destination is a folder.
 const PLACES_INTO = new Set(['cp', 'install', 'mv', 'ln']);
+// Programs that remove a file, empty it or change its times or mode, and never
+// open it to read what it holds.
+const CHANGES_UNREAD = new Set(['rm', 'truncate', 'touch', 'chmod']);
 const REDIRECT = /^(?:\d*|&)(?:>>?|>\|)(.*)$/;
 // AN INPUT REDIRECT IS A READ, whatever program it feeds: `<` and `0<` open the
 // file for reading, and `<<<` hands over a string. Not `<>`, which opens it for
@@ -2062,9 +2065,14 @@ const INPUT_REDIRECT = /^\d*(?:<<<|<(?![<>(]))(.*)$/;
 // shellPathWords reads it, so the words compare. Each `into` entry carries
 // `at`, where its segment starts in `command`, for the folder it starts from.
 // `readsPart` is the reading for the shell the command is written for.
+// For the credential check, beside the words a command can write: `targets`,
+// what a segment only writes, removes or copies onto, and `others`, every
+// other word a segment names, which it may read.
 function answerFileWriteWords(command, posixText = false, readsPart = isReadOnlyShellCommand) {
   const out = new Set();
   const into = [];
+  const targets = new Set();
+  const others = new Set();
   const bare = (w) => {
     const s = w.replace(/^['"]|['"]$/g, '');
     return posixText && !/^['"]/.test(w) && s.includes('\\') && !WIN_DRIVE.test(s) && !WIN_UNC.test(s) ? s.replace(/\\(.)/g, '$1') : s;
@@ -2131,19 +2139,26 @@ function answerFileWriteWords(command, posixText = false, readsPart = isReadOnly
     const makesFolders = verb === 'install' && args.some(a => /^-[a-zA-Z]*d/.test(a) || a === '--directory');
     if (makesFolders) reads = false;
     if (splitAtReturn) reads = false;
+    let placed = null;
     if (PLACES_INTO.has(verb) && !makesFolders) {
       const t = args.indexOf('-t');
       const named = t >= 0 ? args[t + 1] : (args.find(a => a.startsWith('--target-directory=')) || '').slice('--target-directory='.length);
       const operands = args.filter((a, i) => !a.startsWith('-') && !(t >= 0 && i === t + 1));
       const dest = named || (operands.length > 1 ? operands[operands.length - 1] : null);
       if (dest) into.push({ dest, sources: named ? operands : operands.slice(0, -1), at: Math.max(0, segAt) });
+      placed = dest;
     }
     for (const w of written) out.add(w);
+    const changed = CHANGES_UNREAD.has(verb);
+    for (const w of [...written, ...(placed ? [placed] : []), ...(changed ? args.filter(a => !a.startsWith('-')) : [])]) targets.add(w);
+    const left = changed ? args.filter(a => a.startsWith('-')) : [...args];
+    if (left.lastIndexOf(placed) >= 0) left.splice(left.lastIndexOf(placed), 1);
+    for (const w of left) others.add(w);
     // The words of the segment without its redirects: what it reads from is not
     // written, and what it writes to is in `written` already.
     if (!reads) for (const t of shellPathTokens(rest.join(' '), posixText)) out.add(t);
   }
-  return { words: out, into };
+  return { words: out, into, targets, others };
 }
 
 // A FOLDER THAT HOLDS ANSWER FILES IS THEM: removing, moving or replacing
@@ -3522,16 +3537,21 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   // differ: a command of its own, from where the line starts, as it is.
   const viewed = c => { const v = shellView(c.text).text; return v === c.text ? [c] : [c, { ...c, text: v }]; };
   const view = opts.shellTool === 'PowerShell' ? judged : { ...judged, commands: judged.commands.flatMap(viewed) };
-  const writes = { words: new Set(), into: [] };
+  const writes = { words: new Set(), into: [], targets: new Set(), others: new Set(view.literals.map(l => l.t)) };
   if (!readOnly) {
     for (const lit of view.literals) if (lit.written) writes.words.add(lit.t);
     for (const [text, fromStart] of [[view.text, false], ...view.commands.map(c => [c.text, true])]) {
       const w = answerFileWriteWords(text, posixText, readsPart);
       for (const x of w.words) writes.words.add(x);
       for (const i of w.into) writes.into.push({ ...i, fromStart });
+      for (const x of w.targets) writes.targets.add(x);
+      for (const x of w.others) writes.others.add(x);
     }
   }
   const writingWords = writes.words;
+  // A word the line only writes, removes or copies onto, and names nowhere else
+  // on it, its code included: what it names is not read. Any other word may be.
+  const onlyWritten = new Set([...writes.targets].filter(x => !writes.others.has(x)));
   // A folder a copy or move writes INTO is not itself replaced: what it writes
   // is checked by name below, so `cp x.json .claude` asks about nothing.
   const intoFolders = new Set(writes.into.map(i => i.dest));
@@ -3776,10 +3796,11 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   // raises. Answers whether it was reported, now or by an earlier word.
   // A credential file is never a development path or covered by a named
   // folder, so those two exemptions are not tried here.
-  // Every credential file the line reads, the workspace's own included, is
-  // also noted in `opts.credentialReads` when given: a word the line writes is not.
+  // Every credential file the line may read, the workspace's own included, is
+  // also noted in `opts.credentialReads` when given: one `raw`, the word or
+  // folder that reached it, only writes (`onlyWritten`) is not.
   const reportSecret = (r, raw) => {
-    if (opts.credentialReads && !(raw && writingWords.has(raw))) opts.credentialReads.add(r);
+    if (opts.credentialReads && !onlyWritten.has(raw)) opts.credentialReads.add(r);
     if (insideWorkspaceRoot(r, workspaceRoot, path)) return false;
     if (seen.has(r)) return true;
     seen.add(r);
@@ -3860,7 +3881,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     const here = fromStart ? null : possibleFoldersAt(at);
     const starts = here || [basesFor(path, fromStart)(at), ...cdStarts(path, at, fromStart)];
     for (const form of braceForms(homeIn(word)).flatMap(loopForms).map(homeIn)) {
-      for (const h of homesReadBy(form, starts)) for (const e of entriesUnder(h)) reportSecret(e.path);
+      for (const h of homesReadBy(form, starts)) for (const e of entriesUnder(h)) reportSecret(e.path, word);
     }
   }
   let previous = '';
@@ -3994,6 +4015,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     // cards on any access, read or write, regardless of what the command is.
     const tags = agentHomeTags(resolved, home, foldsCase, spelled);
     if (tags.agentHome && !tags.secret && (!tags.persistenceSurface || readOnly)) continue;
+    if (tags.secret && opts.credentialReads && !onlyWritten.has(raw)) opts.credentialReads.add(resolved);
     const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -4871,10 +4893,12 @@ fetchAgentNotice((agentNotice) => {
   // stops it: the sandbox denies writes to them, not reads, and the file
   // tools do not run in the sandbox. The `secret` tag is read the way the
   // crossing check above reads its tags, so a file added to the registry is
-  // covered with no path of its own. The tag does not tell a read from a
-  // write, so a write is refused too. Its sentence comes last, so an access an
+  // covered with no path of its own. Only a read: a file tool's, or a word a
+  // shell command reads rather than writes, the workspace's own files included.
+  // A write keeps the answer it had. Its sentence comes last, so an access an
   // earlier case already refuses keeps that case's words.
-  const credentialAccess = !!(access && access.credential) || boundaryCrossingsFor(access).some(c => c && c.secret);
+  const credentialAccess = credentialReads.size > 0 || !!(access && access.credential)
+    || boundaryCrossingsFor(access).some(c => c && c.secret && !c.write);
   const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;
   function unanswered(reason) {
     let why;
