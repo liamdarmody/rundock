@@ -71,6 +71,21 @@ describe('the review', () => {
     assert.deepStrictEqual(files(dir).map(bytes), before);
   });
 
+  test('names a read-deny entry of the person\'s own, and not the read deny Rundock writes itself', () => {
+    const { dir } = handAuthored();
+    const own = scaffold.sandboxSettings(dir, 'darwin', os.homedir(), scaffold.tempRoots(), [], 'on').filesystem.denyRead;
+    const theirs = path.join(os.homedir(), 'notes.txt');
+    const settings = JSON.parse(bytes(files(dir)[0]));
+    settings.sandbox.filesystem.denyRead = [...own, theirs];
+    fs.writeFileSync(files(dir)[0], JSON.stringify(settings, null, 2));
+    withWorkspace(dir, () => {
+      const ws = captureWs();
+      buildDispatch().review_sandbox_import({}, ws, {}, 'darwin');
+      assert.deepStrictEqual(ws.sent[0].review.dropped.filter((d) => d.rule === 'filesystem.denyRead'),
+        [{ rule: 'filesystem.denyRead', value: theirs }], 'only the entry Rundock does not write is named as dropped');
+    });
+  });
+
   test('is refused for a block that is already Rundock\'s own', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-import-ours-'));
     made.push(dir);
