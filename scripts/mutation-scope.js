@@ -97,9 +97,13 @@ const SECONDS_PER_SHARD = 600;
 // top planned one past it. Sixteen is the smallest cap that fits both.
 // Raised to seventeen when main's rows and those of a change adding nine to
 // the boundary harness, merged, planned one shard past the limit at sixteen.
-// Seventeen is the smallest cap that fits both
+// Seventeen is the smallest cap that fits both. Raised to nineteen when the
+// full set's longest shard sat at the limit, 900 s, at seventeen and
+// eighteen, and two changes adding rows, merged, planned one shard past it
+// at seventeen. Nineteen plans the longest at 889 s with those rows, and
+// leaves room for the rows still to come
 // (docs/evidence/mutation-shard-cap-evidence.md has the plans).
-const MAX_SHARDS = 17;
+const MAX_SHARDS = 19;
 const COSTS_FILE = 'mutation-costs.json';
 const FALLBACK_SECONDS_PER_ROW = 5;
 
