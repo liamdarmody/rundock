@@ -42,6 +42,8 @@
 //     "refusalExitMs": 0,            // how long the refused process lingers
 //     "refusalSplitAt": 0,           // write the refusal line in pieces
 //     "refusalPreamble": "...",      // stderr written just before the refusal
+//     "refusalPreambleJoined": false, // write that preamble and the first piece
+//                                    // of the refusal in ONE write
 //     "refusalAfterInit": false,     // send the init envelope before refusing
 //     "loadAgentFiles": false,       // read agent files as Claude Code does, and
 //                                    // refuse an --agent no file loads for
@@ -405,13 +407,14 @@ if (REFUSED_RESUME) {
   // `refusalSplitAt` writes the line in pieces a moment apart (cut at that
   // character, then the newline on its own), the way a pipe may deliver it.
   // `refusalPreamble` is stderr written on its own just before the refusal,
-  // such as Claude Code's warning that it read no stdin.
+  // such as Claude Code's warning that it read no stdin. `refusalPreambleJoined`
+  // writes it in the same write as the first piece of the refusal (the whole
+  // line when it is not split), so the server reads both in one chunk.
   const line = `No conversation found with session ID: ${RESUME}`;
   const cut = Number(TOP.refusalSplitAt) || 0;
-  const pieces = [
-    ...(TOP.refusalPreamble ? [String(TOP.refusalPreamble)] : []),
-    ...(cut > 0 ? [line.slice(0, cut), line.slice(cut), '\n'] : [`${line}\n`]),
-  ];
+  const pieces = cut > 0 ? [line.slice(0, cut), line.slice(cut), '\n'] : [`${line}\n`];
+  if (TOP.refusalPreamble && TOP.refusalPreambleJoined) pieces[0] = String(TOP.refusalPreamble) + pieces[0];
+  else if (TOP.refusalPreamble) pieces.unshift(String(TOP.refusalPreamble));
   const wait = Number(TOP.refusalExitMs) || 0;
   const finish = () => (wait > 0 ? setTimeout(() => exitWhenWritten(1), wait) : exitWhenWritten(1));
   // `refusalAfterInit` sends the init envelope for the refused id first. The

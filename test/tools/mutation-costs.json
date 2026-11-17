@@ -787,6 +787,8 @@
       "what was held back is shown with what follows it": 0.7,
       "what was held back is shown once": 0.67,
       "a refused process is forgotten once, however many pieces follow": 0.75,
+      "a chunk that holds the no stdin warning is still checked for a refusal": 0.71,
+      "the no stdin warning line is never shown": 0.33,
       "stderr is judged a possible refusal on the line still being written": 0.22,
       "stderr held back and never finished is shown when the stream ends": 0.59,
       "the opening of a refusal that was held is never shown": 0.72,
