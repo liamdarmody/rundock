@@ -1497,8 +1497,8 @@ const MUTATIONS = [
   // A card offering Always allow with nothing to save: the press would save
   // nothing the next request could be answered by.
   [PS_CARD, 'PowerShell card: no Always allow when there is no key to save',
-    '!boundary && !answerFile && key && RundockPermissions.offersAlwaysAllow(risk, verdict)',
-    '!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict)'],
+    '!boundary && !answerFile && !credential && key && RundockPermissions.offersAlwaysAllow(risk, verdict)',
+    '!boundary && !answerFile && !credential && RundockPermissions.offersAlwaysAllow(risk, verdict)'],
   // WHAT A SAVED POWERSHELL KEY ANSWERS. The first puts back the match on the
   // command's first word; the rest each let one kind of part count as covered.
   [PS_GRADER, 'PowerShell key: a request is answered by every part it covers, not by its first word',
