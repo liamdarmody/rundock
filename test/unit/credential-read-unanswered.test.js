@@ -216,11 +216,11 @@ describe('with Rundock unreachable, every read of a credential file is refused',
 });
 
 describe('a reply that does not parse refuses every credential read', () => {
-  for (const [label, mode] of MODES) {
-    test(`${label}: refused in the same words as an unreachable server, but the first sentence`, async () => {
-      const cases = REGISTRY.flatMap(f => everyRead(f));
-      const unreachable = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode }));
-      const unparsed = await each(cases, ([tool, input]) => run(tool, input, { port: portOf(garbled), mode }));
+  for (const [label, mode] of MODES) for (const [where, workspace] of WORKSPACES) {
+    test(`${label}${where}: refused in the same words as an unreachable server, but the first sentence`, async () => {
+      const cases = REGISTRY.flatMap(f => everyRead(f, workspace));
+      const unreachable = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode, workspace }));
+      const unparsed = await each(cases, ([tool, input]) => run(tool, input, { port: portOf(garbled), mode, workspace }));
       cases.forEach((c, i) => {
         const a = said(unreachable[i]);
         const b = said(unparsed[i]);
