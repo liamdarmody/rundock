@@ -168,6 +168,33 @@ describe('one summary, one event', () => {
     assert.deepStrictEqual(finished.map((e) => e.key.slice(-2)), ['_0', '_1']);
   });
 
+  test('the older notice twice for one summary, after its item: one event, keyed by the item', async () => {
+    const events = await replay(turnWith([
+      P.itemStartedContextCompaction(THREAD, TURN, 'cmp-alpha'),
+      P.itemCompletedContextCompaction(THREAD, TURN, 'cmp-alpha'),
+      P.threadCompacted(THREAD, TURN),
+      P.threadCompacted(THREAD, TURN),
+    ]));
+    assert.deepStrictEqual(compactions(events), [{ type: 'compactionStarted' }, { type: 'compacted', key: 'cmp-alpha' }]);
+  });
+
+  test('the older notice twice with no item: one event', async () => {
+    const events = await replay(turnWith([P.threadCompacted(THREAD, TURN), P.threadCompacted(THREAD, TURN)]));
+    assert.deepStrictEqual(compactions(events).map((e) => e.type), ['compacted']);
+    assert.strictEqual(typeof compactions(events)[0].key, 'string');
+  });
+
+  test('two summaries, each with its item and its notice sent twice: two events, keyed by the items, in order', async () => {
+    const summary = (id) => [
+      P.itemStartedContextCompaction(THREAD, TURN, id),
+      P.itemCompletedContextCompaction(THREAD, TURN, id),
+      P.threadCompacted(THREAD, TURN),
+      P.threadCompacted(THREAD, TURN),
+    ];
+    const events = await replay(turnWith([...summary('cmp-alpha'), ...summary('cmp-beta')]));
+    assert.deepStrictEqual(events.filter((e) => e.type === 'compacted').map((e) => e.key), ['cmp-alpha', 'cmp-beta']);
+  });
+
   test('a summary in the middle of a reply arrives between the reply\'s two items', async () => {
     const events = await runTurn({ deltas: ['Before ', 'the summary. ', 'After it.'], compaction: { afterDeltas: 2 } });
     const order = kinds(events).filter((k) => k === 'delta' || k === 'text' || k === 'compacted');

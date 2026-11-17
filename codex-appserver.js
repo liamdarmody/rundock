@@ -487,7 +487,7 @@ class CodexAppServer extends EventEmitter {
       startedPromise: null,
       interruptFailsafeTimer: null, // armed by interruptTurn; see _armInterruptFailsafe
       interruptRetryTimer: null,    // one halfway-point interrupt re-send
-      compaction: { started: new Set(), items: new Set(), notices: 0, emitted: 0 },
+      compaction: { started: new Set(), items: new Set(), noticed: false, emitted: 0 },
     };
     this._activeTurns.set(threadId, state);
 
@@ -743,16 +743,21 @@ class CodexAppServer extends EventEmitter {
   // ONE SUMMARY, ONE EVENT. Codex records a summary twice over: the
   // contextCompaction item (started, then completed) and, on servers that
   // still send it, the deprecated thread/compacted notice for the same turn.
-  // Each is counted on its own; a turn has had as many summaries as the larger
-  // count, and 'compacted' is emitted only when that number grows, so either
-  // record, both, or a repeat of one gives one event. A record missing its
-  // ids is not a summary, and every record must name this turn: routing above
+  // An item names its summary; a notice names only its turn, so a notice sent
+  // again and a second summary announced by a notice alone look the same.
+  // Every notice in a turn is therefore one summary: a repeat never draws a
+  // second divider, and a server sending notices without items draws one
+  // divider for the turn however many summaries it ran. A turn has had as
+  // many summaries as its items, or one if it had only notices, and
+  // 'compacted' is emitted only when that number grows, so either record,
+  // both, or a repeat of either gives one event. A record missing its ids is
+  // not a summary, and every record must name this turn: routing above
   // drops one naming another turn but lets through one naming none.
   _onCompaction(state, kind, params) {
     if (typeof params.turnId !== 'string' || params.turnId !== state.turnId) return;
     const c = state.compaction;
     if (kind === 'notice') {
-      c.notices += 1;
+      c.noticed = true;
     } else {
       const id = params.item.id;
       if (typeof id !== 'string' || !id) return;
@@ -765,10 +770,10 @@ class CodexAppServer extends EventEmitter {
       if (c.items.has(id)) return;
       c.items.add(id);
     }
-    const seen = Math.max(c.items.size, c.notices);
+    const seen = Math.max(c.items.size, c.noticed ? 1 : 0);
     if (seen <= c.emitted) return;
     c.emitted = seen;
-    const key = kind === 'notice' ? `${state.turnId}:compacted:${c.notices}` : params.item.id;
+    const key = kind === 'notice' ? `${state.turnId}:compacted` : params.item.id;
     this._emitTurnEvent(state, { type: 'compacted', key });
   }
 

@@ -75,7 +75,9 @@
 //           "item": true,                    // contextCompaction item/started (+completed)
 //           "finish": true,                  // false: started, never completed
 //           "duplicate": false,              // the item/completed sent twice
-//           "notice": false,                 // the older thread/compacted notice too
+//           "notice": false,                 // the older thread/compacted notice too;
+//                                            // a number sends it that many times,
+//                                            // as a replay would
 //           "malformed": false }             // shapes missing their fields, instead
 //   } ] } }
 // First matching rule wins. Every invocation and every incoming app-server
@@ -296,7 +298,8 @@ function runAppServer() {
         if (cmp.finish === false) continue;
         if (cmp.item !== false) send(asfx.itemCompletedContextCompaction(threadId, turnId, itemId));
         if (cmp.duplicate) send(asfx.itemCompletedContextCompaction(threadId, turnId, itemId));
-        if (cmp.notice) send(asfx.threadCompacted(threadId, turnId));
+        const notices = cmp.notice === true ? 1 : (cmp.notice || 0);
+        for (let n = 0; n < notices; n++) send(asfx.threadCompacted(threadId, turnId));
       }
     };
     if (cmp && !(cmp.afterDeltas > 0)) await sendCompaction();

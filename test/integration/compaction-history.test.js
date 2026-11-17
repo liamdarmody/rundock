@@ -112,6 +112,32 @@ describe('a Codex conversation', () => {
     assert.deepStrictEqual(out.map((e) => e[0]), ['user', 'divider', 'divider', 'assistant']);
     assert.notStrictEqual(out[1][1], out[2][1]);
   });
+
+  test('the older notice sent twice for one summary, with its item and without: one event, one kept entry, one divider, every time it is reopened', async () => {
+    for (const [name, compaction] of [['with its item', { notice: 2 }], ['without its item', { item: false, notice: 2 }]]) {
+      const convoId = open('cmph-codex-notice');
+      h.writeCodexScenario([{ match: { promptIncludes: 'HIST-CODEX-NOTICE' }, deltas: ['Carrying on.'], compaction }]);
+      const since = client.messages.length;
+      await chat(convoId, 'example-codex', 'HIST-CODEX-NOTICE go');
+      const sent = client.messages.slice(since).filter((m) => m._conversationId === convoId && m.subtype === 'compact_boundary');
+      assert.strictEqual(sent.length, 1, `${name}: one event`);
+      const kept = h.internal.loadTranscript(convoId).filter((t) => t.type === 'compaction');
+      assert.deepStrictEqual(kept.map((t) => t.key), [sent[0].uuid], `${name}: one entry kept, under the event's key`);
+      const expected = [['user', 'HIST-CODEX-NOTICE go'], ['divider', sent[0].uuid, ''], ['assistant', 'Carrying on.']];
+      assert.deepStrictEqual(shape(await reopen(convoId)), expected, name);
+      assert.deepStrictEqual(shape(await reopen(convoId)), expected, `${name}: reopened again`);
+    }
+  });
+
+  test('two summaries, each with its notice sent twice, are still two dividers, keyed by their items', async () => {
+    const convoId = open('cmph-codex-notice-two');
+    h.writeCodexScenario([{ match: { promptIncludes: 'HIST-CODEX-NOTICE-TWO' }, deltas: ['Carrying on.'], compaction: { count: 2, notice: 2 } }]);
+    await chat(convoId, 'example-codex', 'HIST-CODEX-NOTICE-TWO go');
+    const out = shape(await reopen(convoId));
+    assert.deepStrictEqual(out.map((e) => e[0]), ['user', 'divider', 'divider', 'assistant']);
+    assert.match(out[1][1], /^cmp_.*_0$/);
+    assert.match(out[2][1], /^cmp_.*_1$/);
+  });
 });
 
 describe('what is never drawn', () => {
