@@ -1,6 +1,6 @@
 # Reads of the sign-in files under the sandbox block: a real run
 
-`test/unit/sandbox-read-deny.test.js` shows that the block `sandboxSettings` writes names each sign-in credential file in its read-deny list. It cannot show that the runtime honours that list, or that the operating system then refuses the read whatever the command calls the file. This records two real runs that can show it, and what they found.
+`test/unit/sandbox-read-deny.test.js` shows that the block `sandboxSettings` writes names each sign-in credential file in its read-deny list. It cannot show that the runtime honours that list, or that the operating system then refuses the read whatever the command calls the file. This records two real runs that can show it, and what they found, then a run of the app showing that nothing a person uses changed.
 
 ## Which key the runtime reads
 
@@ -68,7 +68,33 @@ A hard link was never made. The sandboxed `ln` failed for every file in both col
 
 All four tests passed under this change's block. Without the read deny, the first test failed and named all twenty reads, four for each file.
 
+## In the app: what a person uses still works
+
+The runs above use the sandbox runtime directly. A third run used the app as a person does, once with this change and once with the commit it is based on, to show the read deny breaks nothing a person relies on.
+
+What each run did, driving the server over its WebSocket the way the window does:
+
+- started the server from the checkout under test and opened a new test workspace holding one note, `notes/hello.md`, of three lines, and two agents, one on Claude Code and one on Codex;
+- set the workspace to Notes mode and turned the sandbox switch on;
+- in one conversation with each agent, asked for three shell commands, `pwd`, `ls notes` and `wc -l notes/hello.md`, one at a time, answering any card with "allow once";
+- read the Permissions row's sandbox status (`get_sandbox_status`) after the workspace opened, after the switch, and after both conversations, and the block in the workspace's `.claude/settings.local.json`, recording only the length of each list.
+
+Both runtimes started from the sign-ins already on the machine. The run read no sign-in file itself and asked no agent to.
+
+| | With this change | The commit it is based on |
+|---|---|---|
+| Claude Code conversation | ran all three commands; output correct; no card | the same |
+| Codex conversation | replied with all three outputs, correct; no card | the same |
+| Permissions row, all three reads | `available`, `present`, `managed`, `on` and `blockOn` true; set by the workspace; nothing enabled elsewhere; no notice | the same, field for field |
+| The block's `denyRead` | 5 entries | absent |
+| The block's `denyWrite` and `allowWrite` | 36 and 8 entries | 36 and 8 entries |
+
+Rundock doesn't show a Codex command's output in the window, so the Codex row rests on its reply. The server logged the three Claude Code commands as read-only and answered them without a card on both sides.
+
+Versions: Claude Code 2.1.326, Codex CLI 0.156.1, with macOS and Node as in the table above.
+
 ## What this doesn't cover
 
+- A sandboxed command that starts Claude Code or Codex itself, such as `claude -p` run through the shell tool. It can no longer read their sign-in files in Notes mode with the sandbox on, so it is expected to fail to sign in. Not run here.
 - Code mode with the sandbox off, where the permission hook is the only check.
 - A runtime version that stops honouring `denyRead`. Rundock pins none, so this run says only what the versions above do.
