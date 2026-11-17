@@ -103,11 +103,53 @@ describe('the gate takes only the default folder', () => {
     assert.strictEqual(gate(link, { home, platform: process.platform }), null);
   });
 
-  test('a link that resolves to the default folder is taken, as written', { skip: SYMLINK_SKIP }, () => {
+  // A taken value stays in the environment for the rest of the launch, so a
+  // link that leads to the default folder now could lead anywhere later.
+  test('a link elsewhere in the home that leads to the default folder is dropped', { skip: SYMLINK_SKIP }, () => {
     const { home, claudeDir } = tempHome();
-    const link = path.join(home, 'claude-link');
+    const link = path.join(home, 'cfg-link');
     fs.symlinkSync(claudeDir, link, 'dir');
-    assert.strictEqual(gate(link, { home, platform: process.platform }), link);
+    assert.strictEqual(gate(link, { home, platform: process.platform }), null);
+  });
+
+  test('a path through a linked folder is dropped, though it leads to the default folder', { skip: SYMLINK_SKIP }, () => {
+    const { home } = tempHome();
+    const sub = path.join(home, 'sub');
+    fs.symlinkSync(home, sub, 'dir');
+    assert.strictEqual(gate(path.join(sub, '.claude'), { home, platform: process.platform }), null);
+  });
+
+  test('a path with . or .. in it is dropped, though it leads to the default folder', () => {
+    const { home } = tempHome();
+    for (const written of [
+      [home, '.', '.claude'].join(path.sep),
+      [home, 'elsewhere', '..', '.claude'].join(path.sep),
+    ]) {
+      assert.strictEqual(gate(written, { home, platform: process.platform }), null, written);
+    }
+  });
+
+  // The system follows sub before it applies .., so this leads wherever the
+  // parent of sub's target is, while the same text tidied up names the
+  // default folder.
+  test('a path with .. after a linked folder is dropped', { skip: SYMLINK_SKIP }, () => {
+    const { home, elsewhere } = tempHome();
+    const sub = path.join(home, 'sub');
+    fs.symlinkSync(elsewhere, sub, 'dir');
+    assert.strictEqual(gate([sub, '..', '.claude'].join(path.sep), { home, platform: process.platform }), null);
+  });
+
+  // Repointing that link moves the default folder too, so taking it adds
+  // nothing a writer of the home could not already do.
+  test('the default folder that is itself a link, as to a dotfiles folder, is taken, as written', { skip: SYMLINK_SKIP }, () => {
+    const home = makeTempDir('shell-config-home-');
+    const dotfiles = path.join(home, 'dotfiles');
+    fs.mkdirSync(dotfiles);
+    const claudeDir = path.join(home, '.claude');
+    fs.symlinkSync(dotfiles, claudeDir, 'dir');
+    assert.strictEqual(gate(claudeDir, { home, platform: process.platform }), claudeDir);
+    const written = claudeDir + path.sep;
+    assert.strictEqual(gate(written, { home, platform: process.platform }), written);
   });
 
   test('nothing is taken when the home has no .claude', () => {
@@ -128,12 +170,20 @@ describe('the gate takes only the default folder', () => {
   describe('case', () => {
     const real = scd.deps.fs;
     // A disk that keeps the case it is given, as macOS's usually does while
-    // ignoring it: the two spellings name one existing folder.
+    // ignoring it: the two spellings name one existing folder, one entry.
     const caseKeeping = {
       statSync: () => ({ isDirectory: () => true }),
       realpathSync: (p) => p,
+      lstatSync: () => ({ dev: 1n, ino: 1n }),
     };
     const home = path.join(path.sep, 'home-x');
+    // A disk that keeps case apart, where .Claude is an entry of its own: a
+    // link to the default folder, which the real path follows.
+    const caseApart = {
+      statSync: () => ({ isDirectory: () => true }),
+      realpathSync: (p) => path.join(path.dirname(p), path.basename(p).toLowerCase()),
+      lstatSync: (p) => ({ dev: 1n, ino: p === path.join(home, '.claude') ? 1n : 2n }),
+    };
 
     test('on macOS the comparison ignores case', () => {
       scd.deps.fs = caseKeeping;
@@ -152,6 +202,47 @@ describe('the gate takes only the default folder', () => {
       } finally {
         scd.deps.fs = real;
       }
+    });
+
+    test('on macOS a differently cased spelling that is an entry of its own is dropped, though it leads to the default folder', () => {
+      scd.deps.fs = caseApart;
+      try {
+        assert.strictEqual(gate(path.join(home, '.Claude'), { home, platform: 'darwin' }), null);
+      } finally {
+        scd.deps.fs = real;
+      }
+    });
+
+    // Only the last name may differ in case: a folder above it spelled in
+    // another case could be a link of its own on a disk that keeps case apart.
+    test('on macOS a differently cased spelling of the home folder is dropped', () => {
+      scd.deps.fs = caseKeeping;
+      try {
+        assert.strictEqual(gate(path.join(home.toUpperCase(), '.claude'), { home, platform: 'darwin' }), null);
+      } finally {
+        scd.deps.fs = real;
+      }
+    });
+
+    test('on macOS a differently cased link beside the default folder is dropped', { skip: SYMLINK_SKIP }, (t) => {
+      const { home: h, claudeDir } = tempHome();
+      if (fs.existsSync(path.join(h, '.CLAUDE'))) {
+        t.skip('this disk ignores case, so a differently cased name cannot be an entry of its own');
+        return;
+      }
+      const link = path.join(h, '.Claude');
+      fs.symlinkSync(claudeDir, link, 'dir');
+      assert.strictEqual(gate(link, { home: h, platform: 'darwin' }), null);
+    });
+
+    test('on macOS, on a disk that ignores case, a differently cased spelling of the default folder is taken, as written', (t) => {
+      const { home: h } = tempHome();
+      const written = path.join(h, '.Claude');
+      if (!fs.existsSync(written)) {
+        t.skip('this disk keeps case apart, so a differently cased name is not the default folder');
+        return;
+      }
+      assert.strictEqual(gate(written, { home: h, platform: 'darwin' }), written);
     });
   });
 });
@@ -687,6 +778,27 @@ describe('once per launch', () => {
       assert.strictEqual(await next.controller.atLaunch(), true);
       assert.strictEqual(next.env.CLAUDE_CONFIG_DIR, h.claudeDir);
       assert.strictEqual(next.reads(), 1);
+    });
+
+    test('a link in the home that leads to the default folder is never taken, so repointing it afterwards reaches nothing the app starts', { skip: SYMLINK_SKIP }, async () => {
+      for (const marker of [false, true]) {
+        const h = tempHome();
+        const link = path.join(h.home, 'cfg-link');
+        fs.symlinkSync(h.claudeDir, link, 'dir');
+        const l = launch({ shell: prints(link), home: h, marker });
+        if (marker) assert.strictEqual(await l.controller.atLaunch(), false, 'nothing is taken at launch');
+        const run = answers(false, true);
+        assert.strictEqual(await l.controller.checkAuthenticated(run), false);
+        assert.strictEqual(run.count, 1, 'the failed check is not run again');
+        assert.strictEqual(l.reads(), 1);
+        fs.unlinkSync(link);
+        fs.symlinkSync(h.elsewhere, link, 'dir');
+        assert.strictEqual(await l.controller.checkAuthenticated(() => true), true);
+        assert.strictEqual(l.env.CLAUDE_CONFIG_DIR, undefined, `marker: ${marker}`);
+        const used = l.env.CLAUDE_CONFIG_DIR || path.join(h.home, '.claude');
+        assert.strictEqual(fs.realpathSync(used), fs.realpathSync(h.claudeDir), 'what the app starts still uses the default folder');
+        assert.strictEqual(l.marker(), false);
+      }
     });
 
     test('a reader that throws takes nothing, leaves the marker as it was, and launch and the check carry on', async () => {

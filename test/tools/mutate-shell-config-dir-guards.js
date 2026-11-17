@@ -54,11 +54,17 @@ const MUTATIONS = [
     "  const token = crypto.randomBytes(16).toString('hex');",
     "  const token = 'feedfacefeedfacefeedfacefeedface';"],
   // ===== THE GATE =====
-  // Without the real-path comparison, any existing folder is taken, the one
-  // a writer of the profile chose included.
-  [READER, 'the value is taken only when its real path is the default folder',
-    "    if (real !== fold(deps.fs.realpathSync(path.join(home, '.claude')))) return null;\n",
-    ''],
+  // Without the comparison with <home>/.claude as written, a path through a
+  // linked folder or with .. in it is taken: it leads to the default folder
+  // at the check and can be repointed after it. The real-path comparison goes
+  // with it, since the comparisons before it now drop everything it would,
+  // so dropping it alone turns nothing red.
+  [READER, 'the value is taken only when it is the default folder as written, not a path that leads there',
+    [
+      "    if (bare.slice(0, -name.length) !== own.slice(0, -name.length) || fold(bare.slice(-name.length)) !== name) return null;\n",
+      "    if (real !== fold(deps.fs.realpathSync(path.join(home, '.claude')))) return null;\n",
+    ],
+    ['', '']],
   // Read past a value already in the environment and the shell's replaces
   // one the person set for the app themselves.
   [READER, 'a value already in the environment is kept and the shell is not run',

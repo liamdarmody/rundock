@@ -49,11 +49,26 @@ function mayRun({ isPackaged, platform, env } = {}) {
 // resolves to the same place as <home>/.claude, compared without case on
 // macOS, whose disks usually ignore it. Anything else, or any error, is null.
 // A taken value is kept as written: the form Claude Code sees in a terminal.
+//
+// The value stays in the environment for the rest of the launch, so it must
+// also be one that cannot be repointed later unless <home>/.claude itself is:
+// <home>/.claude letter for letter, but for one trailing separator and, on
+// macOS, the case of the last name, which must then be the same entry on
+// disk as <home>/.claude rather than an entry of its own. A link elsewhere
+// that leads there, a path through a linked folder, and a path with . or ..
+// in it, which the system resolves through links, are each dropped.
 function gate(value, { home, platform }) {
   if (typeof value !== 'string' || !path.isAbsolute(value)) return null;
   const fold = (p) => (platform === 'darwin' ? p.toLowerCase() : p);
+  const name = '.claude';
+  const bare = value.endsWith(path.sep) ? value.slice(0, -1) : value;
   try {
+    const own = path.join(home, name);
+    if (bare.slice(0, -name.length) !== own.slice(0, -name.length) || fold(bare.slice(-name.length)) !== name) return null;
     if (!deps.fs.statSync(value).isDirectory()) return null;
+    const entry = deps.fs.lstatSync(bare, { bigint: true });
+    const ownEntry = deps.fs.lstatSync(own, { bigint: true });
+    if (entry.dev !== ownEntry.dev || entry.ino !== ownEntry.ino) return null;
     const real = fold(deps.fs.realpathSync(value));
     if (real !== fold(deps.fs.realpathSync(path.join(home, '.claude')))) return null;
     return value;
