@@ -765,6 +765,23 @@
     return null;
   }
 
+  // The conversations left waiting on the person: every one holding a request
+  // except the one on screen, which needs no mark because its cards are in
+  // front of them. Each is marked in the conversation list, as a request that
+  // arrived in the background is.
+  function waitingConversations(byConvo, activeId) {
+    const ids = [];
+    for (const entry of byConvo) if (entry[0] && entry[0] !== activeId && entry[1].size) ids.push(entry[0]);
+    return ids;
+  }
+
+  // Whether a conversation still holds a request waiting on an answer. One
+  // that does is never empty, whatever has been said in it.
+  function holdsOpenRequest(byConvo, convoId) {
+    const m = byConvo.get(convoId);
+    return !!(m && m.size);
+  }
+
   // Drop every queued request for one conversation (the server's cancel
   // sweep has already answered them). Returns how many were dropped.
   function clearPendingPermissions(byConvo, convoId) {
@@ -810,12 +827,24 @@
     ended.set(requestId, { reason: reason || 'ended', allow: allow === true });
     while (ended.size > ENDED_LIMIT) ended.delete(ended.keys().next().value);
   }
+  // An answer given on a card in this window. Recorded like any other end, so
+  // no copy of the card can be drawn live again, with the words the card
+  // settled on, so a later redraw looks as the card did when it was answered.
+  function markPermissionAnswered(ended, requestId, allow, always, text) {
+    markPermissionEnded(ended, requestId, 'answered-here', allow);
+    const record = ended.get(requestId);
+    if (record) Object.assign(record, { always: always === true, text });
+  }
   function permissionEnded(ended, requestId) {
     return (requestId && ended.get(requestId)) || null;
   }
   // What an ended card says: a short label, whether it reads as allowed, and
-  // one sentence of why. An answer given in another window keeps its answer.
-  function endedPermissionCopy(reason, allow) {
+  // one sentence of why. An answer given in another window keeps its answer;
+  // one given here reads as it did on the card.
+  function endedPermissionCopy(reason, allow, always) {
+    if (reason === 'answered-here') {
+      return { allowed: allow === true, label: allow === true ? (always === true ? '✓ Always' : '✓') : '✕', why: '' };
+    }
     if (reason === 'answered') {
       return { allowed: allow === true, label: allow === true ? '✓ Answered in another window' : '✕ Answered in another window', why: '' };
     }
@@ -1023,6 +1052,6 @@
     MCP_SEND_VERBS, MCP_DESTRUCTIVE_VERBS, mcpActionWords, connectorServerName, isConnectorSend, isTeamCard,
     putBackCardCopy, putBackDiffLines,
     verdictAllowKey, verdictCardCopy, ruleKeyLabel, ALWAYS_ASKS_CLOSING, allowButtonClass,
-    routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions,
-    permissionOwner, markPermissionEnded, permissionEnded, endedPermissionCopy, staleRequestIds, findPendingPermission };
+    routePermissionRequest, queuePendingPermission, pendingPermissionsFor, removePendingPermission, clearPendingPermissions, waitingConversations, holdsOpenRequest,
+    permissionOwner, markPermissionEnded, markPermissionAnswered, permissionEnded, endedPermissionCopy, staleRequestIds, findPendingPermission };
 }));

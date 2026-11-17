@@ -60,6 +60,9 @@
 // exit, as a runtime that finishes its turn when asked to stop: see emitTurn.
 // Such a rule may give "pauseAfterTextMs": n to wait that long once its text
 // is out, so a test can land a SIGTERM there every time. No rule, no pause.
+// A turn may give a block { "holdUntil": "<path>" } to write the turn up to
+// that block and hold the rest until the file exists, so a test decides the
+// moment between two events of one turn: see writeEvents.
 // A rule may give "shell": ["rm a.md", "mv b.md c.md"], commands the run
 // gives its shell tool. Each is put to the PreToolUse hooks the --settings
 // file names first, as Claude Code does, and really runs unless a hook or the
@@ -477,6 +480,18 @@ function matches(rule, prompt) {
   return true;
 }
 
+// The holds a turn's blocks asked for, told apart from envelopes by identity,
+// so no envelope a scenario writes can be taken for one.
+const HOLDS = new WeakSet();
+
+// Write a turn's envelopes in order, waiting at each hold for its file.
+function writeEvents(events, then) {
+  const at = events.findIndex((e) => HOLDS.has(e));
+  for (const e of at < 0 ? events : events.slice(0, at)) writeOut(JSON.stringify(e) + '\n');
+  if (at < 0) { then(); return; }
+  whenFileExists(events[at].holdUntil, () => writeEvents(events.slice(at + 1), then));
+}
+
 function buildEnvelopes(rule) {
   const events = [];
   if (!initSent) { events.push(fx.init(SESSION_ID)); initSent = true; }
@@ -500,6 +515,10 @@ function buildEnvelopes(rule) {
       events.push(...fx.toolUseFlow(block.tool.name, block.tool.input || {}, toolIndex++));
     } else if (block.raw) {
       events.push(block.raw);
+    } else if (block.holdUntil) {
+      const hold = { holdUntil: String(block.holdUntil) };
+      HOLDS.add(hold);
+      events.push(hold);
     }
   }
   // Faithful end-of-message shape: the real stream closes the message with
@@ -631,6 +650,13 @@ function emitTurn(rule, prompt) {
     const pause = Number(rule.pauseAfterTextMs) || 0;
     if (pause > 0) setTimeout(carryOn, pause);
     else carryOn();
+    return;
+  }
+  if (events.some((e) => HOLDS.has(e))) {
+    writeEvents(events, () => {
+      if (rule.exitAfterTurn != null) exitWhenWritten(Number(rule.exitAfterTurn));
+      else if (PRINT) exitWhenWritten(0);
+    });
     return;
   }
   if (rule.singleChunk) {

@@ -678,9 +678,10 @@ function handle(d) {
       // Agent was cancelled by user
       if(d.subtype==='cancelled' && convoId) {
         // The server's cancel sweep has already answered every pending
-        // permission request for this conversation, so any queued
-        // background cards are stale and must never render.
-        RundockPermissions.clearPendingPermissions(pendingPermissionsByConvo, convoId);
+        // permission request for this conversation. Each held card ends as
+        // stopped, so none renders live and a return shows it settled once,
+        // whether this or the request's own end arrives first.
+        for (const held of RundockPermissions.pendingPermissionsFor(pendingPermissionsByConvo, convoId)) endPermissionRequest(held.request_id, 'cancelled');
         const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
@@ -746,6 +747,22 @@ function handle(d) {
       if(d.subtype==='codex_error' && convoId) {
         renderCodexErrorPill(convoId, d);
         finishProcessing(convoId);
+      }
+      // The runtime saying a summary has started, or that one stopped short.
+      if(d.subtype==='status' && convoId) {
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+      }
+      // A summary the runtime finished: one divider where it fell, and none
+      // for a summary this conversation already holds.
+      if(d.subtype==='compact_boundary' && convoId) {
+        const convo = conversations.find(c => c.id === convoId);
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {
+          knownCompactionKeys: (convo?.messages || []).filter(m => m && m.type === 'compaction').map(m => m.key),
+        });
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
       }
       break;
     case 'stream_event':
@@ -1141,6 +1158,18 @@ const EFFECT_EXECUTORS = {
     const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime);
     if (actSummary && msgEl) msgEl.appendChild(actSummary);
   },
+  // Kept where it fell, as the server keeps it: in a conversation whose
+  // messages are loaded, so coming back draws it again (a conversation not
+  // loaded yet brings it with its history), and drawn only when on screen.
+  'insert-compaction-divider': (convoId, ef) => {
+    const convo = conversations.find(c => c.id === convoId);
+    if (convo && convo.messages.length) {
+      convo.messages.push({ role: 'system', type: 'compaction', key: ef.key, content: '', agentId: null, timestamp: new Date().toISOString() });
+    }
+    drawCompactionDivider(convoId, ef.key);
+  },
+  'show-summarising': (convoId) => { showSummarising(convoId); },
+  'clear-summarising': (convoId) => clearSummarising(convoId),
 };
 
 function executeEffects(convoId, effects) {
@@ -1339,9 +1368,10 @@ setInterval(() => {
 
 // Pending permission callbacks (avoids inline onclick injection)
 const pendingPermissions = new Map();
-// Permission requests for conversations that are not on screen, awaiting
-// render when their conversation opens: convoId -> Map(requestId -> the raw
-// control_request payload). Entries leave on answer (respondPermission),
+// Every open permission request a conversation holds, whether it arrived in
+// the background or was drawn on screen, drawn again when the conversation
+// opens: convoId -> Map(requestId -> the raw control_request payload).
+// Entries leave on answer (respondPermission),
 // server timeout (permission_timeout), or cancel (the server's cancel sweep
 // already answered them). The store's decisions are pure functions in
 // permissions.js (unit-tested); this map is the app's single instance.

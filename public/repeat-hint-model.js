@@ -47,7 +47,7 @@
     const r = request || {};
     const tool = r.tool_name || '';
     const input = r.input || {};
-    if (r.put_back || r.answer_file === true) return null;
+    if (r.put_back || r.answer_file === true || r.credential === true) return null;
     // Any verdict on a card means it has already been judged worth a person's
     // decision: it can't be undone or asks once by rule (Code mode), or, in
     // either mode, it reads or changes the Keychain, which no setting stops.

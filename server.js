@@ -1550,6 +1550,7 @@ wss.on('connection', (ws) => {
         // named here is lost on that path even though the first delivery
         // carried it.
         ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {}),
+        ...(pending.credential && !pending.boundary ? { credential: true, resolved_path: pending.resolvedPath, grant_dir: null } : {}),
         ...(pending.startupFile ? { startup_file: pending.startupFile } : {})
       },
       _conversationId: pending.conversationId,
@@ -3301,6 +3302,10 @@ async function grepSearchTranscripts(query, convos) {
       for await (const line of rl) {
         try {
           const obj = JSON.parse(line);
+          // The summary Claude Code writes to make room is never a match,
+          // marked as its session file marks it or as its output stream does.
+          if (obj.isCompactSummary === true) continue;
+          if (obj.type === 'user' && obj.isSynthetic === true) continue;
           if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
             if (obj.message.content.toLowerCase().includes(q)) {
               rl.close();

@@ -1430,6 +1430,10 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   // the registry spells it (see SHELL_STARTUP_FILES).
   const startup = writing ? startupFileAt(resolvedPath, home, foldsCase) : null;
   if (startup) return { where: inside ? 'inside' : 'outside', resolvedPath: startup.path, grantDir: null, answerFile: true, startupFile: startup.name };
+  // A credential file the workspace holds (a workspace at the home folder, or
+  // in a runtime home) is still a credential: reading it asks, and is refused
+  // when nobody can be asked. `where` stays honest; `credential` carries why.
+  if (inside && !writing && isSecretPath(resolvedPath, home, foldsCase, spelled)) return { where: 'inside', resolvedPath, grantDir: null, credential: true };
   if (inside) return { where: 'inside', resolvedPath };
   // CODE MODE'S DEVELOPMENT PATHS: the temp folders and package caches are
   // working folders there, and git's own settings are free to read. Notes mode
@@ -2107,6 +2111,9 @@ const COPIES_FROM_SOURCES = new Set(['cp', 'install']);
 // there: `into` carries each destination and its sources, for the caller to
 // resolve once it knows whether the destination is a folder.
 const PLACES_INTO = new Set(['cp', 'install', 'mv', 'ln']);
+// Programs that remove a file, empty it or change its times or mode, and never
+// open it to read what it holds.
+const CHANGES_UNREAD = new Set(['rm', 'truncate', 'touch', 'chmod']);
 const REDIRECT = /^(?:\d*|&)(?:>>?|>\|)(.*)$/;
 // AN INPUT REDIRECT IS A READ, whatever program it feeds: `<` and `0<` open the
 // file for reading, and `<<<` hands over a string. Not `<>`, which opens it for
@@ -2116,9 +2123,18 @@ const INPUT_REDIRECT = /^\d*(?:<<<|<(?![<>(]))(.*)$/;
 // shellPathWords reads it, so the words compare. Each `into` entry carries
 // `at`, where its segment starts in `command`, for the folder it starts from.
 // `readsPart` is the reading for the shell the command is written for.
+// For the credential check, beside the words a command can write: `targets`,
+// what a segment only writes, removes or copies onto, and `others`, every
+// other word a segment names, which it may read. `writtenAt` holds each place
+// a target stands, as where it starts in `command` and the word, so another
+// place on the line that names the same word is still read.
 function answerFileWriteWords(command, posixText = false, readsPart = isReadOnlyShellCommand) {
   const out = new Set();
   const into = [];
+  const targets = new Set();
+  const others = new Set();
+  const writtenAt = new Set();
+  const wrote = (w, at) => { if (at >= 0) writtenAt.add(`${at}\u0000${w}`); };
   const bare = (w) => {
     const s = w.replace(/^['"]|['"]$/g, '');
     return posixText && !/^['"]/.test(w) && s.includes('\\') && !WIN_DRIVE.test(s) && !WIN_UNC.test(s) ? s.replace(/\\(.)/g, '$1') : s;
@@ -2144,21 +2160,27 @@ function answerFileWriteWords(command, posixText = false, readsPart = isReadOnly
     }
   }
   for (const { seg, segAt } of pieces) {
-    const words = seg.match(/'([^']*)'|"([^"]*)"|[^\s]+/g) || [];
+    const found = [...seg.matchAll(/'([^']*)'|"([^"]*)"|[^\s]+/g)];
+    const words = found.map(m => m[0]);
+    // Where each word starts in `command`, or -1 where the segment was not found.
+    const wordAt = found.map(m => (segAt >= 0 ? segAt + m.index : -1));
     const written = [];
     const rest = [];
+    const restAt = [];
     for (let i = 0; i < words.length; i++) {
       const input = INPUT_REDIRECT.exec(words[i]);
       if (input) { if (!input[1]) i++; continue; }
       const m = REDIRECT.exec(words[i]);
-      if (!m) { rest.push(words[i]); continue; }
+      if (!m) { rest.push(words[i]); restAt.push(wordAt[i]); continue; }
       const target = m[1] || words[++i];
       if (target && !target.startsWith('&')) written.push(bare(target));
+      if (target && wordAt[i] >= 0) wrote(bare(target), wordAt[i] + words[i].length - target.length);
     }
     let at = 0;
     while (at < rest.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[at])) at++;
     const verb = bare(rest[at] || '').split('/').pop();
     const args = rest.slice(at + 1).map(bare);
+    const argsAt = restAt.slice(at + 1);
     let reads = readsPart(rest.join(' ')) || READS_NAMED_FILES.has(verb);
     // A command whose options are judged is read from the segment's own text,
     // past any keyword before it, as the shell hands the words over. Rejoined
@@ -2175,29 +2197,41 @@ function answerFileWriteWords(command, posixText = false, readsPart = isReadOnly
     } else if (verb === 'dd') {
       reads = true;
       for (const a of args) if (a.startsWith('of=')) written.push(a.slice(3));
+      args.forEach((a, k) => { if (a.startsWith('of=')) wrote(a.slice(3), argsAt[k]); });
     } else if (COPIES_FROM_SOURCES.has(verb) && !args.some(a => a === '-t' || /^--(target-directory|link|symbolic-link)/.test(a) || /^-[a-zA-Z]*[ls]/.test(a))) {
       const operands = args.filter(a => !a.startsWith('-'));
       reads = true;
       if (operands.length > 1) written.push(operands[operands.length - 1]);
+      if (operands.length > 1) wrote(operands[operands.length - 1], argsAt[args.lastIndexOf(operands[operands.length - 1])]);
     }
     // `install -d` copies nothing: it creates each folder it names, or sets the
     // mode and owner of one already there, so every word it names is written.
     const makesFolders = verb === 'install' && args.some(a => /^-[a-zA-Z]*d/.test(a) || a === '--directory');
     if (makesFolders) reads = false;
     if (splitAtReturn) reads = false;
+    let placed = null;
     if (PLACES_INTO.has(verb) && !makesFolders) {
       const t = args.indexOf('-t');
       const named = t >= 0 ? args[t + 1] : (args.find(a => a.startsWith('--target-directory=')) || '').slice('--target-directory='.length);
       const operands = args.filter((a, i) => !a.startsWith('-') && !(t >= 0 && i === t + 1));
       const dest = named || (operands.length > 1 ? operands[operands.length - 1] : null);
       if (dest) into.push({ dest, sources: named ? operands : operands.slice(0, -1), at: Math.max(0, segAt) });
+      placed = dest;
+      const k = !named ? args.lastIndexOf(dest) : t >= 0 ? t + 1 : args.findIndex(a => a.startsWith('--target-directory='));
+      if (dest && k >= 0) wrote(dest, argsAt[k]);
     }
     for (const w of written) out.add(w);
+    const changed = CHANGES_UNREAD.has(verb);
+    if (changed) args.forEach((a, k) => { if (!a.startsWith('-')) wrote(a, argsAt[k]); });
+    for (const w of [...written, ...(placed ? [placed] : []), ...(changed ? args.filter(a => !a.startsWith('-')) : [])]) targets.add(w);
+    const left = changed ? args.filter(a => a.startsWith('-')) : [...args];
+    if (left.lastIndexOf(placed) >= 0) left.splice(left.lastIndexOf(placed), 1);
+    for (const w of left) others.add(w);
     // The words of the segment without its redirects: what it reads from is not
     // written, and what it writes to is in `written` already.
     if (!reads) for (const t of shellPathTokens(rest.join(' '), posixText)) out.add(t);
   }
-  return { words: out, into };
+  return { words: out, into, targets, others, writtenAt };
 }
 
 // A FOLDER THAT HOLDS ANSWER FILES IS THEM: removing, moving or replacing
@@ -3578,16 +3612,30 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   // differ: a command of its own, from where the line starts, as it is.
   const viewed = c => { const v = shellView(c.text).text; return v === c.text ? [c] : [c, { ...c, text: v }]; };
   const view = opts.shellTool === 'PowerShell' ? judged : { ...judged, commands: judged.commands.flatMap(viewed) };
-  const writes = { words: new Set(), into: [] };
+  const writes = { words: new Set(), into: [], targets: new Set(), others: new Set(view.literals.map(l => l.t)), writtenAt: new Set() };
   if (!readOnly) {
     for (const lit of view.literals) if (lit.written) writes.words.add(lit.t);
+    // Which text a place is in: 0 for the line, k + 1 for its k-th command.
+    let source = 0;
     for (const [text, fromStart] of [[view.text, false], ...view.commands.map(c => [c.text, true])]) {
       const w = answerFileWriteWords(text, posixText, readsPart);
       for (const x of w.words) writes.words.add(x);
       for (const i of w.into) writes.into.push({ ...i, fromStart });
+      for (const x of w.targets) writes.targets.add(x);
+      for (const x of w.others) writes.others.add(x);
+      for (const x of w.writtenAt) writes.writtenAt.add(`${source}\u0000${x}`);
+      source++;
     }
   }
   const writingWords = writes.words;
+  // A word the line only writes, removes or copies onto, and names nowhere else
+  // on it, its code included: what it names is not read. Any other word may be.
+  const onlyWritten = new Set([...writes.targets].filter(x => !writes.others.has(x)));
+  // EACH PLACE A WORD STANDS IS JUDGED ON ITS OWN. Of such a word, only the
+  // place where it is a target is written: the same word anywhere else on the
+  // line, an input redirect (`cat < f`) above all, is read, even when the write
+  // sits in a branch that never runs.
+  const writeOnlyAt = (source, w) => onlyWritten.has(w.t) && writes.writtenAt.has(`${source}\u0000${w.at}\u0000${w.t}`);
   // A folder a copy or move writes INTO is not itself replaced: what it writes
   // is checked by name below, so `cp x.json .claude` asks about nothing.
   const intoFolders = new Set(writes.into.map(i => i.dest));
@@ -3602,8 +3650,8 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     const akey = pmod === path.win32 ? at.toLowerCase() : at;
     if (!seen.has(akey)) { seen.add(akey); found.push({ path: at, answerFile: true, ...(sf ? { startupFile: sf.name } : {}) }); }
   };
-  const ran = view.commands.flatMap(c => shellPathWords(c.text, posixText).map(w => ({ t: w.t, at: c.at, fromStart: true })));
-  const words = shellPathWords(view.text, posixText).concat(view.literals, ran).sort((a, b) => a.at - b.at);
+  const ran = view.commands.flatMap((c, k) => shellPathWords(c.text, posixText).map(w => ({ t: w.t, at: c.at, fromStart: true, writeOnly: writeOnlyAt(k + 1, w) })));
+  const words = shellPathWords(view.text, posixText).map(w => ({ ...w, writeOnly: writeOnlyAt(0, w) })).concat(view.literals, ran).sort((a, b) => a.at - b.at);
   // The same text as bash joins each word (joinedPathWords), read after the
   // words above so the first crossing is the one it was. A line that reading
   // cannot read is marked, and asked about (classifyShellAccess).
@@ -3842,7 +3890,11 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   // raises. Answers whether it was reported, now or by an earlier word.
   // A credential file is never a development path or covered by a named
   // folder, so those two exemptions are not tried here.
-  const reportSecret = (r) => {
+  // Every credential file the line may read, the workspace's own included, is
+  // also noted in `opts.credentialReads` when given: one reached from a place
+  // that only writes (`writeOnly`) is not.
+  const reportSecret = (r, writeOnly) => {
+    if (opts.credentialReads && !writeOnly) opts.credentialReads.add(r);
     if (insideWorkspaceRoot(r, workspaceRoot, path)) return false;
     if (seen.has(r)) return true;
     seen.add(r);
@@ -3923,7 +3975,9 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     const here = fromStart ? null : possibleFoldersAt(at);
     const starts = here || [basesFor(path, fromStart)(at), ...cdStarts(path, at, fromStart)];
     for (const form of braceForms(homeIn(word)).flatMap(loopForms).map(homeIn)) {
-      for (const h of homesReadBy(form, starts)) for (const e of entriesUnder(h)) reportSecret(e.path);
+      // A folder a recursive reader is handed stands among the words a segment
+      // may read, so it is only written where no place names it any other way.
+      for (const h of homesReadBy(form, starts)) for (const e of entriesUnder(h)) reportSecret(e.path, onlyWritten.has(word));
     }
   }
   // A WORD HOLDING A VARIABLE OR A SUBSTITUTION is only known when the line
@@ -3946,7 +4000,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     for (const { e, rels, paths, names } of ends) if ((homed && paths.some(p => fits(parts, p))) || (last && parts.some((x, i) => i && x.replace(/^\//, '') && names.some(n => fits(parts.slice(i), n)))) || rels.some(r => last.endsWith('/' + r))) reportSecret(e.path);
   }
   let previous = '';
-  for (const { t: raw, at, fromStart } of words) {
+  for (const { t: raw, at, fromStart, writeOnly } of words) {
     // A `cd` target is judged even as a bare word, so a folder that is a link
     // to somewhere outside is reported where it really is.
     const cdTarget = previous === 'cd';
@@ -4037,7 +4091,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
       for (const form of forms) {
         for (const r of secretsReachedBy(form, { starts, unfollowed: unsure, relative, entries: secretEntries, folds: foldsCase })) reached.add(r);
       }
-      if ([...reached].map(reportSecret).some(Boolean)) continue;
+      if ([...reached].map(r => reportSecret(r, writeOnly)).some(Boolean)) continue;
     }
 
     // Skip tokens that could not cross. A relative token resolves against the
@@ -4076,6 +4130,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     // cards on any access, read or write, regardless of what the command is.
     const tags = agentHomeTags(resolved, home, foldsCase, spelled);
     if (tags.agentHome && !tags.secret && (!tags.persistenceSurface || readOnly)) continue;
+    if (tags.secret && opts.credentialReads && !writeOnly) opts.credentialReads.add(resolved);
     const key = pmod === path.win32 ? resolved.toLowerCase() : resolved;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -4320,6 +4375,9 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
   // The first folders this command's code literals name, looked up afresh for
   // every classification (see literalIsPlace).
   const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home, foldsCase, { ...opts, windowsSwitches, shellTool: toolName, firstFolders: new Map() });
+  // Nothing crosses, but the line reads a credential file the workspace holds.
+  const reads = opts.credentialReads;
+  if (!crossings.length && reads && reads.size) return { where: 'inside', resolvedPath: [...reads][0], grantDir: null, credential: true };
   // A line the joined reading could not read is asked about, as an escape is.
   if (!crossings.length) return crossings.unread ? { where: 'outside', resolvedPath: null, grantDir: null, grantable: false, crossings: [] } : null;
   // `grantDir` AND `grantable` ARE DIFFERENT QUESTIONS, and conflating them is
@@ -4683,17 +4741,20 @@ fetchAgentNotice((agentNotice) => {
   // short-circuit on purpose: code mode trusts commands inside the
   // workspace, it does not extend the workspace to the whole machine.
   // File tools and shell commands are classified by the same boundary and
-  // reach the same card. classifyShellAccess only ever answers 'outside' or
-  // null, so an ordinary command keeps whatever card it already had: the
-  // instant-allow branch below stays reachable only by file tools.
+  // reach the same card. classifyShellAccess answers 'outside', null, or a
+  // read of a credential file the workspace holds, so an ordinary command
+  // keeps whatever card it already had: the instant-allow branch below stays
+  // reachable only by file tools.
   // No refusal reaches here: both exit above, so this guard is the tool-name
   // check alone rather than restating them.
   // Where the command runs: the hook input's cwd follows the agent.
   const codeMode = process.env.RUNDOCK_CODE_MODE === '1';
   const cwd = (typeof data.cwd === 'string' && data.cwd) ? data.cwd : undefined;
+  // Every credential file a shell command reads, wherever it is.
+  const credentialReads = new Set();
   const access = (typeof data.tool_name === 'string')
     ? classifyFileAccess(data.tool_name, data.tool_input, wsRoot, extraDirs, undefined, undefined, undefined, { codeMode })
-      || classifyShellAccess(data.tool_name, data.tool_input, wsRoot, extraDirs, undefined, undefined, { cwd, codeMode })
+      || classifyShellAccess(data.tool_name, data.tool_input, wsRoot, extraDirs, undefined, undefined, { cwd, codeMode, credentialReads })
     : null;
   // THE SAME PRINCIPLE THE BRANCH ABOVE APPLIES TO ~/.claude, applied to the
   // workspace's own settings file, because the measurement is the same one.
@@ -4743,8 +4804,9 @@ fetchAgentNotice((agentNotice) => {
   // line removed the card completely, in Knowledge mode as well as Code mode:
   // a silent, total loss of the one question that governs every other question.
   // `where` describes where the file sits and must stay honest; `answerFile`
-  // decides whether it is ordinary inside work, and it never is.
-  if (access && access.where === 'inside' && !access.answerFile) {
+  // decides whether it is ordinary inside work, and it never is. Nor is a read
+  // of a credential file the workspace holds (`credential`).
+  if (access && access.where === 'inside' && !access.answerFile && !access.credential) {
     writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -4780,7 +4842,7 @@ fetchAgentNotice((agentNotice) => {
   // or rule to remember, and refused when nobody can be asked.
   const keychain = !!(verdict && verdict.reason === 'keychain');
   if (codeMode
-      && !(access && (access.where === 'outside' || access.answerFile))
+      && !(access && (access.where === 'outside' || access.answerFile || access.credential))
       && (!verdict || verdict.verdict === 'runs')) {
     writeDecision(({
       hookSpecificOutput: {
@@ -4843,6 +4905,10 @@ fetchAgentNotice((agentNotice) => {
     // reason, and the client keys its heading off this rather than off boundary.
     ...(access && access.answerFile && access.where !== 'outside'
       ? { answer_file: true, resolved_path: access.resolvedPath || null, grant_dir: null }
+      : {}),
+    // So does a credential file the workspace holds, with nothing to remember.
+    ...(access && access.credential && access.where !== 'outside'
+      ? { credential: true, resolved_path: access.resolvedPath || null, grant_dir: null }
       : {}),
     // A shell startup file, named as the card spells it (`~/.zshrc`): a label.
     ...(startupName ? { startup_file: startupName } : {}),
@@ -4938,10 +5004,22 @@ fetchAgentNotice((agentNotice) => {
   // would otherwise send with nobody having seen it. Only Notes mode reaches here with one: Code mode has already
   // answered every connector action above.
   const connectorAlwaysAsks = isMcpSendTool(data.tool_name) || isMcpDeleteTool(data.tool_name);
-  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;
+  // AND A SIGN-IN CREDENTIAL, in both modes. The files the secrets registry
+  // names hold the runtimes' own sign-in, and nothing under a read of one
+  // stops it: the sandbox denies writes to them, not reads, and the file
+  // tools do not run in the sandbox. The `secret` tag is read the way the
+  // crossing check above reads its tags, so a file added to the registry is
+  // covered with no path of its own. Only a read: a file tool's, or a word a
+  // shell command reads rather than writes, the workspace's own files included.
+  // A write keeps the answer it had. Its sentence comes first, so a credential
+  // read refused for another reason as well still says what it reached.
+  const credentialAccess = credentialReads.size > 0 || !!(access && access.credential)
+    || boundaryCrossingsFor(access).some(c => c && c.secret && !c.write);
+  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;
   function unanswered(reason) {
     let why;
-    if (answerFile) why = 'This file records your own permission answers or decides what runs, and it is never changed without asking, so it was refused rather than approved on your behalf.';
+    if (credentialAccess) why = 'This reads a sign-in credential, and it is never done without asking, so it was refused rather than approved on your behalf.';
+    else if (answerFile) why = 'This file records your own permission answers or decides what runs, and it is never changed without asking, so it was refused rather than approved on your behalf.';
     else if (keychain) why = 'This reads or changes a password or key stored in your Mac\'s Keychain, and it is never done without asking, so it was refused rather than approved on your behalf.'
       + (verdict.also ? ' Part of it also cannot be undone.' : '');
     else if (alwaysAsks || destructive) why = 'This command cannot be undone, and it is never run without asking, so it was refused rather than approved on your behalf.';

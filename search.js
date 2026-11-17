@@ -33,7 +33,7 @@ const { extractLinks } = require('./lib/links.js');
 
 // Bumping this rebuilds every index on next open. That is the whole migration
 // story: rebuild, never migrate.
-const SCHEMA_VERSION = 4; // 4: links table; 3: HTML/SVG artifact content + frontmatter values in file indexing
+const SCHEMA_VERSION = 5; // 5: compact summaries left out; 4: links table; 3: HTML/SVG artifact content + frontmatter values in file indexing
 
 const MAX_QUERY_LENGTH = 256;
 const MAX_QUERY_TOKENS = 12;
@@ -362,6 +362,12 @@ CREATE TABLE IF NOT EXISTS session_marks (
  */
 function extractIndexableMessage(obj) {
   if (!obj || typeof obj !== 'object') return null;
+  // The summary Claude Code writes when it makes room: a user line nobody
+  // typed, which can repeat anything said earlier. Never shown, never found.
+  // Its session file line is marked isCompactSummary; the same summary in
+  // Claude Code's output stream is a user line marked isSynthetic.
+  if (obj.isCompactSummary === true) return null;
+  if (obj.type === 'user' && obj.isSynthetic === true) return null;
   const tsMs = obj.timestamp ? Date.parse(obj.timestamp) || null : null;
   if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
     const text = obj.message.content.trim();
