@@ -714,7 +714,7 @@ function handlePermissionRequest(d, convoId) {
   // suppressed at the button, because a key stored from an UNRELATED Write or
   // Edit approval would otherwise answer this one from the session's set, and
   // the user would never see that it had happened.
-  const decision = (req.boundary || req.answer_file === true)
+  const decision = (req.boundary || req.answer_file === true || req.credential === true)
     ? { action: 'card' }
     : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict);
   const isActive = activeConversation?.id === convoId;
@@ -1011,6 +1011,9 @@ function renderPermissionCard(d, convoId, host) {
   const crossingList = Array.isArray(req.crossings) ? req.crossings : [];
   const answerFile = req.answer_file === true
     || (crossingList.length > 0 && crossingList.every(c => c && c.answerFile));
+  // A read of a credential file the workspace holds: asked every time, with
+  // nothing to remember, and worded as inside, which is where the file is.
+  const credential = req.credential === true && !boundary && !answerFile;
   // A standing folder grant is only on offer when the crossing HAS a folder.
   // A shell command denied by the runtime sandbox and retried with the sandbox
   // turned off is a crossing established by the operating system, not by a
@@ -1091,6 +1094,11 @@ function renderPermissionCard(d, convoId, host) {
     summary = RundockPermissions.answerFileSummary(named, startupLabel);
     detail = startupLabel || req.resolved_path || detail;
     context = RundockPermissions.answerFileCopy(named, startupLabel);
+  } else if (credential) {
+    summary = 'Wants to read a sign-in credential in your workspace';
+    if (toolName === 'Bash' && detail) commandDetail = detail;
+    detail = req.resolved_path || detail;
+    context = RundockPermissions.alwaysAskCopy({ secret: true });
   } else if (boundary) {
     const reads = toolName === 'Read' || toolName === 'Glob' || toolName === 'Grep';
     // A shell crossing does not say which act it is. The command may read,
@@ -1176,7 +1184,7 @@ function renderPermissionCard(d, convoId, host) {
   // and the closing sentence follow the boundary text.
   if (verdictCopy && !answerFile) {
     const said = [verdictCopy.sentence, verdictCopy.closing].filter(Boolean).join(' ');
-    context = boundary && context ? `${context} ${said}` : said;
+    context = (boundary || credential) && context ? `${context} ${said}` : said;
   }
 
   // WHAT A CONNECTOR'S EMAIL OR EVENT SAYS, on the card that approves it. Only
@@ -1190,7 +1198,7 @@ function renderPermissionCard(d, convoId, host) {
   // reading or building it throws, the card is the plain one it would have been.
   let fields = null;
   let fieldsBox = null;
-  if (!boundary && !answerFile && !verdictCopy && typeof RundockConnectorFields !== 'undefined') {
+  if (!boundary && !answerFile && !credential && !verdictCopy && typeof RundockConnectorFields !== 'undefined') {
     try {
       fields = RundockConnectorFields.connectorFields(toolName, input);
       if (fields) {
@@ -1228,7 +1236,7 @@ function renderPermissionCard(d, convoId, host) {
   // outside path is not automatically dangerous, and grading it as though it
   // were would put a red card in front of ordinary work until the colour meant
   // nothing.
-  const renderRisk = boundary ? 'high'
+  const renderRisk = (boundary || credential) ? 'high'
     : (verdict && verdict.verdict === 'always-asks') ? 'high'
       : (verdict && verdict.verdict === 'asks-once') ? 'medium' : risk;
   // A connector send asks every time too: once a message has gone it cannot be
@@ -1284,7 +1292,7 @@ function renderPermissionCard(d, convoId, host) {
         <button class="btn-perm ${RundockPermissions.allowButtonClass(allowLabel, answerFile)}" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">${esc(allowLabel)}</button>
         ${wholeFolderOffered
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
-          : (!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
+          : (!boundary && !answerFile && !credential && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>
@@ -1566,7 +1574,7 @@ function handleOwnerlessPermissionRequest(d) {
   if (RundockPermissions.permissionEnded(endedPermissions, requestId)) return;
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
-  const decision = (req.boundary || req.answer_file === true)
+  const decision = (req.boundary || req.answer_file === true || req.credential === true)
     ? { action: 'card' }
     : RundockPermissions.decidePermission(classifyRisk(toolName, input),
       RundockPermissions.verdictAllowKey(req.code_mode_verdict) || toolAllowKey(toolName, input), alwaysAllowedTools, req.code_mode_verdict || undefined);

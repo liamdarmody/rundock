@@ -1430,6 +1430,10 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   // the registry spells it (see SHELL_STARTUP_FILES).
   const startup = writing ? startupFileAt(resolvedPath, home, foldsCase) : null;
   if (startup) return { where: inside ? 'inside' : 'outside', resolvedPath: startup.path, grantDir: null, answerFile: true, startupFile: startup.name };
+  // A credential file the workspace holds (a workspace at the home folder, or
+  // in a runtime home) is still a credential: reading it asks, and is refused
+  // when nobody can be asked. `where` stays honest; `credential` carries why.
+  if (inside && !writing && isSecretPath(resolvedPath, home, foldsCase, spelled)) return { where: 'inside', resolvedPath, grantDir: null, credential: true };
   if (inside) return { where: 'inside', resolvedPath };
   // CODE MODE'S DEVELOPMENT PATHS: the temp folders and package caches are
   // working folders there, and git's own settings are free to read. Notes mode
@@ -4653,8 +4657,9 @@ fetchAgentNotice((agentNotice) => {
   // line removed the card completely, in Knowledge mode as well as Code mode:
   // a silent, total loss of the one question that governs every other question.
   // `where` describes where the file sits and must stay honest; `answerFile`
-  // decides whether it is ordinary inside work, and it never is.
-  if (access && access.where === 'inside' && !access.answerFile) {
+  // decides whether it is ordinary inside work, and it never is. Nor is a read
+  // of a credential file the workspace holds (`credential`).
+  if (access && access.where === 'inside' && !access.answerFile && !access.credential) {
     writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -4690,7 +4695,7 @@ fetchAgentNotice((agentNotice) => {
   // or rule to remember, and refused when nobody can be asked.
   const keychain = !!(verdict && verdict.reason === 'keychain');
   if (codeMode
-      && !(access && (access.where === 'outside' || access.answerFile))
+      && !(access && (access.where === 'outside' || access.answerFile || access.credential))
       && (!verdict || verdict.verdict === 'runs')) {
     writeDecision(({
       hookSpecificOutput: {
@@ -4753,6 +4758,10 @@ fetchAgentNotice((agentNotice) => {
     // reason, and the client keys its heading off this rather than off boundary.
     ...(access && access.answerFile && access.where !== 'outside'
       ? { answer_file: true, resolved_path: access.resolvedPath || null, grant_dir: null }
+      : {}),
+    // So does a credential file the workspace holds, with nothing to remember.
+    ...(access && access.credential && access.where !== 'outside'
+      ? { credential: true, resolved_path: access.resolvedPath || null, grant_dir: null }
       : {}),
     // A shell startup file, named as the card spells it (`~/.zshrc`): a label.
     ...(startupName ? { startup_file: startupName } : {}),
@@ -4856,7 +4865,7 @@ fetchAgentNotice((agentNotice) => {
   // covered with no path of its own. The tag does not tell a read from a
   // write, so a write is refused too. Its sentence comes last, so an access an
   // earlier case already refuses keeps that case's words.
-  const credentialAccess = boundaryCrossingsFor(access).some(c => c && c.secret);
+  const credentialAccess = !!(access && access.credential) || boundaryCrossingsFor(access).some(c => c && c.secret);
   const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;
   function unanswered(reason) {
     let why;

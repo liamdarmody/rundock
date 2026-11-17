@@ -50,8 +50,12 @@ for (const d of [path.join(home, '.claude', 'agents'), path.join(home, '.codex')
 const REGISTRY = secretsRegistry(home);
 for (const f of [...REGISTRY, path.join(home, '.claude', 'settings.json'), path.join(home, '.claude', 'agents', 'helper.md'), path.join(ws, 'notes.md'), path.join(root, 'elsewhere', 'notes.md'), path.join(home, 'notes.md')]) fs.writeFileSync(f, '{}\n');
 // A workspace can be the home folder itself, which then holds every credential
-// file the registry names. Its cases carry this after the mode in their names.
+// file the registry names, or a runtime home, which holds some of them. Their
+// cases carry these after the mode in their names.
 const AT_HOME = ', workspace at home';
+const IN_RUNTIME_HOME = ', workspace in a runtime home';
+const WORKSPACES = [['', ws], [AT_HOME, home], [IN_RUNTIME_HOME, path.join(home, '.claude')]];
+for (const [, w] of WORKSPACES) fs.mkdirSync(path.join(w, '.rundock'), { recursive: true });
 
 // The shell commands are POSIX spellings, and the recorded answers name POSIX paths.
 const POSIX = process.platform === 'win32' ? 'the shell commands and recorded paths here are POSIX' : false;
@@ -67,6 +71,8 @@ const fileReads = f => [['Read', { file_path: f }], ['Grep', { pattern: 'token',
 const shellReads = (f, w = ws) => [['Bash', { command: `cat ${f}` }], ['Bash', { command: `head ${f}` }], ['Bash', { command: `cp ${f} ${path.join(w, 'copy.json')}` }]];
 const everyRead = (f, w = ws) => [...fileReads(f), ...(POSIX ? [] : shellReads(f, w))];
 const cardReads = f => [['Read', { file_path: f }], ['Bash', { command: `cat ${f}` }]];
+const homeCardReads = f => [['Read', { file_path: f }]];
+const credentialIn = ([, input]) => input.file_path || input.path || input.command.split(' ')[1];
 
 // Code mode already refused some credential reads with nobody to ask, as a
 // crossing it asks about every time: a file directly in the home folder, which
@@ -179,9 +185,9 @@ async function each(cases, fn) {
 }
 
 // Every case refused with Rundock unreachable, listing each one that was not.
-async function assertRefused(cases, mode) {
+async function assertRefused(cases, mode, workspace = ws) {
   assert.ok(cases.length > 0, 'the registry names credential files');
-  const got = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode }));
+  const got = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode, workspace }));
   const notRefused = cases.map((c, i) => [c, said(got[i])])
     .filter(([, o]) => o.permissionDecision !== 'deny' || !o.permissionDecisionReason.startsWith(`${UNREACHABLE} `))
     .map(([c, o]) => `${named(c)}: ${o.permissionDecision}: ${o.permissionDecisionReason}`);
@@ -192,6 +198,10 @@ describe('with Rundock unreachable, every read of a credential file is refused',
   for (const [label, mode] of MODES) {
     test(`${label}: Read, Grep and Glob of each credential file are refused`, () => assertRefused(REGISTRY.flatMap(fileReads), mode));
     test(`${label}: cat, head and a copy into the workspace of each credential file are refused`, { skip: POSIX }, () => assertRefused(REGISTRY.flatMap(f => shellReads(f)), mode));
+    // A workspace that holds the file does not make reading it ordinary work.
+    for (const [where, w] of WORKSPACES.slice(1)) {
+      test(`${label}${where}: Read, Grep and Glob of each credential file are refused`, () => assertRefused(REGISTRY.flatMap(fileReads), mode, w));
+    }
   }
   // The tag does not tell a read from a write, so a write is refused too.
   test('Notes mode: a write to a credential file is refused too, in the same words', async () => {
@@ -340,6 +350,21 @@ describe('with Rundock reachable, a credential read draws the card main draws', 
       });
     });
   }
+  // A credential file inside the workspace draws a card of its own, which says
+  // where the file is rather than calling it a crossing, and offers no grant.
+  for (const [label, mode] of MODES) {
+    test(`${label}${AT_HOME}: each read of each credential file asks, and Rundock's answer stands`, async () => {
+      const cases = REGISTRY.flatMap(homeCardReads);
+      const got = await each(cases, ([tool, input]) => run(tool, input, { port: portOf(recording), mode, workspace: home }));
+      cases.forEach(([tool, input], i) => {
+        const c = [tool, input];
+        assert.strictEqual(got[i].cards.length, 1, `${named(c)}: one card`);
+        const { credential, resolved_path, grant_dir, boundary, crossings } = got[i].cards[0];
+        assert.deepStrictEqual({ credential, resolved_path, grant_dir, boundary, crossings }, { credential: true, resolved_path: normal(credentialIn(c)), grant_dir: null, boundary: undefined, crossings: undefined }, named(c));
+        assert.strictEqual(said(got[i]).permissionDecision, 'deny', `${named(c)}: the refusal Rundock sent`);
+      });
+    });
+  }
 });
 
 describe('once Rundock is back, a credential read refused while it was unreachable draws its card', { skip: POSIX || (RECORD ? 'recording' : false) }, () => {
@@ -354,6 +379,20 @@ describe('once Rundock is back, a credential read refused while it was unreachab
       cases.forEach((c, i) => {
         assert.strictEqual(said(got[i].refused).permissionDecision, 'deny', `${named(c)}: refused while unreachable`);
         assert.deepStrictEqual(got[i].again, onMain[keyOf(label, 'reachable', c)], `${named(c)}: the same card as ever, once it is back`);
+      });
+    });
+    test(`${label}${AT_HOME}: nothing remembers the refusal`, async () => {
+      const cases = REGISTRY.flatMap(homeCardReads);
+      const got = await each(cases, async ([tool, input], i) => {
+        const session = `again-home-${mode}-${i}`;
+        const refused = await run(tool, input, { port: closed, mode, session, workspace: home });
+        const again = await run(tool, input, { port: portOf(recording), mode, session, workspace: home });
+        return { refused, again, first: await run(tool, input, { port: portOf(recording), mode, workspace: home }) };
+      });
+      cases.forEach((c, i) => {
+        assert.strictEqual(said(got[i].refused).permissionDecision, 'deny', `${named(c)}: refused while unreachable`);
+        assert.ok(got[i].again.cards.length === 1 && got[i].again.cards[0].credential === true, `${named(c)}: a card once it is back`);
+        assert.deepStrictEqual(got[i].again, got[i].first, `${named(c)}: the same card a first read draws`);
       });
     });
   }

@@ -1711,7 +1711,7 @@ const MUTATIONS = [
     "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;",
     "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;"],
   [CM_HOOK, "M18: the Code-mode branch answers before the boundary classification",
-    "      && !(access && (access.where === 'outside' || access.answerFile))\n      && (!verdict || verdict.verdict === 'runs')) {",
+    "      && !(access && (access.where === 'outside' || access.answerFile || access.credential))\n      && (!verdict || verdict.verdict === 'runs')) {",
     "      && (!verdict || verdict.verdict === 'runs')) {"],
   [CM_HOOK, "M19: the hook input's cwd is ignored",
     "  const cwd = (typeof data.cwd === 'string' && data.cwd) ? data.cwd : undefined;",
@@ -4608,14 +4608,14 @@ const MUTATIONS = [
   // Each field the hook grades keeps its request on the card path, however
   // its command reads.
   [READ_ONLY_ANSWER, 'Read-only answer: a crossing out of the workspace is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
-    "const HOOK_GRADES = ['answer_file', 'startup_file'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'credential'];",
+    "const HOOK_GRADES = ['answer_file', 'startup_file', 'credential'];"],
   [READ_ONLY_ANSWER, 'Read-only answer: an answer-file write is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
-    "const HOOK_GRADES = ['boundary', 'startup_file'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'credential'];",
+    "const HOOK_GRADES = ['boundary', 'startup_file', 'credential'];"],
   [READ_ONLY_ANSWER, 'Read-only answer: a shell startup file is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
-    "const HOOK_GRADES = ['boundary', 'answer_file'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'credential'];",
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'credential'];"],
   // The verdict decides once it reaches decidePermission, so dropping it from
   // the call is what answers a Keychain line as a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a Keychain line or any other verdict is answered with no card',
