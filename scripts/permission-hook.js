@@ -3987,17 +3987,22 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   // its literal parts from one on could spell, to the end of the word, the
   // file's name or its path below home (`$D.credentials.json`,
   // `$D/.cred$E"entials.json"`), or when the text after the last one ends in
-  // that path. A word with no literal text but `/` (`$A/$B`) names nothing,
-  // nor does a name a variable begins (`$f.json`).
+  // that path; any ending the word may be empty (`$D/auth.json$(true)`). A
+  // word with no literal text but `/` (`$A/$B`) names nothing, nor does a name
+  // a variable begins (`$f.json`).
   const fold = p => foldCase(p, foldsCase);
+  // A word's literal parts, split at each variable and substitution. A `$( )`
+  // runs to the parenthesis that closes it, or to the end when none does.
+  const literalParts = t => { const re = /\$\{[^}]*\}|\$[\w@*#?$!-]+|`[^`]*`/y, parts = ['']; for (let i = 0; i < t.length; i++) { const j = t.startsWith('$(', i) ? codeParse.closeParen(t, i + 1, 'bash') : (re.lastIndex = i, re.test(t)) ? re.lastIndex - 1 : null; if (j === null) parts[parts.length - 1] += t[i]; else { parts.push(''); i = j < 0 ? t.length : j; } } return parts; };
   const fits = (parts, p) => { const last = parts[parts.length - 1]; let k = parts[0].length; for (const x of parts.slice(1, -1)) { const i = p.indexOf(x, k); if (i < 0) return false; k = i + x.length; } return p.startsWith(parts[0]) && p.endsWith(last) && (parts.length > 1 ? p.length - last.length >= k : p === last); };
   const ends = secretEntries.map(e => { const rels = e.reach.flatMap(x => homeSpellings.map(h => path.relative(h, x))).filter(r => r && !r.startsWith('..') && !path.isAbsolute(r)).map(fold); return { e, rels, paths: [...rels.map(r => '~/' + r), ...e.reach.map(fold)], names: rels.flatMap(r => r.split('/').flatMap((_, i, a) => [a.slice(i).join('/'), '/' + a.slice(i).join('/')])) }; });
   for (const w of joined) {
-    const parts = w.expands ? fold(HOME_PREFIX.reduce((t, re) => t.replace(re, '~'), w.t)).split(/\$\{[^}]*\}|\$\([^]*\)|\$[\w@*#?$!-]+|`[^`]*`/) : [];
-    const last = parts[parts.length - 1];
+    const parts = w.expands ? literalParts(fold(HOME_PREFIX.reduce((t, re) => t.replace(re, '~'), w.t))) : [];
+    let cut = parts.length; while (cut > 1 && !parts[cut - 1]) cut--;
+    const lit = parts.slice(0, cut), last = lit[cut - 1];
     const homed = parts.length > 1 && (parts[0].startsWith('~/') || homeSpellings.some(h => (parts[0] + '/').startsWith(fold(h) + '/')));
     if (parts.length < 2 || !/[^/]/.test(parts.join(''))) continue;
-    for (const { e, rels, paths, names } of ends) if ((homed && paths.some(p => fits(parts, p))) || (last && parts.some((x, i) => i && x.replace(/^\//, '') && names.some(n => fits(parts.slice(i), n)))) || rels.some(r => last.endsWith('/' + r))) reportSecret(e.path);
+    for (const { e, rels, paths, names } of ends) if ((homed && paths.some(p => fits(parts, p))) || (last && lit.some((x, i) => i && x.replace(/^\//, '') && names.some(n => fits(lit.slice(i), n)))) || rels.some(r => last.endsWith('/' + r))) reportSecret(e.path);
   }
   let previous = '';
   for (const { t: raw, at, fromStart, writeOnly } of words) {

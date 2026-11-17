@@ -269,6 +269,14 @@ describe('a word holding a variable or a substitution, matched on its literal pa
     ['cat ~/$X', CLAUDE_JSON],
     // A name split by a variable, after a variable holding its folder.
     ['D=~/.claude; E=; cat $D/.cred$E"entials.json"', CREDENTIALS],
+    // Two substitutions in one word, each read to its own closing parenthesis,
+    // so the literal text between them is matched. One ending the word may be
+    // empty, so the literal text before it is the word's literal end.
+    ['cat $(echo ~)/.claude/.credentials.json$(true)', CREDENTIALS],
+    ["cat $(echo ~)/.claude/.credentials.json$(printf '')", CREDENTIALS],
+    ['cat $(echo ~)/.claude/.cred$(true)entials.json', CREDENTIALS],
+    ['cat $(echo $(echo ~))/.codex/auth.json$(true)', CODEX_AUTH],
+    ['H=~; cat $H/.claude/.credentials.json$(true)', CREDENTIALS],
   ];
   const UNTAGGED = [
     'H=~; cat $H/notes.md', 'H=~; cat $H/sub/.credentials.json', 'cat $H/x.claude.json', 'cat $DIR/sub/auth.json',
@@ -276,6 +284,8 @@ describe('a word holding a variable or a substitution, matched on its literal pa
     'cat $A$B', 'cat $A/$B', 'cat notes/$X',
     // A file name a variable begins.
     'cat $f.json', 'cat $DIR/$f.json',
+    // A name and an extension each held in a variable.
+    'cat $NAME.$EXT',
   ];
   for (const [label, env] of MODES) {
     for (const [command, file] of TAGGED) {
@@ -340,8 +350,9 @@ describe('each way past the joined reading', { skip: POSIX, concurrency: 8 }, ()
     ['a cd into home in double quotes', 'cd "$HOME/.claude" && cat .credentials.json'],
     ['home held in a variable', 'H=~/.claude; cat $H/.credentials.json'],
     ['home built by a substitution', 'cat $(echo ~)/.claude/.credentials.json'],
-    // Joined, the script is one word that names no path; only the reading of
-    // quotes as written finds the path inside it.
+    // Joined, the script is one word that names no path, and read as written
+    // it is one quoted word too; the path is found by reading the script as
+    // code, among the literals that name a place.
     ['a path inside a quoted script', 'python3 -c "print(open(\'$HOME/.claude/.credentials.json\').read())"'],
   ];
   for (const [label, env] of MODES) {
@@ -350,6 +361,24 @@ describe('each way past the joined reading', { skip: POSIX, concurrency: 8 }, ()
         await assertTagged(command, CREDENTIALS, env);
       });
     }
+  }
+});
+
+// THE READING OF QUOTES AS WRITTEN IS KEPT BESIDE THE JOINED ONE. Joined,
+// `"x y"/etc/hosts` is `x y/etc/hosts`, a path inside the workspace; read as
+// written, its second piece is `/etc/hosts`. The crossings are the union, so
+// the line asks about the file the plain spelling asks about.
+describe('a crossing only the reading of quotes as written finds', { skip: POSIX }, () => {
+  for (const [label, env] of MODES) {
+    test(`${label}: cat "x y"/etc/hosts asks about the file cat /etc/hosts asks about`, async () => {
+      const [via, base, joinedOnly] = await Promise.all([ask('cat "x y"/etc/hosts', env), ask('cat /etc/hosts', env), ask('cat "x y/etc/hosts"', env)]);
+      assert.ok(!joinedOnly.cards.some(c => c.boundary), 'sanity: the joined word alone names no crossing');
+      assert.strictEqual(base.cards.length, 1, 'sanity: cat /etc/hosts asks');
+      assert.ok(base.cards[0].crossings.length > 0, 'sanity: about a crossing');
+      assert.strictEqual(via.decision, 'deny', 'asked, and refused by the stand-in');
+      assert.strictEqual(via.cards.length, 1, 'one card');
+      assert.deepStrictEqual(via.cards[0].crossings, base.cards[0].crossings, `the crossing cat /etc/hosts raises: ${JSON.stringify(via.cards[0].crossings)}`);
+    });
   }
 });
 

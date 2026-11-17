@@ -346,4 +346,4 @@ function lexWords(segment, dialect = 'bash', targets = null, joined = false) {
   return out;
 }
 
-module.exports = { lexSegments, lexWords, substitutions, stripHeredocs };
+module.exports = { lexSegments, lexWords, substitutions, stripHeredocs, closeParen };

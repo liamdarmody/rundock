@@ -4881,11 +4881,13 @@ const MUTATIONS = [
   [JOINED_WORDS, 'Joined words: home is not recognized inside double quotes',
     '          if (t && !(slash && t === \'/\')) out.push({ t, at: wat,',
     '          if (t && !(slash && t === \'/\')) out.push({ t: /^"\\$/.test(w.raw) ? w.raw : t, at: wat,'],
-  // The joined words stand in for the split ones. Caught by: a path inside a
-  // quoted script, which only the reading of quotes as written finds.
+  // The joined words stand in for the split ones: the words the reading of
+  // quotes as written finds are dropped, and the code's literals and the
+  // commands it runs are kept. Caught by: `cat "x y"/etc/hosts`, whose
+  // crossing only the reading of quotes as written finds.
   [JOINED_WORDS, 'Joined words: the joined reading replaces the split one',
     '  for (const w of joined) if (w.joined) { words.push(w);',
-    '  words.length = 0; for (const w of joined) if (w) { words.push(w);'],
+    '  words.splice(0, words.length, ...words.filter(w => view.literals.includes(w) || ran.includes(w))); for (const w of joined) if (w) { words.push(w);'],
   // A word holding a variable is never tagged. Caught by: each word holding a
   // variable whose literal parts name a registry file asks as a secret.
   [JOINED_WORDS, 'Joined words: a word holding a variable is never tagged',
