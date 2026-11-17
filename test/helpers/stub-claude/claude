@@ -121,6 +121,20 @@ if (argv.includes('--print') && argv[argv.indexOf('--output-format') + 1] === 't
     process.stderr.write('API Error: Connection error.\n');
     process.exit(1);
   }
+  // STUB_CLAUDE_CHECK_HANGS holds the check unanswered, as a Claude Code that
+  // never replies, until whatever started it ends it. STUB_CLAUDE_CHECK_STDERR
+  // and STUB_CLAUDE_CHECK_STDOUT (base64, so any bytes can be given) fail it
+  // with that output, and STUB_CLAUDE_CHECK_EXIT gives its code (1 if unset).
+  if (process.env.STUB_CLAUDE_CHECK_HANGS === '1') {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);
+    process.exit(0);
+  }
+  const said = (name) => Buffer.from(process.env[name] || '', 'base64');
+  if ('STUB_CLAUDE_CHECK_STDERR' in process.env || 'STUB_CLAUDE_CHECK_STDOUT' in process.env || process.env.STUB_CLAUDE_CHECK_EXIT) {
+    fs.writeSync(2, said('STUB_CLAUDE_CHECK_STDERR'));
+    fs.writeSync(1, said('STUB_CLAUDE_CHECK_STDOUT'));
+    process.exit(Number(process.env.STUB_CLAUDE_CHECK_EXIT || 1));
+  }
   process.stdout.write('ok\n');
   process.exit(0);
 }

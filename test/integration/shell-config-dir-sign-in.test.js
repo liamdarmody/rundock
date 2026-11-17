@@ -22,6 +22,7 @@ const h = require('../helpers/harness.js');
 const { makeTempDir } = require('../helpers/workspace.js');
 const { fakeShell } = require('../helpers/fake-login-shell.js');
 const scd = require('../../electron/shell-config-dir.js');
+const { createSignInReason } = require('../../electron/sign-in-reason.js');
 
 const SKIP = process.platform === 'win32'
   ? 'the read runs a POSIX login shell, which Windows does not have, and it never runs there'
@@ -40,12 +41,14 @@ function post(url, headers = {}) {
 }
 
 // The desktop's own sign-in check, as electron/main.js has it. main.js cannot
-// be loaded outside Electron, so the function is taken from its source.
+// be loaded outside Electron, so the function is taken from its source, with
+// the reason holder main.js gives it.
 function desktopSignInCheck() {
   const src = fs.readFileSync(path.join(__dirname, '../../electron/main.js'), 'utf8');
   const fn = /^function isClaudeAuthenticated\(\) \{\n[\s\S]*?\n\}\n/m.exec(src);
   assert.ok(fn, 'electron/main.js has its sign-in check');
-  return new Function('execSync', `${fn[0]}\nreturn isClaudeAuthenticated;`)(require('node:child_process').execSync);
+  return new Function('execSync', 'signInReason', `${fn[0]}\nreturn isClaudeAuthenticated;`)(
+    require('node:child_process').execSync, createSignInReason());
 }
 
 describe('signing in with CLAUDE_CONFIG_DIR from the login shell', { skip: SKIP }, () => {
