@@ -108,6 +108,12 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # A stalled run must end within five minutes and name what stalled. These
+      # proofs wait out real limits, so they run here, after the suite, rather
+      # than inside npm test, where they would change its counts and length.
+      - name: Prove a stalled test run ends and names what stalled
+        run: npm run test:stall-guard
+
   # Type checking: JSDoc annotations + tsc --checkJs, zero build step.
   # Shapes (types.d.ts) plus every opted-in module must satisfy both configs
   # (server and client are separate so DOM globals never leak into server
