@@ -462,9 +462,15 @@ function renderSessionHistory(d) {
   if (!convo) return;
   const el = document.getElementById('messages');
   if (!el) return;
+  // The reply has come: a later open draws what it holds, or asks again.
+  convo.historyAskedOn = null;
+  // ONLY ITS OWN VIEW IS DRAWN INTO. A conversation left before its history
+  // arrived keeps the messages below and draws them when it is opened again;
+  // the view on screen, its loading line included, belongs to another.
+  const onScreen = activeConversation?.id === convo.id;
 
   // Remove the loading indicator
-  const loader = document.getElementById('history-loading');
+  const loader = onScreen && document.getElementById('history-loading');
   if (loader) loader.remove();
 
   // If the user already sent a new (non-history) message while history was loading, skip rendering
@@ -557,7 +563,9 @@ function renderSessionHistory(d) {
   // Insert before any existing content (in case of load-more)
   const existingDivider = document.getElementById('history-divider');
   const isLoadMore = !!existingDivider;
-  if (isLoadMore) {
+  if (!onScreen) {
+    // Not drawn: stored below, and replayed when the conversation is opened.
+  } else if (isLoadMore) {
     // Load more: capture scroll position, prepend, then restore
     const loadMoreBtn = document.getElementById('history-load-more');
     const scrollAnchor = loadMoreBtn ? loadMoreBtn.nextElementSibling : el.firstChild;
@@ -615,7 +623,7 @@ function renderSessionHistory(d) {
   if (!state.activeProcessId) {
     state.activeAgentId = restoredActiveAgentId(convo);
   }
-  if (activeConversation?.id === convo.id) {
+  if (onScreen) {
     const displayId = state.activeAgentId || convo.agentId;
     const agent = agents.find(a => a.id === displayId) || convo.agent;
     if (agent) {
@@ -624,12 +632,14 @@ function renderSessionHistory(d) {
       document.getElementById('chat-agent-avatar').textContent = agent.icon;
       document.getElementById('msg-input').placeholder = `Message ${agent.displayName}...`;
     }
-    renderConvoList();
   }
+  // Its sidebar item shows what arrived, on screen or not.
+  renderConvoList();
 
   // Universal search: if this history load was triggered by a search-result
   // click, scroll to (and flash) the matched message now that it's rendered.
-  tryMessageAnchor(d.conversationId);
+  // Off screen there is nothing of it to find, and the view is another's.
+  if (onScreen) tryMessageAnchor(d.conversationId);
 }
 
 // ===== PERMISSION UI =====

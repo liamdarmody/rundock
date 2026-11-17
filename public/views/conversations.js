@@ -802,7 +802,9 @@ function discardIfEmpty() {
   const hasUserMsg = activeConversation.messages.some(m => m.role === 'user');
   // An open card keeps it: dropped, its card could never be reached again.
   const holdsCard = RundockPermissions.holdsOpenRequest(pendingPermissionsByConvo, activeConversation.id);
-  if (!hasUserMsg && !activeConversation.persisted && !holdsCard) {
+  // A saved one whose history is on its way keeps it too: its messages are
+  // not here yet, and dropped, it would vanish until a reload.
+  if (!hasUserMsg && !activeConversation.persisted && !holdsCard && !activeConversation.historyAskedOn) {
     conversations = conversations.filter(c => c.id !== activeConversation.id);
     activeConversation = null;
     renderConvoList();
@@ -871,12 +873,16 @@ function openConversation(id, withAnchor) {
   // A TRANSCRIPT IS HISTORY TOO. A conversation whose every session Claude
   // Code removed is kept for its transcript; asking for nothing, it opened
   // with its title over an empty body.
-  if(c.persisted && c.messages.length===0 && (c.sessionId || (c.sessionIds && c.sessionIds.length) || c.hasTranscript)) {
+  if((c.persisted || c.historyAskedOn) && c.messages.length===0 && (c.sessionId || (c.sessionIds && c.sessionIds.length) || c.hasTranscript)) {
     // Persisted conversation from a previous session: load history from JSONL transcript(s)
     el.innerHTML=`<div id="history-loading" style="text-align:center;padding:24px 0;color:var(--text-3);font-size:var(--caption)">Loading conversation history...</div>`;
     // Send all sessionIds so server can merge history across delegation chain
     const sessionIds = (c.sessionIds && c.sessionIds.length) ? c.sessionIds : (c.sessionId ? [{ sessionId: c.sessionId, agentId: c.agentId }] : []);
-    ws.send(JSON.stringify({
+    // ASKED ONCE PER CONNECTION. Opened again before the reply comes, it
+    // waits for that reply, which is drawn once. A reply lost with a dropped
+    // connection is asked for again on the new one. The mark is cleared when
+    // the reply arrives (renderSessionHistory).
+    if (c.historyAskedOn !== ws) ws.send(JSON.stringify({
       type: 'get_session_history',
       sessionId: c.sessionId,
       sessionIds: sessionIds,
@@ -885,6 +891,7 @@ function openConversation(id, withAnchor) {
       // matched message is present even when it's deep in the conversation.
       limit: withAnchor ? 999 : 200
     }));
+    c.historyAskedOn = ws;
     // Mark as no longer purely persisted: messages are now in memory for this
     // session. Status is NOT touched here: opening an archived conversation to
     // read past context should not silently un-archive it. Status flips back
