@@ -25,7 +25,11 @@ const HOOK = path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'secret-folder-read-')));
 const home = path.join(root, 'home');
 const ws = path.join(root, 'ws');
-for (const d of [path.join(home, '.claude', 'projects'), path.join(home, '.claude', 'skills', 'x'), path.join(home, '.codex'), ws]) {
+// A folder outside the workspace that holds no credential file. Not `/tmp`:
+// the temporary home these tests use is under it, and a folder holding home
+// holds its credential files.
+const OUT = path.join(root, 'out');
+for (const d of [path.join(home, '.claude', 'projects'), path.join(home, '.claude', 'skills', 'x'), path.join(home, '.codex'), ws, OUT]) {
   fs.mkdirSync(d, { recursive: true });
 }
 const CREDENTIALS = path.join(home, '.claude', '.credentials.json');
@@ -158,7 +162,7 @@ const CLAUDE = [
   'find -L ~/.claude -exec cat {} +', 'find -H ~/.claude -type f -exec cat {} \\;', 'find -P -x ~/.claude -exec cat {} +',
   'find -LE ~/.claude -exec cat {} +', 'find -f ~/.claude -exec cat {} +', 'find -L -f ~/.claude -exec cat {} +',
   'find -D tree ~/.claude -exec cat {} +', 'find -O3 ~/.claude -exec cat {} +', 'find -- ~/.claude -exec cat {} +',
-  'find -L ~/.claude -type f | xargs cat', 'find /tmp ~/.claude -exec cat {} +',
+  'find -L ~/.claude -type f | xargs cat', `find ${OUT} ~/.claude -exec cat {} +`,
   // Names listed and handed to xargs, which reads each one; and a listing of
   // the files that match, which reads them to know.
   'rg --files ~/.claude | xargs cat', 'rg --files ~/.claude | xargs grep token', 'rg -l token ~/.claude', 'rg --files-with-matches token ~/.claude',
@@ -189,7 +193,7 @@ const FREE = [
   'ls ~/.claude', 'ls -R ~/.claude', 'du -sh ~/.claude', "find ~/.claude -name '*.md'", 'cd ~/.claude && ls',
   'grep token ~/.claude/settings.json', 'cat ~/.claude/settings.json', 'grep -r token .',
   // A cd the shell is sure to make out of the folder first.
-  'cd ~/.claude && cd /tmp && grep -r token',
+  `cd ~/.claude && cd ${OUT} && grep -r token`,
   // Not recursive, however the options are given.
   'grep -e token ~/.claude/settings.json', 'grep -d skip token ~/.claude', 'grep --include "*.json" token ~/.claude/settings.json',
   "find -L ~/.claude -name '*.md'", 'find -H ~/.claude -type f',
@@ -282,7 +286,7 @@ describe('listing names, and reading a free file, stay as they are', { skip: POS
       test(`${label}: ${command}`, async () => { await assertAsOnMain(label, command, env); });
     }
     test(`${label}: a reader started in the runtime folder that cds out first`, async () => {
-      await assertAsOnMain(label, 'cd /tmp && grep -r token', env, { cwd: path.join(home, '.claude') });
+      await assertAsOnMain(label, `cd ${OUT} && grep -r token`, env, { cwd: path.join(home, '.claude') });
     });
   }
 });
@@ -484,7 +488,7 @@ describe('through classifyShellAccess', { skip: POSIX }, () => {
       for (const command of [...FREE, 'grep -r token ~/.claude/projects', 'foo ~/.claude']) {
         assert.deepStrictEqual(secretPaths(classify(command, codeMode)), [], command);
       }
-      for (const command of FREE.filter(c => !c.includes('/tmp'))) assert.strictEqual(classify(command, codeMode), null, command);
+      for (const command of FREE.filter(c => !c.includes(OUT))) assert.strictEqual(classify(command, codeMode), null, command);
     });
   }
 });

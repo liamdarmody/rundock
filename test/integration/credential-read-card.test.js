@@ -7,11 +7,11 @@
 // from an ordinary workspace, sends the request main's hook sent, and the
 // window gets the card main's got. With the workspace at the home folder,
 // which holds every one of those files, main allowed the same read with
-// nothing shown. It now draws a card that says the file is in the workspace
-// and offers nothing to remember, which no standing allow answers and no
-// answer, however it is sent, makes go unasked. It comes back to a window that
-// reconnects, and once Rundock is back after refusing a read while it could
-// not be asked, the read asks again.
+// nothing shown. It now draws the card the same read draws from any other
+// workspace, the file tagged as a secret with nothing to remember, which no
+// standing allow answers and no answer, however it is sent, makes go unasked.
+// It comes back to a window that reconnects, and once Rundock is back after
+// refusing a read while it could not be asked, the read asks again.
 //
 // What each read sends the server, the card request the window gets, and the
 // hook's answer once the card is refused, are compared field by field with
@@ -225,7 +225,7 @@ describe('from an ordinary workspace, a credential read asks as it did on main',
 
 describe('with the workspace at the home folder, a credential read asks, where main allowed it with nothing shown', POSIX, () => {
   for (const [label, code] of MODES) {
-    test(`${label}${AT_HOME}: Read and cat of each credential file draw a card that says the file is in the workspace`, async () => {
+    test(`${label}${AT_HOME}: Read and cat of each credential file draw a card that names the file as a secret, with no folder to remember`, async () => {
       const cases = secretsRegistry(h.workspaceDir).flatMap(reads);
       const got = await each(cases, ([tool, input]) => ask(tool, input, { code, under: h.workspaceDir }));
       cases.forEach((c, i) => {
@@ -235,25 +235,24 @@ describe('with the workspace at the home folder, a credential read asks, where m
         assert.strictEqual(onMain[key].card, null, `${named(c)}: main drew no card`);
         assert.strictEqual(onMain[key].answer.permissionDecision, 'allow', `${named(c)}: main allowed it`);
         const file = canonicalize(c[1].file_path || c[1].command.slice('cat '.length));
-        const { credential, resolved_path, grant_dir, boundary: crossing, crossings } = got[i].card || {};
-        assert.deepStrictEqual({ credential, resolved_path, grant_dir, crossing, crossings }, { credential: true, resolved_path: file, grant_dir: null, crossing: undefined, crossings: undefined }, `${named(c)}: a credential card naming the file, with no folder to remember`);
-        assert.strictEqual(got[i].body.credential, true, `${named(c)}: the hook asked about a credential`);
-        assert.strictEqual(got[i].body.resolved_path, file, `${named(c)}: by its path`);
+        const card = got[i].card || {};
+        assert.ok((card.crossings || []).some(x => x.path === file && x.secret === true), `${named(c)}: the card names the file as a secret: ${JSON.stringify(card.crossings)}`);
+        assert.strictEqual(card.boundary, true, `${named(c)}: a boundary card, which no standing grant answers for a secret`);
+        assert.strictEqual(card.grant_dir, null, `${named(c)}: with no folder to remember`);
+        assert.ok((got[i].body.crossings || []).some(x => x.path === file && x.secret === true && !x.grantDir), `${named(c)}: the hook asked about the secret, by its path`);
         assert.strictEqual(got[i].answer.permissionDecision, 'deny', `${named(c)}: refused, as the card was`);
       });
     });
-    test(`${label}${AT_HOME}: the card names the file where it is, in the workspace, and offers nothing to remember`, LIVE, async () => {
+    test(`${label}${AT_HOME}: the card is the one the same read draws from any other workspace, and offers nothing to remember`, LIVE, async () => {
       for (const c of secretsRegistry(h.workspaceDir).flatMap(reads)) {
         let drawn;
         await ask(c[0], c[1], { code, under: h.workspaceDir, onCard: (card, convo) => { drawn = draw(card, convo); } });
-        const file = canonicalize(c[1].file_path || c[1].command.slice('cat '.length));
         assert.strictEqual(drawn.answered, false, `${named(c)}: not answered from the standing allows`);
-        assert.strictEqual(drawn.summary, 'Wants to read a sign-in credential in your workspace', named(c));
+        assert.strictEqual(drawn.summary, OUTSIDE[c[0]], `${named(c)}: the heading the same read draws from any other workspace`);
         assert.ok(drawn.context.startsWith(CREDENTIAL_COPY), `${named(c)}: worded as a credential: ${drawn.context}`);
-        assert.strictEqual(drawn.detail, file, `${named(c)}: the file it reads`);
-        assert.doesNotMatch(drawn.words, /outside/, `${named(c)}: not called a place outside the workspace`);
         assert.match(drawn.risk, /risk-high/, named(c));
-        assert.deepStrictEqual(drawn.buttons, ['allow: Allow', 'deny: Deny'], `${named(c)}: a one-off answer and nothing to remember`);
+        assert.deepStrictEqual(drawn.buttons.map(b => b.split(':')[0]), ['allow', 'deny'], `${named(c)}: a one-off answer and nothing to remember`);
+        assert.doesNotMatch(drawn.words, /Always allow/, named(c));
       }
     });
     test(`${label}${AT_HOME}: an allow is that one read only, however it is sent, and keeps nothing`, LIVE, async () => {
@@ -286,9 +285,9 @@ describe('with the workspace at the home folder, a credential read asks, where m
       // The replay is rebuilt from what the server kept, which has never
       // included Code mode's verdict for any card.
       const { code_mode_verdict: _v, ...asked } = got.card;
-      assert.deepStrictEqual(replayed.request, asked, 'the same card request, the credential and its path included');
+      assert.deepStrictEqual(replayed.request, asked, 'the same card request, the secret crossing included');
       assert.strictEqual(replayed._conversationId, got.convo);
-      assert.strictEqual(got.card.credential, true);
+      assert.ok((got.card.crossings || []).some(x => x.secret === true), `the card names the file as a secret: ${JSON.stringify(got.card.crossings)}`);
       assert.strictEqual(got.answer.permissionDecision, 'deny');
     });
   }
@@ -311,7 +310,7 @@ describe('once Rundock is back, a credential read refused while it could not be 
         const refused = await ask(c[0], c[1], { code, under: h.workspaceDir, port: closed });
         assert.deepStrictEqual(refused.answer, { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: REFUSAL }, `${named(c)}: refused while unreachable`);
         const again = await ask(c[0], c[1], { code, under: h.workspaceDir });
-        assert.ok(again.card && again.card.credential === true, `${named(c)}: a card once Rundock is back`);
+        assert.ok(again.card && (again.card.crossings || []).some(x => x.secret === true), `${named(c)}: a secret card once Rundock is back`);
         assert.deepStrictEqual({ body: again.body, card: again.card }, { body: first.body, card: first.card }, `${named(c)}: the request and card a first read draws`);
       }
     });

@@ -286,8 +286,10 @@ describe('a credential file one place on a line writes and another reads is refu
       test(`${label}${where}: a line that only writes each credential file keeps main's answer to a write`, async () => {
         const cases = REGISTRY.flatMap(f => onlyWrites(f).map(c => [c, f]));
         const got = await each(cases, ([[tool, input]]) => run(tool, input, { port: closed, mode, workspace: w }));
+        // At home, the answer main gave the same write from any other
+        // workspace (see the write test below).
         const changed = cases.flatMap(([c, f], i) => {
-          const main = onMain[keyOf(`${label}${where}`, 'unreachable', ['Bash', normal({ command: `echo {} > ${f}` })])];
+          const main = onMain[keyOf(where === AT_HOME ? label : `${label}${where}`, 'unreachable', ['Bash', normal({ command: `echo {} > ${f}` })])];
           assert.ok(main, `${named(c)}: a plain write of the file measured on main`);
           return isDeepStrictEqual(got[i], main) ? [] : [`${named(c)}: ${said(got[i]).permissionDecision}: ${said(got[i]).permissionDecisionReason}`];
         });
@@ -410,8 +412,14 @@ describe('with Rundock unreachable, every other access keeps the answer main giv
       test(`${label}${where}: a write to each credential file, or into a folder of them, keeps main's answer`, async () => {
         const cases = [...REGISTRY.flatMap(writes), ...FOLDER_WRITES].map(c => [c[0], normal(c[1])]);
         const got = await each(cases, ([tool, input]) => run(tool, live(input), { port: closed, mode, workspace }));
+        // A write of a credential file in a workspace at home, or a copy into
+        // a folder of them, by a file tool or the shell, is the crossing the
+        // same write is from any other workspace, and gets the answer main
+        // gave that one: where the workspace sits never hides a secret. Main
+        // let some of them through as in-workspace work.
+        const asOnMain = c => (where === AT_HOME && !RECORD ? keyOf(label, 'unreachable', c) : keyOf(`${label}${where}`, 'unreachable', c));
         cases.forEach((c, i) => {
-          const key = keyOf(`${label}${where}`, 'unreachable', c);
+          const key = asOnMain(c);
           if (RECORD) { recorded[key] = got[i]; return; }
           assert.ok(onMain[key], `${named(c)}: measured on main`);
           assert.deepStrictEqual(got[i], onMain[key], `${named(c)}: the whole answer, field by field, as main gives it`);

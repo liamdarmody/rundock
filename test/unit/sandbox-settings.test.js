@@ -32,7 +32,9 @@ const WS = '/tmp/sandbox-ws';
 const HOME = '/Users/someone';
 // The shell startup files the block denies are this process's own, so the
 // lists below are read with no ZDOTDIR or XDG_CONFIG_HOME, run from source.
-for (const name of ['ZDOTDIR', 'XDG_CONFIG_HOME', 'RUNDOCK_ELECTRON']) delete process.env[name];
+// So is a runtime home the runtime was moved to, so nor CLAUDE_CONFIG_DIR or
+// CODEX_HOME either.
+for (const name of ['ZDOTDIR', 'XDG_CONFIG_HOME', 'RUNDOCK_ELECTRON', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME']) delete process.env[name];
 const RECORD = path.join(__dirname, '..', '..', '.startup-file-exposure.json');
 const STARTUP_DENY = [
   ...['.zshenv', '.zprofile', '.zshrc', '.zlogin', '.zlogout', '.bash_profile', '.bash_login', '.profile', '.bashrc', '.bash_logout'].map(f => `${HOME}/${f}`),
@@ -830,5 +832,109 @@ describe('the record of the startup files, through the reconcile', () => {
         }
       }
     }
+  });
+});
+
+// A RUNTIME HOME MOVED BY CLAUDE_CONFIG_DIR. Claude Code keeps its account file
+// and its backups folder in the folder the variable names, measured by
+// scripts/runtime-home-truth/capture.js. The block denies writes to them there
+// as well as in the default home, read from the server's own environment, and
+// appends them last so every list an earlier build wrote is still a prefix.
+describe('a runtime home moved by CLAUDE_CONFIG_DIR', () => {
+  const MOVED = '/Users/someone/.config/claude';
+  const MOVED_DENY = [`${MOVED}/.claude.json`, `${MOVED}/backups`];
+  const FOLDERS_MOVED = ['/Users/someone/Projects'];
+  function moved(fn, value = MOVED) {
+    process.env.CLAUDE_CONFIG_DIR = value;
+    try { return fn(); } finally { delete process.env.CLAUDE_CONFIG_DIR; }
+  }
+  const block = (mode, folders = []) => sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], folders, mode);
+
+  test('the backups folder in the default home is denied to shell writes, in both shapes', () => {
+    for (const mode of ['knowledge', 'code']) {
+      assert.ok(block(mode).filesystem.denyWrite.includes(`${HOME}/.claude/backups`), `${mode}: ~/.claude/backups is in the write deny`);
+    }
+  });
+
+  test('the moved folder\'s account file and backups folder are denied too, after everything else', () => {
+    for (const mode of ['knowledge', 'code']) {
+      const plain = block(mode).filesystem.denyWrite;
+      const deny = moved(() => block(mode)).filesystem.denyWrite;
+      assert.deepStrictEqual(deny.slice(0, plain.length), plain, `${mode}: every default entry stays, in its place`);
+      assert.deepStrictEqual(deny.slice(plain.length), MOVED_DENY, `${mode}: the moved folder's two entries come last`);
+      const { denyWrite: _a, ...rest } = moved(() => block(mode)).filesystem;
+      const { denyWrite: _b, ...plainRest } = block(mode).filesystem;
+      assert.deepStrictEqual(rest, plainRest, `${mode}: nothing else in the block changes`);
+    }
+  });
+
+  test('a value that is not an absolute folder adds nothing', () => {
+    for (const value of ['', 'relative/claude', '.']) {
+      assert.deepStrictEqual(moved(() => block('knowledge'), value), block('knowledge'), `CLAUDE_CONFIG_DIR=${JSON.stringify(value)}`);
+    }
+  });
+
+  test('the list written with the variable set is recorded as written, with and without ZDOTDIR', () => {
+    for (const mode of ['knowledge', 'code']) {
+      const n = moved(() => block(mode, FOLDERS_MOVED)).filesystem.denyWrite.length;
+      assert.ok(WRITTEN_DENY_LENGTHS.includes(n), `${mode}: the ${n}-entry list is in WRITTEN_DENY_LENGTHS`);
+    }
+    process.env.ZDOTDIR = '/Users/someone/zdot';
+    try {
+      const n = moved(() => block('knowledge')).filesystem.denyWrite.length;
+      assert.ok(WRITTEN_DENY_LENGTHS.includes(n), `the ${n}-entry list with ZDOTDIR's files is in WRITTEN_DENY_LENGTHS`);
+    } finally { delete process.env.ZDOTDIR; }
+  });
+
+  test('a block written with the variable set is Rundock\'s when reopened with it unset, and the reverse', () => {
+    for (const mode of ['knowledge', 'code']) {
+      const withIt = moved(() => block(mode, FOLDERS_MOVED));
+      const without = block(mode, FOLDERS_MOVED);
+      assert.strictEqual(isRundockSandbox(withIt, 'darwin'), true, `${mode}: written with it, read without it`);
+      assert.strictEqual(moved(() => isRundockSandbox(without, 'darwin')), true, `${mode}: written without it, read with it`);
+      assert.strictEqual(moved(() => isRundockSandbox(withIt, 'darwin')), true, `${mode}: written and read with it`);
+      assert.strictEqual(moved(() => isRundockSandbox(withIt, 'darwin'), '/Users/someone/other'), true, `${mode}: read with it pointing somewhere else`);
+    }
+  });
+
+  test('an edit to the moved folder\'s entries is a person\'s edit', () => {
+    const variants = [
+      ['the backups entry pointing elsewhere', (d) => { d[d.length - 1] = '/Users/someone/elsewhere/backups'; }],
+      ['the account file pointing elsewhere', (d) => { d[d.length - 2] = '/Users/someone/elsewhere/.claude.json'; }],
+      ['the two in the other order', (d) => { d.push(d.splice(d.length - 2, 1)[0]); }],
+      ['the backups entry dropped', (d) => { d.pop(); }],
+      ['another file appended', (d) => { d.push('/Users/someone/notes.md'); }],
+      ['a relative account file', (d) => { d[d.length - 2] = 'claude/.claude.json'; d[d.length - 1] = 'claude/backups'; }],
+      ['not a string', (d) => { d[d.length - 2] = null; }],
+    ];
+    for (const [why, edit] of variants) {
+      const b = moved(() => block('knowledge'));
+      edit(b.filesystem.denyWrite);
+      let ours;
+      assert.doesNotThrow(() => { ours = isRundockSandbox(b, 'darwin'); }, `${why}: nothing throws`);
+      assert.strictEqual(ours, false, `${why}: a person's edit`);
+    }
+  });
+
+  test('the undo: with the variable unset again, the next open writes the current shape, and the reverse', () => {
+    const fs = require('node:fs');
+    const { _internal: srv } = require('../../server.js');
+    const { makeWorkspace, cleanup } = require('../helpers/workspace.js');
+    const { sandboxStatus } = require('../../lib/workspace/sandbox-status.js');
+    const movedTo = path.join(os.tmpdir(), 'moved-runtime-home');
+    try {
+      const dir = makeWorkspace({ claudeMd: '# x' });
+      const settings = path.join(dir, '.claude', 'settings.local.json');
+      const deny = () => JSON.parse(fs.readFileSync(settings, 'utf-8')).sandbox.filesystem.denyWrite;
+      srv.setWorkspace(dir);
+      srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+      const plain = deny();
+      moved(() => srv.scaffoldWorkspace(dir, { platform: 'darwin' }), movedTo);
+      assert.deepStrictEqual(deny(), [...plain, path.posix.join(movedTo, '.claude.json'), path.posix.join(movedTo, 'backups')], 'opened with it set, the block gains the moved folder\'s entries');
+      assert.strictEqual(sandboxStatus(dir, 'darwin').managed, true, 'and with it unset the switch is still Rundock\'s');
+      srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+      assert.deepStrictEqual(deny(), plain, 'opened with it unset again, the block is back to the current shape');
+      assert.strictEqual(moved(() => sandboxStatus(dir, 'darwin').managed, movedTo), true, 'which a run with it set still calls Rundock\'s');
+    } finally { cleanup(); }
   });
 });
