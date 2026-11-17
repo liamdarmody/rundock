@@ -835,18 +835,30 @@ describe('the record of the startup files, through the reconcile', () => {
   });
 });
 
-// A RUNTIME HOME MOVED BY CLAUDE_CONFIG_DIR. Claude Code keeps its account file
-// and its backups folder in the folder the variable names, measured by
-// scripts/runtime-home-truth/capture.js. The block denies writes to them there
-// as well as in the default home, read from the server's own environment, and
-// appends them last so every list an earlier build wrote is still a prefix.
-describe('a runtime home moved by CLAUDE_CONFIG_DIR', () => {
+// RUNTIME HOMES MOVED BY THEIR VARIABLES. With CLAUDE_CONFIG_DIR set, Claude
+// Code keeps its account file and its backups folder in the folder the
+// variable names, and with CODEX_HOME set, Codex keeps its sign-in file in
+// that one, both measured by scripts/runtime-home-truth/capture.js. Claude
+// Code's credential file is joined there by its default-home name, on the
+// basis the record states. The block denies writes to them there as well as in
+// the default homes, read from the server's own environment, and appends them
+// last so every list an earlier build wrote is still a prefix.
+describe('runtime homes moved by CLAUDE_CONFIG_DIR and CODEX_HOME', () => {
   const MOVED = '/Users/someone/.config/claude';
-  const MOVED_DENY = [`${MOVED}/.claude.json`, `${MOVED}/backups`];
+  const MOVED_CODEX = '/Users/someone/.config/codex';
+  const CLAUDE_DENY = [`${MOVED}/.claude.json`, `${MOVED}/.credentials.json`, `${MOVED}/backups`];
+  const CODEX_DENY = [`${MOVED_CODEX}/auth.json`];
   const FOLDERS_MOVED = ['/Users/someone/Projects'];
-  function moved(fn, value = MOVED) {
-    process.env.CLAUDE_CONFIG_DIR = value;
-    try { return fn(); } finally { delete process.env.CLAUDE_CONFIG_DIR; }
+  // Each variable alone, and both together.
+  const SETS = [
+    ['CLAUDE_CONFIG_DIR alone', { CLAUDE_CONFIG_DIR: MOVED }, CLAUDE_DENY],
+    ['CODEX_HOME alone', { CODEX_HOME: MOVED_CODEX }, CODEX_DENY],
+    ['both', { CLAUDE_CONFIG_DIR: MOVED, CODEX_HOME: MOVED_CODEX }, [...CLAUDE_DENY, ...CODEX_DENY]],
+  ];
+  const ELSEWHERE = { CLAUDE_CONFIG_DIR: '/Users/someone/other/claude', CODEX_HOME: '/Users/someone/other/codex' };
+  function withEnv(vars, fn) {
+    for (const [k, v] of Object.entries(vars)) process.env[k] = v;
+    try { return fn(); } finally { for (const k of Object.keys(vars)) delete process.env[k]; }
   }
   const block = (mode, folders = []) => sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], folders, mode);
 
@@ -856,85 +868,127 @@ describe('a runtime home moved by CLAUDE_CONFIG_DIR', () => {
     }
   });
 
-  test('the moved folder\'s account file and backups folder are denied too, after everything else', () => {
-    for (const mode of ['knowledge', 'code']) {
-      const plain = block(mode).filesystem.denyWrite;
-      const deny = moved(() => block(mode)).filesystem.denyWrite;
-      assert.deepStrictEqual(deny.slice(0, plain.length), plain, `${mode}: every default entry stays, in its place`);
-      assert.deepStrictEqual(deny.slice(plain.length), MOVED_DENY, `${mode}: the moved folder's two entries come last`);
-      const { denyWrite: _a, ...rest } = moved(() => block(mode)).filesystem;
-      const { denyWrite: _b, ...plainRest } = block(mode).filesystem;
-      assert.deepStrictEqual(rest, plainRest, `${mode}: nothing else in the block changes`);
+  test('each moved folder\'s secrets are denied too, after everything else, for each variable alone and both together', () => {
+    for (const [name, vars, expected] of SETS) {
+      for (const mode of ['knowledge', 'code']) {
+        const plain = block(mode).filesystem.denyWrite;
+        const deny = withEnv(vars, () => block(mode)).filesystem.denyWrite;
+        assert.deepStrictEqual(deny.slice(0, plain.length), plain, `${name}, ${mode}: every default entry stays, in its place`);
+        assert.deepStrictEqual(deny.slice(plain.length), expected, `${name}, ${mode}: the moved folders' entries come last`);
+        const { denyWrite: _a, ...rest } = withEnv(vars, () => block(mode)).filesystem;
+        const { denyWrite: _b, ...plainRest } = block(mode).filesystem;
+        assert.deepStrictEqual(rest, plainRest, `${name}, ${mode}: nothing else in the block changes`);
+      }
     }
   });
 
   test('a value that is not an absolute folder adds nothing', () => {
-    for (const value of ['', 'relative/claude', '.']) {
-      assert.deepStrictEqual(moved(() => block('knowledge'), value), block('knowledge'), `CLAUDE_CONFIG_DIR=${JSON.stringify(value)}`);
+    for (const variable of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME']) {
+      for (const value of ['', 'relative/home', '.']) {
+        assert.deepStrictEqual(withEnv({ [variable]: value }, () => block('knowledge')), block('knowledge'), `${variable}=${JSON.stringify(value)}`);
+      }
     }
   });
 
-  test('the list written with the variable set is recorded as written, with and without ZDOTDIR', () => {
-    for (const mode of ['knowledge', 'code']) {
-      const n = moved(() => block(mode, FOLDERS_MOVED)).filesystem.denyWrite.length;
-      assert.ok(WRITTEN_DENY_LENGTHS.includes(n), `${mode}: the ${n}-entry list is in WRITTEN_DENY_LENGTHS`);
-    }
-    process.env.ZDOTDIR = '/Users/someone/zdot';
-    try {
-      const n = moved(() => block('knowledge')).filesystem.denyWrite.length;
-      assert.ok(WRITTEN_DENY_LENGTHS.includes(n), `the ${n}-entry list with ZDOTDIR's files is in WRITTEN_DENY_LENGTHS`);
-    } finally { delete process.env.ZDOTDIR; }
-  });
-
-  test('a block written with the variable set is Rundock\'s when reopened with it unset, and the reverse', () => {
-    for (const mode of ['knowledge', 'code']) {
-      const withIt = moved(() => block(mode, FOLDERS_MOVED));
-      const without = block(mode, FOLDERS_MOVED);
-      assert.strictEqual(isRundockSandbox(withIt, 'darwin'), true, `${mode}: written with it, read without it`);
-      assert.strictEqual(moved(() => isRundockSandbox(without, 'darwin')), true, `${mode}: written without it, read with it`);
-      assert.strictEqual(moved(() => isRundockSandbox(withIt, 'darwin')), true, `${mode}: written and read with it`);
-      assert.strictEqual(moved(() => isRundockSandbox(withIt, 'darwin'), '/Users/someone/other'), true, `${mode}: read with it pointing somewhere else`);
+  test('the list written with either variable or both set is recorded as written, with and without ZDOTDIR', () => {
+    for (const [name, vars] of SETS) {
+      for (const mode of ['knowledge', 'code']) {
+        const n = withEnv(vars, () => block(mode, FOLDERS_MOVED)).filesystem.denyWrite.length;
+        assert.ok(WRITTEN_DENY_LENGTHS.includes(n), `${name}, ${mode}: the ${n}-entry list is in WRITTEN_DENY_LENGTHS`);
+      }
+      const n = withEnv({ ...vars, ZDOTDIR: '/Users/someone/zdot' }, () => block('knowledge')).filesystem.denyWrite.length;
+      assert.ok(WRITTEN_DENY_LENGTHS.includes(n), `${name}: the ${n}-entry list with ZDOTDIR's files is in WRITTEN_DENY_LENGTHS`);
     }
   });
 
-  test('an edit to the moved folder\'s entries is a person\'s edit', () => {
-    const variants = [
-      ['the backups entry pointing elsewhere', (d) => { d[d.length - 1] = '/Users/someone/elsewhere/backups'; }],
-      ['the account file pointing elsewhere', (d) => { d[d.length - 2] = '/Users/someone/elsewhere/.claude.json'; }],
-      ['the two in the other order', (d) => { d.push(d.splice(d.length - 2, 1)[0]); }],
-      ['the backups entry dropped', (d) => { d.pop(); }],
-      ['another file appended', (d) => { d.push('/Users/someone/notes.md'); }],
-      ['a relative account file', (d) => { d[d.length - 2] = 'claude/.claude.json'; d[d.length - 1] = 'claude/backups'; }],
-      ['not a string', (d) => { d[d.length - 2] = null; }],
-    ];
-    for (const [why, edit] of variants) {
-      const b = moved(() => block('knowledge'));
-      edit(b.filesystem.denyWrite);
-      let ours;
-      assert.doesNotThrow(() => { ours = isRundockSandbox(b, 'darwin'); }, `${why}: nothing throws`);
-      assert.strictEqual(ours, false, `${why}: a person's edit`);
+  test('a block written with either variable or both set is Rundock\'s when reopened with them unset, and the reverse', () => {
+    for (const [name, vars] of SETS) {
+      for (const mode of ['knowledge', 'code']) {
+        const withIt = withEnv(vars, () => block(mode, FOLDERS_MOVED));
+        const without = block(mode, FOLDERS_MOVED);
+        assert.strictEqual(isRundockSandbox(withIt, 'darwin'), true, `${name}, ${mode}: written with it, read without it`);
+        assert.strictEqual(withEnv(vars, () => isRundockSandbox(without, 'darwin')), true, `${name}, ${mode}: written without it, read with it`);
+        assert.strictEqual(withEnv(vars, () => isRundockSandbox(withIt, 'darwin')), true, `${name}, ${mode}: written and read with it`);
+        assert.strictEqual(withEnv(ELSEWHERE, () => isRundockSandbox(withIt, 'darwin')), true, `${name}, ${mode}: read with both pointing somewhere else`);
+        for (const [other, otherVars] of SETS) {
+          assert.strictEqual(withEnv(otherVars, () => isRundockSandbox(withIt, 'darwin')), true, `${name}, ${mode}: read with ${other} set`);
+        }
+      }
     }
   });
 
-  test('the undo: with the variable unset again, the next open writes the current shape, and the reverse', () => {
+  test('an edit to the moved folders\' entries is a person\'s edit', () => {
+    const plain = block('knowledge').filesystem.denyWrite.length;
+    for (const [name, vars, tail] of SETS) {
+      const variants = [
+        // Codex's one entry pointing elsewhere, or dropped, is the block written
+        // with CODEX_HOME there, or unset, so only the entries of Claude Code's
+        // longer row are edited one at a time.
+        ...tail.filter(e => path.posix.dirname(e) === MOVED).flatMap((entry) => {
+          const base = path.posix.basename(entry);
+          const i = tail.indexOf(entry);
+          return [
+            [`${base} pointing elsewhere`, (d) => { d[plain + i] = `/Users/someone/elsewhere/${base}`; }],
+            [`${base} dropped`, (d) => { d.splice(plain + i, 1); }],
+          ];
+        }),
+        ...tail.flatMap((entry, i) => {
+          const base = path.posix.basename(entry);
+          return [
+            [`${base} relative`, (d) => { d[plain + i] = `home/${base}`; }],
+            [`${base} not a string`, (d) => { d[plain + i] = null; }],
+          ];
+        }),
+        ['the moved entries in another order', (d) => {
+          if (d.length - plain > 1) d.splice(plain, d.length - plain, ...d.slice(plain).reverse());
+          else [d[plain - 1], d[plain]] = [d[plain], d[plain - 1]];
+        }],
+        ['another file appended', (d) => { d.push('/Users/someone/notes.md'); }],
+      ];
+      for (const [why, edit] of variants) {
+        const b = withEnv(vars, () => block('knowledge'));
+        edit(b.filesystem.denyWrite);
+        let ours;
+        assert.doesNotThrow(() => { ours = isRundockSandbox(b, 'darwin'); }, `${name}, ${why}: nothing throws`);
+        assert.strictEqual(ours, false, `${name}, ${why}: a person's edit`);
+      }
+    }
+  });
+
+  test('Claude Code\'s backups entry dropped with both set is a person\'s edit, though as long as a list CLAUDE_CONFIG_DIR alone writes', () => {
+    const b = withEnv(SETS[2][1], () => block('knowledge'));
+    b.filesystem.denyWrite.splice(block('knowledge').filesystem.denyWrite.length + 2, 1);
+    assert.strictEqual(b.filesystem.denyWrite.length, withEnv(SETS[0][1], () => block('knowledge')).filesystem.denyWrite.length);
+    assert.strictEqual(isRundockSandbox(b, 'darwin'), false);
+  });
+
+  test('the undo: with the variables unset again, the next open writes the current shape, and the reverse', () => {
     const fs = require('node:fs');
     const { _internal: srv } = require('../../server.js');
     const { makeWorkspace, cleanup } = require('../helpers/workspace.js');
     const { sandboxStatus } = require('../../lib/workspace/sandbox-status.js');
     const movedTo = path.join(os.tmpdir(), 'moved-runtime-home');
+    const movedCodexTo = path.join(os.tmpdir(), 'moved-codex-home');
+    const sets = [
+      ['CLAUDE_CONFIG_DIR alone', { CLAUDE_CONFIG_DIR: movedTo }, [path.posix.join(movedTo, '.claude.json'), path.posix.join(movedTo, '.credentials.json'), path.posix.join(movedTo, 'backups')]],
+      ['CODEX_HOME alone', { CODEX_HOME: movedCodexTo }, [path.posix.join(movedCodexTo, 'auth.json')]],
+    ];
+    sets.push(['both', { ...sets[0][1], ...sets[1][1] }, [...sets[0][2], ...sets[1][2]]]);
     try {
-      const dir = makeWorkspace({ claudeMd: '# x' });
-      const settings = path.join(dir, '.claude', 'settings.local.json');
-      const deny = () => JSON.parse(fs.readFileSync(settings, 'utf-8')).sandbox.filesystem.denyWrite;
-      srv.setWorkspace(dir);
-      srv.scaffoldWorkspace(dir, { platform: 'darwin' });
-      const plain = deny();
-      moved(() => srv.scaffoldWorkspace(dir, { platform: 'darwin' }), movedTo);
-      assert.deepStrictEqual(deny(), [...plain, path.posix.join(movedTo, '.claude.json'), path.posix.join(movedTo, 'backups')], 'opened with it set, the block gains the moved folder\'s entries');
-      assert.strictEqual(sandboxStatus(dir, 'darwin').managed, true, 'and with it unset the switch is still Rundock\'s');
-      srv.scaffoldWorkspace(dir, { platform: 'darwin' });
-      assert.deepStrictEqual(deny(), plain, 'opened with it unset again, the block is back to the current shape');
-      assert.strictEqual(moved(() => sandboxStatus(dir, 'darwin').managed, movedTo), true, 'which a run with it set still calls Rundock\'s');
+      for (const [name, vars, entries] of sets) {
+        const dir = makeWorkspace({ claudeMd: '# x' });
+        const settings = path.join(dir, '.claude', 'settings.local.json');
+        const deny = () => JSON.parse(fs.readFileSync(settings, 'utf-8')).sandbox.filesystem.denyWrite;
+        srv.setWorkspace(dir);
+        srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+        const plain = deny();
+        withEnv(vars, () => srv.scaffoldWorkspace(dir, { platform: 'darwin' }));
+        assert.deepStrictEqual(deny(), [...plain, ...entries], `${name}: opened with it set, the block gains the moved folders' entries`);
+        assert.strictEqual(sandboxStatus(dir, 'darwin').managed, true, `${name}: and with it unset the switch is still Rundock's`);
+        srv.scaffoldWorkspace(dir, { platform: 'darwin' });
+        assert.deepStrictEqual(deny(), plain, `${name}: opened with it unset again, the block is back to the current shape`);
+        assert.strictEqual(withEnv(vars, () => sandboxStatus(dir, 'darwin').managed), true, `${name}: which a run with it set still calls Rundock's`);
+      }
     } finally { cleanup(); }
   });
 });

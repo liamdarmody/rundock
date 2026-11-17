@@ -2789,7 +2789,7 @@ describe('each shell word is also read as bash joins it, as the page and the hoo
 // ---------------------------------------------------------------------------
 
 describe('a copy of a secret, a moved runtime home and the workspace\'s own location, as the page and the hook say', () => {
-  const HEADING = '**A copy of a secret is a secret, and so is the account file in a runtime home moved by its variable.**';
+  const HEADING = '**A copy of a secret is a secret, and so are the account and credential files in a runtime home moved by its variable.**';
   const passage = (() => {
     const at = architecture.indexOf(HEADING);
     return at < 0 ? '' : architecture.slice(at, architecture.indexOf('\n', at));
@@ -2817,9 +2817,12 @@ describe('a copy of a secret, a moved runtime home and the workspace\'s own loca
       'Claude Code keeps timed copies of `~/.claude.json` in `~/.claude/backups/`',
       'The folder and everything under it card on any read or write, by every file tool and every shell spelling, in both modes, and listing the folder cards too',
       'Its name lives in `SECRET_RELATIVE_DIRS` in `scripts/permission-hook.js`',
-      'with `CLAUDE_CONFIG_DIR` set, it wrote `.claude.json` and `backups/` into that folder and nothing into the home folder (`scripts/runtime-home-truth/captured-runtime-homes.json`)',
+      'What each runtime keeps in the moved folder was measured, not assumed (`scripts/runtime-home-truth/captured-runtime-homes.json`)',
+      'with `CLAUDE_CONFIG_DIR` set, Claude Code wrote `.claude.json` and `backups/` into that folder and nothing into the home folder',
+      'with `CODEX_HOME` set, Codex wrote its sign-in file, `auth.json`, into that folder and nothing into the home folder',
+      'Claude Code\'s credential file was not measured there, because only a real sign-in places it, and is joined as `.credentials.json` on the basis the record states beside that',
+      'joining a name that may never appear only adds a card and frees nothing',
       'as well as in the default homes, never in their place, and following the variable only adds',
-      'The credential file was not measured there, because only a real sign-in places it, and Codex could not be run, so neither is claimed',
       'One function, `relocatedRuntimeHomes`, reads the variables: the hook from its own environment, and the server from its own when it writes the block',
       'A block written with a variable set is recognized as Rundock\'s own with it unset, and the reverse',
       '**A workspace\'s own location never hides a secret.**',
@@ -2833,6 +2836,7 @@ describe('a copy of a secret, a moved runtime home and the workspace\'s own loca
     const end = src.indexOf('const RELOCATED_HOMES');
     const comment = src.slice(src.lastIndexOf('// `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move', end), end).replace(/\n\/\/ ?/g, ' ');
     assert.ok(comment.includes('What each runtime keeps there was MEASURED, not assumed'), comment);
+    assert.ok(comment.includes('One entry is joined unmeasured, on a basis the record states'), comment);
     assert.ok(comment.includes('AS WELL AS THE DEFAULT HOMES, NEVER IN PLACE OF THEM'), comment);
     assert.ok(comment.includes('it ONLY ADDS'), comment);
   });
@@ -2847,16 +2851,19 @@ describe('a copy of a secret, a moved runtime home and the workspace\'s own loca
     } finally { fs.rmSync(p.base, { recursive: true, force: true }); }
   });
 
-  test('the variable adds its folder\'s entries to the default homes\', and CODEX_HOME adds none', () => {
+  test('each variable adds its folder\'s entries to the default homes\', the credential files among them', () => {
     const home = path.join(os.tmpdir(), 'doc-claims-home');
     const moved = path.join(os.tmpdir(), 'doc-claims-moved');
-    const env = { CLAUDE_CONFIG_DIR: moved };
-    const [row] = hook.relocatedRuntimeHomes(env);
-    assert.deepStrictEqual([row.variable, row.secrets, row.secretDirs], ['CLAUDE_CONFIG_DIR', ['.claude.json'], ['backups']]);
+    const movedCodex = path.join(os.tmpdir(), 'doc-claims-moved-codex');
+    const env = { CLAUDE_CONFIG_DIR: moved, CODEX_HOME: movedCodex };
+    const [row, codex] = hook.relocatedRuntimeHomes(env);
+    assert.deepStrictEqual([row.variable, row.secrets, row.secretDirs], ['CLAUDE_CONFIG_DIR', ['.claude.json', '.credentials.json'], ['backups']]);
+    assert.deepStrictEqual([codex.variable, codex.secrets, codex.secretDirs], ['CODEX_HOME', ['auth.json'], []]);
     const withVariable = hook.secretsRegistry(home, env);
     for (const f of hook.secretsRegistry(home, {})) assert.ok(withVariable.includes(f), `the default entry ${f} stays`);
-    assert.ok(withVariable.includes(path.join(row.root, '.claude.json')), 'and the moved account file is added');
-    assert.deepStrictEqual(hook.relocatedRuntimeHomes({ CODEX_HOME: moved }), []);
+    for (const f of [path.join(row.root, '.claude.json'), path.join(row.root, '.credentials.json'), path.join(codex.root, 'auth.json')]) {
+      assert.ok(withVariable.includes(f), `and the moved ${path.basename(f)} is added`);
+    }
   });
 
   test('a workspace at home asks about its secret, keeps an ordinary file inside, and a link asks as where it leads', () => {

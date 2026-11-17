@@ -27,9 +27,11 @@
 // WHAT IS NOT MEASURED, AND WHY. Claude Code writes its credential file only
 // when a person signs in, which this harness never does, and on macOS it keeps
 // the credential in the Keychain, which this harness never touches. So the
-// record says where that file would be read is not measured, and the registry
-// is not extended with it on the strength of this record. A CLI that is not
-// installed is recorded as not measured too, never guessed.
+// record says where that file would be read is not measured, and gives, beside
+// it, the basis on which the registry joins it under the variable's folder
+// all the same (joinedUnmeasured): the test allows an unseen entry only with
+// one. A CLI that is not installed is recorded as not measured too, never
+// guessed.
 //
 // RUN BY HAND, NEVER BY THE SUITE OR CI: it needs real installs, and it is not
 // a *.test.js file, so `npm test` does not collect it.
@@ -148,6 +150,13 @@ function listTree(dir, scrub) {
   return [...new Set(out.map(scrub))];
 }
 
+// NAMES A RUNTIME MAKES NEW ON EACH RUN. Codex makes a folder named
+// `codex-arg0` and six random characters under `tmp/arg0/` each time it
+// starts, so a record carrying the characters could never match a rerun.
+function scrubRunNames(s) {
+  return String(s).replace(/codex-arg0[A-Za-z0-9]{6}/g, 'codex-arg0<id>');
+}
+
 function scrubber(dirs) {
   const plain = [...new Set(Object.values(dirs).flatMap(d => [d, fs.realpathSync(d)]))].sort((a, b) => b.length - a.length);
   const encoded = plain.map(d => d.replace(/[/.]/g, '-'));
@@ -156,7 +165,7 @@ function scrubber(dirs) {
     for (const d of plain) out = out.split(d).join('<case>');
     for (const d of encoded) out = out.split(d).join('<case>');
     out = out.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>').replace(/\d{10,}/g, '<time>');
-    return scrubCapture(out);
+    return scrubCapture(scrubRunNames(out));
   };
 }
 
@@ -184,6 +193,10 @@ function where(name, homeTree, relocatedTree) {
   if (relocatedTree.includes(name)) at.push('relocated');
   return at;
 }
+
+// Why the credential file is joined under CLAUDE_CONFIG_DIR unseen. Written by
+// --write beside the reason it is not measured.
+const JOINED_UNMEASURED_CREDENTIALS = 'Joined under CLAUDE_CONFIG_DIR though not measured, because under the variable the measured run put everything Claude Code keeps, `~/.claude.json` from home included, in the variable\'s folder and nothing in home; the credential file is `.credentials.json` in the default home\'s registry; and joining a name that may never appear only adds a card and frees nothing.';
 
 async function claudeCase(runRoot) {
   const found = resolveBin('claude', 'CLAUDE_BIN');
@@ -222,6 +235,9 @@ async function claudeCase(runRoot) {
     },
     notMeasured: {
       '.credentials.json': 'Claude Code writes its credential file only when a person signs in, which this harness never does, and on macOS it keeps the credential in the Keychain, which this harness never touches.',
+    },
+    joinedUnmeasured: {
+      '.credentials.json': JOINED_UNMEASURED_CREDENTIALS,
     },
   };
   const error = runs.map(r => firstError(r.err, scrub)).find(Boolean);
@@ -302,7 +318,7 @@ async function main() {
   process.exit(same ? 0 : 1);
 }
 
-module.exports = { createRunRoot, caseFolders, removeRunRoot, listTree, leaks };
+module.exports = { createRunRoot, caseFolders, removeRunRoot, listTree, leaks, scrubber, scrubRunNames };
 
 if (require.main === module) {
   main().catch((e) => {

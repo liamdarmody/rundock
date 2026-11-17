@@ -513,6 +513,23 @@ const MOVE = { CLAUDE_CONFIG_DIR: moved };
 // And a link to its account file, by another name, in the workspace above.
 fs.symlinkSync(MOVED.claudeJson, path.join(aliasWs, 'zeta.json'));
 
+// THE CREDENTIAL FILES OF A MOVED RUNTIME HOME, each in a folder of its own
+// inside a folder that is also a workspace, beside an ordinary file: Codex's
+// sign-in file where CODEX_HOME was seen to keep it, and Claude Code's
+// credential file where CLAUDE_CONFIG_DIR puts it, by the default home's name.
+const holder = path.join(root, 'holder-ws');
+const RELOCATED = [
+  { variable: 'CLAUDE_CONFIG_DIR', dir: path.join(holder, 'claude-home'), secret: '.credentials.json', ordinary: path.join('projects', 'p.jsonl') },
+  { variable: 'CODEX_HOME', dir: path.join(holder, 'codex-home'), secret: 'auth.json', ordinary: path.join('log', 'codex-login.log') },
+];
+for (const r of RELOCATED) {
+  fs.mkdirSync(path.join(r.dir, path.dirname(r.ordinary)), { recursive: true });
+  for (const f of [r.secret, r.ordinary]) fs.writeFileSync(path.join(r.dir, f), '{}');
+}
+fs.writeFileSync(path.join(holder, 'notes.md'), '');
+// And Claude Code's account file in its folder, for the case with both set.
+fs.writeFileSync(path.join(RELOCATED[0].dir, '.claude.json'), '{}');
+
 const AT_HOME = { homeDir: atHome, workspace: atHome };
 const ELSEWHERE = { homeDir: atHome, workspace: ws };
 const LINKED = { homeDir: atHome, workspace: linkWs };
@@ -814,6 +831,57 @@ describe('a runtime home moved by CLAUDE_CONFIG_DIR keeps its secrets', { skip: 
   }
 });
 
+describe('a runtime home moved by CLAUDE_CONFIG_DIR or CODEX_HOME keeps its credential file', { skip: POSIX, concurrency: 8 }, () => {
+  const shape = (r) => ({ decision: r.decision, cards: r.cards.map(({ session_id, ...card }) => card) });
+  const HOLDING = { homeDir: atHome, workspace: holder };
+  const PLACES = [['from a workspace elsewhere', ELSEWHERE], ['from a workspace holding the folder', HOLDING]];
+  for (const [label, mode] of MODES) {
+    for (const r of RELOCATED) {
+      const env = { ...mode, [r.variable]: r.dir };
+      const file = path.join(r.dir, r.secret);
+      const ordinary = path.join(r.dir, r.ordinary);
+      for (const [where, opts] of PLACES) {
+        test(`${label}, ${r.variable} set, ${where}: its ${r.secret} asks as a secret, by Read, Write and cat`, async () => {
+          for (const tool of ['Read', 'Write']) assertSecretCrossing(await fileTool(tool, file, env, opts), file, `${tool} ${r.secret}`);
+          assertSecretCrossing(await ask(`cat ${file}`, env, opts), file, `cat ${r.secret}`);
+          if (opts === HOLDING) assertSecretCrossing(await ask(`cat ${path.relative(holder, file)}`, env, opts), file, `cat ${path.relative(holder, file)}`);
+        });
+        test(`${label}, ${r.variable} set, ${where}: an ordinary file in the same folder is judged as it was without the variable`, async () => {
+          for (const run of [(e) => ask(`cat ${ordinary}`, e, opts), (e) => fileTool('Read', ordinary, e, opts), (e) => fileTool('Write', ordinary, e, opts)]) {
+            const withIt = await run(env);
+            assert.deepStrictEqual(shape(withIt), shape(await run(mode)), `${r.ordinary}: the same answer`);
+            assert.ok(!anySecret(withIt.cards), `${r.ordinary}: no secret`);
+          }
+        });
+        test(`${label}, ${r.variable} unset, ${where}: its ${r.secret} is answered as the ordinary file beside it`, async () => {
+          for (const [what, run] of [['cat', (f) => ask(`cat ${f}`, mode, opts)], ['Read', (f) => fileTool('Read', f, mode, opts)], ['Write', (f) => fileTool('Write', f, mode, opts)]]) {
+            const secret = await run(file);
+            const plain = await run(ordinary);
+            assert.ok(!anySecret(secret.cards), `${what} ${r.secret}: no secret`);
+            assert.strictEqual(secret.decision, plain.decision, `${what} ${r.secret}: the same decision as ${r.ordinary}`);
+            assert.strictEqual(secret.cards.length, plain.cards.length, `${what} ${r.secret}: as many cards as ${r.ordinary}`);
+          }
+        });
+      }
+    }
+    test(`${label}, both set: each folder's credential file asks, and so do Claude Code's account file and the default homes'`, async () => {
+      const env = { ...mode, ...Object.fromEntries(RELOCATED.map(r => [r.variable, r.dir])) };
+      for (const file of [...RELOCATED.map(r => path.join(r.dir, r.secret)), path.join(RELOCATED[0].dir, '.claude.json'), AT.credentials, AT.codexAuth]) {
+        for (const [where, opts] of PLACES) {
+          assertSecretCrossing(await fileTool('Read', file, env, opts), file, `Read ${path.relative(root, file)}, ${where}`);
+          assertSecretCrossing(await ask(`cat ${file}`, env, opts), file, `cat ${path.relative(root, file)}, ${where}`);
+        }
+      }
+    });
+    test(`${label}: CODEX_HOME set to a folder that holds the workspace, the workspace stays as it was`, async () => {
+      for (const e of [{ ...mode, CODEX_HOME: root }, { ...mode, CODEX_HOME: ws }]) {
+        assertFree(await fileTool('Read', path.join(ws, 'notes.md'), e, ELSEWHERE), `Read notes.md, the variable at ${path.relative(root, e.CODEX_HOME) || 'the test root'}`);
+        await assertAsOnMain(label, 'cat notes.md', e, ELSEWHERE);
+      }
+    });
+  }
+});
+
 describe('the five sequences, for where a secret sits', { skip: POSIX, concurrency: 8 }, () => {
   for (const [label, env] of MODES) {
     test(`${label}: the inverse, ordinary files and the runtime's own folders stay free, and a backup write asks`, async () => {
@@ -877,8 +945,9 @@ describe('the five sequences, for where a secret sits', { skip: POSIX, concurren
 
 // THE NEW CHECKS FAILING. Each preload makes one of them throw, from outside
 // the hook, as test/unit/hook-never-crashes.test.js does: reading the moved
-// home's variable, and asking whether the backups folder is there. A request
-// the hook could not check is refused, never allowed.
+// home's variable, asking whether the backups folder is there, and reading a
+// word's entry to see whether it is a link. A request the hook could not check
+// is refused, never allowed.
 describe('when the new checks fail, the request is refused', { skip: POSIX, concurrency: 8 }, () => {
   const preload = (name, body) => {
     const file = path.join(root, `${name}.js`);
@@ -895,6 +964,17 @@ describe('when the new checks fail, the request is refused', { skip: POSIX, conc
     const exists = fs.existsSync;
     fs.existsSync = function (p) { if (String(p).endsWith(path.sep + 'backups')) throw new Error('forced failure'); return exists.apply(this, arguments); };
   `);
+  // A link's entry that cannot be read, for a reason other than there being no
+  // link to read: the disk failing under it.
+  const readlinkFails = preload('readlink-fails', `
+    const fs = require('fs');
+    const path = require('path');
+    const readlink = fs.readlinkSync;
+    fs.readlinkSync = function (p) {
+      if (path.basename(String(p)) === 'link.json') { const e = new Error('forced failure'); e.code = 'EIO'; throw e; }
+      return readlink.apply(this, arguments);
+    };
+  `);
   const refused = (r, what) => {
     assert.strictEqual(r.decision, 'deny', `${what}: refused`);
     assert.match(r.reason, /refused/, `${what}: as a request that could not be checked`);
@@ -910,4 +990,25 @@ describe('when the new checks fail, the request is refused', { skip: POSIX, conc
     assertFree(await ask('grep -r TODO .', codeMode), 'sanity: allowed without the failure');
     refused(await ask('grep -r TODO .', codeMode, { preload: folderCheckThrows }), 'grep -r TODO .');
   });
+  for (const [label, mode] of MODES) {
+    for (const [name, run] of [
+      ['cat link.json', (opts) => ask('cat link.json', mode, { ...LINKED, ...opts })],
+      ['cat sub/link.json', (opts) => ask('cat sub/link.json', mode, { ...LINKED, ...opts })],
+      ['the Read tool on a workspace link', (opts) => fileTool('Read', path.join(linkWs, 'link.json'), mode, { ...LINKED, ...opts })],
+    ]) {
+      test(`${label}: reading a link's entry fails with an I/O error: ${name} is refused`, async () => {
+        assertSecretCrossing(await run({}), AT.claudeJson, `sanity: ${name} asks as a secret without the failure`);
+        refused(await run({ preload: readlinkFails }), name);
+      });
+    }
+    // A word too long to be any file's name has no entry, so it is no link,
+    // and a long commit message is answered as it always was.
+    test(`${label}: a word too long to be a file's name is no link, so a long commit message is answered as on main`, async () => {
+      await assertAsOnMain(label, `git commit -m "${'word '.repeat(80)}"`, mode);
+    });
+    // Nor can any file's name hold a NUL byte, so a word that does is no link.
+    test(`${label}: a word holding a NUL byte names no file, so it is no link, and is answered as on main`, async () => {
+      await assertAsOnMain(label, 'git commit -m "x\u0000y"', mode);
+    });
+  }
 });

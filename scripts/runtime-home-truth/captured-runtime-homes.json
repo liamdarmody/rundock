@@ -41,12 +41,38 @@
       },
       "notMeasured": {
         ".credentials.json": "Claude Code writes its credential file only when a person signs in, which this harness never does, and on macOS it keeps the credential in the Keychain, which this harness never touches."
+      },
+      "joinedUnmeasured": {
+        ".credentials.json": "Joined under CLAUDE_CONFIG_DIR though not measured, because under the variable the measured run put everything Claude Code keeps, `~/.claude.json` from home included, in the variable's folder and nothing in home; the credential file is `.credentials.json` in the default home's registry; and joining a name that may never appear only adds a card and frees nothing."
       }
     },
     "codex": {
       "variable": "CODEX_HOME",
-      "measured": false,
-      "reason": "no codex CLI could be found or opened on this machine"
+      "runtimeVersion": "0.156.1",
+      "measured": true,
+      "cliExitCodes": [
+        0
+      ],
+      "created": {
+        "home": [],
+        "relocated": [
+          "auth.json",
+          "log/",
+          "log/codex-login.log",
+          "tmp/",
+          "tmp/arg0/",
+          "tmp/arg0/codex-arg0<id>/",
+          "tmp/arg0/codex-arg0<id>/.lock",
+          "tmp/arg0/codex-arg0<id>/apply_patch",
+          "tmp/arg0/codex-arg0<id>/applypatch",
+          "tmp/arg0/codex-arg0<id>/codex-execve-wrapper"
+        ]
+      },
+      "files": {
+        "auth.json": [
+          "relocated"
+        ]
+      }
     }
   }
 }

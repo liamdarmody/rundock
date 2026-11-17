@@ -700,22 +700,22 @@ const MUTATIONS = [
     '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
   // Forget a length a build wrote and every workspace carrying it is stranded.
   [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22, 23, 36, 38, 41, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22, 23, 36, 38, 41, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22, 23, 36, 38, 41, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   // Leave the current length out and the day a longer list ships, every block
   // this build wrote reads as a person's edit and never upgrades.
   [SCAFFOLD_SETTINGS, 'the current deny list\'s length is recorded as written',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 38, 41, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-two-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 23, 36, 38, 41, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.
@@ -3160,17 +3160,17 @@ const MUTATIONS = [
   // Forget the length the last build wrote and every workspace carrying it is
   // stranded: never rewritten, never given the new entries.
   [SCAFFOLD_SETTINGS, 'What runs: the nineteen-entry list is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 38, 41, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD, 'What runs: the nineteen-entry list upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 38, 41, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-one-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 38, 41, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD, 'Connector secrets: the twenty-one-entry list upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 38, 41, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   // An inherited Code-mode flag puts a Notes workspace under Code-mode grading;
   // an inherited conversation id names a conversation the agent does not have.
   [SPAWN_ENV, 'Spawn env: an inherited RUNDOCK_CODE_MODE reaches the agent',
@@ -4488,11 +4488,11 @@ const MUTATIONS = [
     '    ...shellStartupEntries(home).map(e => e.path),\n',
     ''],
   [STARTUP_SANDBOX, 'Startup files: the twenty-three-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 36, 38, 41, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [STARTUP_SANDBOX, "Startup files: the list with ZDOTDIR's zsh files is recorded as written",
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 41, 43];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 38, 43];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 42, 44, 45];'],
   // The record of the startup files is accepted in the spelling either way of
   // running writes, and in no other: break each spelling and each refusal.
   // The record found anywhere in the block, rather than where this run writes

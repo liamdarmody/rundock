@@ -308,12 +308,19 @@ const SECRET_RELATIVE_DIRS = ['backups'];
 const CODEX_SECRET_RELATIVE_DIRS = [];
 // ── A runtime home moved by its variable ──
 // `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move each runtime's home. What each
-// runtime keeps there was MEASURED, not assumed: with CLAUDE_CONFIG_DIR set,
-// Claude Code wrote `.claude.json` and `backups/` into that folder and nothing
-// into home (scripts/runtime-home-truth/captured-runtime-homes.json). Only the
-// measured entries are joined: the credential file is placed only by a real
-// sign-in, and Codex could not be run, so neither is claimed. A test holds
-// these lists to that record.
+// runtime keeps there was MEASURED, not assumed
+// (scripts/runtime-home-truth/captured-runtime-homes.json): with
+// CLAUDE_CONFIG_DIR set, Claude Code wrote `.claude.json` and `backups/` into
+// that folder and nothing into home, and with CODEX_HOME set, Codex wrote its
+// sign-in file, `auth.json`, into that folder and nothing into home.
+//
+// One entry is joined unmeasured, on a basis the record states: Claude Code's
+// credential file, which only a real sign-in writes (and which macOS keeps in
+// the Keychain instead). Under the variable the measured run kept everything
+// Claude Code keeps, the home folder's account file included, in the variable's
+// folder, so the credential file is joined there by the name the default
+// home's registry gives it. Joining a name that may never appear only adds a
+// card and frees nothing. A test holds these lists to that record, both ways.
 //
 // AS WELL AS THE DEFAULT HOMES, NEVER IN PLACE OF THEM. The hook, the server and
 // a terminal can each see the variable differently, so a value set in one must
@@ -321,14 +328,14 @@ const CODEX_SECRET_RELATIVE_DIRS = [];
 // never a runtime home to homeFor, so nothing in it becomes free, and an
 // ordinary file there is judged exactly as it was.
 const RELOCATED_HOMES = [
-  { runtime: 'claude', variable: 'CLAUDE_CONFIG_DIR', secrets: ['.claude.json'], secretDirs: ['backups'] },
-  { runtime: 'codex', variable: 'CODEX_HOME', secrets: [], secretDirs: [] },
+  { runtime: 'claude', variable: 'CLAUDE_CONFIG_DIR', secrets: ['.claude.json', '.credentials.json'], secretDirs: ['backups'] },
+  { runtime: 'codex', variable: 'CODEX_HOME', secrets: ['auth.json'], secretDirs: [] },
 ];
 // THE ONE PLACE THE VARIABLES ARE READ. The hook passes its own environment by
 // default; the server passes its own when it writes the sandbox block. A value
 // that is not an absolute path names no folder anyone can check, and is ignored.
 // Returns one row per runtime whose variable names a folder and which keeps a
-// measured secret there, shaped like a runtimeHomes row: `root` canonical for
+// secret there, shaped like a runtimeHomes row: `root` canonical for
 // matching, `value` as the variable spelled it, for the block.
 function relocatedRuntimeHomes(env = process.env) {
   const rows = [];
@@ -470,12 +477,25 @@ function namesSecretEntry(spelled, home = os.homedir(), foldsCase = hostFoldsCas
 // round a loop), so such a link would be judged where it sits; a write through
 // one that leads nowhere yet creates the file it names. Empty for a word that
 // is no link: one read of its entry.
+//
+// ONLY AN ANSWER THAT THERE IS NO FURTHER LINK ENDS THE WALK: the entry is no
+// link (EINVAL), is not there (ENOENT), sits under a file (ENOTDIR) or under a
+// loop (ELOOP), or is named longer than any entry can be (ENAMETOOLONG), which
+// every word of a long commit message is. A name holding a NUL byte, which no
+// entry's can, is no link either, and is never read. Any other failure, or one
+// with no code, leaves the question open, so it is thrown and the request
+// refused, never taken for an ordinary file.
+const NO_FURTHER_LINK = ['EINVAL', 'ENOENT', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG'];
 function linkHops(p) {
   const hops = [];
   let cur = p;
   for (let i = 0; i < 8; i++) {
+    if (cur.includes('\0')) break;
     let next;
-    try { next = path.resolve(path.dirname(cur), fs.readlinkSync(cur)); } catch (e) { break; }
+    try { next = path.resolve(path.dirname(cur), fs.readlinkSync(cur)); } catch (e) {
+      if (e && NO_FURTHER_LINK.includes(e.code)) break;
+      throw e;
+    }
     if (next === p || hops.includes(next)) break;
     hops.push(next);
     cur = next;
