@@ -1497,8 +1497,8 @@ const MUTATIONS = [
   // A card offering Always allow with nothing to save: the press would save
   // nothing the next request could be answered by.
   [PS_CARD, 'PowerShell card: no Always allow when there is no key to save',
-    '!boundary && !answerFile && key && RundockPermissions.offersAlwaysAllow(risk, verdict)',
-    '!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict)'],
+    '!boundary && !answerFile && !credential && key && RundockPermissions.offersAlwaysAllow(risk, verdict)',
+    '!boundary && !answerFile && !credential && RundockPermissions.offersAlwaysAllow(risk, verdict)'],
   // WHAT A SAVED POWERSHELL KEY ANSWERS. The first puts back the match on the
   // command's first word; the rest each let one kind of part count as covered.
   [PS_GRADER, 'PowerShell key: a request is answered by every part it covers, not by its first word',
@@ -1756,10 +1756,10 @@ const MUTATIONS = [
     "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? verdict.rule : null;",
     "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? 'Bash:git' : null;"],
   [CM_HOOK, "M17: Asks once fails open when nobody can be asked",
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;",
-    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;"],
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;",
+    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;"],
   [CM_HOOK, "M18: the Code-mode branch answers before the boundary classification",
-    "      && !(access && (access.where === 'outside' || access.answerFile))\n      && (!verdict || verdict.verdict === 'runs')) {",
+    "      && !(access && (access.where === 'outside' || access.answerFile || access.credential))\n      && (!verdict || verdict.verdict === 'runs')) {",
     "      && (!verdict || verdict.verdict === 'runs')) {"],
   [CM_HOOK, "M19: the hook input's cwd is ignored",
     "  const cwd = (typeof data.cwd === 'string' && data.cwd) ? data.cwd : undefined;",
@@ -2729,8 +2729,8 @@ const MUTATIONS = [
   // Let a connector send or delete through when nobody can be asked and an
   // agent still running after Rundock has stopped sends with nobody seeing it.
   [CONNECTOR_HOOK_FLOW, 'Connector send: a send or delete is allowed when Rundock cannot be asked',
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;",
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks;"],
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;",
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || credentialAccess;"],
   [CONNECTOR_HOOK_FLOW, 'Connector delete: a delete is allowed when Rundock cannot be asked',
     '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name) || isMcpDeleteTool(data.tool_name);',
     '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name);'],
@@ -4656,14 +4656,14 @@ const MUTATIONS = [
   // Each field the hook grades keeps its request on the card path, however
   // its command reads.
   [READ_ONLY_ANSWER, 'Read-only answer: a crossing out of the workspace is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
-    "const HOOK_GRADES = ['answer_file', 'startup_file'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'credential'];",
+    "const HOOK_GRADES = ['answer_file', 'startup_file', 'credential'];"],
   [READ_ONLY_ANSWER, 'Read-only answer: an answer-file write is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
-    "const HOOK_GRADES = ['boundary', 'startup_file'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'credential'];",
+    "const HOOK_GRADES = ['boundary', 'startup_file', 'credential'];"],
   [READ_ONLY_ANSWER, 'Read-only answer: a shell startup file is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
-    "const HOOK_GRADES = ['boundary', 'answer_file'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'credential'];",
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'credential'];"],
   // The verdict decides once it reaches decidePermission, so dropping it from
   // the call is what answers a Keychain line as a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a Keychain line or any other verdict is answered with no card',

@@ -401,17 +401,18 @@ describe('the five sequences', { skip: POSIX, concurrency: 8 }, () => {
 // let through because it could not be reached, while in Code mode the relative
 // and glob spellings were approved as ordinary Code-mode commands without ever
 // asking: the same decision, for a different reason. The whole answer is
-// compared, so that difference is caught. Whether the secrets tier should
-// refuse when nobody can be asked is a separate change.
+// compared, so that difference is caught. A credential read with nobody to
+// ask is now refused (credential-read-unanswered.test.js), so every spelling
+// is refused, in the direct spelling's words.
 describe('with the server unreachable', { skip: POSIX, concurrency: 8 }, () => {
   for (const [label, env] of MODES) {
     test(`${label}: a relative or glob spelling gets the answer the direct one gets`, async () => {
       const direct = await ask('cat ~/.claude/.credentials.json', env, { at: 1 });
-      assert.strictEqual(direct.decision, 'allow', 'sanity: the direct spelling is let through');
-      assert.strictEqual(direct.reason, 'Rundock server unreachable.');
+      assert.strictEqual(direct.decision, 'deny', 'sanity: the direct spelling is refused');
+      assert.ok(direct.reason.startsWith('Rundock server unreachable. This reads a sign-in credential,'), direct.reason);
       for (const command of ['cd ~/.claude && cat .credentials.json', 'cat ~/.claude/.cred*', 'cat ~/.claude/*']) {
         const r = await ask(command, env, { at: 1 });
-        assert.strictEqual(r.decision, 'allow', `${command}: allowed, as the direct spelling is`);
+        assert.strictEqual(r.decision, 'deny', `${command}: refused, as the direct spelling is`);
         assert.deepStrictEqual(r.answer, direct.answer, `${command}: the same answer, for the same reason`);
       }
     });
