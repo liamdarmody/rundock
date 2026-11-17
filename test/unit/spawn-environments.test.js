@@ -25,9 +25,11 @@ const { checkConnection, openClaudeConsole, consoleGate } = require('../../lib/r
 
 test('the funnel every agent spawn goes through passes on the environment it is given', () => {
   // spawnClaude hands its options to spawn unchanged but for `detached`, so
-  // the environment an agent runs with is the one its caller built.
+  // the environment an agent runs with is the one its caller built. A start
+  // through Node inside the Electron app adds one variable to it, and only
+  // then (test/unit/npm-launcher.test.js).
   const src = fs.readFileSync(path.join(ROOT, 'lib', 'runtime', 'claude.js'), 'utf8');
-  assert.match(src, /const proc = spawn\(resolveClaudeBin\(\), args, \{ \.\.\.options, detached: process\.platform !== 'win32' \}\);/);
+  assert.match(src, /const spawnOptions = \{ \.\.\.options, detached: process\.platform !== 'win32' \};\n  if \(launch\.env\) spawnOptions\.env = \{ \.\.\.\(\(options && options\.env\) \|\| process\.env\), \.\.\.launch\.env \};\n  const proc = deps\.spawn\(launch\.program, \[\.\.\.launch\.args, \.\.\.args\], spawnOptions\);/);
 });
 
 test('a routine is started with no conversation, even when the app was given one, and a conversation with its own', () => {

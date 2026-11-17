@@ -43,6 +43,7 @@ const { spawn } = require('node:child_process');
 
 const { classifyCodexError, resolveCodexBin } = require('./codex.js');
 const { guardChildStdin } = require('./lib/runtime/child-stdin.js');
+const { CODEX, launchPlan, unstarted } = require('./lib/runtime/npm-launcher.js');
 
 // The log a client is given when it is given none: it says nothing.
 const NO_LOG = () => {};
@@ -109,6 +110,10 @@ class CodexAppServer extends EventEmitter {
     this._binPath = opts.binPath || resolveCodexBin();
     this._spawnCwd = opts.cwd || process.cwd();
     this._spawnEnv = opts.env || process.env;
+    // The platform the start is planned for, and the Node an npm launcher's
+    // entry point is started with (_spawn). A test stands others in here.
+    this._platform = opts.platform || process.platform;
+    this._execPath = opts.execPath || process.execPath;
     this._clientName = opts.clientName || 'rundock';
     this._clientVersion = opts.clientVersion || PKG_VERSION;
     this._requestTimeoutMs = opts.requestTimeoutMs ?? 30000;
@@ -211,9 +216,15 @@ class CodexAppServer extends EventEmitter {
   }
 
   _spawn() {
-    const proc = spawn(this._binPath, ['app-server'], {
+    // On Windows an npm launcher (`codex.cmd`) is never started: the entry
+    // point it names is, with Node, and inside the Electron app with
+    // ELECTRON_RUN_AS_NODE added for that start only. A package that cannot
+    // be read starts nothing: a stand-in fails as a start that could not run
+    // would, with the reason (lib/runtime/npm-launcher.js).
+    const launch = launchPlan(this._binPath, CODEX, { platform: this._platform, execPath: this._execPath });
+    const proc = launch.refusal ? unstarted(launch.refusal) : spawn(launch.program, [...launch.args, 'app-server'], {
       cwd: this._spawnCwd,
-      env: this._spawnEnv,
+      env: launch.env ? { ...this._spawnEnv, ...launch.env } : this._spawnEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this._proc = proc;
@@ -281,6 +292,7 @@ class CodexAppServer extends EventEmitter {
         ? `codex app-server failed to start: ${spawnError.message}`
         : `codex app-server exited before responding to ${pending.method}`);
       if (spawnError && spawnError.code) err.code = spawnError.code;
+      if (spawnError) err.cause = spawnError;
       pending.reject(err);
     }
     this._pending.clear();

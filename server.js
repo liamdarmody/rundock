@@ -734,11 +734,14 @@ httpRouter.wireHttpRouterDeps({
   // out only when its words are a sign-in failure (isAuthError).
   // The version is the one the runtime probe last read (getRuntimeStatus,
   // asked for whenever a workspace loads); never probed, it is unknown, and
-  // the console runs `claude` bare.
+  // the console runs `claude` bare. A check that could not start Claude Code
+  // because its npm package could not be read says so, in the refusal's own
+  // words, for the card to show (lib/runtime/npm-launcher.js).
   openClaudeConsole: () => claudeConsole.openClaudeConsole({ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version, purpose: 'reconnect' }),
   checkClaudeConnection: () => claudeConsole.checkConnection({ bin: resolveClaudeBin(), isAuthFailure: isAuthError }).then((r) => {
     if (r.known) _claudeAuthEvidence = r.connected;
-    return { connected: r.connected, known: r.known };
+    const answer = { connected: r.connected, known: r.known };
+    return r.message ? { ...answer, code: r.code, message: r.message } : answer;
   }),
 });
 
@@ -2569,9 +2572,9 @@ function handleChatSpawnError(err, convoId) {
         userMessage = 'Claude Code not found on PATH. Run `claude --version` to check your install.';
       } else if (err.code === 'EACCES') {
         userMessage = "Couldn't start Claude Code: permission denied. Check your install.";
-      } else if (err.code === 'CLAUDE_TOO_OLD') {
-        // The whole notice: the copy found, the version needed, what to do
-        // (lib/runtime/claude-floor.js).
+      } else if (err.code === 'CLAUDE_TOO_OLD' || err.code === 'NPM_PACKAGE_UNREADABLE') {
+        // The whole notice: the copy found, why it was not started, what to
+        // do (lib/runtime/claude-floor.js, lib/runtime/npm-launcher.js).
         userMessage = err.message;
       } else {
         userMessage = `Couldn't start Claude Code: ${err.message}. Run \`claude --version\` to check your install.`;

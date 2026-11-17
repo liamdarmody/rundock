@@ -211,6 +211,27 @@ describe('Doc saves, creates and deletes, each exactly once, with no window open
       removeFive(p);
     }
   });
+
+  test('an agent file that ends with its own fenced block is written with its closing fence', async () => {
+    const name = 'fence-made';
+    const convoId = h.freshConvoId('docfence');
+    const body = `${teamFile(name, 'Fenced')}\n\nAn example reply:\n\n\`\`\`markdown\n## Example\n\`\`\``;
+    const gate = path.join(h.workspaceDir, `gate-${convoId}`);
+    h.writeScenario([{ match: { promptIncludes: 'DOC-FENCE' }, untilFile: gate,
+      turn: [{ text: `Made it.\n<!-- RUNDOCK:SAVE_AGENT name=${name} -->\n${body}\n<!-- /RUNDOCK:SAVE_AGENT -->` }] }]);
+    try {
+      await startThenCloseEveryWindow({ type: 'chat', conversationId: convoId, agent: 'rundock-guide', content: 'DOC-FENCE make an agent' }, 'rundock-guide');
+      fs.writeFileSync(gate, '');
+      assert.ok(await h.waitUntil(() => fs.existsSync(agentPath(name))), 'the file was written at the turn\'s end, with no window open');
+      assert.strictEqual(fs.readFileSync(agentPath(name), 'utf-8'), body, 'byte for byte, the closing fence included');
+      const next = await nextWindowFlushed('agent_saved', name, convoId);
+      next.close();
+    } finally {
+      h.reapConvo(convoId);
+      fs.rmSync(agentPath(name), { force: true });
+      h.internal.invalidateAgentCache();
+    }
+  });
 });
 
 describe('Every other agent is refused, nothing changes, and the conversation is told', () => {

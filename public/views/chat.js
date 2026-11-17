@@ -314,7 +314,9 @@ function buildDelegationDivider(agentData, opts = {}) {
 // notice by itself when they have finished: the server learns Claude Code is
 // connected only from a turn that works, so the card waits for "I've
 // reconnected" and runs that one check then. Where no console can be opened it
-// shows the steps to run. Every state is fixed copy, and none says "sign in".
+// shows the steps to run. Every state is fixed copy, and none says "sign in",
+// with one exception: a check that could not start Claude Code because its npm
+// package could not be read shows the server's own words for that, as text.
 const AUTH_DOCS = '<a href="https://docs.rundock.ai/troubleshooting/authentication" target="_blank" rel="noopener">';
 const authTitle = (t, pulse) => `<div class="auth-error-title">${pulse ? '<span class="auth-pulse" aria-hidden="true"></span>' : ''}${t}</div>`;
 const authBody = (t) => `<div class="auth-error-body">${t}</div>`;
@@ -354,10 +356,11 @@ const AUTH_CARD = {
     + `<ol class="auth-error-steps"><li>Open a terminal and run <code>${AUTH_LOGIN_CMD}</code> <button class="auth-error-copy" onclick="copyAuthCmd(this)" title="Copy command">copy</button></li></ol>`
     + `<div class="auth-error-foot">Then resend your message. ${AUTH_DOCS}Full steps and details &#x2192;</a></div>`],
 };
-function drawAuthCard(el, state) {
+function drawAuthCard(el, state, said) {
   const [tone, html] = AUTH_CARD[state];
   el.className = 'auth-error-card' + (tone ? ` ${tone}` : '');
   el.innerHTML = html;
+  if (said) el.querySelector('.auth-error-body').textContent = said;
   el.querySelectorAll('[data-auth]').forEach(b => b.addEventListener('click', () => authCardAction(el, b.dataset.auth)));
 }
 // Open the console: through the desktop's main process where there is one,
@@ -372,7 +375,8 @@ async function authCardAction(el, action) {
   if (action === 'check') {
     drawAuthCard(el, 'checking');
     const r = await fetch('/api/claude/connection', { method: 'POST' }).then(x => (x.ok ? x.json() : null), () => null);
-    drawAuthCard(el, r && r.connected === true ? 'reconnected' : (!r || r.known === false ? 'unchecked' : 'notyet'));
+    const state = r && r.connected === true ? 'reconnected' : (!r || r.known === false ? 'unchecked' : 'notyet');
+    drawAuthCard(el, state, state === 'unchecked' && r && typeof r.message === 'string' ? r.message : '');
     return;
   }
   const r = await Promise.resolve().then(reconnectClaude).catch(() => null);
@@ -634,12 +638,13 @@ function renderSessionHistory(d) {
 // it, so a reload rebuilds rather than forgets.
 const alwaysAllowedTools = new Set();
 
-// Requests that have ended, by id, and the queued copies of background
-// requests that ended before their conversation was opened. View-local for
+// Requests that have ended, by id, and the held copies of requests that ended
+// or were answered before their conversation was next opened. View-local for
 // the reason alwaysAllowedTools is: nothing outside the cards reads them.
 // The first is what makes a late copy of a card render as over instead of
-// answerable; the second is what lets a card that timed out off screen be
-// seen as timed out when its conversation is opened, rather than vanishing.
+// answerable; the second is what lets a card that timed out off screen, or
+// was answered, be seen settled when its conversation is opened, rather than
+// vanishing.
 const endedPermissions = new Map();
 const endedQueuedPermissions = new Map();
 
@@ -716,7 +721,7 @@ function handlePermissionRequest(d, convoId) {
   // the user would never see that it had happened.
   const decision = (req.boundary || req.answer_file === true || req.credential === true)
     ? { action: 'card' }
-    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict);
+    : RundockPermissions.decidePermission(risk, key, alwaysAllowedTools, verdict, { toolName, input });
   const isActive = activeConversation?.id === convoId;
   const route = RundockPermissions.routePermissionRequest(decision, isActive);
   // A card that will be shown, here or when its conversation opens, is
@@ -739,6 +744,11 @@ function handlePermissionRequest(d, convoId) {
     return;
   }
   renderPermissionCard(d, convoId);
+  // Drawn on screen, and held as a background arrival is: switching
+  // conversations replaces the page, and the redraw on return draws only what
+  // is held. A copy of a card already answered here draws nothing and is not
+  // held again.
+  if (pendingPermissions.has(requestId)) RundockPermissions.queuePendingPermission(pendingPermissionsByConvo, convoId, requestId, d);
 }
 
 // Render one approval card into the active conversation's message list.
@@ -956,16 +966,19 @@ function connectorFieldsElement(f, toolName) {
   return frag;
 }
 
-function renderPermissionCard(d, convoId, host) {
+function renderPermissionCard(d, convoId, host, settled) {
   const req = d.request || {};
   const requestId = d.request_id || '';
   // A WS reconnect re-sends control_request for every pending request, but the
   // DOM (and any existing card) survive the reconnect, so guard against a
   // duplicate card, exactly as renderPendingPermissionCards does.
   if (requestId && document.getElementById('perm-' + requestId)) return;
+  // How the request ended, if it has. A card kept to be shown settled brings
+  // its own, since the record of ended requests keeps only the latest.
+  const ended = settled || RundockPermissions.permissionEnded(endedPermissions, requestId);
   // A change Rundock has already put back has a card of its own, unless the
   // request has ended, which is drawn settled like any other.
-  if (req.put_back && !RundockPermissions.permissionEnded(endedPermissions, requestId)) { renderPutBackCard(d, convoId, host); return; }
+  if (req.put_back && !ended) { renderPutBackCard(d, convoId, host); return; }
   const toolName = req.tool_name || 'Unknown';
   const input = req.input || {};
   const risk = classifyRisk(toolName, input);
@@ -973,17 +986,18 @@ function renderPermissionCard(d, convoId, host) {
   // ENDED BEFORE IT WAS SHOWN. Every road to a card passes through here: a
   // live request, one queued for a background conversation, one replayed on
   // reconnect. A request that timed out, was answered, or lost its asker is
-  // drawn settled, saying why, with nothing to click.
-  const ended = RundockPermissions.permissionEnded(endedPermissions, requestId);
+  // drawn settled, saying why, with nothing to click. One answered on a card
+  // here says what that card said when it settled.
   if (ended) {
-    const copy = RundockPermissions.endedPermissionCopy(ended.reason, ended.allow);
+    const copy = RundockPermissions.endedPermissionCopy(ended.reason, ended.allow, ended.always);
     const m0 = host || document.getElementById('messages');
     if (!m0) return;
     const done = document.createElement('div');
     done.className = 'msg msg-permission';
     done.id = 'perm-' + requestId;
     m0.appendChild(done);
-    resolvePermissionCard(requestId, copy.allowed, copy.label, false, [summary, copy.why].filter(Boolean).join('. '));
+    resolvePermissionCard(requestId, copy.allowed, copy.label, false,
+      typeof ended.text === 'string' ? ended.text : [summary, copy.why].filter(Boolean).join('. '));
     return;
   }
   // The command, kept beside a crossing path rather than replaced by it.
@@ -1292,7 +1306,7 @@ function renderPermissionCard(d, convoId, host) {
         <button class="btn-perm ${RundockPermissions.allowButtonClass(allowLabel, answerFile)}" data-perm-id="${escAttr(requestId)}" data-perm-action="allow">${esc(allowLabel)}</button>
         ${wholeFolderOffered
           ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="allow-folder">Always allow this folder</button>`
-          : (!boundary && !answerFile && !credential && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
+          : (!boundary && !answerFile && !credential && key && RundockPermissions.offersAlwaysAllow(risk, verdict) ? `<button class="btn-perm btn-always" data-perm-id="${escAttr(requestId)}" data-perm-action="always">${esc(alwaysLabel)}</button>` : '')}
         <button class="btn-perm btn-deny" data-perm-id="${escAttr(requestId)}" data-perm-action="deny">Deny</button>
       </div>
     </div>
@@ -1512,22 +1526,27 @@ function streamTextAfterCut(state, text) {
   return prefix && t.startsWith(prefix) ? t.slice(prefix.length) : t;
 }
 
-// Append cards for any approval requests that arrived while this
-// conversation was in the background. Idempotent: a card already in the DOM
-// is skipped, and entries stay queued until answered or timed out, so
-// switching away and back re-renders them. Called when a conversation
-// becomes the active view (openConversation).
+// Append cards for every approval request this conversation holds, whether it
+// arrived in the background or was drawn while the conversation was on
+// screen. Idempotent: a card already in the DOM is skipped, and entries stay
+// held until answered or ended, so switching away and back re-renders them.
+// Called when a conversation becomes the active view (openConversation, and
+// createConversation for a new one).
 function renderPendingPermissionCards(convoId) {
   if (activeConversation?.id !== convoId) return;
+  // A conversation left with a card still open waits on the person, as one
+  // whose card arrived in the background does.
+  const waiting = RundockPermissions.waitingConversations(pendingPermissionsByConvo, convoId);
+  for (const id of waiting) unread.markPermission(id);
+  if (waiting.length) updateUnreadBadge();
   if (!document.getElementById('messages')) return;
-  // Requests that ended while this conversation was in the background are
-  // shown once, as ended, so the thread says it asked and why nothing came of
-  // it. Once drawn they are dropped, the way an answered card is not redrawn
-  // when a conversation is reopened.
+  // Requests that ended, or were answered here, since this conversation was
+  // last drawn are shown once, settled, so the thread says it asked and what
+  // came of it. Once drawn they are dropped, and a later return draws none.
   const ended = endedQueuedPermissions.get(convoId);
   if (ended) {
     endedQueuedPermissions.delete(convoId);
-    for (const d of ended.values()) renderPermissionCard(d, convoId);
+    for (const kept of ended.values()) renderPermissionCard(kept.payload, convoId, undefined, kept.outcome);
   }
   for (const d of RundockPermissions.pendingPermissionsFor(pendingPermissionsByConvo, convoId)) {
     if (document.getElementById('perm-' + (d.request_id || ''))) continue;
@@ -1577,7 +1596,8 @@ function handleOwnerlessPermissionRequest(d) {
   const decision = (req.boundary || req.answer_file === true || req.credential === true)
     ? { action: 'card' }
     : RundockPermissions.decidePermission(classifyRisk(toolName, input),
-      RundockPermissions.verdictAllowKey(req.code_mode_verdict) || toolAllowKey(toolName, input), alwaysAllowedTools, req.code_mode_verdict || undefined);
+      RundockPermissions.verdictAllowKey(req.code_mode_verdict) || toolAllowKey(toolName, input), alwaysAllowedTools, req.code_mode_verdict || undefined,
+      { toolName, input });
   if (decision && decision.action === 'allow') {
     if (ws) ws.send(JSON.stringify({ type: 'permission_response', requestId, conversationId: '', allow: true }));
     return;
@@ -1606,10 +1626,11 @@ function endPermissionRequest(requestId, reason, allow) {
   if (!answeredHere) resolvePermissionCard(requestId, copy.allowed, copy.label, false);
   pendingPermissions.delete(requestId);
   const convoId = RundockPermissions.removePendingPermission(pendingPermissionsByConvo, requestId);
-  if (queued && convoId) {
-    let m = endedQueuedPermissions.get(convoId);
-    if (!m) { m = new Map(); endedQueuedPermissions.set(convoId, m); }
-    m.set(requestId, queued.payload);
+  if (queued && convoId) keepEndedCard(convoId, requestId, queued.payload);
+  // A card already kept says how it ended last: answered here, then too late.
+  for (const kept of endedQueuedPermissions.values()) {
+    const entry = kept.get(requestId);
+    if (entry) entry.outcome = RundockPermissions.permissionEnded(endedPermissions, requestId);
   }
   // L4: a background card that ended must clear its own contribution to the
   // unread badge. Only once the conversation has no other pending card, and
@@ -1621,6 +1642,16 @@ function endPermissionRequest(requestId, reason, allow) {
   }
   const t = document.getElementById('thinking-indicator');
   if (t) t.style.display = '';
+}
+
+// A request that ended, or was answered, while its card was held for a
+// conversation, kept to be shown once, settled, the next time that
+// conversation is opened. It keeps how it ended, so it never depends on the
+// record of ended requests, which forgets the oldest.
+function keepEndedCard(convoId, requestId, payload) {
+  let m = endedQueuedPermissions.get(convoId);
+  if (!m) { m = new Map(); endedQueuedPermissions.set(convoId, m); }
+  m.set(requestId, { payload, outcome: RundockPermissions.permissionEnded(endedPermissions, requestId) });
 }
 
 // After a reconnect the server names every request still pending. Anything
@@ -1636,8 +1667,9 @@ function respondPermission(requestId, allow, always, allowFolder) {
   if (!pending || !ws) return;
   if (RundockPermissions.permissionEnded(endedPermissions, requestId)) return;
   pendingPermissions.delete(requestId);
-  // Answered: the queued copy (if this card was rendered from the
-  // background store) must never render again.
+  // Answered: the copy held for its conversation must never render live
+  // again. It is kept to be shown once more, settled, on the next return.
+  const held = RundockPermissions.findPendingPermission(pendingPermissionsByConvo, requestId);
   RundockPermissions.removePendingPermission(pendingPermissionsByConvo, requestId);
 
   ws.send(JSON.stringify({
@@ -1652,8 +1684,9 @@ function respondPermission(requestId, allow, always, allowFolder) {
     toolInput: pending.toolInput || {}
   }));
 
-  // Store always-allow pattern if requested
-  if (allow && always) {
+  // Store always-allow pattern if requested. A request with no key has no
+  // Always allow on its card, and saves nothing however it is answered.
+  if (allow && always && pending.key) {
     alwaysAllowedTools.add(pending.key);
     // Written back so the answer outlives this tab. The cache is updated first
     // so the next card in the same session is silent whether or not the write
@@ -1662,8 +1695,15 @@ function respondPermission(requestId, allow, always, allowFolder) {
     try { ws.send(JSON.stringify({ type: 'add_tool_allow', key: pending.key })); } catch (e) {}
   }
 
-  // Replace the card with a resolved indicator
-  resolvePermissionCard(requestId, allow, allow ? (always ? '✓ Always' : '✓') : '✕', true);
+  // Replace the card with a resolved indicator. One held for its conversation
+  // is recorded as answered, with what it said, so any later copy of it is
+  // drawn just as settled, and the next return to that conversation shows it.
+  const copy = RundockPermissions.endedPermissionCopy('answered-here', allow, always);
+  const said = resolvePermissionCard(requestId, copy.allowed, copy.label, true);
+  if (held) {
+    RundockPermissions.markPermissionAnswered(endedPermissions, requestId, allow, always, said);
+    keepEndedCard(held.convoId, requestId, held.payload);
+  }
 
   // Resume thinking indicator
   const t = document.getElementById('thinking-indicator');
@@ -1677,7 +1717,8 @@ function respondPermission(requestId, allow, always, allowFolder) {
 //
 // keepSummary decides whether the card's own summary text is carried into the
 // resolved state. The user-answered path keeps it so the thread still reads as
-// a record of what was approved; the timeout path never showed it.
+// a record of what was approved; the timeout path never showed it. Returns
+// the words the settled card shows beside its label.
 function resolvePermissionCard(requestId, allowed, label, keepSummary, text) {
   const card = document.getElementById('perm-' + requestId);
   if (!card) return;
@@ -1694,6 +1735,7 @@ function resolvePermissionCard(requestId, allowed, label, keepSummary, text) {
     setTimeout(() => { card.remove(); updateApprovalsDock(); }, 4000);
     updateApprovalsDock();
   }
+  return summary;
 }
 
 function formatToolName(name) {
