@@ -11,8 +11,10 @@
 // drawn from that request, so an identical request is an identical card.
 //
 // A write to a file named in quotes asks with the card main raises for the
-// same write spelled plainly: the same request but for the command's own text
-// and the label scanned from it, which is not drawn on a crossing's card.
+// same write spelled plainly, and a file named in quotes and read through `<`
+// is read as main reads it spelled plainly: the same request but for the
+// command's own text and the label scanned from it, which is not drawn on a
+// crossing's card.
 //
 // The expected values are test/fixtures/joined-path-words-on-main.json,
 // recorded by running this file against main's hook:
@@ -57,12 +59,19 @@ const CONTROLS = [
   // The plain spellings, and the spellings that already asked.
   'cat ~/.claude/.credentials.json', 'cat ~/\\.claude/.credentials.json', 'cd ~/.claude && cat .credentials.json',
   'echo x >> ~/.claude/settings.json', 'echo x > ~/.claude/.credentials.json', 'echo x >> ~/.zshrc',
+  // A file read through `<`, never written.
+  'python3 tool.py < .mcp.json',
 ];
 // [quoted, the plain spelling main is compared on]
 const WRITES = [
   ['echo x >> ~/.claude/"settings.json"', 'echo x >> ~/.claude/settings.json'],
   ["echo x >> ~/.claude/'settings'.json", 'echo x >> ~/.claude/settings.json'],
   ['echo x > ~/.claude/".credentials.json"', 'echo x > ~/.claude/.credentials.json'],
+];
+// [quoted, the plain spelling main is compared on]: a redirection's target
+// read through `<` sends what the plain spelling sends, card or no card.
+const READS = [
+  ['python3 tool.py < ".mcp.json"', 'python3 tool.py < .mcp.json'],
 ];
 const keyOf = (label, command) => `${label} | ${command}`;
 const ETC = process.platform === 'win32' ? '/etc' : fs.realpathSync('/etc');
@@ -136,6 +145,15 @@ describe('lines with no quoted path near a credential file send exactly what mai
         assert.ok(expected && expected.cards.length === 1, `measured on main: ${plain} asks`);
         assert.deepStrictEqual(got.answer, expected.answer, 'the same answer');
         assert.deepStrictEqual(got.cards.map(drawn), expected.cards.map(drawn), 'the same card');
+      });
+    }
+    for (const [command, plain] of RECORD ? [] : READS) {
+      test(`${label}: ${command} is read as ${plain} is on main`, async () => {
+        const got = await run(command, env);
+        const expected = onMain[keyOf(label, plain)];
+        assert.ok(expected, `measured on main: ${plain}`);
+        assert.deepStrictEqual(got.answer, expected.answer, 'the same answer');
+        assert.deepStrictEqual(got.cards.map(drawn), expected.cards.map(drawn), 'the same cards, or none');
       });
     }
   }

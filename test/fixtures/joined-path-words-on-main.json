@@ -417,6 +417,16 @@
   },
   "cards": []
  },
+ "Code mode | python3 tool.py < .mcp.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": "Auto-approved: workspace is in Code mode"
+   }
+  },
+  "cards": []
+ },
  "Code mode | sed 's#/a#/b#' notes.md": {
   "answer": {
    "hookSpecificOutput": {
@@ -1026,6 +1036,24 @@
     "advisory_outside_paths": [
      "<root>/home/.claude/.credentials.json"
     ]
+   }
+  ]
+ },
+ "Notes mode | python3 tool.py < .mcp.json": {
+  "answer": {
+   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "The person refused this command. The refusal is deliberate: do not retry it or try another way. This run has nobody to ask, so carry on with the rest of the job without that step. If you cannot finish without it, make the last line of your final message: RUN STATUS: failed: <one-line reason>"
+   }
+  },
+  "cards": [
+   {
+    "tool_name": "Bash",
+    "tool_input": {
+     "command": "python3 tool.py < .mcp.json"
+    },
+    "conversation_id": ""
    }
   ]
  },

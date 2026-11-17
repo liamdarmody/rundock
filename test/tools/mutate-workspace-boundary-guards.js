@@ -503,6 +503,9 @@ const STARTUP_PRELOAD = { src: path.join(ROOT, 'test', 'helpers', 'account-home-
 // refused, through the real hook in every mode and run, and the check itself
 // in-process with the case-folding seam set both ways.
 const TEAM_FOLDERS = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/workspace-team-folders.test.js' };
+// Each shell word also read as bash joins it, quotes and escapes removed,
+// through the real hook in both modes.
+const JOINED_WORDS = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/joined-path-words.test.js' };
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -4863,6 +4866,34 @@ const MUTATIONS = [
   [TEAM_FOLDERS, 'Team folders: only the first path field present is checked',
     "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
     "  const targets = [ti.file_path || ti.notebook_path || ti.path].filter((v) => typeof v === 'string' && v);"],
+  // ===== A PATH IS ALSO READ AS THE SHELL JOINS IT =====
+  // Quotes read only as written: a quoted credential path names nothing.
+  // Caught by: every spelling generated from a registry entry's path.
+  [JOINED_WORDS, 'Joined words: the joined reading is removed',
+    '      joined.push(...joinedPathWords(text).map(',
+    '      joined.push(...[].map('],
+  // A word that opens with a variable in double quotes is left as written, so
+  // `"$HOME/.claude"/.credentials.json` starts with a quote, not home, and no
+  // literal part names a registry file. Caught by: home in double quotes,
+  // alone and with what follows, in every generated spelling.
+  [JOINED_WORDS, 'Joined words: home is not recognized inside double quotes',
+    '          if (t && !(slash && t === \'/\')) out.push({ t, at: wat,',
+    '          if (t && !(slash && t === \'/\')) out.push({ t: /^"\\$/.test(w.raw) ? w.raw : t, at: wat,'],
+  // The joined words stand in for the split ones. Caught by: a path inside a
+  // quoted script, which only the reading of quotes as written finds.
+  [JOINED_WORDS, 'Joined words: the joined reading replaces the split one',
+    '  for (const w of joined) if (w.joined) { words.push(w);',
+    '  words.length = 0; for (const w of joined) if (w) { words.push(w);'],
+  // A word holding a variable is never tagged. Caught by: each word holding a
+  // variable whose literal parts name a registry file asks as a secret.
+  [JOINED_WORDS, 'Joined words: a word holding a variable is never tagged',
+    '    for (const { e, rels, paths, names } of ends) if (',
+    '    for (const { e, rels, paths, names } of []) if ('],
+  // A line the joined reading cannot read runs as though it named nothing.
+  // Caught by: the lexer throwing, and a line past the reading's length, ask.
+  [JOINED_WORDS, 'Joined words: a lexer failure is treated as no crossing',
+    '  } catch (e) { found.unread = true; joined = []; }',
+    '  } catch (e) { joined = []; }'],
 ];
 const REPORTER = ['--test-reporter', 'spec'];
 

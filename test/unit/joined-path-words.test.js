@@ -127,16 +127,17 @@ async function assertSecretCard(command, file, direct, env) {
 }
 
 // Every way of writing `rel`, a path below home, that bash reads as that path:
-// each component quoted whole with either quote, each split in two by an
-// empty pair of either quote, each with one character escaped, and home in
-// double quotes alone and together with the next component.
+// each component quoted whole with either quote, with or without a `$` before
+// the quote, each split in two by an empty pair of either quote, each with one
+// character escaped, and home in double quotes alone and together with the
+// next component.
 function spellings(rel) {
   const parts = rel.split('/');
   const with_ = (i, piece) => parts.map((p, j) => (j === i ? piece : p)).join('/');
   const out = [];
   parts.forEach((p, i) => {
     const mid = Math.ceil(p.length / 2);
-    for (const q of ['"', "'"]) out.push(`~/${with_(i, q + p + q)}`, `~/${with_(i, p.slice(0, mid) + q + q + p.slice(mid))}`);
+    for (const q of ['"', "'"]) out.push(`~/${with_(i, q + p + q)}`, `~/${with_(i, '$' + q + p + q)}`, `~/${with_(i, p.slice(0, mid) + q + q + p.slice(mid))}`);
     out.push(`~/${with_(i, `${p.slice(0, mid)}\\${p.slice(mid)}`)}`);
   });
   const tail = parts.length > 1 ? `/${parts.slice(1).join('/')}` : '';
@@ -211,7 +212,35 @@ describe('every registry entry, in every spelling generated from its path', { sk
   }
 });
 
-describe('a word holding a variable or a substitution, matched on its literal end', { skip: POSIX, concurrency: 8 }, () => {
+// A QUOTE OPENED BY A DOLLAR SIGN. Bash drops the `$`: `$'.x'` and `$".x"` are
+// `.x`. Inside `$'...'` an escape such as `\x65` or `\145` stands for a
+// character, which is not worked out, so a word holding one is read as a word
+// that cannot be known until the line runs.
+describe('a quote opened by a dollar sign', { skip: POSIX, concurrency: 8 }, () => {
+  const READS = [
+    ["cat ~/.claude/$'.credentials.json'", CREDENTIALS],
+    ['cat $HOME/.claude/$".credentials.json"', CREDENTIALS],
+    ['cat ~/.codex/$"auth.json"', CODEX_AUTH],
+    ["cat ~/$'.claude.json'", CLAUDE_JSON],
+  ];
+  const ESCAPED = ["cat ~/.claude/$'.cred\\x65ntials.json'", "cat ~/.claude/$'.cred\\145ntials.json'", "cat ~/.claude/$'\\x2e'credentials.json",
+    // An escaped quote does not end the quote, so the next word is its own.
+    "cat $'\\'' ~/.claude/$'.credentials.json'"];
+  for (const [label, env] of MODES) {
+    for (const [command, file] of READS) {
+      test(`${label}: ${command} asks as a secret, as the plain spelling does`, async () => {
+        await assertSecretCard(command, file, `cat ~/${below(file)}`, env);
+      });
+    }
+    for (const command of ESCAPED) {
+      test(`${label}: ${command} asks as a secret`, async () => {
+        await assertTagged(command, CREDENTIALS, env);
+      });
+    }
+  }
+});
+
+describe('a word holding a variable or a substitution, matched on its literal parts', { skip: POSIX, concurrency: 8 }, () => {
   const TAGGED = [
     // The entry's path below home, after the variable.
     ['H=~; cat $H/.claude/.credentials.json', CREDENTIALS],
@@ -224,19 +253,76 @@ describe('a word holding a variable or a substitution, matched on its literal en
     ['H=~/.codex; cat "$H/auth.json"', CODEX_AUTH],
     // Any variable at all: an extra card in a rare case, the accepted cost.
     ['cat $DIR/auth.json', CODEX_AUTH],
+    // The entry's file name or its path below home straight after the
+    // variable, with no separator between them.
+    ['D=~/.claude/; cat ${D}.credentials.json', CREDENTIALS],
+    ['D=~/.claude/; cat $D.credentials.json', CREDENTIALS],
+    ['D=~/; cat ${D}.claude/.credentials.json', CREDENTIALS],
+    // Literal parts that, with each variable standing for any text, could
+    // spell the entry's path: an empty end, a name split by a variable, a
+    // folder holding the entry followed by a variable.
+    ['E=; cat ~/.claude/.credentials.json"$E"', CREDENTIALS],
+    ['E=; cat ~/.claude/".credentials.json$E"', CREDENTIALS],
+    ['E=; cat ~/.claude/.cred$E"entials.json"', CREDENTIALS],
+    ['cat ~/.claude/$X', CREDENTIALS],
+    ['cat "$HOME"/$X', CREDENTIALS],
+    ['cat ~/$X', CLAUDE_JSON],
+    // A name split by a variable, after a variable holding its folder.
+    ['D=~/.claude; E=; cat $D/.cred$E"entials.json"', CREDENTIALS],
   ];
-  const UNTAGGED = ['H=~; cat $H/notes.md', 'H=~; cat $H/sub/.credentials.json', 'cat $H/x.claude.json', 'cat $DIR/sub/auth.json'];
+  const UNTAGGED = [
+    'H=~; cat $H/notes.md', 'H=~; cat $H/sub/.credentials.json', 'cat $H/x.claude.json', 'cat $DIR/sub/auth.json',
+    // No literal text but a separator, and a literal start that is not home.
+    'cat $A$B', 'cat $A/$B', 'cat notes/$X',
+    // A file name a variable begins.
+    'cat $f.json', 'cat $DIR/$f.json',
+  ];
   for (const [label, env] of MODES) {
     for (const [command, file] of TAGGED) {
       test(`${label}: ${command} asks as a secret`, async () => {
         await assertTagged(command, file, env);
       });
     }
+    // Home by its full path, then a variable. Named without the path, which
+    // differs per run.
+    test(`${label}: home spelled in full, then a variable, asks as a secret`, async () => {
+      await assertTagged(`cat ${home}/.claude/$X`, CREDENTIALS, env);
+    });
     for (const command of UNTAGGED) {
       test(`${label}: ${command} is not tagged secret`, async () => {
         const r = await ask(command, env);
         assert.ok(r.answer, 'the hook answered');
         assert.ok(!anySecret(r.cards), `${command}: no secret crossing: ${JSON.stringify(r.cards)}`);
+      });
+    }
+  }
+});
+
+// A REDIRECTION'S TARGET is written when its operator holds `>` and read when
+// it is `<`, standing alone or attached, the same as its plain spelling.
+describe("a redirection's target, read or written by its operator", { skip: POSIX, concurrency: 8 }, () => {
+  for (const [label, env] of MODES) {
+    for (const [command, direct] of [
+      ['cat < ~/.claude/".credentials.json"', 'cat < ~/.claude/.credentials.json'],
+      ['cat <~/.claude/".credentials.json"', 'cat <~/.claude/.credentials.json'],
+      ['python3 tool.py < ~/.claude/".credentials.json"', 'python3 tool.py < ~/.claude/.credentials.json'],
+    ]) {
+      test(`${label}: ${command} asks as a secret read, as ${direct} does`, async () => {
+        await assertSecretCard(command, CREDENTIALS, direct, env);
+      });
+    }
+    for (const [command, direct] of [
+      ['echo x >~/.claude/"settings.json"', 'echo x >~/.claude/settings.json'],
+      ['echo x 2>~/.claude/"settings.json"', 'echo x 2>~/.claude/settings.json'],
+      ['echo x &>~/.claude/"settings.json"', 'echo x &>~/.claude/settings.json'],
+      ['echo x 2> ~/.claude/"settings.json"', 'echo x 2> ~/.claude/settings.json'],
+    ]) {
+      test(`${label}: ${command} asks with the card ${direct} raises`, async () => {
+        const [via, base] = await Promise.all([ask(command, env), ask(direct, env)]);
+        assert.strictEqual(base.cards.length, 1, `sanity: ${direct} asks`);
+        assert.strictEqual(via.cards.length, 1, `${command}: one card`);
+        assert.ok(via.cards[0].crossings.some(c => c.path === SETTINGS && c.write === true), `${command}: a write of the settings file`);
+        assert.deepStrictEqual(drawn(via.cards[0]), drawn(base.cards[0]), `${command}: the card ${direct} raises`);
       });
     }
   }
@@ -254,6 +340,9 @@ describe('each way past the joined reading', { skip: POSIX, concurrency: 8 }, ()
     ['a cd into home in double quotes', 'cd "$HOME/.claude" && cat .credentials.json'],
     ['home held in a variable', 'H=~/.claude; cat $H/.credentials.json'],
     ['home built by a substitution', 'cat $(echo ~)/.claude/.credentials.json'],
+    // Joined, the script is one word that names no path; only the reading of
+    // quotes as written finds the path inside it.
+    ['a path inside a quoted script', 'python3 -c "print(open(\'$HOME/.claude/.credentials.json\').read())"'],
   ];
   for (const [label, env] of MODES) {
     for (const [route, command] of ROUTES) {

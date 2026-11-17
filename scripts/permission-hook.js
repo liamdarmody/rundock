@@ -1691,7 +1691,7 @@ function joinedPathWords(text, depth = 0, offset = 0, out = []) {
     if (start >= 0) from = start + seg.text.length;
     const at = offset + Math.max(0, start);
     const targets = [];
-    const words = codeParse.lexWords(seg.text, 'bash', targets);
+    const words = codeParse.lexWords(seg.text, 'bash', targets, true);
     const lead = (words[0] ? words[0].text : '').split('/').pop();
     const next = segs[k + 1];
     const skip = new Set((lead === 'echo' || lead === 'printf') && !/[<>]|\$\(|`/.test(seg.text) && !(next && next.op === '|') ? words : []);
@@ -1706,15 +1706,15 @@ function joinedPathWords(text, depth = 0, offset = 0, out = []) {
     }
     const slash = delimiterArgsIn(seg.text).length > 0;
     for (const body of codeParse.substitutions(seg.text, 'bash').bodies) joinedPathWords(body, depth + 1, at + Math.max(0, seg.text.indexOf(body)), out);
-    const placed = (list, target) => { let cur = 0; return list.map((w) => { const i = seg.text.indexOf(w.raw, cur); if (i >= 0) cur = i + w.raw.length; return [w, at + Math.max(0, i), target]; }); };
-    for (const [w, wat, target] of [...placed(words, false), ...placed(targets, true)]) {
+    const placed = (list) => { let cur = 0; return list.map((w) => { const i = seg.text.indexOf(w.raw, cur); if (i >= 0) cur = i + w.raw.length; return [w, at + Math.max(0, i)]; }); };
+    for (const [w, wat] of [...placed(words), ...placed(targets)]) {
       const close = { '(': ')', '{': '}' }[w.raw[0]];
       if (close) joinedPathWords(w.raw.slice(1, w.raw.lastIndexOf(close)), depth + 1, wat + 1, out);
       if (skip.has(w) || close) continue;
       w.text.split(/([<>]+)/).forEach((piece, n, parts) => {
         const eq = piece.indexOf('=');
         for (const t of n % 2 ? [] : eq > 0 && eq < piece.length - 1 ? [piece, piece.slice(eq + 1)] : [piece]) {
-          if (t && !(slash && t === '/')) out.push({ t, at: wat, joined: w.text !== w.raw, expands: w.expands, target: target || (n > 0 && parts[n - 1].includes('>')) });
+          if (t && !(slash && t === '/')) out.push({ t, at: wat, joined: w.text !== w.raw, expands: w.expands, target: (n ? parts[n - 1] : w.op || '').includes('>') });
         }
       });
     }
@@ -3926,15 +3926,24 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
       for (const h of homesReadBy(form, starts)) for (const e of entriesUnder(h)) reportSecret(e.path);
     }
   }
-  // A WORD HOLDING A VARIABLE OR A SUBSTITUTION names a credential file when
-  // the text after the last one ends in its path below home, or is its name
-  // straight after it: `$H/.claude/.credentials.json`, `$H/.credentials.json`.
-  // What it holds is only known when the line runs, so this asks more.
+  // A WORD HOLDING A VARIABLE OR A SUBSTITUTION is only known when the line
+  // runs, so this asks more. With each one standing for any text, it names a
+  // credential file when it starts at home and its literal parts could spell
+  // the file's path (`~/.claude/$X`, `~/.claude/.cred$E"entials.json"`), when
+  // its literal parts from one on could spell, to the end of the word, the
+  // file's name or its path below home (`$D.credentials.json`,
+  // `$D/.cred$E"entials.json"`), or when the text after the last one ends in
+  // that path. A word with no literal text but `/` (`$A/$B`) names nothing,
+  // nor does a name a variable begins (`$f.json`).
   const fold = p => foldCase(p, foldsCase);
-  const ends = secretEntries.map(e => ({ e, name: '/' + fold(e.name), rels: e.reach.flatMap(x => homeSpellings.map(h => path.relative(h, x))).filter(r => r && !r.startsWith('..') && !path.isAbsolute(r)).map(r => '/' + fold(r)) }));
+  const fits = (parts, p) => { const last = parts[parts.length - 1]; let k = parts[0].length; for (const x of parts.slice(1, -1)) { const i = p.indexOf(x, k); if (i < 0) return false; k = i + x.length; } return p.startsWith(parts[0]) && p.endsWith(last) && (parts.length > 1 ? p.length - last.length >= k : p === last); };
+  const ends = secretEntries.map(e => { const rels = e.reach.flatMap(x => homeSpellings.map(h => path.relative(h, x))).filter(r => r && !r.startsWith('..') && !path.isAbsolute(r)).map(fold); return { e, rels, paths: [...rels.map(r => '~/' + r), ...e.reach.map(fold)], names: rels.flatMap(r => r.split('/').flatMap((_, i, a) => [a.slice(i).join('/'), '/' + a.slice(i).join('/')])) }; });
   for (const w of joined) {
-    const end = w.expands ? fold(w.t.split(/\$\{[^}]*\}|\$\([^]*\)|\$[\w@*#?$!-]+|`[^`]*`/).pop()) : null;
-    for (const { e, name, rels } of end ? ends : []) if (end === name || rels.some(r => end.endsWith(r))) reportSecret(e.path);
+    const parts = w.expands ? fold(HOME_PREFIX.reduce((t, re) => t.replace(re, '~'), w.t)).split(/\$\{[^}]*\}|\$\([^]*\)|\$[\w@*#?$!-]+|`[^`]*`/) : [];
+    const last = parts[parts.length - 1];
+    const homed = parts.length > 1 && (parts[0].startsWith('~/') || homeSpellings.some(h => (parts[0] + '/').startsWith(fold(h) + '/')));
+    if (parts.length < 2 || !/[^/]/.test(parts.join(''))) continue;
+    for (const { e, rels, paths, names } of ends) if ((homed && paths.some(p => fits(parts, p))) || (last && parts.some((x, i) => i && x.replace(/^\//, '') && names.some(n => fits(parts.slice(i), n)))) || rels.some(r => last.endsWith('/' + r))) reportSecret(e.path);
   }
   let previous = '';
   for (const { t: raw, at, fromStart } of words) {
