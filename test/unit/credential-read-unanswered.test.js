@@ -48,7 +48,10 @@ const home = path.join(root, 'profile');
 const ws = path.join(root, 'ws');
 for (const d of [path.join(home, '.claude', 'agents'), path.join(home, '.codex'), path.join(ws, '.rundock'), path.join(root, 'elsewhere')]) fs.mkdirSync(d, { recursive: true });
 const REGISTRY = secretsRegistry(home);
-for (const f of [...REGISTRY, path.join(home, '.claude', 'settings.json'), path.join(home, '.claude', 'agents', 'helper.md'), path.join(ws, 'notes.md'), path.join(root, 'elsewhere', 'notes.md')]) fs.writeFileSync(f, '{}\n');
+for (const f of [...REGISTRY, path.join(home, '.claude', 'settings.json'), path.join(home, '.claude', 'agents', 'helper.md'), path.join(ws, 'notes.md'), path.join(root, 'elsewhere', 'notes.md'), path.join(home, 'notes.md')]) fs.writeFileSync(f, '{}\n');
+// A workspace can be the home folder itself, which then holds every credential
+// file the registry names. Its cases carry this after the mode in their names.
+const AT_HOME = ', workspace at home';
 
 // The shell commands are POSIX spellings, and the recorded answers name POSIX paths.
 const POSIX = process.platform === 'win32' ? 'the shell commands and recorded paths here are POSIX' : false;
@@ -61,8 +64,8 @@ const said = got => (got.answer && got.answer.hookSpecificOutput) || {};
 
 // Each credential file, read every way an agent reads one.
 const fileReads = f => [['Read', { file_path: f }], ['Grep', { pattern: 'token', path: f }], ['Glob', { pattern: '*', path: f }]];
-const shellReads = f => [['Bash', { command: `cat ${f}` }], ['Bash', { command: `head ${f}` }], ['Bash', { command: `cp ${f} ${path.join(ws, 'copy.json')}` }]];
-const everyRead = f => [...fileReads(f), ...(POSIX ? [] : shellReads(f))];
+const shellReads = (f, w = ws) => [['Bash', { command: `cat ${f}` }], ['Bash', { command: `head ${f}` }], ['Bash', { command: `cp ${f} ${path.join(w, 'copy.json')}` }]];
+const everyRead = (f, w = ws) => [...fileReads(f), ...(POSIX ? [] : shellReads(f, w))];
 const cardReads = f => [['Read', { file_path: f }], ['Bash', { command: `cat ${f}` }]];
 
 // Code mode already refused some credential reads with nobody to ask, as a
@@ -72,7 +75,7 @@ const cardReads = f => [['Read', { file_path: f }], ['Bash', { command: `cat ${f
 // files under a runtime home.
 const underRuntimeHome = f => runtimeHomes(home).some(h => f.startsWith(h.root + path.sep));
 const WORDED = {
-  notes: REGISTRY.flatMap(everyRead),
+  notes: REGISTRY.flatMap(f => everyRead(f)),
   code: REGISTRY.filter(underRuntimeHome).flatMap(f => [...fileReads(f), ...(POSIX ? [] : shellReads(f).slice(0, 2))]),
 };
 
@@ -143,13 +146,13 @@ const portOf = s => s.address().port;
 
 // The real hook, given one tool call, as the runtime spawns it. A routine has
 // no conversation id; a conversation has one.
-function run(tool, input, { port, mode, convo = '', env = {}, session = `s${++runs}` }) {
+function run(tool, input, { port, mode, convo = '', env = {}, session = `s${++runs}`, workspace = ws }) {
   return new Promise((resolve) => {
     const proc = spawn(process.execPath, [HOOK], {
-      cwd: ws,
+      cwd: workspace,
       env: {
         ...process.env, HOME: home, USERPROFILE: home, NODE_V8_COVERAGE: '',
-        RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: convo,
+        RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: workspace, RUNDOCK_CONVO_ID: convo,
         RUNDOCK_CODE_MODE: mode === 'code' ? '1' : '', RUNDOCK_EXTRA_DIRS: '', RUNDOCK_HOOK_TOKEN: '',
         RUNDOCK_TEST_SEAMS: '', RUNDOCK_TEST_PLATFORM: '', ...env,
       },
@@ -162,7 +165,7 @@ function run(tool, input, { port, mode, convo = '', env = {}, session = `s${++ru
       const cards = (asked.get(session) || []).map(({ session_id: _drop, ...rest }) => rest);
       resolve(normal({ answer, cards }));
     });
-    proc.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', cwd: ws, session_id: session, tool_name: tool, tool_input: input }));
+    proc.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', cwd: workspace, session_id: session, tool_name: tool, tool_input: input }));
   });
 }
 
@@ -188,7 +191,7 @@ async function assertRefused(cases, mode) {
 describe('with Rundock unreachable, every read of a credential file is refused', () => {
   for (const [label, mode] of MODES) {
     test(`${label}: Read, Grep and Glob of each credential file are refused`, () => assertRefused(REGISTRY.flatMap(fileReads), mode));
-    test(`${label}: cat, head and a copy into the workspace of each credential file are refused`, { skip: POSIX }, () => assertRefused(REGISTRY.flatMap(shellReads), mode));
+    test(`${label}: cat, head and a copy into the workspace of each credential file are refused`, { skip: POSIX }, () => assertRefused(REGISTRY.flatMap(f => shellReads(f)), mode));
   }
   // The tag does not tell a read from a write, so a write is refused too.
   test('Notes mode: a write to a credential file is refused too, in the same words', async () => {
@@ -205,7 +208,7 @@ describe('with Rundock unreachable, every read of a credential file is refused',
 describe('a reply that does not parse refuses every credential read', () => {
   for (const [label, mode] of MODES) {
     test(`${label}: refused in the same words as an unreachable server, but the first sentence`, async () => {
-      const cases = REGISTRY.flatMap(everyRead);
+      const cases = REGISTRY.flatMap(f => everyRead(f));
       const unreachable = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode }));
       const unparsed = await each(cases, ([tool, input]) => run(tool, input, { port: portOf(garbled), mode }));
       cases.forEach((c, i) => {
@@ -236,24 +239,62 @@ describe('the refusal says a sign-in credential is never touched without asking'
   }
 });
 
-// Where this started: with nobody to ask, main's hook allowed a Read of every
-// credential file in Notes mode, and in Code mode of the files under a runtime
-// home, on the reason alone.
-describe('on main, a credential read with nobody to ask was allowed', { skip: POSIX }, () => {
+// WHERE THIS STARTED, by name: main's answer to each read of each credential
+// file with nobody to ask, recorded from main's hook. [file under the home
+// folder, Notes mode, Code mode], where 'allowed' is every read allowed,
+// 'asks' every read refused as a place Code mode asks about every time (a file
+// directly in the home folder is a hidden place there), and 'copy' every read
+// allowed but the copy into the workspace, refused that way as a write.
+const ON_MAIN = [
+  ['.claude/.credentials.json', 'allowed', 'copy'],
+  ['.claude/.config.json', 'allowed', 'copy'],
+  ['.codex/auth.json', 'allowed', 'copy'],
+  ['.claude.json', 'allowed', 'asks'],
+  ['.claude.json.backup', 'allowed', 'asks'],
+];
+const ASKS_EVERY_TIME = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';
+const answered = (decision, reason) => ({ answer: { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: reason } }, cards: [] });
+describe('on main, with nobody to ask, a credential read was allowed unless Code mode asked about it every time', { skip: POSIX }, () => {
+  test('the table names every file the registry names', () => {
+    assert.deepStrictEqual(ON_MAIN.map(([f]) => path.join(home, f)).sort(), [...REGISTRY].sort());
+  });
   for (const [label, mode] of MODES) {
-    test(`${label}: main's hook allowed a Read of each credential file it did not refuse for another reason`, async () => {
-      const cases = REGISTRY.map(f => ['Read', { file_path: f }]);
+    test(`${label}: main's answer to each read of each credential file, by name`, async () => {
+      const cases = ON_MAIN.flatMap(([f, notes, code]) => everyRead(path.join(home, f)).map(c => [c, mode === 'notes' ? notes : code]));
       if (RECORD) {
-        const got = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode }));
-        cases.forEach((c, i) => { recorded[keyOf(label, 'unreachable', c)] = got[i]; });
+        const got = await each(cases, ([[tool, input]]) => run(tool, input, { port: closed, mode }));
+        cases.forEach(([c], i) => { recorded[keyOf(label, 'unreachable', c)] = got[i]; });
         return;
       }
-      const answers = cases.map(c => said(onMain[keyOf(label, 'unreachable', c)]));
-      const allowed = cases.filter((c, i) => answers[i].permissionDecision === 'allow');
-      const expected = mode === 'notes' ? cases : cases.filter(([, input]) => underRuntimeHome(input.file_path));
-      assert.ok(expected.length > 0, 'main allowed some');
-      assert.deepStrictEqual(allowed.map(named), expected.map(named), 'allowed on main');
-      answers.filter(a => a.permissionDecision === 'allow').forEach(a => assert.strictEqual(a.permissionDecisionReason, UNREACHABLE));
+      const refused = answered('deny', unansweredNotice(`${UNREACHABLE} ${ASKS_EVERY_TIME}`, { unattended: true }));
+      for (const [c, onFile] of cases) {
+        const asks = onFile === 'asks' || (onFile === 'copy' && c[1].command && c[1].command.startsWith('cp '));
+        assert.deepStrictEqual(onMain[keyOf(label, 'unreachable', c)], asks ? refused : answered('allow', UNREACHABLE), named(c));
+      }
+    });
+    // With the workspace at the home folder, every credential file is inside it,
+    // and main allowed every read of each, reachable or not.
+    test(`${label}${AT_HOME}: main allowed each read of each credential file, reachable or not`, async () => {
+      const states = [['unreachable', closed, REGISTRY.flatMap(f => everyRead(f, home))], ['reachable', () => portOf(recording), REGISTRY.flatMap(cardReads)]];
+      for (const [state, port, cases] of states) {
+        if (RECORD) {
+          const got = await each(cases, ([tool, input]) => run(tool, input, { port: typeof port === 'function' ? port() : port, mode, workspace: home }));
+          cases.forEach((c, i) => { recorded[keyOf(`${label}${AT_HOME}`, state, c)] = got[i]; });
+          continue;
+        }
+        for (const c of cases) {
+          const got = onMain[keyOf(`${label}${AT_HOME}`, state, c)];
+          assert.ok(got, `${named(c)}: measured on main`);
+          // In Notes mode the server decides a shell command itself, and this one
+          // carries no crossing for it to card; the real server allows a cat.
+          if (mode === 'notes' && state === 'reachable' && c[0] === 'Bash') {
+            assert.ok(got.cards.length === 1 && !got.cards[0].boundary && !got.cards[0].crossings, `${named(c)}: an ordinary request with no crossing`);
+            continue;
+          }
+          assert.strictEqual(said(got).permissionDecision, 'allow', `${named(c)}: ${state}`);
+          assert.deepStrictEqual(got.cards, [], `${named(c)}: no card`);
+        }
+      }
     });
   }
 });
