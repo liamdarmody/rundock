@@ -1495,6 +1495,26 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
     }
   });
 
+  test('a list written before the read deny, trimmed where no build stopped, is left byte for byte', () => {
+    // The trimmed list above keeps the read deny, and a block carrying it is
+    // refused under any list shorter than the one it shipped beside, so only
+    // the written lengths stand between a person's trim and an earlier
+    // build's list when the block has no read deny at all.
+    const ws = tmp('wb-runs-theirs-trim-noread-');
+    open(ws);
+    const settings = read(ws);
+    const deny = settings.sandbox.filesystem.denyWrite;
+    settings.sandbox.filesystem.denyWrite = deny.slice(0, deny.length - 3);
+    delete settings.sandbox.filesystem.denyRead;
+    assert.ok(!scaffold.WRITTEN_DENY_LENGTHS.includes(settings.sandbox.filesystem.denyWrite.length),
+      'fixture sanity: no build stopped at this length');
+    fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
+    const theirs = fs.readFileSync(settingsPath(ws), 'utf8');
+    open(ws);
+    assert.strictEqual(JSON.stringify(read(ws).sandbox), JSON.stringify(JSON.parse(theirs).sandbox),
+      'a trimmed list without the read deny is a person\'s edit, and stays theirs');
+  });
+
   test('opening twice after the upgrade changes nothing the second time', () => {
     const ws = workspaceWithEarlierBlock('wb-cred-twice-');
     open(ws);
