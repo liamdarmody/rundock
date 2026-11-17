@@ -1,7 +1,7 @@
 'use strict';
-// EACH ROUTE TO A SECRET THAT main LEFT WITH NO SECRET CARD NOW CARDS AS ONE.
-// Four routes reached a file the secrets registry names, or a copy of one,
-// with no secret card:
+// FOUR ROUTES TO A SECRET NOW CARD AS ONE, AND WHAT main SHOWED FOR EACH IS
+// CHECKED. Each route reaches a file the secrets registry names, or a copy of
+// one:
 //
 //   1. a workspace at home: a Read of `~/.claude.json`, or `cat .claude.json`;
 //   2. a link in the workspace that leads to a registry file, bare
@@ -11,6 +11,10 @@
 //   4. a runtime home moved by CLAUDE_CONFIG_DIR or CODEX_HOME: a read of the
 //      account or credential file in the variable's folder.
 //
+// Routes 1 and 3 are claimed to have shown no card at all on main, and routes
+// 2 and 4 no secret card. Each row carries its claim, and the claim picks the
+// check made against main's answer.
+//
 // Each case runs through the real hook as its own process, in Notes and in
 // Code mode, against a stand-in server that records each card it is asked to
 // show and refuses it. main's answer is test/fixtures/secret-routes-on-main.json,
@@ -19,17 +23,27 @@
 //   git show origin/main:scripts/permission-hook.js > scripts/.main-hook.js
 //   RUNDOCK_RECORD_HOOK="$PWD/scripts/.main-hook.js" node --test test/unit/secret-routes-on-main.test.js
 //
-// The test holds two things for each case: main's recorded answer has no
-// secret card (the route is reproduced), and this hook cards the same case as
-// a secret, with no folder offered to remember. Two cases did not reproduce:
-// main already resolved a link spelled with a separator, so `cat sub/link.json`
-// and `cat dotclaude/.credentials.json` were secret cards there too. They are
-// kept, recorded, under a heading of their own, so the claim is checked rather
-// than said. From a workspace at home, main asks about `.claude.json` with the
-// card for a credential file the workspace holds, which names no crossing and
-// so no secret: that is the answer recorded for route 1. Paths under the temporary
-// folder are written as `<root>`, and each request's session id, which differs
-// per run, is left out. The home folder is a temporary one, never the real one.
+// Every case is held to this hook carding it as a secret, with no folder
+// offered to remember. What main showed sorts the cases into three groups,
+// each checked against the recording rather than said:
+//
+//   - Reproduced: the bare link and each moved runtime home, in both modes,
+//     where main showed no secret card; and the backups copy in Code mode,
+//     where main showed no card.
+//   - Not reproduced, because main already asked with one card that named no
+//     secret: route 1 in both modes, where main showed its card for a
+//     credential file the workspace holds, and route 3 in Notes mode, where
+//     main showed its card for a path outside the workspace. This hook cards
+//     them as a secret because it must card a registry file wherever the
+//     workspace sits, and the backups folder on every read, not because main
+//     showed no card.
+//   - Not reproduced, because main already resolved a link spelled with a
+//     separator: `cat sub/link.json` and `cat dotclaude/.credentials.json`
+//     were secret cards there too.
+//
+// Paths under the temporary folder are written as `<root>`, and each request's
+// session id, which differs per run, is left out. The home folder is a
+// temporary one, never the real one.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -63,21 +77,43 @@ for (const f of [path.join(movedClaude, '.claude.json'), path.join(movedClaude, 
 
 const POSIX = process.platform === 'win32' ? 'the home folder and links are read the POSIX way here' : false;
 const MODES = [['Notes mode', {}], ['Code mode', { RUNDOCK_CODE_MODE: '1' }]];
+const MODE_ENV = Object.fromEntries(MODES);
+const BOTH = MODES.map(([label]) => label);
+// Each row in each of the modes named, as [mode, row].
+const inModes = (labels, rows) => labels.flatMap(label => rows.map(row => [label, row]));
 const CLAUDE_MOVED = { CLAUDE_CONFIG_DIR: '<root>/moved-claude' };
 const CODEX_MOVED = { CODEX_HOME: '<root>/moved-codex' };
-// [route, tool, input, workspace, variables, the file the card names]
-const ROUTES = [
-  ['a workspace at home', 'Read', { file_path: '<root>/home/.claude.json' }, 'home', {}, '<root>/home/.claude.json'],
-  ['a workspace at home', 'Bash', { command: 'cat .claude.json' }, 'home', {}, '<root>/home/.claude.json'],
-  ['a workspace link to a registry file', 'Bash', { command: 'cat link.json' }, 'ws', {}, '<root>/home/.claude.json'],
-  ['a copy in the backups folder', 'Bash', { command: `cat ~/.claude/backups/${COPY}` }, 'ws', {}, `<root>/home/.claude/backups/${COPY}`],
-  ...[
-    ['<root>/moved-claude/.claude.json', CLAUDE_MOVED],
-    ['<root>/moved-claude/.credentials.json', CLAUDE_MOVED],
-    ['<root>/moved-codex/auth.json', CODEX_MOVED],
-  ].flatMap(([file, vars]) => [
-    ['a runtime home moved by its variable', 'Read', { file_path: file }, 'ws', vars, file],
-    ['a runtime home moved by its variable', 'Bash', { command: `cat ${file}` }, 'ws', vars, file],
+// What a route is claimed to have shown on main: no card at all, or a card
+// that named no secret.
+const NO_CARD = 'no card';
+const NO_SECRET_CARD = 'no secret card';
+// [route, tool, input, workspace, variables, the file the card names, the claim about main]
+// The cases main answered as the claim says.
+const REPRODUCED = [
+  ...inModes(BOTH, [
+    ['a workspace link to a registry file', 'Bash', { command: 'cat link.json' }, 'ws', {}, '<root>/home/.claude.json', NO_SECRET_CARD],
+    ...[
+      ['<root>/moved-claude/.claude.json', CLAUDE_MOVED],
+      ['<root>/moved-claude/.credentials.json', CLAUDE_MOVED],
+      ['<root>/moved-codex/auth.json', CODEX_MOVED],
+    ].flatMap(([file, vars]) => [
+      ['a runtime home moved by its variable', 'Read', { file_path: file }, 'ws', vars, file, NO_SECRET_CARD],
+      ['a runtime home moved by its variable', 'Bash', { command: `cat ${file}` }, 'ws', vars, file, NO_SECRET_CARD],
+    ]),
+  ]),
+  ...inModes(['Code mode'], [
+    ['a copy in the backups folder', 'Bash', { command: `cat ~/.claude/backups/${COPY}` }, 'ws', {}, `<root>/home/.claude/backups/${COPY}`, NO_CARD],
+  ]),
+];
+// The cases where main already asked, with one card that named no secret, so
+// the claim did not hold there.
+const ASKED_ON_MAIN = [
+  ...inModes(BOTH, [
+    ['a workspace at home', 'Read', { file_path: '<root>/home/.claude.json' }, 'home', {}, '<root>/home/.claude.json', NO_CARD],
+    ['a workspace at home', 'Bash', { command: 'cat .claude.json' }, 'home', {}, '<root>/home/.claude.json', NO_CARD],
+  ]),
+  ...inModes(['Notes mode'], [
+    ['a copy in the backups folder', 'Bash', { command: `cat ~/.claude/backups/${COPY}` }, 'ws', {}, `<root>/home/.claude/backups/${COPY}`, NO_CARD],
   ]),
 ];
 // The cases main already carded as a secret.
@@ -141,6 +177,12 @@ function run(hook, tool, input, workspace, env) {
 }
 const anySecret = (cards) => cards.some(card => (card.crossings || []).some(c => c && c.secret));
 const namesSecret = (card, file) => (card.crossings || []).some(c => c.secret === true && c.path === file);
+// Holds a claim about main against main's recorded answer, and throws when
+// main's answer does not match it.
+const CLAIMS = {
+  [NO_CARD]: (main) => assert.strictEqual(main.cards.length, 0, `main sent no card: ${JSON.stringify(main)}`),
+  [NO_SECRET_CARD]: (main) => assert.ok(!anySecret(main.cards), `main sent no secret card: ${JSON.stringify(main)}`),
+};
 // One card, naming the file as a secret, with no folder offered to remember.
 function assertSecretCard(got, tool, file) {
   const o = (got.answer && got.answer.hookSpecificOutput) || {};
@@ -155,21 +197,39 @@ function assertSecretCard(got, tool, file) {
 const titleOf = (label, [name, tool, input, , vars]) => `${label}: ${name}${Object.keys(vars).length ? `, ${Object.keys(vars)[0]} set` : ''}: ${tool} ${JSON.stringify(input)}`;
 const placeOf = (place) => (place === 'home' ? home : ws);
 
-describe('each route main answered with no secret card now cards as a secret, with no folder to remember', { skip: POSIX, concurrency: 8 }, () => {
+describe('each route main answered with no card, or with no secret card, now cards as a secret, with no folder to remember', { skip: POSIX, concurrency: 8 }, () => {
   const onMain = RECORD ? {} : JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
-  for (const [label, modeEnv] of MODES) {
-    for (const route of ROUTES) {
-      const [, tool, input, place, vars, file] = route;
-      test(titleOf(label, route), async () => {
-        const env = { ...modeEnv, ...live(vars) };
-        if (RECORD) { recorded[keyOf(label, route)] = await run(HOOK, tool, live(input), placeOf(place), env); return; }
-        const main = onMain[keyOf(label, route)];
-        assert.ok(main, 'measured on main');
-        assert.ok(main.answer, 'main\'s hook answered');
-        assert.ok(!anySecret(main.cards), `main sent no secret card: ${JSON.stringify(main)}`);
-        assertSecretCard(await run(BRANCH_HOOK, tool, live(input), placeOf(place), env), tool, file);
-      });
-    }
+  for (const [label, route] of REPRODUCED) {
+    const [, tool, input, place, vars, file, claim] = route;
+    test(titleOf(label, route), async () => {
+      const env = { ...MODE_ENV[label], ...live(vars) };
+      if (RECORD) { recorded[keyOf(label, route)] = await run(HOOK, tool, live(input), placeOf(place), env); return; }
+      const main = onMain[keyOf(label, route)];
+      assert.ok(main, 'measured on main');
+      assert.ok(main.answer, 'main\'s hook answered');
+      assert.ok(CLAIMS[claim], `the row names a claim about main: ${claim}`);
+      CLAIMS[claim](main);
+      assertSecretCard(await run(BRANCH_HOOK, tool, live(input), placeOf(place), env), tool, file);
+    });
+  }
+});
+
+describe('a case main already asked about, with one card that named no secret, now cards as a secret, with no folder to remember', { skip: POSIX, concurrency: 8 }, () => {
+  const onMain = RECORD ? {} : JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
+  for (const [label, route] of ASKED_ON_MAIN) {
+    const [, tool, input, place, vars, file, claim] = route;
+    test(titleOf(label, route), async () => {
+      const env = { ...MODE_ENV[label], ...live(vars) };
+      if (RECORD) { recorded[keyOf(label, route)] = await run(HOOK, tool, live(input), placeOf(place), env); return; }
+      const main = onMain[keyOf(label, route)];
+      assert.ok(main, 'measured on main');
+      assert.ok(main.answer, 'main\'s hook answered');
+      assert.strictEqual(main.cards.length, 1, `main sent one card: ${JSON.stringify(main)}`);
+      assert.ok(!anySecret(main.cards), `main's card named no secret: ${JSON.stringify(main)}`);
+      assert.ok(CLAIMS[claim], `the row names a claim about main: ${claim}`);
+      assert.throws(() => CLAIMS[claim](main), assert.AssertionError, `main did not show ${claim}, so the case did not reproduce`);
+      assertSecretCard(await run(BRANCH_HOOK, tool, live(input), placeOf(place), env), tool, file);
+    });
   }
 });
 
