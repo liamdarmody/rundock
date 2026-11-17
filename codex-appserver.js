@@ -746,12 +746,12 @@ class CodexAppServer extends EventEmitter {
   // Each is counted on its own; a turn has had as many summaries as the larger
   // count, and 'compacted' is emitted only when that number grows, so either
   // record, both, or a repeat of one gives one event. A record missing its
-  // ids is not a summary. Turn routing above has already dropped records for
-  // any turn but this one.
+  // ids is not a summary, and every record must name this turn: routing above
+  // drops one naming another turn but lets through one naming none.
   _onCompaction(state, kind, params) {
+    if (typeof params.turnId !== 'string' || params.turnId !== state.turnId) return;
     const c = state.compaction;
     if (kind === 'notice') {
-      if (typeof params.turnId !== 'string' || params.turnId !== state.turnId) return;
       c.notices += 1;
     } else {
       const id = params.item.id;

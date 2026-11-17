@@ -131,6 +131,18 @@ describe('what is never drawn', () => {
     assert.ok(!JSON.stringify(history).includes('SUMMARY-TEXT'));
   });
 
+  test('Codex summary records missing their fields, or naming no turn, draw nothing: the conversation carries on, every time it is reopened', async () => {
+    const convoId = open('cmph-codex-odd');
+    h.writeCodexScenario([{ match: { promptIncludes: 'HIST-CODEX-ODD' }, deltas: ['Still ', 'here.'], compaction: { malformed: true } }]);
+    const since = client.messages.length;
+    await chat(convoId, 'example-codex', 'HIST-CODEX-ODD go');
+    const expected = [['user', 'HIST-CODEX-ODD go'], ['assistant', 'Still here.']];
+    assert.deepStrictEqual(shape(await reopen(convoId)), expected);
+    assert.deepStrictEqual(shape(await reopen(convoId)), expected, 'reopened again');
+    assert.ok(!client.messages.slice(since).some((m) => m._conversationId === convoId && m.subtype === 'compact_boundary'), 'no divider sent to the window');
+    assert.ok(!h.internal.loadTranscript(convoId).some((t) => t.type === 'compaction'), 'none kept');
+  });
+
   test('a conversation never summarised has no divider', async () => {
     const convoId = open('cmph-plain');
     h.writeScenario([{ match: { promptIncludes: 'HIST-PLAIN' }, turn: [{ text: 'Just an answer.' }] }]);

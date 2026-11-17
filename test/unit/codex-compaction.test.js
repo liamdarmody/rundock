@@ -21,6 +21,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { createCodexAppServer } = require('../../codex-appserver.js');
+const P = require('../fixtures/codex-appserver-protocol.js');
 
 const STUB_BIN = path.join(__dirname, '..', 'helpers', 'stub-codex', 'codex');
 const CAPTURES = path.join(__dirname, '..', 'fixtures', 'compaction');
@@ -59,6 +60,26 @@ async function replay(turn) {
   for (const n of turn.notifications) server._onNotification(n.method, n.params);
   return events;
 }
+
+// A turn of Rundock's in the protocol's own shapes, with the given records
+// between the reply's start and its end: for shapes neither source stages.
+const THREAD = 'thread-alpha';
+const TURN = 'turn-alpha';
+function turnWith(records) {
+  return { threadId: THREAD, turnId: TURN, notifications: [
+    P.turnStarted(THREAD, TURN),
+    P.itemStartedAgentMessage(THREAD, TURN, 'msg-alpha'),
+    P.agentMessageDelta(THREAD, TURN, 'msg-alpha', 'Still here.'),
+    ...records,
+    P.itemCompletedAgentMessage(THREAD, TURN, 'msg-alpha', 'Still here.'),
+    P.turnCompleted(THREAD, TURN),
+  ] };
+}
+const withTurnId = (record, turnId) => {
+  const params = { ...record.params, turnId };
+  if (turnId === undefined) delete params.turnId;
+  return { method: record.method, params };
+};
 
 describe('the captured lines', () => {
   test('a summary in the middle of a turn: one start, one finish keyed by the item, between the two parts of the reply', async () => {
@@ -168,6 +189,22 @@ describe('what draws nothing', () => {
     assert.deepStrictEqual(compactions(events), []);
     assert.strictEqual(events.find((e) => e.type === 'text').text, 'Still here.');
     assert.strictEqual(events[events.length - 1].status, 'completed');
+  });
+
+  test('a summary item with its id but no turn named, started or finished, draws nothing, and the reply and the turn carry on', async () => {
+    const started = P.itemStartedContextCompaction(THREAD, TURN, 'cmp-alpha');
+    const finished = P.itemCompletedContextCompaction(THREAD, TURN, 'cmp-alpha');
+    const cases = {
+      'the start alone, no turn id': [withTurnId(started, undefined)],
+      'the finish alone, no turn id': [withTurnId(finished, undefined)],
+      'both, the turn id null': [withTurnId(started, null), withTurnId(finished, null)],
+    };
+    for (const [name, records] of Object.entries(cases)) {
+      const events = await replay(turnWith(records));
+      assert.deepStrictEqual(compactions(events), [], name);
+      assert.strictEqual(events.find((e) => e.type === 'text').text, 'Still here.', name);
+      assert.strictEqual(events[events.length - 1].type, 'done', name);
+    }
   });
 
   test('a reply that spells out the divider\'s words and either runtime\'s summary event is only text', async () => {

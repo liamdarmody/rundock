@@ -281,6 +281,9 @@ function runAppServer() {
       if (cmp.malformed) {
         send({ method: 'item/started', params: { item: { type: 'contextCompaction' }, threadId, turnId } });
         send({ method: 'item/completed', params: { item: { type: 'contextCompaction', id: 7 }, threadId, turnId } });
+        // An item with its id but no turn named.
+        send({ method: 'item/started', params: { item: { type: 'contextCompaction', id: `cmp_${shortId}_unrouted` }, threadId } });
+        send({ method: 'item/completed', params: { item: { type: 'contextCompaction', id: `cmp_${shortId}_unrouted` }, threadId } });
         send({ method: 'thread/compacted', params: { threadId } });
         send({ method: 'thread/compacted', params: { threadId, turnId: 'turn-of-another-thread' } });
         send({ method: 'thread/compacted' });
