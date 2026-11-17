@@ -11,7 +11,7 @@ const path = require('node:path');
 const h = require('../helpers/harness.js');
 const glue = require('../../lib/runtime/codex-glue.js');
 const { agentFile, standardTeam } = require('../helpers/workspace.js');
-const { seedSummarisedConversation, SUMMARY_ONLY_WORD, BOUNDARY_UUID } = require('../helpers/compaction-seed.js');
+const { seedSummarisedConversation, SUMMARY_ONLY_WORD, BOUNDARY_UUID, seedCapturedSession, CAPTURED_SUMMARY_WORD } = require('../helpers/compaction-seed.js');
 
 const CAPTURE = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'compaction', 'claude-compact.jsonl'), 'utf8')
   .trim().split('\n').map((l) => JSON.parse(l));
@@ -90,6 +90,24 @@ describe('a Claude Code conversation', () => {
     assert.deepStrictEqual(shape(history).map((e) => e[0]), ['user', 'assistant', 'divider', 'user', 'assistant']);
     assert.strictEqual(history.messages[2].key, BOUNDARY_UUID);
     assert.ok(!JSON.stringify(history).includes(SUMMARY_ONLY_WORD), 'the summary\'s text is nowhere in the history (main already hides it)');
+  });
+
+  test('from the session file Claude Code kept: the divider where the transcript puts it, and the summary never shown, with the transcript or from the file alone', async () => {
+    const convoId = open('cmph-captured');
+    const { sessionId, boundaryUuid } = seedCapturedSession(h, { convoId, agentId: 'example-writer' });
+    h.internal.convoTranscripts.delete(convoId);
+    const sessions = [{ sessionId, agentId: 'example-writer' }];
+    const history = await reopen(convoId, sessions);
+    assert.deepStrictEqual(shape(history), [
+      ['user', 'Reply with the single word ready.'], ['assistant', 'ready'], ['divider', boundaryUuid, ''],
+      ['user', 'Reply with the single word done.'], ['assistant', 'done'],
+    ]);
+    assert.ok(!JSON.stringify(history).includes(CAPTURED_SUMMARY_WORD), 'with the transcript (main already hides it)');
+    // With no transcript, the file's own lines are the history, and only how
+    // they are marked keeps the summary out.
+    fs.rmSync(path.join(h.workspaceDir, '.rundock', 'transcripts', `${convoId}.json`));
+    h.internal.convoTranscripts.delete(convoId);
+    assert.ok(!JSON.stringify(await reopen(convoId, sessions)).includes(CAPTURED_SUMMARY_WORD), 'from the file alone (main already hides it)');
   });
 });
 

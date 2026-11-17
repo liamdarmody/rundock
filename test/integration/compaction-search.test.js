@@ -7,7 +7,10 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 
 const h = require('../helpers/harness.js');
-const { seedSummarisedConversation, SUMMARY_ONLY_WORD, SHARED_WORD, DIVIDER_WORDS } = require('../helpers/compaction-seed.js');
+const {
+  seedSummarisedConversation, SUMMARY_ONLY_WORD, SHARED_WORD, DIVIDER_WORDS,
+  seedCapturedSession, CAPTURED_SUMMARY_WORD, CAPTURED_PROMPT_WORDS,
+} = require('../helpers/compaction-seed.js');
 
 const probe = require('../../search.js').probeSqlite();
 if (!probe.available) {
@@ -16,19 +19,21 @@ if (!probe.available) {
 }
 
 const CONVO = 'cmp-search';
+const CAPTURED = 'cmp-search-captured';
 let client;
 let seeded;
 
-async function search(query) {
+async function search(query, convoId = CONVO) {
   const since = client.messages.length;
   client.send({ type: 'search_universal', query });
   const { msg } = await client.waitFor((m) => m.type === 'search_universal_results' && m.query === query, { since, label: 'search_universal_results' });
-  return msg.groups.conversations.filter((c) => c.id === CONVO);
+  return msg.groups.conversations.filter((c) => c.id === convoId);
 }
 
 before(async () => {
   await h.boot();
   seeded = seedSummarisedConversation(h, { convoId: CONVO, sessionId: 'sess-cmp-fts' });
+  seedCapturedSession(h, { convoId: CAPTURED });
   client = await h.connect();
 });
 after(async () => h.shutdown());
@@ -48,6 +53,18 @@ describe('the index', () => {
 
   test('never finds it by the divider\'s words (main already behaves this way: they are drawn, never stored)', async () => {
     for (const words of DIVIDER_WORDS) assert.deepStrictEqual(await search(words), [], words);
+  });
+});
+
+describe('the index, over the session file Claude Code kept', () => {
+  test('finds the conversation by the prompts it was sent (main already behaves this way)', async () => {
+    const hits = await search(CAPTURED_PROMPT_WORDS, CAPTURED);
+    assert.strictEqual(hits.length, 1);
+    assert.strictEqual(hits[0].matchType, 'content');
+  });
+
+  test('never finds it by the summary Claude Code wrote', async () => {
+    assert.deepStrictEqual(await search(CAPTURED_SUMMARY_WORD, CAPTURED), []);
   });
 });
 
