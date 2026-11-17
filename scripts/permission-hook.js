@@ -4895,21 +4895,21 @@ fetchAgentNotice((agentNotice) => {
   // crossing check above reads its tags, so a file added to the registry is
   // covered with no path of its own. Only a read: a file tool's, or a word a
   // shell command reads rather than writes, the workspace's own files included.
-  // A write keeps the answer it had. Its sentence comes last, so an access an
-  // earlier case already refuses keeps that case's words.
+  // A write keeps the answer it had. Its sentence comes first, so a credential
+  // read refused for another reason as well still says what it reached.
   const credentialAccess = credentialReads.size > 0 || !!(access && access.credential)
     || boundaryCrossingsFor(access).some(c => c && c.secret && !c.write);
   const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;
   function unanswered(reason) {
     let why;
-    if (answerFile) why = 'This file records your own permission answers or decides what runs, and it is never changed without asking, so it was refused rather than approved on your behalf.';
+    if (credentialAccess) why = 'This reads a sign-in credential, and it is never done without asking, so it was refused rather than approved on your behalf.';
+    else if (answerFile) why = 'This file records your own permission answers or decides what runs, and it is never changed without asking, so it was refused rather than approved on your behalf.';
     else if (keychain) why = 'This reads or changes a password or key stored in your Mac\'s Keychain, and it is never done without asking, so it was refused rather than approved on your behalf.'
       + (verdict.also ? ' Part of it also cannot be undone.' : '');
     else if (alwaysAsks || destructive) why = 'This command cannot be undone, and it is never run without asking, so it was refused rather than approved on your behalf.';
     else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
     else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';
     else if (connectorAlwaysAsks) why = 'A connector action that sends, replies, forwards, deletes or archives is never done without asking, so with no way to ask it was refused rather than approved on your behalf.';
-    else if (credentialAccess) why = 'This reads or changes a sign-in credential, and it is never done without asking, so it was refused rather than approved on your behalf.';
     writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',

@@ -409,7 +409,7 @@ describe('with the server unreachable', { skip: POSIX, concurrency: 8 }, () => {
     test(`${label}: a relative or glob spelling gets the answer the direct one gets`, async () => {
       const direct = await ask('cat ~/.claude/.credentials.json', env, { at: 1 });
       assert.strictEqual(direct.decision, 'deny', 'sanity: the direct spelling is refused');
-      assert.ok(direct.reason.startsWith('Rundock server unreachable. This reads or changes a sign-in credential,'), direct.reason);
+      assert.ok(direct.reason.startsWith('Rundock server unreachable. This reads a sign-in credential,'), direct.reason);
       for (const command of ['cd ~/.claude && cat .credentials.json', 'cat ~/.claude/.cred*', 'cat ~/.claude/*']) {
         const r = await ask(command, env, { at: 1 });
         assert.strictEqual(r.decision, 'deny', `${command}: refused, as the direct spelling is`);

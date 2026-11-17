@@ -31,7 +31,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
-const { secretsRegistry, runtimeHomes } = require('../../scripts/permission-hook.js');
+const { secretsRegistry } = require('../../scripts/permission-hook.js');
 const { unansweredNotice, UNATTENDED_NEXT } = require('../../scripts/refusal-notice.js');
 // A port nothing listens on: Rundock has quit, crashed or is restarting.
 const { closedPort } = require('../helpers/code-mode-fixture.js');
@@ -42,7 +42,7 @@ const FIXTURE = path.join(__dirname, '..', 'fixtures', 'credential-read-on-main.
 
 const UNREACHABLE = 'Rundock server unreachable.';
 const UNPARSED = 'Rundock hook: could not parse server response.';
-const CREDENTIAL = 'This reads or changes a sign-in credential, and it is never done without asking, so it was refused rather than approved on your behalf.';
+const CREDENTIAL = 'This reads a sign-in credential, and it is never done without asking, so it was refused rather than approved on your behalf.';
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'credential-read-unanswered-')));
 const home = path.join(root, 'profile');
@@ -74,16 +74,10 @@ const everyRead = (f, w = ws) => [...fileReads(f), ...(POSIX ? [] : shellReads(f
 const cardReads = f => [['Read', { file_path: f }], ['Bash', { command: `cat ${f}` }]];
 const credentialIn = ([, input]) => input.file_path || input.path || input.command.split(' ')[1];
 
-// Code mode already refused some credential reads with nobody to ask, as a
-// crossing it asks about every time: a file directly in the home folder, which
-// is a hidden place there, and a copy, which writes. Those keep main's words
-// (the table further down), so Code mode's wording cases are the reads of the
-// files under a runtime home.
-const underRuntimeHome = f => runtimeHomes(home).some(h => f.startsWith(h.root + path.sep));
-const WORDED = {
-  notes: REGISTRY.flatMap(f => everyRead(f)),
-  code: REGISTRY.filter(underRuntimeHome).flatMap(f => [...fileReads(f), ...(POSIX ? [] : shellReads(f).slice(0, 2))]),
-};
+// Every read is worded the same, including those Code mode already refused as
+// a crossing it asks about every time: a file directly in the home folder, a
+// hidden place there, and a copy, which writes.
+const WORDED = REGISTRY.flatMap(f => everyRead(f));
 
 const KEYCHAIN = { RUNDOCK_TEST_SEAMS: '1', RUNDOCK_TEST_PLATFORM: 'darwin' };
 const KEYCHAIN_LINE = 'security find-generic-password -w -s example-service';
@@ -132,16 +126,18 @@ const otherReads = (f, w = ws) => [
 ];
 // A folder of credential files copied out, then a folder copied into it.
 const copiedOutThenIn = w => [['Bash', { command: `cp -r ~/.codex ${path.join(w, 'stolen')} && cp -r ${path.join(w, 'y')} ~/.codex` }]];
-// [mode, what, tool, input, env]: credential reads already refused with nobody
-// to ask, for a reason that comes first, keep that reason's words.
-const ALREADY_REFUSED = [
+// [mode, what, tool, input, env]: credential reads main already refused with
+// nobody to ask, for another reason. Still refused, they now say they read a
+// credential.
+const REFUSED_ON_MAIN = [
   ['Code mode', 'a credential file directly in the home folder', 'Read', { file_path: '<root>/profile/.claude.json' }],
   ['Code mode', 'a credential file directly in the home folder', 'Bash', { command: 'cat ~/.claude.json.backup' }],
   ['Code mode', 'a copy of a credential file', 'Bash', { command: 'cp ~/.codex/auth.json ./copy.json' }],
   ...MODES.map(([label]) => [label, 'a copy of a credential file onto an answer file', 'Bash', { command: 'cp ~/.claude/.credentials.json .rundock/permissions.json' }]),
   ...MODES.map(([label]) => [label, 'a credential read beside a Keychain line', 'Bash', { command: `cat ~/.claude/.config.json && ${KEYCHAIN_LINE}` }, KEYCHAIN]),
-  ['Notes mode', 'a delete of a credential file', 'Bash', { command: 'rm ~/.claude/.credentials.json' }],
 ];
+// [mode, what, tool, input]: a credential write main already refused keeps main's words.
+const WRITE_REFUSED_ON_MAIN = [['Notes mode', 'a delete of a credential file', 'Bash', { command: 'rm ~/.claude/.credentials.json' }]];
 
 const asked = new Map();
 let recording;
@@ -214,12 +210,14 @@ async function each(cases, fn) {
   return out;
 }
 
-// Every case refused with Rundock unreachable, listing each one that was not.
+// Every case refused with Rundock unreachable, in a routine, in the words a
+// credential read is refused in, listing each one that was not.
+const REFUSAL = unansweredNotice(`${UNREACHABLE} ${CREDENTIAL}`, { unattended: true });
 async function assertRefused(cases, mode, workspace = ws) {
   assert.ok(cases.length > 0, 'the registry names credential files');
   const got = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode, workspace }));
   const notRefused = cases.map((c, i) => [c, said(got[i])])
-    .filter(([, o]) => o.permissionDecision !== 'deny' || !o.permissionDecisionReason.startsWith(`${UNREACHABLE} `))
+    .filter(([, o]) => o.permissionDecision !== 'deny' || o.permissionDecisionReason !== REFUSAL)
     .map(([c, o]) => `${named(c)}: ${o.permissionDecision}: ${o.permissionDecisionReason}`);
   assert.deepStrictEqual(notRefused, []);
 }
@@ -264,7 +262,7 @@ describe('the refusal says a sign-in credential is never touched without asking'
       ['in a conversation', 'c1', false, 'with no routine wording'],
     ]) {
       test(`${label}, ${who}: the refusal names the credential, ${tail}`, async () => {
-        const cases = WORDED[mode];
+        const cases = WORDED;
         const got = await each(cases, ([tool, input]) => run(tool, input, { port: closed, mode, convo }));
         const reason = unansweredNotice(`${UNREACHABLE} ${CREDENTIAL}`, { unattended });
         assert.strictEqual(reason.endsWith(` ${UNATTENDED_NEXT}`), unattended, 'the routine wording, only in a routine');
@@ -371,10 +369,24 @@ describe('with Rundock unreachable, every other access keeps the answer main giv
   }
 });
 
-describe('a credential read already refused for another reason keeps that reason', { skip: POSIX, concurrency: 8 }, () => {
-  for (const [label, what, tool, input, env] of ALREADY_REFUSED) {
+describe('a credential read main refused for another reason now says it reads a credential', { skip: POSIX, concurrency: 8 }, () => {
+  for (const [label, what, tool, input, env] of REFUSED_ON_MAIN) {
     test(`${label}: ${what} (${tool})`, async () => {
       const got = await run(tool, live(input), { port: closed, mode: label === 'Code mode' ? 'code' : 'notes', env });
+      const key = keyOf(label, 'unreachable', [tool, input]);
+      if (RECORD) { recorded[key] = got; return; }
+      assert.ok(onMain[key], 'measured on main');
+      assert.strictEqual(said(onMain[key]).permissionDecision, 'deny', 'refused on main');
+      assert.notStrictEqual(said(onMain[key]).permissionDecisionReason, REFUSAL, 'in other words on main');
+      assert.deepStrictEqual(got, answered('deny', REFUSAL), 'refused, saying it reads a credential');
+    });
+  }
+});
+
+describe('a credential write main already refused keeps main\'s words', { skip: POSIX }, () => {
+  for (const [label, what, tool, input] of WRITE_REFUSED_ON_MAIN) {
+    test(`${label}: ${what} (${tool})`, async () => {
+      const got = await run(tool, live(input), { port: closed, mode: label === 'Code mode' ? 'code' : 'notes' });
       const key = keyOf(label, 'unreachable', [tool, input]);
       if (RECORD) { recorded[key] = got; return; }
       assert.ok(onMain[key], 'measured on main');
