@@ -280,7 +280,9 @@ const REDIRECT_ATTACHED = /^(\d*|&|\*)(>>?|<)(&\d+|.+)$/;
 //            %NAME% in cmd), outside single quotes
 //   glob     it holds an unquoted *, ? or [
 //   quoted   any part of it was quoted
-function lexWords(segment, dialect = 'bash') {
+// A redirection's target is not a word of the command; `targets`, when given,
+// is a list each target is added to as it is dropped.
+function lexWords(segment, dialect = 'bash', targets = null) {
   const s = String(segment);
   const words = [];
   let w = null;
@@ -329,8 +331,8 @@ function lexWords(segment, dialect = 'bash') {
     // A here-string's `<<<` is kept with its word: the verdict decides what
     // the word is to the command (data, or a script to a shell).
     if (!words[i].quoted && t === '<<<') { out.push(words[i]); continue; }
-    if (!words[i].quoted && REDIRECT_ALONE.test(t)) { i++; continue; }
-    if (!words[i].quoted && REDIRECT_ATTACHED.test(t) && !/^-/.test(t)) continue;
+    if (!words[i].quoted && REDIRECT_ALONE.test(t)) { if (targets && words[i + 1]) targets.push(words[i + 1]); i++; continue; }
+    if (!words[i].quoted && REDIRECT_ATTACHED.test(t) && !/^-/.test(t)) { if (targets) targets.push(words[i]); continue; }
     out.push(words[i]);
   }
   return out;

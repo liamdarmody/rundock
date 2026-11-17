@@ -2743,3 +2743,38 @@ describe('rundock-guide.md: Doc types <, > and & as the characters themselves', 
     assert.doesNotMatch(rule, /iz(?:e|es|ed|ing|ation)\b|yz(?:e|es|ed|ing)\b|\b(?:color|behavior|favor|honor|center|catalog|canceled|traveled|license)\b/i, 'UK spelling');
   });
 });
+
+// ---------------------------------------------------------------------------
+// ARCHITECTURE.md and the hook's own comment: each shell word is also read as
+// bash joins it, and the crossings are the union of both readings
+// ---------------------------------------------------------------------------
+
+describe('each shell word is also read as bash joins it, as the page and the hook say', () => {
+  const HEADING = '**Each word of a shell command is also read as bash joins it.**';
+  const passage = (() => {
+    const at = architecture.indexOf(HEADING);
+    return at < 0 ? '' : architecture.slice(at, architecture.indexOf('\n', at));
+  })();
+
+  test('the page says how a word is joined, that home counts quoted or not, that the readings are a union, and what a variable asks', () => {
+    assert.ok(passage, 'ARCHITECTURE.md has the passage');
+    for (const said of [
+      'the hook reads each word as bash forms it, with quotes and escapes taken out and its pieces joined',
+      '`~/.claude/".credentials.json"` and `"$HOME/.claude"/.credentials.json` are the file they name',
+      '`~`, `$HOME` or `${HOME}` at the start of the joined word is home, quoted or not',
+      'The crossings are the union of both readings, so the joined one only adds',
+      'A word holding a variable or a substitution asks as a credential file when the text after the last one ends in that file\'s path below home, or is its name straight after it',
+      'A line the joined reading cannot read asks',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+  });
+
+  test('the comment above shellPathWords says the same, and no longer that quotes are read as written', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8');
+    const end = src.indexOf('function shellPathWords');
+    const comment = src.slice(src.lastIndexOf('// The same words, each with where it starts', end), end).replace(/\n\/\/ ?/g, ' ');
+    assert.ok(comment.includes('Each word is also read as bash joins it (joinedPathWords)'), comment);
+    assert.ok(comment.includes('the crossings are the union of both readings'), comment);
+    assert.ok(!comment.includes('quotes as written'), 'the old claim is gone');
+    assert.ok(src.includes('function joinedPathWords('), 'the function the comment names is there');
+  });
+});
