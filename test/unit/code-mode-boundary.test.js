@@ -295,8 +295,9 @@ describe('the OS sandbox block is unchanged', () => {
     // Recorded from v0.15.0 with these exact inputs. The one change since is
     // entries APPENDED to denyWrite: the runtimes' credential files, the
     // user-level state file, the paths the runtime acts on outside the
-    // sandbox, and the shell startup files, which narrows what the block
-    // permits and widens nothing.
+    // sandbox, and the shell startup files, then a read deny of the
+    // credential files after them, which narrow what the block permits and
+    // widen nothing.
     assert.deepStrictEqual(block, {
       enabled: false,
       filesystem: {
@@ -319,6 +320,10 @@ describe('the OS sandbox block is unchanged', () => {
           '/Users/someone/.config/fish/config.fish', '/Users/someone/.config/fish/conf.d',
           // Rundock's record of them, and a ZDOTDIR's own when this process has one.
           ...hook.shellStartupEntries('/Users/someone').slice(12).map(e => e.path),
+        ],
+        denyRead: [
+          '/Users/someone/.claude/.credentials.json', '/Users/someone/.claude/.config.json', '/Users/someone/.codex/auth.json',
+          '/Users/someone/.claude.json', '/Users/someone/.claude.json.backup',
         ],
       },
     }, 'the development paths are a card rule, not a widening of what the operating system allows');

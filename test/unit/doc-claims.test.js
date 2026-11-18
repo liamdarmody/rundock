@@ -2882,3 +2882,85 @@ describe('a copy of a secret, a moved runtime home and the workspace\'s own loca
     } finally { fs.rmSync(p.base, { recursive: true, force: true }); }
   });
 });
+
+// THE SANDBOX REFUSES READS OF THE SIGN-IN FILES WHERE IT IS ON. Both
+// documents said it refuses writes only, which stopped being true when the
+// block gained a read deny from the same registry. Each claim is read beside
+// the block it describes, and the limits are pinned with it.
+describe('ARCHITECTURE.md and SECURITY.md: the sandbox refuses reads of the sign-in files where it is on, and the card alone guards them where it is off', () => {
+  const { sandboxSettings } = require('../../lib/workspace/scaffold.js');
+  const { secretsRegistry } = require('../../scripts/permission-hook.js');
+  const HOME = '/Users/someone';
+  const WS = '/Users/someone/ws';
+  const security = fs.readFileSync(path.join(ROOT, 'SECURITY.md'), 'utf-8');
+  const model = security.slice(security.indexOf('## What protects what'), security.indexOf('## Accepted dependency advisories'));
+  const passage = architecture.slice(architecture.indexOf('<!-- boundary-registry-start -->'), architecture.indexOf('<!-- boundary-registry-end -->'));
+  const start = architecture.indexOf('**The guarantee is the operating-system row, and only that row.**');
+  const guarantee = architecture.slice(start, architecture.indexOf('\n', start));
+
+  test('where the sandbox is on, both say it refuses a read of each sign-in file, as the block does', () => {
+    const on = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], 'knowledge');
+    assert.strictEqual(on.enabled, true, 'sanity: the Notes mode block turns the sandbox on');
+    assert.deepStrictEqual(on.filesystem.denyRead, secretsRegistry(HOME), 'sanity: and refuses reads of every sign-in file');
+    assert.match(guarantee, /\*\*governs writes and not reads\*\*, with one exception: a `denyRead` list/,
+      'the guarantee names the one read the operating system refuses');
+    assert.match(passage, /A read of each, which is all that stealing a token takes, is refused there too/,
+      'the registry passage says the operating system refuses the read as well as the write');
+    assert.doesNotMatch(passage, /The deny covers writes only/, 'and no longer says the deny covers writes only');
+    assert.match(model, /in Notes mode, or wherever the sandbox is on, they refuse a read of the runtimes' sign-in files as well as a write/,
+      'the permission model says the same');
+  });
+
+  test('where it is off, as in Code mode, both say the card alone guards those reads', () => {
+    const off = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], 'code');
+    assert.strictEqual(off.enabled, false, 'sanity: the Code mode block turns nothing on');
+    assert.match(passage, /the permission card alone holds the line for reads and writes/,
+      'the registry passage says the card alone guards where no block runs');
+    assert.match(model, /Code mode without the sandbox relies on the card alone for those reads/,
+      'the permission model says Code mode relies on the card alone');
+  });
+
+  test('both name the known limit, a runtime that drops the key, and say the hard-link route is closed as measured', () => {
+    const on = sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], 'knowledge');
+    assert.ok(secretsRegistry(HOME).every((file) => on.filesystem.denyRead.includes(file) && on.filesystem.denyWrite.includes(file)),
+      'sanity: each sign-in file is in both denies');
+    for (const file of ['credential-reads-real-sandbox.test.js', 'credential-reads-claude-code.test.js']) {
+      assert.ok(fs.existsSync(path.join(ROOT, 'test', 'integration', file)), `the measurement the documents cite is there: ${file}`);
+    }
+    assert.match(passage, /One limit is known: the read deny holds only while the installed runtime honors `denyRead` \(measured on Claude Code [\d.]+; Rundock pins no version/,
+      'the registry passage names a runtime that drops the key as the known limit');
+    assert.match(passage, /A hard link to a credential file is a closed route in the measured versions: under the shipped block a sandboxed `ln` of one is refused, with the write deny alone it is still refused, and with neither deny the link is made \(`test\/integration\/credential-reads-real-sandbox\.test\.js` and `test\/integration\/credential-reads-claude-code\.test\.js`, recorded in `docs\/evidence\/credential-reads-real-sandbox-evidence\.md`\)/,
+      'and gives the three measured hard-link results, citing both runs');
+    assert.doesNotMatch(passage, /claims neither outcome/, 'and no longer leaves the hard link unclaimed');
+    assert.doesNotMatch(passage, /\beither deny/, 'and claims nothing about the read deny alone');
+    assert.match(model, /a runtime version that stops honoring the sandbox's read rule \(Rundock pins none\)/,
+      'the permission model names a runtime that drops the key as a known limit');
+    assert.match(model, /A hard link to a sign-in file is no way past them in the versions measured: as shipped the sandbox refuses a sandboxed `ln` of one, with its write rule alone it still refuses, and with neither rule the link is made\./,
+      'and gives the three measured hard-link results');
+    assert.doesNotMatch(model, /not claimed either way/, 'and no longer leaves the hard link unclaimed');
+    assert.doesNotMatch(model, /either of its deny rules/, 'and claims nothing about the read rule alone');
+  });
+
+  test('the evidence the documents cite records the hard link under all three blocks, and its line citations point where it says', () => {
+    const evidence = fs.readFileSync(path.join(ROOT, 'docs', 'evidence', 'credential-reads-real-sandbox-evidence.md'), 'utf-8');
+    assert.match(evidence, /^\| As written \(both runs\) \| refused, naming the credential file \| no \|/m, 'refused under the block as written');
+    assert.match(evidence, /^\| Without `denyRead` \| refused, naming the destination \| no \|/m, 'refused by the write deny alone');
+    assert.match(evidence, /^\| Without either deny's credential entries \| exit 0 \| yes, link count 2 \|/m, 'made with both taken out');
+    assert.match(evidence, /^So the route is closed in the measured versions: under the block as written a sandboxed `ln` of each file is refused, with the write deny alone it is still refused, and with neither deny the link is made\. The block with the read deny alone was not run\.$/m,
+      'and its summary gives only the three measured results');
+    assert.doesNotMatch(evidence, /either deny refuses it on its own/, 'and claims nothing about the read deny alone');
+    const live = fs.readFileSync(path.join(ROOT, 'test', 'integration', 'credential-reads-claude-code.test.js'), 'utf-8').split('\n');
+    const cited = [
+      ['lines 63 to 67', 63, /sandboxSettings\(ws, 'darwin', home, undefined, \[\], 'knowledge'\)/],
+      ['lines 63 to 67', 67, /'settings\.local\.json'\), `\$\{JSON\.stringify\(\{ sandbox: block \}/],
+      ['lines 68 and 132 to 134', 68, /'settings\.json'\), `\$\{JSON\.stringify\(\{ sandbox: \{ filesystem: \{ denyRead: \[other\] \} \} \}/],
+      ['lines 68 and 132 to 134', 132, /test\('a file named only in the other project layer\\'s read deny is refused too/],
+      ['lines 117 to 122', 117, /test\('each credential file is refused for reads, by its plain path, a quoted one, and a link in the workspace'/],
+      ['lines 117 to 130', 124, /test\('a file beside each, which no list names, reads'/],
+    ];
+    for (const [words, line, re] of cited) {
+      assert.ok(evidence.includes(words), `the evidence cites ${words}`);
+      assert.match(live[line - 1], re, `and line ${line} of the Claude Code test is what it cites`);
+    }
+  });
+});
