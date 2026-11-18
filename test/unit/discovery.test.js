@@ -539,6 +539,104 @@ describe('rosters and system prompt', () => {
     }
   });
 
+  // THE ROUTINES RULE. Asked to schedule one of its skills, a specialist wrote
+  // out a `routines:` block, said only Doc changes agent files so the person
+  // should ask Doc to add it, then said to approve it. The Add routine form
+  // does all of that in one step: it schedules one of the agent's skills,
+  // writes the entry into the agent file, and the routine is approved when it
+  // is saved. Nothing the agents were told named the form, so every agent is
+  // now told, in an entry of its own beside the team-files rule.
+  const ROUTINE_AUDIENCES = [
+    ['chief-of-staff', 'an orchestrator'],
+    ['content-lead', 'a lead'],
+    ['content-analyst', 'a specialist'],
+    ['default', 'the default agent'],
+    ['rundock-guide', 'Doc'],
+  ];
+  const NOT_DOC = ROUTINE_AUDIENCES.filter(([id]) => id !== 'rundock-guide');
+  function routinePrompts() {
+    useWorkspace({ agents: standardTeam(), claudeMd: '# Test Workspace\n' });
+    const agents = srv.discoverAgents();
+    return (id) => {
+      const agent = agents.find(a => a.id === id);
+      assert.ok(agent, `${id} is on the roster`);
+      return srv.buildSystemPrompt(agent);
+    };
+  }
+  // The rule is the line under its own heading, straight after the team-files
+  // rule and apart from it, so the team-files rule's own text is untouched.
+  function routinesRuleOf(prompt, label) {
+    const lines = prompt.split('\n');
+    const files = lines.indexOf('FILES IN .claude/ DIRECTORY:');
+    assert.ok(files > -1, `${label}: the team-files heading is there`);
+    assert.strictEqual(lines[files + 3], 'ROUTINES:', `${label}: the routines rule sits next to the team-files rule`);
+    assert.doesNotMatch(lines[files + 1], /routine/i, `${label}: the routines rule is not folded into the team-files rule`);
+    return lines[files + 4];
+  }
+
+  test('buildSystemPrompt: every agent, Doc included, is told a routine is made with Add routine and approved when it is saved', () => {
+    const promptOf = routinePrompts();
+    for (const [id, label] of ROUTINE_AUDIENCES) {
+      const rule = routinesRuleOf(promptOf(id), label);
+      assert.match(rule, /made by the person with Add routine/, `${label} is told the person makes a routine, with the form`);
+      assert.match(rule, /on the agent's page/, `${label} is told the form is on the agent's page`);
+      assert.match(rule, /under Routines in the rail/, `${label} is told the form is under Routines in the rail`);
+      assert.match(rule, /the form schedules one of that agent's skills/, `${label} is told what the form schedules`);
+      assert.match(rule, /writes the routine into the agent file/, `${label} is told the form writes the routine into the agent file`);
+      assert.match(rule, /the routine is approved when it is saved/, `${label} is told a routine made there is approved when it is saved`);
+      // The form has no prompt field, and nothing here may suggest one.
+      assert.doesNotMatch(rule, /prompt/i, `${label} is told nothing about a prompt the form does not ask for`);
+      const sentences = rule.split(/[.!?](?:\s|$)/).filter(s => s.trim());
+      assert.ok(sentences.length <= 3, `${label}: the rule is at most three sentences, not ${sentences.length}`);
+    }
+  });
+
+  test('buildSystemPrompt: every agent but Doc points the person to Add routine, and sends only a routine that runs no skill to Doc', () => {
+    const promptOf = routinePrompts();
+    for (const [id, label] of NOT_DOC) {
+      const rule = routinesRuleOf(promptOf(id), label);
+      assert.match(rule, /When someone wants a routine, point them to Add routine/, `${label} points the person to the form`);
+      assert.match(rule, /do not write a `routines:` block, give one to paste, or send them to Doc for it/,
+        `${label} is told not to write a block, hand one over to paste, or send the person to Doc for it`);
+      assert.match(rule, /A routine that runs no skill is the one case the form cannot make: that one is an agent-file change and goes to Doc like any other/,
+        `${label} sends only a routine that runs no skill to Doc, the way any agent-file change goes`);
+      assert.doesNotMatch(rule, /yourself/, `${label} is not told to write a block itself`);
+      assert.doesNotMatch(rule, /wait in Routines/, `${label} is not given Doc's wording`);
+    }
+  });
+
+  test('buildSystemPrompt: Doc points to Add routine first, writes a block only for a routine that runs no skill, and says it waits for approval', () => {
+    const rule = routinesRuleOf(routinePrompts()('rundock-guide'), 'Doc');
+    const form = rule.indexOf('When someone wants a routine, point them to Add routine rather than writing a `routines:` block');
+    const written = rule.indexOf('Write one yourself only for a routine that runs no skill');
+    assert.ok(form > -1, 'Doc points the person to the form rather than writing a block');
+    assert.ok(written > form, 'and only after that writes one, and only for a routine that runs no skill');
+    assert.match(rule, /tell them it will wait in Routines until they approve it/,
+      'Doc tells the person a block it writes waits in Routines for their approval');
+    assert.doesNotMatch(rule, /send them to Doc/, 'Doc is not told to send the person to Doc');
+    assert.doesNotMatch(rule, /do not write a `routines:` block/i, 'Doc is not given the wording that forbids the one block it writes');
+  });
+
+  test('buildSystemPrompt: the team-files rule is left exactly as it was, for Doc and for everyone else', () => {
+    // Byte for byte: the routines rule sits beside the team-files rule and
+    // changes none of it. The hashes are of the rule's text before the
+    // routines rule was added, one per variant: Doc's, the orchestrator's,
+    // and everyone else's. A deliberate change to the rule updates its hash
+    // in the same change, where a reviewer sees it.
+    const crypto = require('node:crypto');
+    const hashOf = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+    const DOC = '23baea122cb95cd55ad458cdf78ff1d4e272ac5a5e2409e1aecf93d7179c1d1d';
+    const ORCHESTRATOR = '4069db9c54ac6723a2fd585535497f4b321deedb568b540364dd3102b6bfad61';
+    const EVERYONE_ELSE = 'e8b539a5faad687c3d388bd43d9078501a5700c05e4f8d47f8cf7744f054cbe2';
+    const expected = { 'rundock-guide': DOC, 'chief-of-staff': ORCHESTRATOR, 'content-lead': EVERYONE_ELSE, 'content-analyst': EVERYONE_ELSE, default: EVERYONE_ELSE };
+    const promptOf = routinePrompts();
+    for (const [id, label] of ROUTINE_AUDIENCES) {
+      const lines = promptOf(id).split('\n');
+      const rule = lines[lines.indexOf('FILES IN .claude/ DIRECTORY:') + 1];
+      assert.strictEqual(hashOf(rule), expected[id], `${label}: the team-files rule is byte for byte what it was`);
+    }
+  });
+
   test('buildSystemPrompt: agents are told the truth about connectors, which is now that the tab exists', () => {
     // Live finding (issue #70): when a connector's authorisation lapses its
     // tools are silently absent and the agent improvises, and one user was
