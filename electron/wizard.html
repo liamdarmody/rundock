@@ -380,26 +380,42 @@
     }
 
     async function checkSignedIn() {
+      const opens = signInOpens;
       const btn = document.getElementById('btn-signin-done');
       btn.disabled = true;
       btn.textContent = 'Checking...';
       await checkStatus(true);
+      // A sign-in that opened while this check ran owns the button now.
+      if (opens !== signInOpens) return;
       btn.disabled = false;
       btn.textContent = "I've finished signing in";
     }
 
+    // Each check is numbered as it starts. A failing answer from a check that
+    // was already running when a check passed, or when the person last asked,
+    // is out of date and changes nothing.
+    let checksStarted = 0;
+    let passedAt = 0;
+    let askedAt = 0;
+    function outOfDate(started) {
+      return started <= passedAt || started < askedAt;
+    }
+
     async function checkStatus(asked) {
       const opens = signInOpens;
+      const started = ++checksStarted;
+      if (asked === true) askedAt = started;
       let runtimes;
       try {
         runtimes = await window.electronAPI.checkRuntimes();
       } catch {
         // A check that could not run says nothing about sign-in, and never
         // shows the error's text.
-        if (asked === true) showAsked(opens, { kind: 'no-reason' });
+        if (asked === true && !outOfDate(started)) showAsked(opens, { kind: 'no-reason' });
         return false;
       }
       const result = runtimes.claude;
+      if (result.status !== 'ready' && outOfDate(started)) return false;
       const codex = runtimes.codex || { installed: false, authenticated: false };
 
       const signinBtn = document.getElementById('btn-signin');
@@ -440,6 +456,7 @@
       }
 
       if (result.status === 'ready') {
+        passedAt = checksStarted;
         updateStep('install', 'done');
         updateStep('auth', 'done');
         showReason(null);
@@ -475,7 +492,10 @@
         showReason(null);
         btn.disabled = true;
         btn.textContent = 'Waiting for sign-in...';
-        document.getElementById('btn-signin-done').style.display = 'inline-block';
+        const askBtn = document.getElementById('btn-signin-done');
+        askBtn.style.display = 'inline-block';
+        askBtn.disabled = false;
+        askBtn.textContent = "I've finished signing in";
         const hint = document.getElementById('auth-hint');
         if (hint) hint.innerHTML =
           "A terminal opened with Claude's sign-in. Follow its prompts: press Enter when asked, "
