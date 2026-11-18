@@ -11,6 +11,8 @@ const { decideUpdateUi } = require('./update-state.js');
 const { reconcileOnLaunch, recordDownloaded } = require('./update-launches.js');
 const { wizardSize } = require('./wizard-size.js');
 const { installWindowKey, debugSwitchIn } = require('./window-key.js');
+const { createShellConfigDir } = require('./shell-config-dir.js');
+const { createSignInReason } = require('./sign-in-reason.js');
 
 // A shipped build never starts with a debugging port open: whatever connected
 // to it could drive this process and read the key its window is given
@@ -55,6 +57,19 @@ if (userData.kind === 'path') {
   try { fs.mkdirSync(userData.path, { recursive: true }); } catch { /* setPath reports it */ }
   app.setPath('userData', userData.path);
 }
+
+// The packaged app opened from the Finder starts without the login shell's
+// CLAUDE_CONFIG_DIR, and Claude Code then cannot find its sign-in. Every
+// Claude sign-in check goes through this: one that fails reads the login shell
+// once, and runs again if a value was taken (electron/shell-config-dir.js).
+const shellConfigDir = createShellConfigDir({
+  isPackaged: app.isPackaged, platform: process.platform, env: process.env, appData: app.getPath('userData'),
+});
+
+// Why the last Claude sign-in check failed, cleaned in this process before the
+// wizard may show it (electron/sign-in-reason.js). The check still answers
+// only true or false, so the routing above decides exactly as before.
+const signInReason = createSignInReason();
 
 // ===== SINGLE INSTANCE =====
 
@@ -141,11 +156,17 @@ function ensureClaudeOnUserPath(binDir) {
   }
 }
 
+// Every stream is piped, so the check's output reaches only signInReason and
+// never this process's own stderr. stdio: 'pipe' changes where stderr goes,
+// not how much is held: with no stdio option execSync pipes stderr too, holds
+// it under the same maxBuffer, and only then writes it to this stderr.
 function isClaudeAuthenticated() {
   try {
-    execSync('claude --print "test" --output-format text', { timeout: 15000 });
+    execSync('claude --print "test" --output-format text', { timeout: 15000, stdio: 'pipe' });
+    signInReason.passed();
     return true;
-  } catch {
+  } catch (err) {
+    signInReason.failed(err);
     return false;
   }
 }
@@ -248,14 +269,18 @@ function showWizard() {
     // Codex detection rides alongside so the wizard can adapt honestly to what
     // the user has (a Codex user is told why Claude Code is still needed, and
     // can sign in to Codex as an optional final step).
-    ipcMain.handle('wizard-check-runtimes', () => {
-      const claude = (() => {
+    ipcMain.handle('wizard-check-runtimes', async () => {
+      const claude = await (async () => {
         const bin = findClaude();
         if (!bin) return { status: 'not-installed' };
         // Claude is installed: make sure its directory is on the user's PATH so
         // they can simply type `claude` in a new terminal to sign in.
         ensureClaudeOnUserPath(path.dirname(bin));
-        if (!isClaudeAuthenticated()) return { status: 'not-authenticated' };
+        // Nothing runs between the check's last run and this read, so the
+        // reason is that run's own.
+        if (!(await shellConfigDir.checkAuthenticated(isClaudeAuthenticated))) {
+          return { status: 'not-authenticated', reason: signInReason.last() };
+        }
         return { status: 'ready' };
       })();
       return { claude, codex: detectCodexForWizard() };
@@ -804,6 +829,9 @@ app.whenReady().then(async () => {
   // small API call, so we run it only until setup has been verified once
   // (cached via a marker in userData); after that we trust it and let the
   // in-app 401 recovery card handle any later token expiry.
+  // Once a value read from the login shell has signed Claude Code in, later
+  // launches read it here, before anything starts Claude Code.
+  await shellConfigDir.atLaunch();
   console.log('[Electron] Checking for Claude Code...');
   const claudeBin = findClaude();
   console.log('[Electron] Claude binary:', claudeBin || 'not found');
@@ -816,13 +844,13 @@ app.whenReady().then(async () => {
   // (module loading, embedded server, window creation) runs for real, which
   // is the point: a packaging mistake that breaks any of it must fail here.
   const isSmokeTest = process.env.RUNDOCK_SMOKE_TEST === '1';
-  const needsWizard = !isSmokeTest && (!claudeBin || (!setupVerified && !isClaudeAuthenticated()));
+  const needsWizard = !isSmokeTest && (!claudeBin || (!setupVerified && !(await shellConfigDir.checkAuthenticated(isClaudeAuthenticated))));
 
   if (needsWizard) {
     console.log('[Electron] Showing first-run wizard (Claude missing or not signed in)');
     await showWizard();
     // Only proceed if setup is genuinely complete: installed AND authenticated.
-    if (!findClaude() || !isClaudeAuthenticated()) {
+    if (!findClaude() || !(await shellConfigDir.checkAuthenticated(isClaudeAuthenticated))) {
       app.quit();
       return;
     }
@@ -844,7 +872,7 @@ app.whenReady().then(async () => {
   // and nothing else is accepted: it never holds a browser's token or cookie.
   require('../lib/auth/index.js').setDesktopOnly(true);
   const { startServer } = require('../server.js');
-  serverPort = await startServer({ port: 0 });
+  serverPort = await startServer({ port: 0, signInRetry: (check) => shellConfigDir.checkConnection(check) });
   console.log('[Electron] Server running on port:', serverPort);
 
   // Open the main window

@@ -28,6 +28,8 @@ const clients = [];
  * @param {object} [opts.agents] - agent fixture map (default standardTeam)
  * @param {object} [opts.workspaceOpts] - extra makeWorkspace options
  * @param {object} [opts.env] - extra process.env entries set BEFORE require
+ * @param {object} [opts.startOptions] - extra startServer options, as the
+ *   desktop passes them
  * @param {boolean} [opts.workspace=true] - point the server at the fixture
  *   before it listens. Pass false to boot with NO workspace: the state a first
  *   run starts in, where the folder is chosen afterwards through the interface.
@@ -90,7 +92,7 @@ async function boot(opts = {}) {
   assert.strictEqual(codexResolved, path.join(CODEX_STUB_DIR, 'codex'),
     `stub codex not resolved (got: ${codexResolved}). Refusing to run against a real binary.`);
 
-  port = await srv.startServer({ port: 0 });
+  port = await srv.startServer({ port: 0, ...(opts.startOptions || {}) });
   return { internal, port, workspaceDir };
 }
 

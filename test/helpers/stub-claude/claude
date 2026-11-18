@@ -109,15 +109,35 @@ if (argv.includes('--version')) {
 // reconnect card's "I've reconnected" runs): answer at once, without a
 // scenario or a log line. A test signs the stub out with STUB_CLAUDE_SIGNED_OUT,
 // or fails the turn for a reason that is not the sign-in with
-// STUB_CLAUDE_CHECK_FAILS.
+// STUB_CLAUDE_CHECK_FAILS. STUB_CLAUDE_SIGNED_IN_WITH signs it in only when it
+// is started with that CLAUDE_CONFIG_DIR, as Claude Code finds its sign-in.
 if (argv.includes('--print') && argv[argv.indexOf('--output-format') + 1] === 'text') {
-  if (process.env.STUB_CLAUDE_SIGNED_OUT === '1') {
+  const signedInWith = process.env.STUB_CLAUDE_SIGNED_IN_WITH;
+  if (process.env.STUB_CLAUDE_SIGNED_OUT === '1' || (signedInWith && process.env.CLAUDE_CONFIG_DIR !== signedInWith)) {
     process.stderr.write('Invalid API key. Please run /login\n');
     process.exit(1);
   }
   if (process.env.STUB_CLAUDE_CHECK_FAILS === '1') {
     process.stderr.write('API Error: Connection error.\n');
     process.exit(1);
+  }
+  // STUB_CLAUDE_CHECK_HANGS holds the check unanswered, as a Claude Code that
+  // never replies, until whatever started it ends it. STUB_CLAUDE_CHECK_STDERR
+  // and STUB_CLAUDE_CHECK_STDOUT (base64, so any bytes can be given) fail it
+  // with that output, and STUB_CLAUDE_CHECK_EXIT gives its code (1 if unset).
+  // STUB_CLAUDE_CHECK_STDERR_TIMES writes the stderr that many times in a row,
+  // for more output than one environment variable can carry; every byte is
+  // written before the exit, however much each write takes.
+  if (process.env.STUB_CLAUDE_CHECK_HANGS === '1') {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);
+    process.exit(0);
+  }
+  const said = (name) => Buffer.from(process.env[name] || '', 'base64');
+  if ('STUB_CLAUDE_CHECK_STDERR' in process.env || 'STUB_CLAUDE_CHECK_STDOUT' in process.env || process.env.STUB_CLAUDE_CHECK_EXIT) {
+    const stderr = Buffer.concat(Array(Number(process.env.STUB_CLAUDE_CHECK_STDERR_TIMES || 1)).fill(said('STUB_CLAUDE_CHECK_STDERR')));
+    for (let at = 0; at < stderr.length;) at += fs.writeSync(2, stderr, at);
+    fs.writeSync(1, said('STUB_CLAUDE_CHECK_STDOUT'));
+    process.exit(Number(process.env.STUB_CLAUDE_CHECK_EXIT || 1));
   }
   process.stdout.write('ok\n');
   process.exit(0);
@@ -156,6 +176,8 @@ try {
       RUNDOCK_HOOK_TOKEN: process.env.RUNDOCK_HOOK_TOKEN || null,
       // The workspace the permission hook is told it is answering for.
       RUNDOCK_WORKSPACE: process.env.RUNDOCK_WORKSPACE || null,
+      // Where this copy looks for its sign-in.
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || null,
     },
     // The folder this process was started in, which is also where this log
     // and the scenario are read from.

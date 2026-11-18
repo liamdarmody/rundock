@@ -124,6 +124,7 @@ const NOT_CLAUDE = [
   { at: 'electron/main.js | launchCodexSignIn | spawn(`start "Sign in to Codex" cmd /k ""${bin}" login"`)', runs: "Codex's own sign-in, on Windows" },
   { at: "electron/main.js | launchCodexSignIn | spawn('open')", runs: "Codex's own sign-in, on macOS" },
   { at: "electron/main.js | launchCodexSignIn | spawn('x-terminal-emulator')", runs: "Codex's own sign-in, on Linux" },
+  { at: 'electron/shell-config-dir.js | readShellConfigDir | spawn(shell)', runs: "the person's login shell, once, running the app's own binary as Node to print CLAUDE_CONFIG_DIR" },
   { at: "lib/packages/extension-source.js | acquireWithGit | execFileSync('git')", runs: 'git, to fetch an extension' },
   { at: "lib/packages/extension-source.js | listRefsWithGit | execFileSync('git')", runs: "git, to list an extension's tags" },
   { at: "lib/packages/extension-source.js | listTagCommitsWithGit | execFile('git')", runs: "git, to list an extension's tag commits" },
@@ -139,7 +140,7 @@ const NOT_CLAUDE = [
 // The files that load child_process at all. A new one fails here, so a launch
 // through a name this scan does not know cannot arrive unseen with it.
 const LOADS_CHILD_PROCESS = [
-  'codex-appserver.js', 'codex.js', 'electron/main.js', 'lib/delegation/engine.js', 'lib/packages/extension-source.js',
+  'codex-appserver.js', 'codex.js', 'electron/main.js', 'electron/shell-config-dir.js', 'lib/delegation/engine.js', 'lib/packages/extension-source.js',
   'lib/protocol/handlers/files.js', 'lib/protocol/handlers/workspace.js', 'lib/runtime/claude-console.js', 'lib/runtime/claude.js',
   'scripts/code-mode-git.js', 'server.js',
 ];
