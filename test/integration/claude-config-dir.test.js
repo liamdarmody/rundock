@@ -89,6 +89,36 @@ async function machine() {
   assert.strictEqual(res.status, 200);
   return res.json();
 }
+// Lists a conversation for this session, and returns how to put the list back.
+function listConversation(id, sessionId) {
+  const file = path.join(h.workspaceDir, '.rundock', 'conversations.json');
+  const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : null;
+  const convos = original ? JSON.parse(original) : [];
+  convos.push({ id, agentId: 'chief-of-staff', sessionId, sessionIds: [], title: 'Folder change', status: 'active', createdAt: '2026-07-01T09:59:00.000Z', lastActiveAt: '2026-07-01T10:01:00.000Z' });
+  write(file, JSON.stringify(convos, null, 2));
+  return () => { if (original === null) fs.rmSync(file, { force: true }); else fs.writeFileSync(file, original); };
+}
+// The conversations the palette's search finds by what was said in them.
+async function contentHits(query) {
+  const since = client.messages.length;
+  client.send({ type: 'search_universal', query });
+  const { msg } = await client.waitFor((m) => m.type === 'search_universal_results' && m.query === query, { since, label: 'search_universal_results' });
+  return msg.groups.conversations.filter((c) => c.matchType === 'content').map((c) => c.id);
+}
+// Every path under root the server asks the filesystem about while fn runs.
+async function asked(root, fn) {
+  const seen = [];
+  const names = ['existsSync', 'statSync', 'readdirSync'];
+  const real = names.map((n) => fs[n]);
+  names.forEach((n, i) => {
+    fs[n] = function (p, ...rest) {
+      if (typeof p === 'string' && p.startsWith(root)) seen.push(`${n} ${p}`);
+      return real[i].call(this, p, ...rest);
+    };
+  });
+  try { await fn(); } finally { names.forEach((n, i) => { fs[n] = real[i]; }); }
+  return seen;
+}
 
 // Where the record saw Claude Code keep its account file: at the top of the
 // variable's folder, and nothing in home.
@@ -190,6 +220,109 @@ describe('the retry', () => {
         memo.ts = 0;
         assert.strictEqual(internal.resolveSessionPathCached('sess-retry'), real);
       });
+    } finally { tidy(); }
+  });
+});
+
+// A remembered session path belongs to the folder it was found in. Each test
+// remembers one in a folder, then moves the folder in-process, and asks again
+// at once: nothing waits out the miss window.
+describe('a remembered session path follows a folder change', () => {
+  const internal = () => h.internal;
+
+  test('a session remembered from home is answered, and searched, from the moved folder once the variable is set', async () => {
+    const id = 'sess-memo-set';
+    const moved = makeTempDir('config-dir-memo-set-');
+    const real = path.join(moved, 'projects', hash(), `${id}.jsonl`);
+    const decoy = path.join(homeClaude(), 'projects', hash(), `${id}.jsonl`);
+    // The same length and the same modification time, so only the path tells
+    // the two apart.
+    write(real, jsonl('the bilby plan'));
+    write(decoy, jsonl('the dingo plan'));
+    const when = new Date('2026-07-01T10:00:00.000Z');
+    fs.utimesSync(real, when, when);
+    fs.utimesSync(decoy, when, when);
+    const indexed = require('../../search.js').probeSqlite().available;
+    const restore = listConversation('memo-set-c', id);
+    try {
+      await withVariable(undefined, async () => {
+        if (indexed) assert.deepStrictEqual(await contentHits('dingo'), ['memo-set-c'], 'indexed from home first');
+        assert.strictEqual(internal().resolveSessionPathCached(id), decoy);
+        assert.strictEqual(internal()._sessionPathMemo.get(id).path, decoy, 'the home path is remembered');
+      });
+      await withVariable(moved, async () => {
+        assert.strictEqual(internal().resolveSessionPathCached(id), real, 'answered from the moved folder at once');
+        if (!indexed) return; // no index on this runtime
+        assert.deepStrictEqual(await contentHits('bilby'), ['memo-set-c'], 'search finds what the moved transcript says');
+        assert.deepStrictEqual(await contentHits('dingo'), [], 'search no longer finds what the home transcript says');
+      });
+    } finally {
+      restore();
+      const engine = internal().getSearchEngine();
+      if (engine) engine.removeConversation('memo-set-c');
+      tidy();
+    }
+  });
+
+  test('a session remembered from the moved folder is answered from home once the variable is removed', async () => {
+    const id = 'sess-memo-unset';
+    const { moved, real, decoy } = seedBoth(id);
+    try {
+      await withVariable(moved, () => {
+        assert.strictEqual(internal().resolveSessionPathCached(id), real);
+        assert.strictEqual(internal()._sessionPathMemo.get(id).path, real, 'the moved path is remembered');
+      });
+      await withVariable(undefined, () => {
+        assert.strictEqual(internal().resolveSessionPathCached(id), decoy, 'answered from home at once');
+      });
+    } finally { tidy(); }
+  });
+
+  test('a session missed in one folder is found at once in another folder that has it', async () => {
+    const id = 'sess-memo-miss';
+    const empty = makeTempDir('config-dir-memo-empty-');
+    const { moved, real } = seedBoth(id);
+    try {
+      await withVariable(empty, () => {
+        assert.strictEqual(internal().resolveSessionPathCached(id), null, 'not in this folder');
+        assert.strictEqual(internal()._sessionPathMemo.get(id).path, null, 'the miss is remembered');
+      });
+      await withVariable(moved, () => {
+        assert.strictEqual(internal().resolveSessionPathCached(id), real, 'found in the other folder at once');
+      });
+    } finally { tidy(); }
+  });
+
+  test('a miss remembered while the shared function throws is not served once it names a folder again', async () => {
+    const id = 'sess-memo-throw-miss';
+    const { moved, real } = seedBoth(id);
+    try {
+      await withVariable(moved, async () => {
+        await withThrowingHook(() => {
+          assert.strictEqual(internal().resolveSessionPathCached(id), null);
+          assert.strictEqual(internal()._sessionPathMemo.get(id).path, null, 'the miss is remembered');
+        });
+        assert.strictEqual(internal().resolveSessionPathCached(id), real, 'found at once once the function answers');
+      });
+    } finally { tidy(); }
+  });
+
+  test('a hit remembered before the shared function throws is not served while it throws, and home is never read', async () => {
+    const id = 'sess-memo-throw-hit';
+    const { moved, real, decoy } = seedBoth(id);
+    try {
+      for (const [variable, found] of [[moved, real], [undefined, decoy]]) {
+        await withVariable(variable, async () => {
+          assert.strictEqual(internal().resolveSessionPathCached(id), found);
+          assert.strictEqual(internal()._sessionPathMemo.get(id).path, found, 'the hit is remembered');
+          let answer;
+          const touched = await asked(homeClaude(), () => withThrowingHook(() => {
+            answer = internal().resolveSessionPathCached(id);
+          }));
+          assert.strictEqual(answer, null, `the path remembered from ${found === real ? 'the moved folder' : 'home'} is not served while the function throws`);
+          assert.deepStrictEqual(touched, [], 'home is never read while the function throws');
+        });
+      }
     } finally { tidy(); }
   });
 });

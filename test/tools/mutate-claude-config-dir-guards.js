@@ -3,7 +3,8 @@
 // Break each rule that makes Rundock read Claude Code's own files from where
 // Claude Code keeps them, and report which tests notice
 // (lib/runtime/claude-home.js and its four readers: history in server.js, the
-// transcript reader, the Connectors route and the sandbox status).
+// transcript reader, the Connectors route and the sandbox status), and keep
+// search's remembered session paths and its index on the folder in use.
 //
 // With CLAUDE_CONFIG_DIR set, Claude Code keeps its transcripts, its user
 // settings and its account file in that folder and nothing in home. Every rule
@@ -40,6 +41,7 @@ const HISTORY = { src: path.join(ROOT, 'server.js'), suite: SERVER_SUITE };
 const TRANSCRIPTS = { src: path.join(ROOT, 'lib', 'runtime', 'session-transcript.js'), suite: UNIT };
 const CONNECTORS = { src: path.join(ROOT, 'lib', 'http-router.js'), suite: SERVER_SUITE };
 const SANDBOX = { src: path.join(ROOT, 'lib', 'workspace', 'sandbox-status.js'), suite: UNIT };
+const SEARCH_INDEX = { src: path.join(ROOT, 'search.js'), suite: SERVER_SUITE };
 
 const MUTATIONS = [
   // ===== A READER JOINS CLAUDE CODE'S FOLDER ONTO HOME AGAIN =====
@@ -99,6 +101,38 @@ const MUTATIONS = [
   [SANDBOX, 'the sandbox status names the moved settings file as home\'s',
     "  layers.push({ label: claude.relocated ? file : '~/.claude/settings.json', file });",
     "  layers.push({ label: '~/.claude/settings.json', file });"],
+  // ===== A REMEMBERED SESSION PATH AFTER A FOLDER CHANGE =====
+  // The path lookup search uses remembers each answer. Remembered across a
+  // folder change, a hit names a transcript Claude Code no longer uses and a
+  // miss hides one it does, until something clears the memory.
+  [HISTORY, 'a remembered session path is served after a folder change',
+    '  if (memo && memo.folder === folder) {',
+    '  if (memo) {'],
+  [HISTORY, 'only a remembered hit is checked against the folder',
+    '  if (memo && memo.folder === folder) {',
+    '  if (memo && (memo.folder === folder || !memo.path)) {'],
+  [HISTORY, 'only a remembered miss is checked against the folder',
+    '  if (memo && memo.folder === folder) {',
+    '  if (memo && (memo.folder === folder || memo.path)) {'],
+  [HISTORY, 'the folder a remembered path is checked against is read once at load',
+    'function resolveSessionPathCached(sessionId) {\n  const now = Date.now();\n  const folder = claudeFolderNow();\n',
+    'const FOLDER_AT_LOAD = claudeFolderNow();\nfunction resolveSessionPathCached(sessionId) {\n  const now = Date.now();\n  const folder = FOLDER_AT_LOAD;\n'],
+  [HISTORY, 'a remembered path is checked against home\'s folder when the folder cannot be worked out',
+    '  try { return claudeHome(home).folder; } catch (e) { return null; }',
+    "  try { return claudeHome(home).folder; } catch (e) { return path.join(home, '.claude'); }"],
+  // Not recorded, no entry ever matches, so nothing is remembered at all: a
+  // miss no longer holds within its window.
+  [HISTORY, 'a remembered path does not record its folder',
+    '  _sessionPathMemo.set(sessionId, { path: resolved || null, ts: now, folder });',
+    '  _sessionPathMemo.set(sessionId, { path: resolved || null, ts: now });'],
+  // The search index's mark for a session read from another file: kept, the
+  // index goes on finding what the old transcript said.
+  [SEARCH_INDEX, 'the index keeps a session\'s rows when the session is read from another file',
+    '        const wipe = inherit || replaced || st.size < mark.byte_offset || st.size < mark.size;',
+    '        const wipe = inherit || st.size < mark.byte_offset || st.size < mark.size;'],
+  [SEARCH_INDEX, 'the index skips a session read from another file of the same size and time',
+    '        if (!inherit && !replaced && st.mtimeMs === mark.mtime_ms && st.size === mark.size) continue;',
+    '        if (!inherit && st.mtimeMs === mark.mtime_ms && st.size === mark.size) continue;'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

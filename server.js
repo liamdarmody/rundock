@@ -2798,7 +2798,7 @@ let searchEngineFailedWorkspace = null; // workspace whose engine open failed (b
 let searchProbe = null;             // cached capability probe
 let searchFilesReconciledAt = 0;    // TTL gate for the files walk (not per-keystroke)
 const SEARCH_FILES_RECONCILE_TTL_MS = 2000;
-// Session-id -> {path|null, ts} memo. Missing session files (Claude Code
+// Session-id -> {path|null, ts, folder} memo. Missing session files (Claude Code
 // prunes transcripts) would otherwise trigger a full scan of Claude Code's
 // projects folder per session per keystroke. Negative entries expire so a
 // session whose jsonl appears moments later becomes visible.
@@ -3144,10 +3144,20 @@ function ensureSearchEngine() {
 // Session-file map for the indexer: [{conversationId, sessions:[{sessionId,
 // agentId, filePath}]}]. Paths resolve into Claude Code's projects folder
 // (outside the workspace); the index itself stays inside .rundock/.
+//
+// Each entry records the folder Claude Code kept its files in when it was
+// resolved (null when that could not be worked out), and answers only while
+// the folder is the same: after a change, a hit would name a transcript Claude
+// Code no longer uses and a miss would hide one it does.
+function claudeFolderNow() {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  try { return claudeHome(home).folder; } catch (e) { return null; }
+}
 function resolveSessionPathCached(sessionId) {
   const now = Date.now();
+  const folder = claudeFolderNow();
   const memo = _sessionPathMemo.get(sessionId);
-  if (memo) {
+  if (memo && memo.folder === folder) {
     if (memo.path) {
       // Cheap single stat validates a positive hit (files can be pruned).
       if (fs.existsSync(memo.path)) return memo.path;
@@ -3159,7 +3169,7 @@ function resolveSessionPathCached(sessionId) {
   // live under ~/.codex/sessions as rollout files. Thread ids are uuid-shaped
   // like Claude session ids, so resolution simply tries both homes.
   const resolved = getSessionJsonlPath(sessionId) || codexRuntime.findCodexThreadFile(sessionId);
-  _sessionPathMemo.set(sessionId, { path: resolved || null, ts: now });
+  _sessionPathMemo.set(sessionId, { path: resolved || null, ts: now, folder });
   return resolved;
 }
 
