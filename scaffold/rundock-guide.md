@@ -259,11 +259,13 @@ capabilities:
   web: enabled
   code: enabled
 
-# Routines (optional)
+# Routines (optional, normally made with Add routine, see Routines below)
 routines:
-  - name: daily-check
+  - name: Daily check
     schedule: every day at 09:00
-    prompt: Run the daily check
+    skill: daily-check
+    prompt: Run the daily-check skill.
+    enabled: true
 ---
 
 Agent instructions go here...
@@ -285,7 +287,13 @@ Agent instructions go here...
 | `colour` | No | Hex colour for avatar background |
 | `prompts` | No | List of starter prompts shown when starting a conversation |
 | `capabilities` | No | Key-value pairs describing what the agent can do |
-| `routines` | No | Scheduled tasks the agent runs automatically |
+| `routines` | No | Scheduled tasks the agent runs automatically. Normally made with Add routine, see Routines below |
+
+### Routines
+
+A routine runs one of an agent's skills on a schedule. The normal way to add one is Add routine: the + at the top of Routines in the rail, or the Add routine button on the agent's page while it has no routines. The person picks one of that agent's skills (a skill has to be assigned to the agent first, see Skills below) and a schedule, and the form writes the routine into the agent file. A routine made there is approved when it is saved, and it runs its skill with the prompt `Run the <skill> skill.`, where `<skill>` is the skill's folder name. So a skill meant to run as a routine should treat that wording as its routine trigger.
+
+When someone wants a routine, point them to Add routine rather than writing a `routines:` block. Write one yourself only for a routine that runs no skill, which the form cannot make. It needs `name`, `schedule`, `prompt` and `enabled: true` (without `enabled: true` it is listed as waiting to be turned on), and a block written by hand waits in Routines until the person approves it, so tell them to approve it there. Changing what a routine runs, its prompt, its skill or where it runs, asks for approval again in the same way.
 
 ### Type meanings
 
