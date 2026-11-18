@@ -2749,6 +2749,77 @@ describe('rundock-guide.md: Doc types <, > and & as the characters themselves', 
 });
 
 // ---------------------------------------------------------------------------
+// scaffold/rundock-guide.md: a routine is made with Add routine, and a block
+// written by hand waits for the person's approval
+// ---------------------------------------------------------------------------
+
+describe('rundock-guide.md: a routine is made with Add routine, and a block written by hand waits for approval', () => {
+  // Doc's guide showed routines only as hand-written YAML, with an example
+  // that ran no skill, and never named the form that makes one in a step and
+  // approves it as it saves. The prompt the guide quotes is checked against
+  // the form's own model and the example against Rundock's own parser, so
+  // neither can drift from what the form writes.
+  const editorModel = require('../../public/routine-editor-model.js');
+  const { parseRoutines } = require('../../lib/agents/discovery.js');
+  const guide = fs.readFileSync(path.join(ROOT, 'scaffold', 'rundock-guide.md'), 'utf-8');
+  const section = (() => {
+    const from = guide.indexOf('\n### Routines\n');
+    const to = guide.indexOf('\n#', from + 1);
+    return from < 0 ? '' : guide.slice(from, to < 0 ? undefined : to);
+  })();
+  const flat = section.replace(/\s+/g, ' ');
+  const formPrompt = (slug) => editorModel.routineDraft({
+    skill: { slug, name: 'Example skill' }, agentId: 'example-agent', frequency: 'day', time: '09:00', runOn: 'local',
+  }).prompt;
+
+  test('the routines coverage leads with Add routine, under Routines in the rail and on the agent\'s page', () => {
+    assert.ok(section, 'the guide has a Routines section');
+    assert.ok(flat.includes('The normal way to add one is Add routine'), 'the form is the normal way');
+    assert.ok(flat.includes('Routines in the rail'), 'it is under Routines in the rail');
+    assert.ok(flat.includes('on the agent\'s page'), 'and on the agent\'s page');
+    assert.ok(flat.includes('writes the routine into the agent file'), 'the form writes the agent file');
+    assert.ok(flat.indexOf('Add routine') < flat.indexOf('`routines:` block'), 'the form comes before any block written by hand');
+  });
+
+  test('a routine made there is approved when it is saved, and runs its skill with the prompt the form writes', () => {
+    assert.ok(flat.includes('A routine made there is approved when it is saved'), 'approved on save');
+    const quoted = flat.match(/runs its skill with the prompt `([^`]+)`/);
+    assert.ok(quoted, 'the guide quotes the prompt a routine runs its skill with');
+    assert.strictEqual(quoted[1].replace('<skill>', 'example-skill'), formPrompt('example-skill'),
+      'the quoted prompt is the one the form writes');
+    assert.ok(flat.includes('a skill meant to run as a routine should treat that wording as its routine trigger'),
+      'a skill written to run as a routine knows the words it is started with');
+  });
+
+  test('a block written by hand is only for a routine that runs no skill, needs enabled: true, and waits in Routines until approved', () => {
+    assert.ok(flat.includes('point them to Add routine rather than writing a `routines:` block'), 'Doc points to the form first');
+    assert.ok(flat.includes('Write one yourself only for a routine that runs no skill'), 'a block is written only for a routine that runs no skill');
+    assert.ok(flat.includes('`enabled: true`'), 'a block written by hand says it needs enabled: true');
+    assert.ok(flat.includes('a block written by hand waits in Routines until the person approves it'), 'and that it waits for the person\'s approval');
+  });
+
+  test('the example is shaped like a routine the form makes, and the field table points to the Routines section', () => {
+    const example = guide.match(/```yaml\n---\n([\s\S]*?)\n---\n/);
+    assert.ok(example, 'the agent frontmatter example is there');
+    const routines = parseRoutines(example[1]);
+    assert.strictEqual(routines.length, 1, 'the example carries one routine');
+    const [routine] = routines;
+    assert.ok(routine.skill, 'the example routine runs a skill');
+    assert.strictEqual(routine.prompt, formPrompt(routine.skill), 'with the prompt the form writes for that skill');
+    assert.strictEqual(routine.enabled, true, 'and is switched on, as a routine the form makes is');
+    const row = guide.split('\n').find((line) => line.startsWith('| `routines` |')) || '';
+    assert.ok(row.includes('see Routines below'), `the field table's routines row points to the Routines section: ${row}`);
+  });
+
+  test('the section Doc reads and repeats is in UK spelling, with no em or en dashes', () => {
+    assert.ok(section, 'the section is there to check');
+    const dashes = [0x2013, 0x2014].map((c) => String.fromCharCode(c));
+    assert.ok(!dashes.some((d) => section.includes(d)), 'no em or en dashes');
+    assert.doesNotMatch(section, /iz(?:e|es|ed|ing|ation)\b|yz(?:e|es|ed|ing)\b|\b(?:color|behavior|favor|honor|center|catalog|canceled|traveled|license)\b/i, 'UK spelling');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ARCHITECTURE.md and the hook's own comment: each shell word is also read as
 // bash joins it, and the crossings are the union of both readings
 // ---------------------------------------------------------------------------
