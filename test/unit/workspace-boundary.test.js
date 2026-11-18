@@ -1346,7 +1346,7 @@ describe('every credential the secrets tier names is denied by the OS block as w
     assert.ok(first > 0 && deny.slice(0, first).every((p) => p.startsWith(WS + '/')),
       'appended after the workspace files, never inserted among them');
     assert.deepStrictEqual(deny.slice(first, first + secrets.length), secrets, 'and together, in registry order');
-    const asEarlierReleasesWroteIt = { ...block, filesystem: { ...block.filesystem, denyWrite: deny.slice(0, first) } };
+    const asEarlierReleasesWroteIt = { ...block, filesystem: { allowWrite: block.filesystem.allowWrite, denyWrite: deny.slice(0, first) } };
     assert.strictEqual(scaffold.isRundockSandbox(asEarlierReleasesWroteIt, 'darwin'), true,
       'the block every earlier 0.15 release wrote is still recognised as Rundock\'s own');
   });
@@ -1431,6 +1431,7 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
     open(ws);
     const settings = read(ws);
     settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, 3);
+    delete settings.sandbox.filesystem.denyRead;
     assert.ok(settings.sandbox.filesystem.denyWrite.every((p) => !credentials().includes(p)), 'fixture sanity: the three workspace files an earlier release denied');
     fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
     return ws;
@@ -1455,6 +1456,7 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
     const settings = read(ws);
     assert.strictEqual(settings.sandbox.enabled, false, 'fixture sanity: the off shape');
     settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, 3);
+    delete settings.sandbox.filesystem.denyRead;
     fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
     open(ws);
     for (const c of credentials()) assert.ok(read(ws).sandbox.filesystem.denyWrite.includes(c), `${c} is denied in the off shape too`);
@@ -1488,6 +1490,7 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
       const settings = read(ws);
       const current = settings.sandbox.filesystem.denyWrite;
       settings.sandbox.filesystem.denyWrite = current.slice(0, n);
+      delete settings.sandbox.filesystem.denyRead;
       fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
       open(ws);
       assert.deepStrictEqual(read(ws).sandbox.filesystem.denyWrite, current, `the ${n}-entry block is ours, and is brought up to the whole list`);
@@ -1510,6 +1513,26 @@ describe('opening a workspace upgrades Rundock\'s own block to deny the credenti
       open(ws);
       assert.strictEqual(JSON.stringify(read(ws).sandbox), JSON.stringify(JSON.parse(theirs).sandbox), `a ${change === 'trim' ? 'trimmed' : 'changed'} list is a person's edit, and stays theirs`);
     }
+  });
+
+  test('a list written before the read deny, trimmed where no build stopped, is left byte for byte', () => {
+    // The trimmed list above keeps the read deny, and a block carrying it is
+    // refused under any list shorter than the one it shipped beside, so only
+    // the written lengths stand between a person's trim and an earlier
+    // build's list when the block has no read deny at all.
+    const ws = tmp('wb-runs-theirs-trim-noread-');
+    open(ws);
+    const settings = read(ws);
+    const deny = settings.sandbox.filesystem.denyWrite;
+    settings.sandbox.filesystem.denyWrite = deny.slice(0, deny.length - 3);
+    delete settings.sandbox.filesystem.denyRead;
+    assert.ok(!scaffold.WRITTEN_DENY_LENGTHS.includes(settings.sandbox.filesystem.denyWrite.length),
+      'fixture sanity: no build stopped at this length');
+    fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
+    const theirs = fs.readFileSync(settingsPath(ws), 'utf8');
+    open(ws);
+    assert.strictEqual(JSON.stringify(read(ws).sandbox), JSON.stringify(JSON.parse(theirs).sandbox),
+      'a trimmed list without the read deny is a person\'s edit, and stays theirs');
   });
 
   test('opening twice after the upgrade changes nothing the second time', () => {
@@ -1548,17 +1571,17 @@ describe('the block denies the runtime\'s own escape paths, whatever runtime ver
     const lastCredential = deny.indexOf(credentials(HOME).slice(-1)[0]);
     assert.deepStrictEqual(deny.slice(lastCredential + 1, lastCredential + 1 + HOME_ESCAPES.length), HOME_ESCAPES,
       'appended after every entry an earlier release wrote, in this order');
-    const asTheLastReleaseWroteIt = { ...block, filesystem: { ...block.filesystem, denyWrite: deny.slice(0, lastCredential + 1) } };
+    const asTheLastReleaseWroteIt = { ...block, filesystem: { allowWrite: block.filesystem.allowWrite, denyWrite: deny.slice(0, lastCredential + 1) } };
     assert.strictEqual(scaffold.isRundockSandbox(asTheLastReleaseWroteIt, 'darwin'), true,
       'a block without them is still recognised as Rundock\'s own, so the next open can add them');
   });
 
-  test('the runtime\'s bookkeeping stays writable, and no read is denied', () => {
+  test('the runtime\'s bookkeeping stays writable, and the only reads denied are the credential files', () => {
     for (const mode of ['on', 'off']) {
       const fsBlock = scaffold.sandboxSettings(WS, 'darwin', HOME, ['/tmp/t'], [], mode).filesystem;
       assert.ok(fsBlock.allowWrite.includes(`${HOME}/.claude`), 'the write list still names the runtime home whole');
       assert.ok(!fsBlock.allowWrite.some((p) => HOME_ESCAPES.includes(p)), 'and names none of the denied paths itself');
-      assert.ok(!('denyRead' in fsBlock), `the ${mode} block denies writes only`);
+      assert.deepStrictEqual(fsBlock.denyRead, credentials(HOME), `the ${mode} block denies reads of the credential files alone`);
     }
   });
 
@@ -1758,6 +1781,7 @@ describe('an existing workspace gains the escape-path denies on open, and keeps 
     open(ws);
     const settings = read(ws);
     settings.sandbox.filesystem.denyWrite = settings.sandbox.filesystem.denyWrite.slice(0, -15 - startupDeny(home).length);
+    delete settings.sandbox.filesystem.denyRead;
     assert.deepStrictEqual(settings.sandbox.filesystem.denyWrite, releasedDenyWrite(ws, home), 'sanity: exactly the 0.15.6 list');
     fs.writeFileSync(settingsPath(ws), JSON.stringify(settings, null, 2));
     open(ws);
