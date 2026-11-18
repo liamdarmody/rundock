@@ -2086,9 +2086,13 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'Only a space, a tab and a newline separate words, as in bash',
       'a quoted writing option keeps its crossing as a write in Notes mode and in Code mode',
       'A wildcard after a plain first character other than `-` still reads for `find`, `rg`, `tree` and `file`',
-      '**Nothing the earlier reading asked about reads now.**',
+      '**Nothing the earlier reading asked about reads now, other than that quoted `find` pattern.**',
       'a line reads only when both readings read it',
-      'are the only two exceptions to the rule that a character outside the plain set makes the segment not a read',
+      'are the only three exceptions to the rule that a character outside the plain set makes the segment not a read',
+      'reads for `find` alone and only as the word after a pattern primary such as `-name`, `-path` or `-regex`',
+      'find takes that word as the pattern, whatever the variable holds, so it is never an option or a path',
+      'A quoted parameter that names an array is still one word: zsh joins it, and bash and zsh\'s `KSH_ARRAYS` take its first element, as `test/unit/quoted-parameter-one-word-shells.test.js` checks against the real bash and zsh.',
+      'Anywhere else a `$` still asks',
       'No quote character that opens nothing in bash hides a command either',
       'every reading reads the line that way as well as as written',
       'is not a read, and neither is one with a `(` or `)` outside its quotes',
@@ -2112,11 +2116,17 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'SPLIT AS WRITTEN TOO, with each quote taken as written and a backslash as text',
       'A line reads only when every piece of both splits reads',
       'A WILDCARD THAT CANNOT START WITH A DASH.',
-      'makes the only two exceptions to the plain set',
+      'makes two of the only three exceptions to the plain set',
+      'findOnlyReads lets that word through only as the operand of a pattern primary',
+      'A quoted parameter that names an array is still one word: zsh joins it, and bash and zsh\'s KSH_ARRAYS take its first element, as the shells test (test/unit/quoted-parameter-one-word-shells.test.js) checks.',
+      'A word holding a quoted variable (`held`, from shellWords) reads only as the operand of a pattern primary',
+      'The one word it need not show is a pattern held in a quoted variable',
+      'So no segment of these reads that did not read before, but for a find pattern held in a quoted variable',
       'EVERY READING HERE FINDS A QUOTE BY PAIRING QUOTE CHARACTERS',
       'shellView gives the line back with each of those characters made a space',
       'A FAILURE INSIDE THIS READING IS AN ANSWER',
     ]) assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
+    assert.ok(fs.existsSync(path.join(ROOT, 'test', 'unit', 'quoted-parameter-one-word-shells.test.js')), 'the shells test the page and the module name is there');
     const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
     assert.ok(hookSrc.includes('which the crossing check reads as well (shellCrossings), so none of them hides a path'), 'the hook says where an escaped quote is read');
   });
@@ -2133,13 +2143,14 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       ['a quote in a comment', "ls # it's\ncp a b\nls # '"], ["one escaped inside `$'…'`", "ls $'\\''; cp a b"],
       ["one in a here-document's body", "cat <<EOF\n'\nEOF\ncp a b\necho \"'\""], ['the quotes inside a substitution held in double quotes', 'echo "$(echo "\'")"\ncp a b\necho "$(echo "\'")"'],
       ["zsh's glob qualifiers", "ls *(e:'cp a b':)"], ['its `=( )`', 'cat =(cp a b)'], ['a `case` pattern', 'case x in x) cp a b;; esac'],
-      ['`find . ! -name x`', 'find . !x -name y']];
+      ['`find . ! -name x`', 'find . !x -name y'], ...['find . -name $t', 'find "$t" -name x', 'find . -newer "$t"', 'find . -name "$t"*',
+        'find . -name "$1"', 'find . -name "${t:-x}"', 'rg "$t" .'].map((command) => [`\`${command}\``, command])];
     for (const [named, command] of ASKS) {
       assert.ok(passage.includes(named), `the page names ${named}`);
       assert.ok(asks(command), `${JSON.stringify(command.slice(0, 60))} asks`);
     }
     for (const command of ["find . -name '*.md'", "rg 'two words' notes", 'tree -L 2', 'file notes.md', 'echo "a\nb"', "rg 'TODO' notes/*.md",
-      'find . ! -name x', "ls # it's here", "grep -rn \"it's\" notes", "echo $'a\\tb'"]) {
+      'find . ! -name x', "ls # it's here", "grep -rn \"it's\" notes", "echo $'a\\tb'", 'find . -name "$t.md"']) {
       assert.ok(reads(command), `${command} still reads`);
     }
   });
@@ -2198,7 +2209,7 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
   });
 
   test('the tests the page names exist', () => {
-    for (const file of ['test/unit/permissions.test.js', 'test/unit/quoted-options-hook.test.js', 'test/unit/hook-never-crashes.test.js',
+    for (const file of ['test/unit/permissions.test.js', 'test/unit/quoted-options-hook.test.js', 'test/unit/find-pattern-variable-hook.test.js', 'test/unit/hook-never-crashes.test.js',
       'test/unit/read-only-on-main.test.js', 'test/tools/record-read-only-on-main.js', 'test/unit/shell-view.test.js', 'test/unit/shell-view-hook.test.js',
       'test/unit/zsh-pattern-cards.test.js', 'test/integration/zsh-pattern-saved-answer.test.js', 'test/unit/shell-view-shells.test.js',
       'test/tools/zsh-pattern-grade-moves.js']) {

@@ -696,7 +696,8 @@
   // EACH FLAG IS JUDGED AS THE SHELL HANDS IT TO find, never as it is written:
   // `'-fprintf'`, `\-fprintf` and `-fpr'int'f` are all the `-fprintf` find is
   // given (see optionsOnlyRead below). A line whose words the text alone does
-  // not show is not a read, so it asks.
+  // not show is not a read, so it asks. The one word it need not show is a
+  // pattern held in a quoted variable (findOnlyReads).
   //
   // ARITY IS WHAT MAKES THIS SOUND. `find /tmp -type f -mtime -1` is an
   // ordinary read whose operand begins with `-`, so a flag's operand has to be
@@ -722,23 +723,35 @@
     '-cmin', '-size', '-user', '-group', '-uid', '-gid', '-perm', '-links',
     '-inum', '-used', '-fstype', '-samefile', '-context', '-printf', '-flags',
   ];
+  // The ones among those whose operand find only ever matches names, paths or
+  // link targets against, never opens or prints: the one place a quoted
+  // variable reads (findOnlyReads).
+  var FIND_PATTERN_PRIMARIES = [
+    '-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename', '-lname', '-ilname', '-regex', '-iregex',
+  ];
   // -newer, and the -newerXY family (-newermt, -newerct and the rest), all of
   // which take one operand.
   var FIND_NEWER_FAMILY = /^-newer[a-z]{0,2}$/i;
 
   // A word that does not begin with `-`, once the shell has taken its quotes
   // and backslashes away, is a path, a pattern, a number or one of find's
-  // grouping tokens, and none of those is a flag to judge.
-  function findOnlyReads(words) {
+  // grouping tokens, and none of those is a flag to judge. A word holding a
+  // quoted variable (`held`, from shellWords) reads only as the operand of a
+  // pattern primary: as a path, a flag or any other flag's operand
+  // (`-newer "$t"`, `-printf "$t"`) it is not a read.
+  function findOnlyReads(words, held) {
     for (var i = 0; i < words.length; i++) {
       var w = words[i];
+      if (holdsVariable(held, i)) return false;
       if (w.charAt(0) !== '-') continue;
       if (FIND_READ_FLAGS_NO_OPERAND.indexOf(w) >= 0) continue;
+      if (holdsVariable(held, i + 1) && FIND_PATTERN_PRIMARIES.indexOf(w) < 0) return false;
       if (FIND_READ_FLAGS_ONE_OPERAND.indexOf(w) >= 0 || FIND_NEWER_FAMILY.test(w)) { i++; continue; }
       return false;
     }
     return true;
   }
+  function holdsVariable(held, i) { return !!held && held.indexOf(i) >= 0; }
 
   // ── sort and date are judged the way find is, by the options that read ──
   //
@@ -862,22 +875,44 @@
   // space or a tab ends a word, as in bash. Quotes and backslashes are taken
   // away, so `'-o'`, `"-o"`, `\-o` and `-'o'` are all the `-o` the program is
   // given. Not followed at all: a `$` or a backtick
-  // (unquoted or inside double quotes), `$'…'`, a glob, a brace, a bracket, a
+  // (unquoted or inside double quotes, but for the one `held` takes, below),
+  // `$'…'`, a glob, a brace, a bracket, a
   // redirection, a quote left open, a backslash with nothing after it, a
   // control character, and text longer than this reading follows. Each can
   // hand the program a word the text does not show, `-o` among them, so the
   // segment is not a read, and it asks.
   //
   // `asWrittenToo` (true for find, rg, tree and file, whose words are judged
-  // as written as well, below) makes the only two exceptions to the plain set,
-  // each for text those four always read: a wildcard that cannot start with a
-  // dash (globCannotStartWithDash), and a `!` that is a word of its own, which
-  // bash and zsh hand over as the text `!` after the command's name (find's
-  // negation, `find . ! -name x`). A `!` beside other text still fails closed.
+  // as written as well, below) makes two of the only three exceptions to the
+  // plain set, each for text those four always read: a wildcard that cannot
+  // start with a dash (globCannotStartWithDash), and a `!` that is a word of
+  // its own, which bash and zsh hand over as the text `!` after the command's
+  // name (find's negation, `find . ! -name x`). A `!` beside other text still
+  // fails closed.
+  //
+  // `held`, an array for find alone and null for every other command, makes
+  // the third: a plain parameter inside double quotes, `"$t"` or `"${t}"`,
+  // kept in its word as written, with the word's index pushed onto `held`.
+  // findOnlyReads lets that word through only as the operand of a pattern
+  // primary, which find takes as a pattern whatever the shell puts there. A
+  // quoted parameter that names an array is still one word: zsh joins it, and
+  // bash and zsh's KSH_ARRAYS take its first element, as the shells test
+  // (test/unit/quoted-parameter-one-word-shells.test.js) checks. Not
+  // plain, so still not followed: a special parameter (`"$1"`, `"$@"`), a
+  // brace holding more than a name (`"${t:-x}"`), a name followed by anything
+  // but the few characters that end it in bash and zsh alike (`"$t[1]"` and
+  // `"$t:h"` are not followed), and a word that also holds a glob or a `~`
+  // outside its quotes (`"$t"*`), which the shell can expand into other words.
   var OPTIONS_READ_LIMIT = 8192;
   // Unquoted, only these are plain text in bash and in zsh alike.
   var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\/:,=+%@~-]|[\p{L}\p{M}\p{N}])$/u;
-  function shellWords(text, asWrittenToo) {
+  var PLAIN_PARAMETER = /\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*(?=["\t .\/,*?$-]))/y;
+  function plainParameter(text, at) {
+    PLAIN_PARAMETER.lastIndex = at;
+    var found = PLAIN_PARAMETER.exec(text);
+    return found ? found[0] : '';
+  }
+  function shellWords(text, asWrittenToo, held) {
     var lenient = asWrittenToo === true;
     // UNREADABLE is the PowerShell reading's test, below: a control character,
     // a replacement character, or half a surrogate pair.
@@ -887,11 +922,14 @@
     var inWord = false;
     var first = '';
     var quote = '';
+    var expands = -1;
     for (var i = 0; i < text.length; i++) {
       var c = text[i];
       if (quote === "'") { if (c === "'") quote = ''; else word += c; continue; }
       if (quote === '"') {
         if (c === '"') { quote = ''; continue; }
+        var plain = c === '$' && held && expands !== words.length ? plainParameter(text, i) : '';
+        if (plain) { if (!holdsVariable(held, words.length)) held.push(words.length); word += plain; i += plain.length - 1; continue; }
         if (c === '$' || c === '`') return null;
         if (c === '\\' && i + 1 < text.length && '$`"\\'.indexOf(text[i + 1]) >= 0) { word += text[++i]; continue; }
         word += c;
@@ -909,6 +947,7 @@
       // A `!` standing alone as a word, find's negation, is plain text to bash
       // and zsh anywhere after the command's own name.
       if (lenient && c === '!' && !word && /^[ \t]?$/.test(text.charAt(i + 1))) { word += c; continue; }
+      if (held && (c === '~' || GLOB_CHAR.test(c))) { if (holdsVariable(held, words.length)) return null; expands = words.length; }
       if (lenient && GLOB_CHAR.test(c) && globCannotStartWithDash(first)) { word += c; continue; }
       if (!PLAIN_WORD_CHAR.test(c)) return null;
       word += c;
@@ -926,7 +965,8 @@
   // is `src/` and more, `./*` is `./` and more), so none of them is an option.
   // Any other first character asks: a wildcard itself (`*.md`, `?pre*`), a
   // bracket (`[-]*`), a quote or a backslash. One rule for find, rg, tree and
-  // file; a `$`, a backtick or an open quote anywhere still asks.
+  // file; a `$` (but a find pattern held in double quotes, shellWords above),
+  // a backtick or an open quote anywhere still asks.
   var GLOB_CHAR = /^[*?[\]]$/;
   function globCannotStartWithDash(first) {
     return first !== '-' && PLAIN_WORD_CHAR.test(first);
@@ -966,7 +1006,8 @@
   // always asked, at option-like text inside a quoted operand (`find . -name
   // 'a -delete'`, `rg "x --pre" .`) or an option split across quotes where
   // its list does not hold the pieces (`find . -na'me' x`). So no segment of
-  // these reads that did not read before.
+  // these reads that did not read before, but for a find pattern held in a
+  // quoted variable (shellWords, above).
   var AS_WRITTEN_TOO = ['find', 'rg', 'tree', 'file'];
   function wordsAsWritten(text, skip) {
     return String(text).split(/\s+/).filter(Boolean).slice(skip);
@@ -983,9 +1024,10 @@
       var text = String(segment);
       if (NOT_A_WORD_BREAK.test(text)) return false;
       var asWrittenToo = AS_WRITTEN_TOO.indexOf(command) >= 0;
-      var words = shellWords(textAfterWords(text, skip), asWrittenToo);
+      var held = command === 'find' ? [] : null;
+      var words = shellWords(textAfterWords(text, skip), asWrittenToo, held);
       if (!words) return false;
-      if (OPTION_RULES[command](words) !== true) return false;
+      if (OPTION_RULES[command](words, held) !== true) return false;
       return !asWrittenToo || OPTION_RULES[command](wordsAsWritten(text, skip)) === true;
     } catch (failed) {
       return false;
@@ -1333,7 +1375,7 @@
   function namedOptions() {
     return JSON.parse(JSON.stringify({
       find: {
-        noOperand: FIND_READ_FLAGS_NO_OPERAND, oneOperand: FIND_READ_FLAGS_ONE_OPERAND,
+        noOperand: FIND_READ_FLAGS_NO_OPERAND, oneOperand: FIND_READ_FLAGS_ONE_OPERAND, patterns: FIND_PATTERN_PRIMARIES,
         newerFamily: { source: FIND_NEWER_FAMILY.source, flags: FIND_NEWER_FAMILY.flags },
       },
       sort: SORT_OPTIONS, date: DATE_OPTIONS, rg: EXECUTING_FLAGS.rg, tree: WRITING_FLAGS.tree, file: WRITING_FLAGS.file,

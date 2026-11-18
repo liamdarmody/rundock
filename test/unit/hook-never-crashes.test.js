@@ -1281,6 +1281,32 @@ describe('the reading of find, rg, tree and file, when it fails or cannot read t
       }
     } finally { await close(server); }
   });
+
+  // A find whose pattern is a quoted variable reads, and so is freed as the
+  // others are. With the reading failing, or the text past what it follows, it
+  // is answered as the writing form is, in both modes, and asked about as a write.
+  const HELD = `find ${hooksDir} -name "$t.sh"`;
+  test('a find whose pattern is a quoted variable, when the reading fails or cannot follow the text, is never freed', POSIX, async () => {
+    const { server, cards } = await serve();
+    try {
+      const freed = await runHookAgainst(server.address().port, bash(HELD), homeEnv);
+      assert.ok(answered(freed));
+      assert.ok(!cards[cards.length - 1].boundary, 'sanity: with nothing forced, the read is freed');
+      for (const [command, preload] of [[HELD, readingFails], [past(HELD), undefined]]) {
+        for (const codeMode of ['', '1']) {
+          const env = { ...homeEnv, RUNDOCK_CODE_MODE: codeMode };
+          const writes = runHook(bash(writing), { env });
+          const r = runHook(bash(command), { preload, env });
+          assert.ok(answered(r), `no answer for ${JSON.stringify(command.slice(0, 60))}: ${r.stderr}`);
+          assert.strictEqual(decision(r), decision(writes), `the same answer as the writing form: ${JSON.stringify(command.slice(0, 60))}`);
+          assert.strictEqual(reasonOf(r), reasonOf(writes), 'in the same words');
+        }
+        const asked = await runHookAgainst(server.address().port, bash(command), homeEnv, { preload });
+        assert.strictEqual(decision(asked), 'deny', 'the answer it was given, no, is the answer');
+        assert.ok(asksAsWrite(cards[cards.length - 1]), `asked about as a write: ${JSON.stringify(cards[cards.length - 1])}`);
+      }
+    } finally { await close(server); }
+  });
 });
 
 // THE VIEW OF A LINE, FAILING, on a line that hides code in a zsh file

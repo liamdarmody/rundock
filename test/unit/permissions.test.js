@@ -1241,6 +1241,241 @@ describe('options are judged as the shell reads them', () => {
   });
 });
 
+// ── A quoted variable that is find's pattern ────────────────────────────────
+//
+// Inside double quotes a plain `$NAME` or `${NAME}` is exactly one word in
+// bash and in zsh, and find takes the word after `-name` (or any other pattern
+// primary) as the pattern, whatever it says. So there, and only there, a
+// quoted variable reads. find's own parse decides which word that is, never
+// the word before it. Every other `$` still asks, and the hook reports the
+// crossing it reported before this reading existed: each expected crossing
+// below was measured then, in a workspace holding `.rundock/state.json`.
+describe("a quoted variable that is find's pattern reads, and every other variable still asks", () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const S = require('../../public/read-only-shell.js');
+  const hook = require('../../scripts/permission-hook.js');
+  const risk = cmd => P.classifyRisk('Bash', { command: cmd });
+  const show = cmd => JSON.stringify(cmd);
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'find-pattern-')));
+  const home = path.join(root, 'home');
+  const ws = path.join(home, 'Workspace');
+  const HOOKS = path.join(home, '.claude', 'hooks');
+  fs.mkdirSync(path.join(ws, '.rundock'), { recursive: true });
+  fs.writeFileSync(path.join(ws, '.rundock', 'state.json'), '{}\n');
+  fs.mkdirSync(HOOKS, { recursive: true });
+  after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // Each crossing the hook reports: the path from the home, and what it is.
+  const crossings = cmd => hook.boundaryCrossingsFor(hook.classifyShellAccess('Bash', { command: cmd }, ws, [], home))
+    .map(c => [path.relative(home, c.path).split(path.sep).join('/'), c.write && 'write',
+      c.answerFile && 'answer file', c.persistenceSurface && 'persistence surface'].filter(Boolean).join(' '));
+  const NONE = [];
+  const STATE = ['Workspace/.rundock answer file'];
+  const SURFACE = ['.claude/hooks write persistence surface'];
+  const PRUNED = 'find . -path ./.rundock -prune -o';
+  function assertReads(cmd) {
+    assert.strictEqual(S.isReadOnlyShellCommand(cmd), true, `the shared definition reads: ${show(cmd)}`);
+    assert.strictEqual(risk(cmd), 'low', `graded low: ${show(cmd)}`);
+    assert.deepStrictEqual(crossings(cmd), NONE, `and the hook reports no crossing: ${show(cmd)}`);
+  }
+  // Each case: the line, and the crossings the hook reported for it before.
+  function assertAsks(cases) {
+    assert.ok(cases.length > 0, 'there are lines to ask about');
+    for (const [cmd, before] of cases) {
+      assert.strictEqual(S.isReadOnlyShellCommand(cmd), false, `the shared definition does not read: ${show(cmd)}`);
+      assert.notStrictEqual(risk(cmd), 'low', `and it asks: ${show(cmd)}`);
+      assert.deepStrictEqual(crossings(cmd), before, `the crossing it reported before: ${show(cmd)}`);
+    }
+  }
+  const each = (lines, before) => lines.map(cmd => [cmd, before]);
+
+  test('a quoted variable as the pattern of -name, -iname, -path, -regex, -lname or -wholename reads, with no crossing', () => {
+    for (const cmd of ['find . -name "$t.md" -print', 'find notes -iname "${t}*"', 'find notes -name "$t*"',
+      `${PRUNED} -name "$t.md" -print`, 'find . -path "./$d/*" -print', 'find . -regex ".*/${t}[.]md"',
+      'find . -lname "$t"', 'find . -wholename "./$a/$b.md"']) {
+      assertReads(cmd);
+    }
+  });
+
+  test('a loop searching for several names by a quoted variable reads, as the same loop with a literal name does', () => {
+    const loop = (pattern) => 'for t in alpha beta; do echo "== $t"; '
+      + `find . -path ./.git -prune -o -path ./.rundock -prune -o -name "${pattern}" -print; done`;
+    assertReads(loop('alpha.md'));
+    assertReads(loop('$t.md'));
+  });
+
+  test('a quoted pattern variable reads beside other text, other variables and other reading primaries', () => {
+    for (const cmd of ['find . \\( -name "$t" -o -iname "$u.md" \\) -print', 'find . -name "$t""$u"', 'find . -name "$t$u"',
+      'find . -name "$t,$u"', 'find . -name "$t-$u"', 'find . -name "$t?"', 'find . -name "$t".md -print',
+      'find . -name "$t x"', 'find . -name "$t\tx"', 'find . -name "${t}[1]"', 'find . -name "${t}:h"', 'find . ! -name "$t"',
+      'find . -not -path "./$d/*" -name "$t"', 'find . -ipath "*/$d/$t-$u,x?"', 'find . -name "$t" -o -name "$u" -print',
+      'find . -type f -name "$t" -newer x', 'find . -iregex ".*/${t}[.]md" -maxdepth 2', 'find . -name "$_x$T_2"',
+      // In zsh, setting PATH sets the array `path`: the quoted array is one
+      // word, which -name takes as a pattern (the shells test runs this line).
+      "for PATH in 'x:-o:-delete'; do /usr/bin/find . -name \"$path\" -print; done"]) {
+      assertReads(cmd);
+    }
+  });
+
+  test("the pattern list is find's ten pattern primaries, each one taking one operand", () => {
+    const find = S.namedOptions().find;
+    assert.deepStrictEqual(find.patterns, ['-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename',
+      '-lname', '-ilname', '-regex', '-iregex']);
+    for (const primary of find.patterns) assert.ok(find.oneOperand.includes(primary), `${primary} takes one operand`);
+    assert.ok(find.oneOperand.includes('-regextype') && !find.patterns.includes('-regextype'),
+      '-regextype takes a dialect, not a pattern');
+  });
+
+  test('the word reader hands find a quoted pattern variable whole, marked as held, and only when asked to', () => {
+    const held = [];
+    assert.deepStrictEqual(S.shellWords('-name "$t.md" -print', true, held), ['-name', '$t.md', '-print']);
+    assert.deepStrictEqual(held, [1], 'the second word holds a variable');
+    assert.strictEqual(S.shellWords('-name "$t.md" -print', true), null, 'with nowhere to mark it, a $ is still unread');
+    const two = [];
+    assert.deepStrictEqual(S.shellWords('. -name "$t""$u" -o -path "${d}/x"', true, two),
+      ['.', '-name', '$t$u', '-o', '-path', '${d}/x']);
+    assert.deepStrictEqual(two, [2, 5], 'each word is marked once');
+    for (const text of ['-name $t', '-name "$t"*', '-name "$t"{a,b}', '-name x*"$t"', '-name ~"$t"', '-name "$t"~',
+      '-name "$t[1]"', '-name "$t:h"', '-name "${t:-x}"', '-name "${!t}"', '-name "$@"', '-name "$1"', '-name "$$"',
+      '-name "$(rm x)"', '-name "$t`rm x`"']) {
+      assert.strictEqual(S.shellWords(text, true, []), null, `still unread: ${show(text)}`);
+    }
+  });
+
+  // ── Generated: a quoted variable as a pattern is judged as a plain word is
+  //
+  // From the module's own pattern list and a set of templates, reading and
+  // writing. Each line with the variable gets the verdict, the risk and the
+  // crossings the line with a plain word in its place gets. A crossing names
+  // the text it was read from, so the variable's name is put back as the word.
+  const TEMPLATES = [
+    [p => `find . ${p} -print`, true],
+    [p => `${PRUNED} ${p} -print`, true],
+    [p => `find ${HOOKS} ${p} -print`, true],
+    [p => `find . ${p} -delete`, false],
+    [p => `find . ${p} -fprint .rundock/state.json`, false],
+    [p => `find . ${p} -exec cat {} \\;`, false],
+    [p => `find ${HOOKS} ${p} -delete`, false],
+  ];
+  const SPELLINGS = [['"$t"', '"alpha"'], ['"${t}.md"', '"alpha.md"'], ['".*/$t*"', '".*/alpha*"']];
+  test('a quoted variable as any pattern gets the verdict, risk and crossings the line with a plain word gets', () => {
+    const asWord = cmd => crossings(cmd).map(c => c.replace(/\$\{t\}|\$t/g, 'alpha'));
+    const patterns = S.namedOptions().find.patterns;
+    assert.ok(patterns.length > 0, 'the module names its patterns');
+    for (const primary of patterns) {
+      for (const [template, reads] of TEMPLATES) {
+        for (const [variable, word] of SPELLINGS) {
+          const held = template(`${primary} ${variable}`);
+          const plain = template(`${primary} ${word}`);
+          assert.strictEqual(S.isReadOnlyShellCommand(plain), reads, `the plain line ${reads ? 'reads' : 'asks'}: ${show(plain)}`);
+          assert.strictEqual(S.isReadOnlyShellCommand(held), reads, `and so does ${show(held)}`);
+          assert.strictEqual(risk(held), risk(plain), `the same risk: ${show(held)}`);
+          assert.deepStrictEqual(asWord(held), asWord(plain), `the same crossings: ${show(held)}`);
+        }
+      }
+    }
+  });
+
+  // ── Every other variable still asks, one test per way past the allowance
+  test('an unquoted variable still asks, even as the pattern', () => {
+    assertAsks([...each(['find . -name $t.md -print', 'find . -name ${t}.md -print', 'find notes -iname $t'], NONE),
+      [`${PRUNED} -name $t.md -print`, STATE], [`find ${HOOKS} -name $t`, SURFACE]]);
+  });
+
+  test('a quoted variable where find reads a path or an option still asks', () => {
+    assertAsks([...each(['find . "$t"', 'find "$t" -name x', 'find "${t}" -name x', 'find . -name x "$t"',
+      'find . -name "$t" "$u"', 'find . "-$t" x', 'find . -"$t" x'], NONE),
+    ...each([`${PRUNED} "$t"`, `${PRUNED} -name x "$t"`, `${PRUNED} -name "$t" "$u"`], STATE),
+    [`find ${HOOKS} "$t"`, SURFACE]]);
+  });
+
+  test("a quoted variable after any primary that is not a pattern still asks, generated from the module's list", () => {
+    const find = S.namedOptions().find;
+    const others = find.oneOperand.filter(f => !find.patterns.includes(f));
+    assert.ok(others.includes('-regextype') && others.includes('-printf') && others.includes('-samefile'));
+    assertAsks([...each([...others, '-newer', '-newermt', '-fprint', '-fls'].map(f => `${PRUNED} ${f} "$t"`), STATE),
+      ...each([`${PRUNED} -fprintf "$t" x`, `${PRUNED} -exec cat "$t" \\;`, `${PRUNED} -execdir cat "$t" \\;`,
+        `${PRUNED} -ok cat "$t" \\;`, `${PRUNED} -okdir cat "$t" \\;`], STATE),
+      ['find . -samefile "$t"', NONE], [`find ${HOOKS} -newer "$t"`, SURFACE]]);
+  });
+
+  test('a parameter that is special or can become several words still asks', () => {
+    assertAsks(each(['"$@"', '"$*"', '"${a[@]}"', '"$a[@]"', '"${@}"', '"$1"', '"${1}"', '"$#"', '"$?"', '"$$"', '"$!"',
+      '"$-"', '"$0"'].map(v => `${PRUNED} -name ${v}`), STATE));
+  });
+
+  test('a braced parameter that does more than expand a name still asks', () => {
+    assertAsks(each(['"${t:-x}"', '"${t-x}"', '"${t/a/b}"', '"${!t}"', '"${#t}"', '"${(e)t}"', '"${t[1]}"', '"${t%.md}"',
+      '"${t:0:1}"', '"${ t}"', '"${t }"'].map(v => `${PRUNED} -name ${v}`), STATE));
+  });
+
+  test('a bare name followed by a subscript, a modifier or any character off the short list still asks', () => {
+    assertAsks([...each(['find . -name "$t[1]"', 'find . -name "$t:h"'], NONE),
+      ...each(['"$t[1]"', '"$t:h"', '"$t(x)"', '"$t{1}"', '"$t=x"', '"$t+"', '"$t%"', '"$t#"', '"$t@"', '"$t~"', '"$t\'"']
+        .map(v => `${PRUNED} -name ${v}`), STATE)]);
+  });
+
+  test('a variable after a word spelled like a pattern primary that is another primary\'s operand still asks', () => {
+    assertAsks([...each(['find . -printf -name "$t" -print', 'find . -regextype -name "$t"', 'find . -newer -iname "$t"',
+      'find . -name -name "$t"', 'find . -user -regex "$t"'], NONE),
+    ...each([`${PRUNED} -printf -name "$t" -print`, `${PRUNED} -name -name "$t"`], STATE)]);
+  });
+
+  test('text outside the quotes that the shell expands, in the same word, still asks', () => {
+    assertAsks([...each(['find . -name "$t"* -print', 'find . -name "$t"{a,b} -print'], NONE),
+      ...each(['"$t"*', '"$t"?', '"$t"[ab]', '"$t"{a,b}', '"$t"{a,-delete}', 'x*"$t"'].map(v => `${PRUNED} -name ${v} -print`), STATE),
+      ...each(['~"$t"', '"$t"~'].map(v => `${PRUNED} -name ${v} -print`), [...STATE, 'write'])]);
+  });
+
+  test('a line that declares, references or assigns the variable still asks', () => {
+    assertAsks([...each(['declare -n t=x; find . -name "$t"', 'typeset -n t=x; find . -name "$t"',
+      'local -n t=x; find . -name "$t"', 't=x; find . -name "$t"', 't=x find . -name "$t"', 'export t=x; find . -name "$t"',
+      'readonly t=x; find . -name "$t"'], NONE)]);
+  });
+
+  // Beside a segment that asks, a find segment that now reads no longer
+  // reports the folder it prunes as written, so the line reports what the
+  // same line with a literal name reports. The line still asks.
+  test('beside a segment that asks, a pruning find reports what the literal name reports', () => {
+    for (const line of [`declare -n t=x; ${PRUNED} -name "$t"`, `t=x; ${PRUNED} -name "$t" -print`]) {
+      const literal = line.replace('"$t"', '"alpha"');
+      assert.strictEqual(S.isReadOnlyShellCommand(line), false, line);
+      assert.strictEqual(P.classifyRisk('Bash', { command: line }), P.classifyRisk('Bash', { command: literal }), line);
+      assert.deepStrictEqual(crossings(line), crossings(literal), line);
+    }
+  });
+
+  test('a command substitution or a backtick inside the quotes still asks', () => {
+    assertAsks([['find . -name "$(rm x)"', NONE],
+      ...each(['"$(rm x)"', '"`rm x`"', '"$t$(rm x)"', '"${t}`rm x`"'].map(v => `${PRUNED} -name ${v}`), STATE)]);
+  });
+
+  test('option-like text beside the variable inside the quotes still asks', () => {
+    assertAsks([['find . -name "$t -delete"', NONE],
+      ...each(['"$t -delete"', '"$t -o -delete"', '"x -fprint y $t"'].map(v => `${PRUNED} -name ${v}`), STATE)]);
+  });
+
+  test('a writing or running primary elsewhere on the line still asks', () => {
+    assertAsks([['find . -name "$t" -delete', NONE],
+      ...each([`${PRUNED} -name "$t" -delete`, `${PRUNED} -name "$t" -fprint out`, `${PRUNED} -name "$t" -exec rm {} \\;`,
+        `${PRUNED} -name "$t" -fls out`, `${PRUNED} -iname "$t.md" -execdir cat {} +`], STATE),
+      [`find ${HOOKS} -name "$t" -delete`, SURFACE]]);
+  });
+
+  test('a pattern primary built from a variable still asks', () => {
+    assertAsks([...each(['find . "$p" "$t"', 'find . "$p" x'], NONE),
+      ...each([`${PRUNED} "$p" "$t"`, `${PRUNED} "-$p" "$t"`, `${PRUNED} -"$p" "$t"`], STATE)]);
+  });
+
+  test('a quoted variable still asks for rg, tree, file, sort and date', () => {
+    assertAsks([...each(['rg "$t" notes', 'rg -e "$t" notes', 'tree "$t"', 'tree -P "$t" notes', 'file "$t"', 'sort "$t"',
+      'sort -k "$t" notes/a.md', 'date "$t"', 'date +"$t"'], NONE),
+    ...each(['rg "$t" .rundock', 'rg -e "$t" .rundock', 'tree "$t" .rundock', 'file "$t" .rundock'], STATE)]);
+  });
+});
+
 // ── classifyRisk: PowerShell ────────────────────────────────────────────────
 
 describe('classifyRisk PowerShell', () => {
