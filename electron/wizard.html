@@ -331,6 +331,8 @@
     // process sends one cleaned line Claude Code printed, or a fixed kind
     // (electron/sign-in-reason.js). The line is only ever set as text.
     let signInStarted = false;
+    // Whether the step shows a reason. Only an asked answer shows one.
+    let reasonShown = false;
     const FIXED_REASONS = {
       timeout: "Claude Code didn't answer in time.",
       'not-started': "Claude Code couldn't be started.",
@@ -346,6 +348,7 @@
       const box = document.getElementById('auth-reason');
       box.textContent = '';
       box.hidden = !reason;
+      reasonShown = !box.hidden;
       if (!reason) return;
       const quoted = reason.kind === 'said' && typeof reason.text === 'string' && reason.text !== '';
       if (!quoted) {
@@ -428,6 +431,12 @@
         (codex.installed && result.status !== 'ready') ? CODEX_SUBTITLE : BASE_SUBTITLE;
 
       if (result.status === 'not-installed') {
+        // While an asked answer shows, an automatic answer leaves it, the step
+        // and both sign-in buttons as they are. The Codex step updates as ever.
+        if (asked !== true && reasonShown) {
+          renderCodexStep(codex, false);
+          return false;
+        }
         // Action needed, not in progress: numbered attention state, never the
         // spinner, so it does not read as "checking" forever before install.
         updateStep('install', 'attention');

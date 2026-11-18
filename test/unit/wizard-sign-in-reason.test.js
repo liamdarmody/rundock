@@ -109,6 +109,31 @@ async function askedAfterSignIn(reason, options) {
   return wiz;
 }
 
+// Sign in and ask, and the asked answer shows; an automatic check that
+// started while the person asked ('during') or after the answer showed
+// ('after') then answers `late`, or is rejected. Returns the wizard and what
+// it showed just before that late answer.
+async function askThenLate({ order, asked = failing(said(NOT_LOGGED_IN, true)), late }) {
+  const wiz = loadWizard();
+  await wiz.settle();
+  await wiz.signIn();
+  wiz.hold();
+  wiz.askButton().click();
+  let auto;
+  if (order === 'during') auto = wiz.w.checkStatus();
+  if (asked === 'rejected') wiz.state.held[0].reject(new Error('bridge-failure-detail-93'));
+  else wiz.state.held[0].answer(asked);
+  await wiz.settle();
+  assert.notStrictEqual(wiz.shown(), '', 'the asked answer shows first');
+  if (order === 'after') auto = wiz.w.checkStatus();
+  const before = { view: wiz.view(), install: wiz.doc.getElementById('step-install').outerHTML, shown: wiz.shown() };
+  if (late === 'rejected') wiz.state.held[1].reject(new Error('bridge-failure-detail-93'));
+  else wiz.state.held[1].answer(late);
+  await auto;
+  wiz.state.hold = false;
+  return { wiz, before };
+}
+
 // The declarations of one rule in the wizard's own stylesheet, whitespace
 // collapsed, so a test can pin a declaration without pinning the formatting.
 function ruleBody(selector) {
@@ -391,9 +416,106 @@ describe("the I've finished signing in button", () => {
     assert.ok(wiz.doc.getElementById('step-install').className.includes('done'), 'not back to the install step');
     wiz.state.hold = false;
     await wiz.check({ status: 'not-installed' });
-    assert.strictEqual(wiz.shown(), '', 'a check started after the ask still moves the step back');
-    assert.ok(wiz.doc.getElementById('step-install').className.includes('attention'));
+    assert.strictEqual(wiz.view(), asked, 'one started after the asked answer leaves them too');
+    assert.ok(wiz.doc.getElementById('step-install').className.includes('done'));
     wiz.close();
+  });
+
+  test('an automatic check that started while the person asked leaves the asked line, its hint, the step and both buttons when it answers after them that Claude Code is not installed', async () => {
+    const { wiz, before } = await askThenLate({ order: 'during', late: { status: 'not-installed' } });
+    assert.strictEqual(wiz.view(), before.view, 'the line, the hint, the step and both buttons stay');
+    assert.strictEqual(wiz.doc.getElementById('step-install').outerHTML, before.install, 'not back to the install step');
+    assert.strictEqual(wiz.saidLine().textContent, NOT_LOGGED_IN);
+    assert.strictEqual(wiz.command().textContent, COMMAND, 'the hint stays');
+    assert.ok(wiz.step().className.includes('active'));
+    assert.strictEqual(wiz.signinButton().style.display, 'inline-block');
+    assert.strictEqual(wiz.signinButton().disabled, false);
+    assert.strictEqual(wiz.signinButton().textContent, 'Sign in to Claude');
+    assert.strictEqual(wiz.askButton().style.display, 'inline-block');
+    assert.strictEqual(wiz.askButton().disabled, false);
+    assert.strictEqual(wiz.askButton().textContent, ASK);
+    assert.strictEqual(wiz.doc.getElementById('btn-check').style.display, 'none');
+    wiz.close();
+  });
+
+  test('an automatic check that started after the asked answer showed leaves the line, the step and both buttons when it answers that Claude Code is not installed', async () => {
+    for (const asked of [failing(said(NOT_LOGGED_IN, true)), failing({ kind: 'timeout' }), 'rejected']) {
+      const where = 'asked ' + JSON.stringify(asked);
+      const { wiz, before } = await askThenLate({ order: 'after', asked, late: { status: 'not-installed' } });
+      assert.strictEqual(wiz.view(), before.view, 'the line, the hint, the step and both buttons stay: ' + where);
+      assert.strictEqual(wiz.doc.getElementById('step-install').outerHTML, before.install, 'not back to the install step: ' + where);
+      assert.strictEqual(wiz.shown(), before.shown, where);
+      wiz.close();
+    }
+  });
+
+  test('while an asked line shows, an automatic check that fails another way or is rejected changes nothing, whether it started during the ask or after the answer', async () => {
+    for (const order of ['during', 'after']) {
+      for (const late of [failing(said(LIMIT, false)), failing({ kind: 'not-started' }), { status: 'not-authenticated' }, 'rejected']) {
+        const where = order + ', ' + JSON.stringify(late);
+        const { wiz, before } = await askThenLate({ order, late });
+        assert.strictEqual(wiz.view(), before.view, 'the line, the hint, the step and both buttons stay: ' + where);
+        assert.strictEqual(wiz.doc.getElementById('step-install').outerHTML, before.install, where);
+        assert.strictEqual(wiz.shown(), before.shown, where);
+        wiz.close();
+      }
+    }
+  });
+
+  test('once an automatic not-installed answer has left the asked line, asking again still replaces it and a pass still removes it and advances, and after the pass a not-installed answer moves the step back as before', async () => {
+    for (const order of ['during', 'after']) {
+      for (const pass of ['automatic', 'asked']) {
+        const where = order + ', ' + pass + ' pass';
+        const { wiz } = await askThenLate({ order, late: { status: 'not-installed' } });
+        await wiz.ask(failing(said(LIMIT, false)));
+        assert.strictEqual(wiz.saidLine().textContent, LIMIT, 'asking again replaces the line: ' + where);
+        assert.strictEqual(wiz.command(), null, 'with no hint for this line: ' + where);
+        assert.strictEqual(wiz.signinButton().disabled, false, where);
+        assert.strictEqual(wiz.signinButton().textContent, 'Sign in to Claude', where);
+        assert.strictEqual(wiz.askButton().disabled, false, where);
+        assert.strictEqual(wiz.askButton().textContent, ASK, where);
+        const replaced = wiz.view();
+        await wiz.check({ status: 'not-installed' });
+        assert.strictEqual(wiz.view(), replaced, 'the new line holds against an automatic not-installed answer too: ' + where);
+        if (pass === 'asked') await wiz.ask({ status: 'ready' });
+        else await wiz.check({ status: 'ready' });
+        assert.strictEqual(wiz.shown(), '', 'a pass removes the line: ' + where);
+        assert.ok(wiz.step().className.includes('done'), 'and advances: ' + where);
+        assert.strictEqual(wiz.signinButton().style.display, 'none', where);
+        assert.strictEqual(wiz.askButton().style.display, 'none', where);
+        assert.strictEqual(wiz.doc.getElementById('btn-check').textContent, 'Continue', where);
+        await wiz.check({ status: 'not-installed' });
+        assert.ok(wiz.doc.getElementById('step-install').className.includes('attention'),
+          'after the pass, not installed moves the step back: ' + where);
+        assert.ok(wiz.step().className.includes('pending'), where);
+        assert.strictEqual(wiz.askButton().style.display, 'none', where);
+        assert.strictEqual(wiz.shown(), '', where);
+        wiz.close();
+      }
+    }
+  });
+
+  test('after a new sign-in opens, an automatic not-installed answer moves the step back to install as before, whenever its check started', async () => {
+    for (const started of ['before the sign-in opened', 'after the sign-in opened']) {
+      const wiz = await askedAfterSignIn(said(OAUTH, true));
+      assert.ok(wiz.saidLine(), 'the line showed first');
+      wiz.hold();
+      let auto;
+      if (started === 'before the sign-in opened') auto = wiz.w.checkStatus();
+      wiz.signinButton().click();
+      await wiz.settle();
+      assert.strictEqual(wiz.shown(), '', 'the new sign-in clears the line: ' + started);
+      if (!auto) auto = wiz.w.checkStatus();
+      wiz.state.held[0].answer({ status: 'not-installed' });
+      await auto;
+      assert.ok(wiz.doc.getElementById('step-install').className.includes('attention'), 'back to the install step: ' + started);
+      assert.ok(wiz.step().className.includes('pending'), started);
+      assert.strictEqual(wiz.signinButton().style.display, 'none', started);
+      assert.strictEqual(wiz.askButton().style.display, 'none', started);
+      assert.strictEqual(wiz.doc.getElementById('btn-check').style.display, 'inline-block', started);
+      assert.strictEqual(wiz.shown(), '', started);
+      wiz.close();
+    }
   });
 
   test('a new sign-in clears the line and starts quiet, and an asked answer from before it opened shows nothing', async () => {
@@ -654,7 +776,7 @@ describe('after sign-in starts and a check the person asks for still fails', () 
   test('the line goes when the step changes', async () => {
     const wiz = await askedAfterSignIn(said(OAUTH, true));
     assert.ok(wiz.saidLine(), 'the line showed first');
-    await wiz.check({ status: 'not-installed' });
+    await wiz.ask({ status: 'not-installed' });
     assert.strictEqual(wiz.shown(), '');
     assert.ok(!wiz.step().textContent.includes(OAUTH));
     wiz.close();
