@@ -298,6 +298,55 @@ const CODEX_SECRET_RELATIVE_PATHS = ['auth.json'];
 // at the home folder's own root, like every entry above is matched only at
 // its folder's root.
 const HOME_SECRET_FILES = ['.claude.json', '.claude.json.backup'];
+// ── Folders of copies of a secret ──
+// Claude Code keeps timed copies of `~/.claude.json` in `~/.claude/backups/`
+// (`.claude.json.backup.<time>`) and tells a person to copy one back over the
+// live file when it is lost, so each copy carries the same user-scope MCP
+// servers and account details. A folder entry matches the folder itself and
+// everything under it, whatever the copies come to be called. Codex has none.
+const SECRET_RELATIVE_DIRS = ['backups'];
+const CODEX_SECRET_RELATIVE_DIRS = [];
+// ── A runtime home moved by its variable ──
+// `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move each runtime's home. What each
+// runtime keeps there was MEASURED, not assumed
+// (scripts/runtime-home-truth/captured-runtime-homes.json): with
+// CLAUDE_CONFIG_DIR set, Claude Code wrote `.claude.json` and `backups/` into
+// that folder and nothing into home, and with CODEX_HOME set, Codex wrote its
+// sign-in file, `auth.json`, into that folder and nothing into home.
+//
+// One entry is joined unmeasured, on a basis the record states: Claude Code's
+// credential file, which only a real sign-in writes (and which macOS keeps in
+// the Keychain instead). Under the variable the measured run kept everything
+// Claude Code keeps, the home folder's account file included, in the variable's
+// folder, so the credential file is joined there by the name the default
+// home's registry gives it. Joining a name that may never appear only adds a
+// card and frees nothing. A test holds these lists to that record, both ways.
+//
+// AS WELL AS THE DEFAULT HOMES, NEVER IN PLACE OF THEM. The hook, the server and
+// a terminal can each see the variable differently, so a value set in one must
+// never make `~/.claude` ordinary in another. And it ONLY ADDS: the folder is
+// never a runtime home to homeFor, so nothing in it becomes free, and an
+// ordinary file there is judged exactly as it was.
+const RELOCATED_HOMES = [
+  { runtime: 'claude', variable: 'CLAUDE_CONFIG_DIR', secrets: ['.claude.json', '.credentials.json'], secretDirs: ['backups'] },
+  { runtime: 'codex', variable: 'CODEX_HOME', secrets: ['auth.json'], secretDirs: [] },
+];
+// THE ONE PLACE THE VARIABLES ARE READ. The hook passes its own environment by
+// default; the server passes its own when it writes the sandbox block. A value
+// that is not an absolute path names no folder anyone can check, and is ignored.
+// Returns one row per runtime whose variable names a folder and which keeps a
+// secret there, shaped like a runtimeHomes row: `root` canonical for
+// matching, `value` as the variable spelled it, for the block.
+function relocatedRuntimeHomes(env = process.env) {
+  const rows = [];
+  for (const r of RELOCATED_HOMES) {
+    const value = env ? env[r.variable] : undefined;
+    if (typeof value !== 'string' || !path.isAbsolute(value)) continue;
+    if (!r.secrets.length && !r.secretDirs.length) continue;
+    rows.push({ runtime: r.runtime, variable: r.variable, value, root: canonicalize(value), secrets: r.secrets, secretDirs: r.secretDirs });
+  }
+  return rows;
+}
 // `config.toml` is Codex's `settings.json`: free to read, asks on write. The
 // databases, caches, logs and session files beside it are scratch and stay
 // free both ways, the same judgement already made for `~/.claude`.
@@ -358,12 +407,14 @@ function runtimeHomes(home = os.homedir()) {
     {
       root: agentHomeRoot(home),
       secrets: SECRET_RELATIVE_PATHS,
+      secretDirs: SECRET_RELATIVE_DIRS,
       dirs: PERSISTENCE_SURFACE_DIRS,
       files: PERSISTENCE_SURFACE_FILES,
     },
     {
       root: codexHomeRoot(home),
       secrets: CODEX_SECRET_RELATIVE_PATHS,
+      secretDirs: CODEX_SECRET_RELATIVE_DIRS,
       dirs: CODEX_PERSISTENCE_SURFACE_DIRS,
       files: CODEX_PERSISTENCE_SURFACE_FILES,
     },
@@ -379,13 +430,30 @@ function homeFor(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
     return c === r || c.startsWith(r + path.sep);
   }) || null;
 }
-// Every secret path, in one list: each runtime home's registry, then the
-// home-level files. The sandbox block's deny list is tied to this.
-function secretsRegistry(home = os.homedir()) {
+// Every secret file, in one list: each runtime home's registry, then the
+// home-level files, then those of a relocated home. The sandbox block's deny
+// list is tied to this. Files only: the folders are in secretFolders.
+function secretsRegistry(home = os.homedir(), env = process.env) {
   return [
     ...runtimeHomes(home).flatMap(h => h.secrets.map(p => path.join(h.root, p))),
     ...HOME_SECRET_FILES.map(f => path.join(canonicalize(home), f)),
+    ...relocatedRuntimeHomes(env).flatMap(r => r.secrets.map(p => path.join(r.root, p))),
   ];
+}
+// Every secret folder, matched with everything under it, in the same order.
+function secretFolders(home = os.homedir(), env = process.env) {
+  return [...runtimeHomes(home), ...relocatedRuntimeHomes(env)].flatMap(h => h.secretDirs.map(d => path.join(h.root, d)));
+}
+// Whether a row (a runtime home, or a relocated one) names `c`, a folded
+// canonical path, as a secret: one of its files exactly, or one of its folders
+// or anything under it.
+function holdsSecret(h, c, foldsCase) {
+  const at = p => foldCase(canonicalize(path.join(h.root, p)), foldsCase);
+  if (h.secrets.some(p => c === at(p))) return true;
+  return h.secretDirs.some(d => {
+    const dir = at(d);
+    return c === dir || c.startsWith(dir + path.sep);
+  });
 }
 function isHomeSecretFile(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
   const c = foldCase(canonicalize(candidate), foldsCase);
@@ -399,7 +467,40 @@ function namesSecretEntry(spelled, home = os.homedir(), foldsCase = hostFoldsCas
   if (typeof spelled !== 'string' || !spelled) return false;
   const at = p => foldCase(path.join(canonicalize(path.dirname(p)), path.basename(p)), foldsCase);
   const c = at(spelled);
-  return secretsRegistry(home).some(p => c === at(p));
+  if (secretsRegistry(home).some(p => c === at(p))) return true;
+  // A folder of secrets is named by the folder or anything under it, by its
+  // own name (a linked `backups`) or where it leads.
+  return secretFolders(home).some(d => [at(d), foldCase(canonicalize(d), foldsCase)].some(dir => c === dir || c.startsWith(dir + path.sep)));
+}
+// THE PLACES A LINK NAMES ON ITS WAY, one hop at a time. canonicalize keeps
+// the spelling of a link it cannot resolve (one that leads nowhere yet, or
+// round a loop), so such a link would be judged where it sits; a write through
+// one that leads nowhere yet creates the file it names. Empty for a word that
+// is no link: one read of its entry.
+//
+// ONLY AN ANSWER THAT THERE IS NO FURTHER LINK ENDS THE WALK: the entry is no
+// link (EINVAL), is not there (ENOENT), sits under a file (ENOTDIR) or under a
+// loop (ELOOP), or is named longer than any entry can be (ENAMETOOLONG), which
+// every word of a long commit message is. A name holding a NUL byte, which no
+// entry's can, is no link either, and is never read. Any other failure, or one
+// with no code, leaves the question open, so it is thrown and the request
+// refused, never taken for an ordinary file.
+const NO_FURTHER_LINK = ['EINVAL', 'ENOENT', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG'];
+function linkHops(p) {
+  const hops = [];
+  let cur = p;
+  for (let i = 0; i < 8; i++) {
+    if (cur.includes('\0')) break;
+    let next;
+    try { next = path.resolve(path.dirname(cur), fs.readlinkSync(cur)); } catch (e) {
+      if (e && NO_FURTHER_LINK.includes(e.code)) break;
+      throw e;
+    }
+    if (next === p || hops.includes(next)) break;
+    hops.push(next);
+    cur = next;
+  }
+  return hops;
 }
 // `spelled`, when given, is the path as the command or tool named it, before
 // links were resolved: a CREDENTIAL FILE THAT IS A LINK is judged where it
@@ -407,10 +508,16 @@ function namesSecretEntry(spelled, home = os.homedir(), foldsCase = hostFoldsCas
 function isSecretPath(candidate, home = os.homedir(), foldsCase = hostFoldsCase(), spelled) {
   if (typeof candidate !== 'string' || !candidate) return false;
   if (spelled && namesSecretEntry(spelled, home, foldsCase)) return true;
+  // A link is a secret when any place it names on its way is one, so a link
+  // that cannot be resolved is never taken for an ordinary file by default.
+  // Each hop is judged by its own name and where it leads, never its hops again.
+  if (spelled && linkHops(spelled).some(t => namesSecretEntry(t, home, foldsCase) || isSecretPath(t, home, foldsCase))) return true;
   const c = foldCase(canonicalize(candidate), foldsCase);
+  // A relocated home is asked first and only ever adds (see RELOCATED_HOMES).
+  if (relocatedRuntimeHomes().some(r => holdsSecret(r, c, foldsCase))) return true;
   const h = homeFor(candidate, home, foldsCase);
   if (!h) return isHomeSecretFile(candidate, home, foldsCase);
-  return h.secrets.some(p => c === foldCase(canonicalize(path.join(h.root, p)), foldsCase));
+  return holdsSecret(h, c, foldsCase);
 }
 function isPersistenceSurface(candidate, home = os.homedir(), foldsCase = hostFoldsCase()) {
   if (typeof candidate !== 'string' || !candidate) return false;
@@ -571,8 +678,9 @@ function isRuntimeHomeSurfaceEdit(toolName, toolInput, home = os.homedir(), fold
   if (typeof target !== 'string') return false;
   const resolved = canonicalize(path.resolve(target));
   // NO SECRETS-TIER PATH REACHES THIS, and the reason is a property of the
-  // registries rather than a check here: the secrets registry names a file at
-  // the runtime home root, and no persistence surface covers that root, so
+  // registries rather than a check here: the secrets registry names files and
+  // folders at the runtime home root (`backups/` among them), and no
+  // persistence surface covers that root or those folders, so
   // `isPersistenceSurface` is already false for every secret. A defensive
   // `isSecretPath` guard stood here and was removed because nothing could make
   // it fire, and an unreachable guard reads as protection that is not there.
@@ -935,11 +1043,17 @@ function globReachesConsole(resolvedPath, home = os.homedir(), foldsCase = hostF
 // `cd $(...)`); a relative word bearing a registry entry's own name is then
 // asked about as that entry, rather than guessed to be somewhere harmless.
 // Returns the registry paths reached, each spelled as the registry spells it.
+//
+// A FOLDER ENTRY (`folder: true`) is named by any segment of the word
+// (`backups/x`), and reached by a word resolving to it or to anything under
+// it; it answers with the path reached, which is what the card names.
 function secretsReachedBy(word, { starts, unfollowed, relative, entries, folds, pmod = path }) {
   const glob = /[*?[]/.test(word);
-  const name = String(word).split(/[\\/]+/).pop();
+  const segs = String(word).split(/[\\/]+/);
+  const name = segs[segs.length - 1];
   const nameRe = glob ? globSegmentRegex(name, folds) : null;
-  const named = (e) => (glob ? nameRe.test(e.name) : foldCase(name, folds) === foldCase(e.name, folds));
+  const segNames = (s, n) => (/[*?[]/.test(s) ? globSegmentRegex(s, folds).test(n) : foldCase(s, folds) === foldCase(n, folds));
+  const named = (e) => (e.folder ? segs.some(x => segNames(x, e.name)) : glob ? nameRe.test(e.name) : foldCase(name, folds) === foldCase(e.name, folds));
   // A literal word can only reach a file whose name it ends in, which keeps
   // the resolving below off every ordinary word in the command.
   if (!glob && !entries.some(named)) return [];
@@ -949,10 +1063,11 @@ function secretsReachedBy(word, { starts, unfollowed, relative, entries, folds, 
     for (const e of entries) {
       // `*/..` resolves away, leaving a name with no glob in it: the shell
       // expands `*` to any folder there and climbs back out of it.
-      const hit = glob && /[*?[]/.test(r)
-        ? e.reach.some(x => globReachesPath(r, x, folds, pmod)) || globReachesPath(r, e.path, folds, pmod)
-        : foldCase(r, folds) === foldCase(e.path, folds);
-      if (hit) hits.add(e.path);
+      const globbed = glob && /[*?[]/.test(r);
+      const hit = globbed
+        ? e.reach.some(x => globReachesPath(r, x, folds, pmod, !!e.folder)) || globReachesPath(r, e.path, folds, pmod, !!e.folder)
+        : foldCase(r, folds) === foldCase(e.path, folds) || (!!e.folder && foldCase(r, folds).startsWith(foldCase(e.path, folds) + pmod.sep));
+      if (hit && (!globbed || !e.folder || e.present())) hits.add(e.folder && !globbed ? r : e.path);
     }
   }
   if (unfollowed && relative) for (const e of entries) if (named(e)) hits.add(e.path);
@@ -1214,12 +1329,15 @@ function recursiveReadWords(command, posixText = true) {
 // Whether a resolved glob can expand to `target`: every segment from the first
 // one holding a glob is matched against the segments of `target` below the
 // folder before it, a `**` standing for any number of them.
-function globReachesPath(resolvedGlob, target, folds, pmod = path) {
+// `within`: `target` is a folder, reached by a glob that can expand to it or
+// to anything under it (`~/.claude/backups/*`, `~/.claude/*/x`).
+function globReachesPath(resolvedGlob, target, folds, pmod = path, within = false) {
   const segs = String(resolvedGlob).split(/[\\/]+/);
   const at = segs.findIndex(s => /[*?[]/.test(s));
   if (at < 0) return false;
   const dir = foldCase(segs.slice(0, at).join(pmod.sep) || pmod.sep, folds);
   const t = foldCase(String(target), folds);
+  if (within && (dir === t || dir.startsWith(t + pmod.sep))) return true;
   const prefix = dir.endsWith(pmod.sep) ? dir : dir + pmod.sep;
   if (!t.startsWith(prefix)) return false;
   const names = String(target).slice(prefix.length).split(/[\\/]+/);
@@ -1233,6 +1351,7 @@ function globReachesPath(resolvedGlob, target, folds, pmod = path) {
     if (memo.has(key)) return memo.get(key);
     let r;
     if (i === pat.length) r = j === names.length;
+    else if (within && j === names.length) r = true;
     else if (pat[i] === '**') r = match(i + 1, j) || (j < names.length && match(i, j + 1));
     else r = j < names.length && res[i].test(names[j]) && match(i + 1, j + 1);
     memo.set(key, r);
@@ -1430,11 +1549,13 @@ function classifyFileAccess(toolName, toolInput, workspaceRoot, extraDirs = [], 
   // the registry spells it (see SHELL_STARTUP_FILES).
   const startup = writing ? startupFileAt(resolvedPath, home, foldsCase) : null;
   if (startup) return { where: inside ? 'inside' : 'outside', resolvedPath: startup.path, grantDir: null, answerFile: true, startupFile: startup.name };
-  // A credential file the workspace holds (a workspace at the home folder, or
-  // in a runtime home) is still a credential: reading it asks, and is refused
-  // when nobody can be asked. `where` stays honest; `credential` carries why.
-  if (inside && !writing && isSecretPath(resolvedPath, home, foldsCase, spelled)) return { where: 'inside', resolvedPath, grantDir: null, credential: true };
-  if (inside) return { where: 'inside', resolvedPath };
+  // A SECRET THE WORKSPACE HOLDS (a workspace at the home folder, in a
+  // runtime home, or above one) goes on to the tags below, read or written,
+  // and asks as the same file asks from any other workspace: a crossing
+  // tagged secret, with no folder to remember, refused when nobody can be
+  // asked. Where the workspace sits never hides one.
+  const secretInside = inside && isSecretPath(resolvedPath, home, foldsCase, spelled);
+  if (inside && !secretInside) return { where: 'inside', resolvedPath };
   // CODE MODE'S DEVELOPMENT PATHS: the temp folders and package caches are
   // working folders there, and git's own settings are free to read. Notes mode
   // is unchanged. See scripts/dev-paths.js.
@@ -3836,16 +3957,26 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   for (const rel of SECRET_RELATIVE_PATHS) spell(path.join('.claude', rel));
   for (const rel of CODEX_SECRET_RELATIVE_PATHS) spell(path.join('.codex', rel));
   for (const f of HOME_SECRET_FILES) spell(f);
+  for (const rel of SECRET_RELATIVE_DIRS) spell(path.join('.claude', rel));
+  for (const rel of CODEX_SECRET_RELATIVE_DIRS) spell(path.join('.codex', rel));
   // `winWorld` is a Windows shell judged on a macOS or Linux host, which only
   // the tests build (the hook never passes `platform`). The registry is spelled
   // in the host's own path rules, which cannot name its paths, so it is not
   // matched there. On a Windows host `winWorld` is false and this runs with
   // Windows path rules, as everything else here does.
-  const secretEntries = winWorld ? [] : secretsRegistry(home).map((p) => {
+  // A folder of secrets (secretFolders) is an entry too, marked `folder`.
+  // Named itself, it is a secret whether or not it is there yet. Reached from
+  // a folder above it, or by a glob, it is only when it is there: a read of
+  // `~/.claude` reads nothing from a backups folder that does not exist.
+  const entryFor = (p, folder) => {
     const c = canonicalize(p);
-    return { path: c, reach: [...new Set([p, ...(spelled.get(c) || [])])], name: path.basename(p) };
-  });
+    let there;
+    const present = () => (there === undefined ? (there = fs.existsSync(c)) : there);
+    return { path: c, reach: [...new Set([p, ...(spelled.get(c) || [])])], name: path.basename(p), ...(folder ? { folder: true, present } : {}) };
+  };
+  const secretEntries = winWorld ? [] : [...secretsRegistry(home).map(p => entryFor(p)), ...secretFolders(home).map(p => entryFor(p, true))];
   const secretNames = new Set(secretEntries.map(e => foldCase(e.name, foldsCase)));
+  const folderNames = new Set(secretEntries.filter(e => e.folder).map(e => foldCase(e.name, foldsCase)));
   // The runtime homes, which hold credential files and are free to read, and
   // the words and places the command reads everything inside of. Each home is
   // known by both its spellings, as written under home and where its links
@@ -3858,7 +3989,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     listed: [...new Set(homeSpellings.map(s => path.join(s, ['.claude', '.codex'][i])))],
   }));
   const under = (p, dir) => foldCase(p, foldsCase).startsWith(foldCase(dir, foldsCase) + path.sep);
-  const entriesUnder = (h) => secretEntries.filter(e => e.reach.some(x => under(x, h.root)) || under(e.path, h.real));
+  const entriesUnder = (h) => secretEntries.filter(e => (!e.folder || e.present()) && (e.reach.some(x => under(x, h.root)) || under(e.path, h.real)));
   const folderReads = [];
   for (const [text, at] of [[view.text, null], ...view.commands.map(c => [c.text, c.at])]) {
     for (const r of recursiveReadWords(text, posixText)) folderReads.push(at === null ? { ...r, fromStart: false } : { word: r.word, at, fromStart: true });
@@ -3884,18 +4015,34 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     homesKnown.set(key, out);
     return out;
   };
-  // A CREDENTIAL FILE IS REPORTED AS ITS DIRECT SPELLING WOULD BE: the same
-  // exemption (the workspace's own files) and the same tags, so the card a relative
-  // or glob spelling raises is the one `cat ~/.claude/.credentials.json`
-  // raises. Answers whether it was reported, now or by an earlier word.
+  // ANY FOLDER HOLDING A SECRET, not only a runtime home: home itself, a folder
+  // above one, or a link to either. `grep -r TODO .` in a workspace at home
+  // reads the credential files there as surely as `cat` would. A literal word
+  // only; a glob is matched against the runtime homes above.
+  const holds = (dir, p) => { const d = foldCase(dir, foldsCase); return foldCase(p, foldsCase).startsWith(d.endsWith(path.sep) ? d : d + path.sep); };
+  const entriesWithin = (word, starts) => {
+    if (/[*?[]/.test(word)) return [];
+    const out = new Set();
+    for (const b of starts) {
+      const lexical = path.resolve(b, word);
+      const r = canonicalize(lexical);
+      for (const e of secretEntries) if ((!e.folder || e.present()) && (e.reach.some(x => holds(lexical, x) || holds(r, x)) || holds(r, e.path))) out.add(e);
+    }
+    return [...out];
+  };
+  // A CREDENTIAL FILE IS REPORTED AS ITS DIRECT SPELLING WOULD BE, with the
+  // same tags, so the card a relative or glob spelling raises is the one
+  // `cat ~/.claude/.credentials.json` raises. Answers whether it was
+  // reported, now or by an earlier word.
   // A credential file is never a development path or covered by a named
-  // folder, so those two exemptions are not tried here.
-  // Every credential file the line may read, the workspace's own included, is
-  // also noted in `opts.credentialReads` when given: one reached from a place
-  // that only writes (`writeOnly`) is not.
+  // folder, so those two exemptions are not tried here. Nor is the
+  // workspace's own: one the workspace holds is reported, read or written,
+  // as it is from anywhere else. Where the workspace sits never hides one.
+  // Every credential file the line may read is also noted in
+  // `opts.credentialReads` when given: one reached from a place that only
+  // writes (`writeOnly`) is not.
   const reportSecret = (r, writeOnly) => {
     if (opts.credentialReads && !writeOnly) opts.credentialReads.add(r);
-    if (insideWorkspaceRoot(r, workspaceRoot, path)) return false;
     if (seen.has(r)) return true;
     seen.add(r);
     const hidden = hiddenHomeRootOf(r, home);
@@ -3978,6 +4125,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
       // A folder a recursive reader is handed stands among the words a segment
       // may read, so it is only written where no place names it any other way.
       for (const h of homesReadBy(form, starts)) for (const e of entriesUnder(h)) reportSecret(e.path, onlyWritten.has(word));
+      for (const e of entriesWithin(form, starts)) reportSecret(e.path, onlyWritten.has(word));
     }
   }
   // A WORD HOLDING A VARIABLE OR A SUBSTITUTION is only known when the line
@@ -3995,7 +4143,7 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
   // runs to the parenthesis that closes it, or to the end when none does.
   const literalParts = t => { const re = /\$\{[^}]*\}|\$[\w@*#?$!-]+|`[^`]*`/y, parts = ['']; for (let i = 0; i < t.length; i++) { const j = t.startsWith('$(', i) ? codeParse.closeParen(t, i + 1, 'bash') : (re.lastIndex = i, re.test(t)) ? re.lastIndex - 1 : null; if (j === null) parts[parts.length - 1] += t[i]; else { parts.push(''); i = j < 0 ? t.length : j; } } return parts; };
   const fits = (parts, p) => { const last = parts[parts.length - 1]; let k = parts[0].length; for (const x of parts.slice(1, -1)) { const i = p.indexOf(x, k); if (i < 0) return false; k = i + x.length; } return p.startsWith(parts[0]) && p.endsWith(last) && (parts.length > 1 ? p.length - last.length >= k : p === last); };
-  const ends = secretEntries.map(e => { const rels = e.reach.flatMap(x => homeSpellings.map(h => path.relative(h, x))).filter(r => r && !r.startsWith('..') && !path.isAbsolute(r)).map(fold); return { e, rels, paths: [...rels.map(r => '~/' + r), ...e.reach.map(fold)], names: rels.flatMap(r => r.split('/').flatMap((_, i, a) => [a.slice(i).join('/'), '/' + a.slice(i).join('/')])) }; });
+  const ends = secretEntries.filter(e => !e.folder).map(e => { const rels = e.reach.flatMap(x => homeSpellings.map(h => path.relative(h, x))).filter(r => r && !r.startsWith('..') && !path.isAbsolute(r)).map(fold); return { e, rels, paths: [...rels.map(r => '~/' + r), ...e.reach.map(fold)], names: rels.flatMap(r => r.split('/').flatMap((_, i, a) => [a.slice(i).join('/'), '/' + a.slice(i).join('/')])) }; });
   for (const w of joined) {
     const parts = w.expands ? literalParts(fold(HOME_PREFIX.reduce((t, re) => t.replace(re, '~'), w.t))) : [];
     let cut = parts.length; while (cut > 1 && !parts[cut - 1]) cut--;
@@ -4085,7 +4233,8 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     // landing, braces and loop words expanded, and a glob is matched against
     // what it can expand to (see secretsReachedBy).
     const forms = secretEntries.length && pmod === path ? braceForms(t).flatMap(loopForms) : [];
-    if (forms.some(f => /[*?[]/.test(f) || secretNames.has(foldCase(String(f).split(/[\\/]+/).pop(), foldsCase)))) {
+    const namesSecret = (f) => { const segs = String(f).split(/[\\/]+/); return secretNames.has(foldCase(segs[segs.length - 1], foldsCase)) || segs.some(x => folderNames.has(foldCase(x, foldsCase))); };
+    if (forms.some(f => /[*?[]/.test(f) || namesSecret(f))) {
       const relative = !homed && !pmod.isAbsolute(t);
       const here = fromStart ? null : possibleFoldersAt(at);
       const starts = here || [base, ...cdStarts(pmod, at, fromStart)];
@@ -4108,8 +4257,16 @@ function crossingsIn(command, workspaceRoot, extraDirs, home, foldsCase, opts, r
     // A bare word (`dist`, `install`, `-rf`) is never a crossing, however the
     // base falls; a relative path with a separator is judged by where it
     // resolves from the base, like any other.
-    if (!cdTarget && !homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t) && !/[\\/]/.test(t)) continue;
-    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) continue;
+    //
+    // A BARE WORD THAT IS A LINK is judged where it leads when that is a
+    // secret, as the Read tool judges it (`cat link.json`, the link leading to
+    // a credential file). Only a link is asked: one read of the word's entry.
+    const bare = !cdTarget && !homed && !t.startsWith('/') && !WIN_DRIVE.test(t) && !WIN_UNC.test(t) && !TRAVERSAL.test(t) && !/[\\/]/.test(t);
+    const secretHere = () => pmod === path && !winWorld && isSecretPath(resolved, home, foldsCase, spelled);
+    if (bare && !(pmod === path && !winWorld && linkHops(spelled).length && secretHere())) continue;
+    // A secret the workspace holds goes on to the tags below, as it would
+    // from anywhere else (see reportSecret).
+    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod) && !secretHere()) continue;
     // A TOP-LEVEL PATH THAT DOES NOT EXIST, READ BY A COMMAND THAT ONLY READS,
     // reaches nothing: `--exclude-dir=/Build` and `git log -- /Docs` name a
     // pattern, not a place. A command that writes keeps the crossing, however
@@ -4380,9 +4537,6 @@ function classifyShellAccess(toolName, toolInput, workspaceRoot, extraDirs = [],
   // The first folders this command's code literals name, looked up afresh for
   // every classification (see literalIsPlace).
   const crossings = shellCrossings(ti.command, workspaceRoot, extraDirs, home, foldsCase, { ...opts, windowsSwitches, shellTool: toolName, firstFolders: new Map() });
-  // Nothing crosses, but the line reads a credential file the workspace holds.
-  const reads = opts.credentialReads;
-  if (!crossings.length && reads && reads.size) return { where: 'inside', resolvedPath: [...reads][0], grantDir: null, credential: true };
   // A line the joined reading could not read is asked about, as an escape is.
   if (!crossings.length) return crossings.unread ? { where: 'outside', resolvedPath: null, grantDir: null, grantable: false, crossings: [] } : null;
   // `grantDir` AND `grantable` ARE DIFFERENT QUESTIONS, and conflating them is
@@ -4416,7 +4570,8 @@ module.exports = {
   advisoryOutsidePaths,
   isSecretPath, isPersistenceSurface, SECRET_RELATIVE_PATHS, PERSISTENCE_SURFACE_DIRS, PERSISTENCE_SURFACE_FILES,
   CODEX_SECRET_RELATIVE_PATHS, CODEX_PERSISTENCE_SURFACE_DIRS, CODEX_PERSISTENCE_SURFACE_FILES,
-  HOME_SECRET_FILES, secretsRegistry,
+  HOME_SECRET_FILES, secretsRegistry, SECRET_RELATIVE_DIRS, CODEX_SECRET_RELATIVE_DIRS, secretFolders,
+  RELOCATED_HOMES, relocatedRuntimeHomes, linkHops,
   agentHomeRoot, codexHomeRoot, runtimeHomes,
   isWorkspaceAnswerFile, isRuntimeGuardedAnswerFile, isRundockConsolePath, RUNDOCK_CONSOLE_DIR,
   SHELL_STARTUP_FILES, STARTUP_FILE_EXPOSURE_RECORD, exposureRecordPath, shellStartupEntries, startupFileAt, startupFolderAt, homeSpelled,

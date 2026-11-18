@@ -2002,7 +2002,18 @@
       "Startup files: the record's folder counts as one holding a startup file": 9.03,
       "Startup files: the dotfiles folder a startup file links into is not matched": 9.03,
       "Workspace switch: the Codex app-server is shut down while a routine turn still holds it": 51.6,
-      "Workspace switch: a Codex app-server that exits after a switch is taken off the pid file it was registered in": 51.3
+      "Workspace switch: a Codex app-server that exits after a switch is taken off the pid file it was registered in": 51.3,
+      "Secret reach: the workspace hides a secret from the file tools": 28.8,
+      "Secret reach: a secret a command names in the workspace is dropped": 28.8,
+      "Secret reach: a secret the workspace holds is skipped as inside work": 28.8,
+      "Secret reach: a bare link name is not followed to a secret": 28.8,
+      "Secret reach: the backups folder is not a secret": 28.8,
+      "Secret reach: a secret folder does not hold its files": 4.76,
+      "Secret reach: the moved runtime home replaces the default ones": 28.8,
+      "Secret reach: the moved runtime home is taken as a runtime home": 28.8,
+      "Secret reach: a block written with the variable set is not recognized": 6.01,
+      "Secret reach: a named working folder covers its secrets": 28.8,
+      "Secret reach: a named working folder at a runtime home covers its secrets": 28.8
     },
     "mutate-atomic-write-guards.js": {
       "a state file is renamed over whole, never written under its own name": 0.42,
