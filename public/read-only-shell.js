@@ -722,6 +722,9 @@
     '-cmin', '-size', '-user', '-group', '-uid', '-gid', '-perm', '-links',
     '-inum', '-used', '-fstype', '-samefile', '-context', '-printf', '-flags',
   ];
+  var FIND_PATTERN_PRIMARIES = [
+    '-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename', '-lname', '-ilname', '-regex', '-iregex',
+  ];
   // -newer, and the -newerXY family (-newermt, -newerct and the rest), all of
   // which take one operand.
   var FIND_NEWER_FAMILY = /^-newer[a-z]{0,2}$/i;
@@ -729,16 +732,19 @@
   // A word that does not begin with `-`, once the shell has taken its quotes
   // and backslashes away, is a path, a pattern, a number or one of find's
   // grouping tokens, and none of those is a flag to judge.
-  function findOnlyReads(words) {
+  function findOnlyReads(words, held) {
     for (var i = 0; i < words.length; i++) {
       var w = words[i];
+      if (holdsVariable(held, i)) return false;
       if (w.charAt(0) !== '-') continue;
       if (FIND_READ_FLAGS_NO_OPERAND.indexOf(w) >= 0) continue;
+      if (holdsVariable(held, i + 1) && FIND_PATTERN_PRIMARIES.indexOf(w) < 0) return false;
       if (FIND_READ_FLAGS_ONE_OPERAND.indexOf(w) >= 0 || FIND_NEWER_FAMILY.test(w)) { i++; continue; }
       return false;
     }
     return true;
   }
+  function holdsVariable(held, i) { return !!held && held.indexOf(i) >= 0; }
 
   // ── sort and date are judged the way find is, by the options that read ──
   //
@@ -877,7 +883,13 @@
   var OPTIONS_READ_LIMIT = 8192;
   // Unquoted, only these are plain text in bash and in zsh alike.
   var PLAIN_WORD_CHAR = /^(?:[A-Za-z0-9_.\/:,=+%@~-]|[\p{L}\p{M}\p{N}])$/u;
-  function shellWords(text, asWrittenToo) {
+  var PLAIN_PARAMETER = /\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*(?=["\t .\/,*?$-]))/y;
+  function plainParameter(text, at) {
+    PLAIN_PARAMETER.lastIndex = at;
+    var found = PLAIN_PARAMETER.exec(text);
+    return found ? found[0] : '';
+  }
+  function shellWords(text, asWrittenToo, held) {
     var lenient = asWrittenToo === true;
     // UNREADABLE is the PowerShell reading's test, below: a control character,
     // a replacement character, or half a surrogate pair.
@@ -887,11 +899,14 @@
     var inWord = false;
     var first = '';
     var quote = '';
+    var expands = -1;
     for (var i = 0; i < text.length; i++) {
       var c = text[i];
       if (quote === "'") { if (c === "'") quote = ''; else word += c; continue; }
       if (quote === '"') {
         if (c === '"') { quote = ''; continue; }
+        var plain = c === '$' && held && expands !== words.length ? plainParameter(text, i) : '';
+        if (plain) { if (!holdsVariable(held, words.length)) held.push(words.length); word += plain; i += plain.length - 1; continue; }
         if (c === '$' || c === '`') return null;
         if (c === '\\' && i + 1 < text.length && '$`"\\'.indexOf(text[i + 1]) >= 0) { word += text[++i]; continue; }
         word += c;
@@ -909,6 +924,7 @@
       // A `!` standing alone as a word, find's negation, is plain text to bash
       // and zsh anywhere after the command's own name.
       if (lenient && c === '!' && !word && /^[ \t]?$/.test(text.charAt(i + 1))) { word += c; continue; }
+      if (held && (c === '~' || GLOB_CHAR.test(c))) { if (holdsVariable(held, words.length)) return null; expands = words.length; }
       if (lenient && GLOB_CHAR.test(c) && globCannotStartWithDash(first)) { word += c; continue; }
       if (!PLAIN_WORD_CHAR.test(c)) return null;
       word += c;
@@ -983,9 +999,10 @@
       var text = String(segment);
       if (NOT_A_WORD_BREAK.test(text)) return false;
       var asWrittenToo = AS_WRITTEN_TOO.indexOf(command) >= 0;
-      var words = shellWords(textAfterWords(text, skip), asWrittenToo);
+      var held = command === 'find' ? [] : null;
+      var words = shellWords(textAfterWords(text, skip), asWrittenToo, held);
       if (!words) return false;
-      if (OPTION_RULES[command](words) !== true) return false;
+      if (OPTION_RULES[command](words, held) !== true) return false;
       return !asWrittenToo || OPTION_RULES[command](wordsAsWritten(text, skip)) === true;
     } catch (failed) {
       return false;
@@ -1333,7 +1350,7 @@
   function namedOptions() {
     return JSON.parse(JSON.stringify({
       find: {
-        noOperand: FIND_READ_FLAGS_NO_OPERAND, oneOperand: FIND_READ_FLAGS_ONE_OPERAND,
+        noOperand: FIND_READ_FLAGS_NO_OPERAND, oneOperand: FIND_READ_FLAGS_ONE_OPERAND, patterns: FIND_PATTERN_PRIMARIES,
         newerFamily: { source: FIND_NEWER_FAMILY.source, flags: FIND_NEWER_FAMILY.flags },
       },
       sort: SORT_OPTIONS, date: DATE_OPTIONS, rg: EXECUTING_FLAGS.rg, tree: WRITING_FLAGS.tree, file: WRITING_FLAGS.file,
