@@ -506,6 +506,9 @@ const STARTUP_PRELOAD = { src: path.join(ROOT, 'test', 'helpers', 'account-home-
 // refused, through the real hook in every mode and run, and the check itself
 // in-process with the case-folding seam set both ways.
 const TEAM_FOLDERS = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/workspace-team-folders.test.js' };
+// Each shell word also read as bash joins it, quotes and escapes removed,
+// through the real hook in both modes.
+const JOINED_WORDS = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/joined-path-words.test.js' };
 const MUTATIONS = [
   // ===== ONE DIRECTORY UNDER TWO NAMES IS ONE IDENTITY =====
   // Compare unresolved again and every symlink, alias and case spelling of
@@ -700,22 +703,22 @@ const MUTATIONS = [
     '  for (let n = 1; n < deny.length; n++) shapes.push(withDenyWrite(block, deny.slice(0, n)));\n'],
   // Forget a length a build wrote and every workspace carrying it is stranded.
   [SCAFFOLD, 'the list 0.15.6 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD, 'the list 0.13.3 to 0.15.5 wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD, 'the lists the development line wrote before 0.13.3 are recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   // Leave the current length out and the day a longer list ships, every block
   // this build wrote reads as a person's edit and never upgrades.
   [SCAFFOLD_SETTINGS, 'the current deny list\'s length is recorded as written',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-two-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   // ===== THE USER-LEVEL STATE FILE IS A SECRET AT BOTH LAYERS =====
   // Drop the home-level files from the block and ~/.claude.json is writable
   // by sandboxed commands again, its user-scope MCP servers with it.
@@ -1500,8 +1503,8 @@ const MUTATIONS = [
   // A card offering Always allow with nothing to save: the press would save
   // nothing the next request could be answered by.
   [PS_CARD, 'PowerShell card: no Always allow when there is no key to save',
-    '!boundary && !answerFile && key && RundockPermissions.offersAlwaysAllow(risk, verdict)',
-    '!boundary && !answerFile && RundockPermissions.offersAlwaysAllow(risk, verdict)'],
+    '!boundary && !answerFile && !credential && key && RundockPermissions.offersAlwaysAllow(risk, verdict)',
+    '!boundary && !answerFile && !credential && RundockPermissions.offersAlwaysAllow(risk, verdict)'],
   // WHAT A SAVED POWERSHELL KEY ANSWERS. The first puts back the match on the
   // command's first word; the rest each let one kind of part count as covered.
   [PS_GRADER, 'PowerShell key: a request is answered by every part it covers, not by its first word',
@@ -1759,10 +1762,10 @@ const MUTATIONS = [
     "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? verdict.rule : null;",
     "verdict.verdict === 'asks-once' && typeof verdict.rule === 'string' ? 'Bash:git' : null;"],
   [CM_HOOK, "M17: Asks once fails open when nobody can be asked",
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;",
-    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;"],
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;",
+    "  const failClosed = answerFile || destructive || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;"],
   [CM_HOOK, "M18: the Code-mode branch answers before the boundary classification",
-    "      && !(access && (access.where === 'outside' || access.answerFile))\n      && (!verdict || verdict.verdict === 'runs')) {",
+    "      && !(access && (access.where === 'outside' || access.answerFile || access.credential))\n      && (!verdict || verdict.verdict === 'runs')) {",
     "      && (!verdict || verdict.verdict === 'runs')) {"],
   [CM_HOOK, "M19: the hook input's cwd is ignored",
     "  const cwd = (typeof data.cwd === 'string' && data.cwd) ? data.cwd : undefined;",
@@ -2423,14 +2426,16 @@ const MUTATIONS = [
     ", 'startup_file', 'put_back'];",
     ", 'startup_file'];"],
   [PUTBACK_VIEW, "Put-back card: drawn as an ordinary card",
-    "  if (req.put_back && !RundockPermissions.permissionEnded(endedPermissions, requestId)) { renderPutBackCard(d, convoId, host); return; }",
+    "  if (req.put_back && !ended) { renderPutBackCard(d, convoId, host); return; }",
     ""],
   [PUTBACK_VIEW, "Put-back card: Leave it restored keeps the change",
     "data-perm-action=\"deny\">${esc(copy.leave)}",
     "data-perm-action=\"allow\">${esc(copy.leave)}"],
+  // The summarised divider moves the reply below itself with the same line,
+  // so the put-back card's copy is told apart by the else that follows it.
   [PUTBACK_VIEW, "Put-back card: the reply is not moved below the card",
-    "    state.currentStreamingMsg = next;",
-    ""],
+    "    state.currentStreamingMsg = next;\n  } else {",
+    "  } else {"],
   [PUTBACK_COPY, "Put-back card: a whitespace-only change is invisible",
     "    return m ? line.slice(0, m.index) + m[0].replace(/./g, '\u00b7') : line;",
     "    return line;"],
@@ -2732,8 +2737,8 @@ const MUTATIONS = [
   // Let a connector send or delete through when nobody can be asked and an
   // agent still running after Rundock has stopped sends with nobody seeing it.
   [CONNECTOR_HOOK_FLOW, 'Connector send: a send or delete is allowed when Rundock cannot be asked',
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks;",
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks;"],
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;",
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || credentialAccess;"],
   [CONNECTOR_HOOK_FLOW, 'Connector delete: a delete is allowed when Rundock cannot be asked',
     '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name) || isMcpDeleteTool(data.tool_name);',
     '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name);'],
@@ -3158,17 +3163,17 @@ const MUTATIONS = [
   // Forget the length the last build wrote and every workspace carrying it is
   // stranded: never rewritten, never given the new entries.
   [SCAFFOLD_SETTINGS, 'What runs: the nineteen-entry list is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD, 'What runs: the nineteen-entry list upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD_SETTINGS, 'Connector secrets: the twenty-one-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [SCAFFOLD, 'Connector secrets: the twenty-one-entry list upgrades on the next open',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];'],
   // An inherited Code-mode flag puts a Notes workspace under Code-mode grading;
   // an inherited conversation id names a conversation the agent does not have.
   [SPAWN_ENV, 'Spawn env: an inherited RUNDOCK_CODE_MODE reaches the agent',
@@ -4486,11 +4491,11 @@ const MUTATIONS = [
     '    ...shellStartupEntries(home).map(e => e.path),\n',
     ''],
   [STARTUP_SANDBOX, 'Startup files: the twenty-three-entry list the last build wrote is recognised',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 36, 41];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 36, 37, 39, 40, 41, 42, 44, 45];'],
   [STARTUP_SANDBOX, "Startup files: the list with ZDOTDIR's zsh files is recorded as written",
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 41];',
-    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36];'],
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 41, 42, 44, 45];',
+    'const WRITTEN_DENY_LENGTHS = [1, 2, 3, 8, 19, 21, 22, 23, 36, 37, 39, 40, 42, 44, 45];'],
   // The record of the startup files is accepted in the spelling either way of
   // running writes, and in no other: break each spelling and each refusal.
   // The record found anywhere in the block, rather than where this run writes
@@ -4531,8 +4536,8 @@ const MUTATIONS = [
     'Array.isArray(block.filesystem.denyWrite) ? block.filesystem.denyWrite[at] : undefined',
     'block.filesystem.denyWrite[at]'],
   [STARTUP_SANDBOX, 'Record spelling: an earlier deny list that carries the record has the same latitude',
-    'const rebuilt = recordAsWritten(sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode), block, claimedHome);\n  if (sameSandbox(block, rebuilt)) return true;',
-    'const rebuilt = sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode);\n  if (sameSandbox(block, recordAsWritten(rebuilt, block, claimedHome))) return true;'],
+    'const rebuilt = recordAsWritten(sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode, relocated), block, claimedHome);\n  if (sameSandbox(block, rebuilt)) return true;',
+    'const rebuilt = sandboxSettings(claimedWorkspace, platform, claimedHome, tail, [], claimedMode, relocated);\n  if (sameSandbox(block, recordAsWritten(rebuilt, block, claimedHome))) return true;'],
   [STARTUP_SANDBOX, 'Record spelling: recognising a block never changes it',
     '  return recordSpelling(theirs, home) ? withDenyWrite(rebuilt, deny.map((e, i) => (i === at ? theirs : e))) : rebuilt;',
     '  if (recordSpelling(theirs, home)) block.filesystem.denyWrite[at] = deny[at];\n  return rebuilt;'],
@@ -4659,14 +4664,14 @@ const MUTATIONS = [
   // Each field the hook grades keeps its request on the card path, however
   // its command reads.
   [READ_ONLY_ANSWER, 'Read-only answer: a crossing out of the workspace is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
-    "const HOOK_GRADES = ['answer_file', 'startup_file'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'credential'];",
+    "const HOOK_GRADES = ['answer_file', 'startup_file', 'credential'];"],
   [READ_ONLY_ANSWER, 'Read-only answer: an answer-file write is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
-    "const HOOK_GRADES = ['boundary', 'startup_file'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'credential'];",
+    "const HOOK_GRADES = ['boundary', 'startup_file', 'credential'];"],
   [READ_ONLY_ANSWER, 'Read-only answer: a shell startup file is answered with no card',
-    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file'];",
-    "const HOOK_GRADES = ['boundary', 'answer_file'];"],
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'startup_file', 'credential'];",
+    "const HOOK_GRADES = ['boundary', 'answer_file', 'credential'];"],
   // The verdict decides once it reaches decidePermission, so dropping it from
   // the call is what answers a Keychain line as a read.
   [READ_ONLY_ANSWER, 'Read-only answer: a Keychain line or any other verdict is answered with no card',
@@ -4866,6 +4871,111 @@ const MUTATIONS = [
   [TEAM_FOLDERS, 'Team folders: only the first path field present is checked',
     "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
     "  const targets = [ti.file_path || ti.notebook_path || ti.path].filter((v) => typeof v === 'string' && v);"],
+  // ===== A PATH IS ALSO READ AS THE SHELL JOINS IT =====
+  // Quotes read only as written: a quoted credential path names nothing.
+  // Caught by: every spelling generated from a registry entry's path.
+  [JOINED_WORDS, 'Joined words: the joined reading is removed',
+    '      joined.push(...joinedPathWords(text).map(',
+    '      joined.push(...[].map('],
+  // A word that opens with a variable in double quotes is left as written, so
+  // `"$HOME/.claude"/.credentials.json` starts with a quote, not home, and no
+  // literal part names a registry file. Caught by: home in double quotes,
+  // alone and with what follows, in every generated spelling.
+  [JOINED_WORDS, 'Joined words: home is not recognized inside double quotes',
+    '          if (t && !(slash && t === \'/\')) out.push({ t, at: wat,',
+    '          if (t && !(slash && t === \'/\')) out.push({ t: /^"\\$/.test(w.raw) ? w.raw : t, at: wat,'],
+  // The joined words stand in for the split ones: the words the reading of
+  // quotes as written finds are dropped, and the code's literals and the
+  // commands it runs are kept. Caught by: `cat "x y"/etc/hosts`, whose
+  // crossing only the reading of quotes as written finds.
+  [JOINED_WORDS, 'Joined words: the joined reading replaces the split one',
+    '  for (const w of joined) if (w.joined) { words.push(w);',
+    '  words.splice(0, words.length, ...words.filter(w => view.literals.includes(w) || ran.includes(w))); for (const w of joined) if (w) { words.push(w);'],
+  // A word holding a variable is never tagged. Caught by: each word holding a
+  // variable whose literal parts name a registry file asks as a secret.
+  [JOINED_WORDS, 'Joined words: a word holding a variable is never tagged',
+    '    for (const { e, rels, paths, names } of ends) if (',
+    '    for (const { e, rels, paths, names } of []) if ('],
+  // A line the joined reading cannot read runs as though it named nothing.
+  // Caught by: the lexer throwing, and a line past the reading's length, ask.
+  [JOINED_WORDS, 'Joined words: a lexer failure is treated as no crossing',
+    '  } catch (e) { found.unread = true; joined = []; }',
+    '  } catch (e) { joined = []; }'],
+  // ===== WHERE A SECRET SITS =====
+  // A file tool's path inside the workspace is taken as inside work, secret
+  // or not, so a workspace at home reads and writes its secrets unasked.
+  // Caught by: at home, the Read, Write and Edit tools on each secret ask.
+  [SECRET_REACH, 'Secret reach: the workspace hides a secret from the file tools',
+    "  if (inside && !secretInside) return { where: 'inside', resolvedPath };",
+    "  if (inside) return { where: 'inside', resolvedPath };"],
+  // A secret a command names inside the workspace is dropped as inside work,
+  // so a workspace at home lets a command read, replace or remove one
+  // unasked. Caught by: at home, a shell read and a shell write of each
+  // secret ask as a secret, however spelled.
+  [SECRET_REACH, 'Secret reach: a secret a command names in the workspace is dropped',
+    '    if (opts.credentialReads && !writeOnly) opts.credentialReads.add(r);\n    if (seen.has(r)) return true;',
+    '    if (opts.credentialReads && !writeOnly) opts.credentialReads.add(r);\n    if (insideWorkspaceRoot(r, workspaceRoot, path)) return false;\n    if (seen.has(r)) return true;'],
+  // A path the command names that stays in the workspace but is a secret
+  // there (a link to a backup copy not made yet, which the secret forms do
+  // not reach) is skipped as inside work. Caught by: a workspace link to a
+  // backup copy not there yet asks as a secret.
+  [SECRET_REACH, 'Secret reach: a secret the workspace holds is skipped as inside work',
+    '    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod) && !secretHere()) continue;',
+    '    if (insideWorkspaceRoot(resolved, workspaceRoot, pmod)) continue;'],
+  // A bare word is never followed through a link, so a link in the workspace
+  // that leads to a secret is read as the link. Caught by: the link name,
+  // bare and with separators, asks as the secret it leads to.
+  [SECRET_REACH, 'Secret reach: a bare link name is not followed to a secret',
+    '    if (bare && !(pmod === path && !winWorld && linkHops(spelled).length && secretHere())) continue;',
+    '    if (bare) continue;'],
+  // The backups folder is dropped from the registry. Caught by: each read of
+  // the folder or a copy in it, by every tool and spelling, asks as a secret.
+  [SECRET_REACH, 'Secret reach: the backups folder is not a secret',
+    "const SECRET_RELATIVE_DIRS = ['backups'];",
+    'const SECRET_RELATIVE_DIRS = [];'],
+  // A secret folder names only itself, not what it holds, so a copy in it
+  // falls under a standing grant over the runtime home. Caught by: the grant
+  // over the whole runtime home leaves each copy, at any depth, asking.
+  [HOOK, 'Secret reach: a secret folder does not hold its files',
+    '    const dir = at(d);\n    return c === dir || c.startsWith(dir + path.sep);',
+    '    const dir = at(d);\n    return c === dir;'],
+  // A home moved by CLAUDE_CONFIG_DIR is read in place of the default homes,
+  // not beside them. Caught by: the default backups folder keeps its place.
+  [SECRET_REACH, 'Secret reach: the moved runtime home replaces the default ones',
+    '  if (relocatedRuntimeHomes().some(r => holdsSecret(r, c, foldsCase))) return true;',
+    '  const moved = relocatedRuntimeHomes(); if (moved.length) return moved.some(r => holdsSecret(r, c, foldsCase));'],
+  // The moved home is taken as a runtime home, so an ordinary file there is
+  // judged as one in the runtime's folder: following the variable must only
+  // add secrets. Caught by: an ordinary file there is judged as it was
+  // without the variable.
+  [SECRET_REACH, 'Secret reach: the moved runtime home is taken as a runtime home',
+    '  return runtimeHomes(home).find(h => {',
+    '  return [...runtimeHomes(home), ...relocatedRuntimeHomes().map(r => ({ ...r, dirs: [], files: [] }))].find(h => {'],
+  // A block is recognized only as written without the variable, so one
+  // written with it set is no longer seen as Rundock's once it is unset.
+  // Caught by: a block written with the variable set is Rundock's when
+  // reopened with it unset, and the undo.
+  [SCAFFOLD_SETTINGS, 'Secret reach: a block written with the variable set is not recognized',
+    '  const relocated = plain ? relocatedAsWritten(block.filesystem.denyWrite, plain.filesystem.denyWrite.length) : [];',
+    '  const relocated = [];'],
+  // A working folder covers a secret its link leads into. A file tool path, or
+  // a shell word that names the secret, is still caught after this check, so
+  // only a workspace link by another name rests on it alone. Caught by: a
+  // credential file that links into a named working folder, read through a
+  // workspace link to it by another name, and a moved runtime home named as a
+  // working folder, its account file read the same way.
+  [SECRET_REACH, 'Secret reach: a named working folder covers its secrets',
+    '  if (pmod === path && isSecretPath(resolvedPath, home, foldsCase, spelled)) return false;',
+    ''],
+  // Both stops gone, so home, ~/.claude or ~/.codex named as a working folder
+  // covers the secrets in it. Either stop alone still refuses them, which is
+  // why the pins need this row. As above, only a workspace link by another
+  // name rests on these stops alone. Caught by: with each folder named, a
+  // shell read through a workspace link by another name, and the row above's
+  // tests.
+  [SECRET_REACH, 'Secret reach: a named working folder at a runtime home covers its secrets',
+    '  if (homeFor(resolvedPath, home, foldsCase)) return false;\n  // NOR A CREDENTIAL FILE REACHED THROUGH A LINK, wherever the link leads: a\n  // named `~/dotfiles` that holds the target of `~/.claude/.credentials.json`\n  // must not exempt it either.\n  if (pmod === path && isSecretPath(resolvedPath, home, foldsCase, spelled)) return false;',
+    ''],
   // ===== THE BLOCK REFUSES READS OF THE CREDENTIAL FILES =====
   // No read deny, and a sandboxed command reads a token the write deny keeps.
   // Caught by: a read of each credential file is refused, in every shape.
@@ -4890,8 +5000,8 @@ const MUTATIONS = [
   // Ahead of the write deny, so dropping it moves a key and the serialised
   // comparison no longer matches. Caught by: it is the last key.
   [READ_DENY, 'Read deny: placed before the write deny',
-    '  const filesystem = { allowWrite, denyWrite: denyWriteFor(allowWrite[0], home) };',
-    '  const filesystem = { allowWrite, denyRead: [], denyWrite: denyWriteFor(allowWrite[0], home) };'],
+    '  const filesystem = { allowWrite, denyWrite: denyWriteFor(allowWrite[0], home, relocated) };',
+    '  const filesystem = { allowWrite, denyRead: [], denyWrite: denyWriteFor(allowWrite[0], home, relocated) };'],
   // Code mode's shape without it, where another layer turned the sandbox on.
   // Caught by: the Code-mode shape carries it.
   [READ_DENY, 'Read deny: Code mode\'s shape leaves it out',

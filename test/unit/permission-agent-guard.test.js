@@ -130,6 +130,29 @@ describe('isRuntimeHomeSurfaceEdit', () => {
     }
   });
 
+  test('no secret folder, nor anything under it, is a persistence surface, in the default home or a moved one', () => {
+    // The same guarantee for the folders that hold secrets (the backups
+    // folder) and for the entries a moved runtime home adds: a write there
+    // must card, never be refused as a persistence-surface edit.
+    const hook = require('../../scripts/permission-hook.js');
+    assert.ok(hook.SECRET_RELATIVE_DIRS.length > 0, 'the folder registry is not empty, or this proves nothing');
+    const moved = path.join(require('node:fs').realpathSync(os.tmpdir()), 'moved-runtime-home');
+    const env = { CLAUDE_CONFIG_DIR: moved };
+    const folders = hook.secretFolders(home, env);
+    assert.ok(folders.some(d => d.startsWith(moved + path.sep)), 'the moved home adds its folder, or this proves nothing about it');
+    for (const dir of folders) {
+      for (const at of [dir, path.join(dir, '.claude.json.backup.1700000000000')]) {
+        assert.strictEqual(hook.isPersistenceSurface(at, home), false, `${at} holds a secret, so it is not a persistence surface`);
+        assert.strictEqual(isRuntimeHomeSurfaceEdit('Write', { file_path: at }, home), false, `a write to ${at} is not refused as a surface edit`);
+      }
+    }
+    const files = hook.secretsRegistry(home, env).filter(f => f.startsWith(moved + path.sep));
+    assert.ok(files.length > 0, 'the moved home adds its account file');
+    for (const f of files) {
+      assert.strictEqual(hook.isPersistenceSurface(f, home), false, `${f} is a secret, so it is not a persistence surface`);
+    }
+  });
+
   test('handles missing or malformed input without throwing', () => {
     assert.strictEqual(isRuntimeHomeSurfaceEdit('Write', null), false);
     assert.strictEqual(isRuntimeHomeSurfaceEdit('Write', {}), false);

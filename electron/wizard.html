@@ -125,6 +125,32 @@
       font-size: 12px;
       margin-top: 4px;
     }
+    /* Claude Code's own words from a sign-in check that still fails, set apart
+       from Rundock's text. The hint's command opts out of the drag region so
+       it can be selected. */
+    .step-text .reason {
+      color: #9A9590;
+      font-size: 12px;
+      margin-top: 8px;
+    }
+    .step-text .reason-said {
+      color: #F0EDE8;
+      border-left: 2px solid #3D3D3D;
+      padding: 2px 0 2px 8px;
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+    }
+    .step-text .reason-hint {
+      margin-top: 6px;
+    }
+    .step-text .reason-command {
+      background: #333;
+      padding: 2px 6px;
+      border-radius: 3px;
+      -webkit-app-region: no-drag;
+      -webkit-user-select: all;
+      user-select: all;
+    }
     .spinner {
       width: 16px;
       height: 16px;
@@ -166,6 +192,7 @@
       margin-top: 8px;
     }
     .btn-secondary:hover { color: #F0EDE8; }
+    .btn-secondary:disabled { color: #9A9590; cursor: default; }
   </style>
 </head>
 <body>
@@ -188,6 +215,7 @@
         <div class="step-text">
           <div>Sign in to Claude</div>
           <div class="hint" id="auth-hint">Click <strong>Sign in to Claude</strong> below. A terminal opens to complete the sign-in.</div>
+          <div class="reason" id="auth-reason" hidden></div>
         </div>
       </div>
       <!-- Rendered only when the Codex CLI is detected on this machine; Claude-only
@@ -202,6 +230,7 @@
     </div>
 
     <button class="btn" id="btn-signin" style="display:none" onclick="signIn()">Sign in to Claude</button>
+    <button class="btn-secondary" id="btn-signin-done" style="display:none" onclick="checkSignedIn()">I've finished signing in</button>
     <button class="btn" id="btn-codex-signin" style="display:none" onclick="signInCodex()">Sign in to Codex</button>
     <button class="btn" id="btn-check" onclick="checkNow()">Check again</button>
     <button class="btn-secondary" id="btn-codex-skip" style="display:none" onclick="skipCodex()">Skip for now</button>
@@ -298,12 +327,102 @@
       return { pendingCodex: true };
     }
 
-    async function checkStatus() {
-      const runtimes = await window.electronAPI.checkRuntimes();
+    // Why the sign-in check still fails once sign-in has started. The main
+    // process sends one cleaned line Claude Code printed, or a fixed kind
+    // (electron/sign-in-reason.js). The line is only ever set as text.
+    let signInStarted = false;
+    // Whether the step shows a reason. Only an asked answer shows one.
+    let reasonShown = false;
+    const FIXED_REASONS = {
+      timeout: "Claude Code didn't answer in time.",
+      'not-started': "Claude Code couldn't be started.",
+      'no-reason': 'Claude Code gave no reason.',
+    };
+    function textBlock(className, text) {
+      const el = document.createElement('div');
+      el.className = className;
+      el.textContent = text;
+      return el;
+    }
+    function showReason(reason) {
+      const box = document.getElementById('auth-reason');
+      box.textContent = '';
+      box.hidden = !reason;
+      reasonShown = !box.hidden;
+      if (!reason) return;
+      const quoted = reason.kind === 'said' && typeof reason.text === 'string' && reason.text !== '';
+      if (!quoted) {
+        box.append(textBlock('reason-label', FIXED_REASONS[reason.kind] || FIXED_REASONS['no-reason']));
+        return;
+      }
+      box.append(textBlock('reason-label', 'Claude Code said:'), textBlock('reason-said', reason.text));
+      // An app opened from the Finder starts without the login shell's
+      // environment, so a CLAUDE_CONFIG_DIR set only in the profile is missed.
+      if (reason.signIn === true && window.electronAPI.platform === 'darwin') {
+        const hint = textBlock('reason-hint',
+          'If your shell profile sets CLAUDE_CONFIG_DIR, Rundock opened from Finder may not see it. Run ');
+        const command = document.createElement('code');
+        command.className = 'reason-command';
+        command.textContent = 'launchctl setenv CLAUDE_CONFIG_DIR "<that folder>"';
+        hint.append(command, ' in Terminal, then quit Rundock and open it again.');
+        box.append(hint);
+      }
+    }
+
+    // Only a check the person asks for shows why sign-in still fails: the
+    // automatic ones run while they are still in the terminal, where a failure
+    // is expected. Each sign-in that opens is counted, so an asked answer that
+    // arrives after a newer sign-in opened shows nothing.
+    let signInOpens = 0;
+    function showAsked(opens, reason) {
+      if (opens !== signInOpens) return;
+      showReason(reason);
+      const signinBtn = document.getElementById('btn-signin');
+      signinBtn.disabled = false;
+      signinBtn.textContent = 'Sign in to Claude';
+    }
+
+    async function checkSignedIn() {
+      const opens = signInOpens;
+      const btn = document.getElementById('btn-signin-done');
+      btn.disabled = true;
+      btn.textContent = 'Checking...';
+      await checkStatus(true);
+      // A sign-in that opened while this check ran owns the button now.
+      if (opens !== signInOpens) return;
+      btn.disabled = false;
+      btn.textContent = "I've finished signing in";
+    }
+
+    // Each check is numbered as it starts. A failing answer from a check that
+    // was already running when a check passed, or when the person last asked,
+    // is out of date and changes nothing.
+    let checksStarted = 0;
+    let passedAt = 0;
+    let askedAt = 0;
+    function outOfDate(started) {
+      return started <= passedAt || started < askedAt;
+    }
+
+    async function checkStatus(asked) {
+      const opens = signInOpens;
+      const started = ++checksStarted;
+      if (asked === true) askedAt = started;
+      let runtimes;
+      try {
+        runtimes = await window.electronAPI.checkRuntimes();
+      } catch {
+        // A check that could not run says nothing about sign-in, and never
+        // shows the error's text.
+        if (asked === true && !outOfDate(started)) showAsked(opens, { kind: 'no-reason' });
+        return false;
+      }
       const result = runtimes.claude;
+      if (result.status !== 'ready' && outOfDate(started)) return false;
       const codex = runtimes.codex || { installed: false, authenticated: false };
 
       const signinBtn = document.getElementById('btn-signin');
+      const askBtn = document.getElementById('btn-signin-done');
       const checkBtn = document.getElementById('btn-check');
 
       // A Codex user waiting on the Claude steps is told why Claude Code is
@@ -312,13 +431,21 @@
         (codex.installed && result.status !== 'ready') ? CODEX_SUBTITLE : BASE_SUBTITLE;
 
       if (result.status === 'not-installed') {
+        // While an asked answer shows, an automatic answer leaves it, the step
+        // and both sign-in buttons as they are. The Codex step updates as ever.
+        if (asked !== true && reasonShown) {
+          renderCodexStep(codex, false);
+          return false;
+        }
         // Action needed, not in progress: numbered attention state, never the
         // spinner, so it does not read as "checking" forever before install.
         updateStep('install', 'attention');
         updateStep('auth', 'pending');
+        showReason(null);
         renderCodexStep(codex, false);
         // Install step: Check again is the primary action.
         signinBtn.style.display = 'none';
+        askBtn.style.display = 'none';
         checkBtn.style.display = 'inline-block';
         return false;
       }
@@ -329,14 +456,21 @@
         renderCodexStep(codex, false);
         // Sign-in step: the Sign in button replaces Check again (single action).
         signinBtn.style.display = 'inline-block';
+        askBtn.style.display = signInStarted ? 'inline-block' : 'none';
         checkBtn.style.display = 'none';
+        // An automatic check that fails leaves the step as it is. One the
+        // person asked for says why, and sign-in can be started again.
+        if (asked === true) showAsked(opens, result.reason || { kind: 'no-reason' });
         return false;
       }
 
       if (result.status === 'ready') {
+        passedAt = checksStarted;
         updateStep('install', 'done');
         updateStep('auth', 'done');
+        showReason(null);
         signinBtn.style.display = 'none';
+        askBtn.style.display = 'none';
         const { pendingCodex } = renderCodexStep(codex, true);
         if (pendingCodex) {
           // The optional Codex step holds the wizard open; Sign in to Codex
@@ -360,12 +494,23 @@
       btn.textContent = 'Opening sign-in...';
       const res = await window.electronAPI.signInClaude();
       if (res && res.ok) {
+        signInStarted = true;
+        signInOpens += 1;
+        // A new sign-in starts quiet until the person asks again, even when an
+        // asked answer landed while the terminal was opening.
+        showReason(null);
+        btn.disabled = true;
         btn.textContent = 'Waiting for sign-in...';
+        const askBtn = document.getElementById('btn-signin-done');
+        askBtn.style.display = 'inline-block';
+        askBtn.disabled = false;
+        askBtn.textContent = "I've finished signing in";
         const hint = document.getElementById('auth-hint');
         if (hint) hint.innerHTML =
           "A terminal opened with Claude's sign-in. Follow its prompts: press Enter when asked, "
           + "and if your browser doesn't open, copy the link it shows and open it. "
-          + "This screen continues automatically once you finish.";
+          + "This screen continues automatically once you finish. "
+          + "If it doesn't, click <strong>I've finished signing in</strong>.";
         // Make sure we're polling so the wizard advances the moment auth lands.
         if (!polling) polling = setInterval(checkStatus, 3000);
       } else {

@@ -1,0 +1,104 @@
+'use strict';
+// A TEST THAT NEVER SETTLES ENDS ITS FILE, AND THE RUN SAYS WHICH ONE IT WAS.
+//
+// Without this, a test whose promise nobody resolves, or whose callback is
+// never called, holds its file open for as long as something else keeps the
+// process alive, and the run prints nothing more until the CI job's own time
+// limit ends it with no test named.
+//
+// The npm test scripts load it with --require, which `node --test` hands to
+// every test file it runs, so this file is the one place the limit is set.
+//
+// WHY NOT --test-timeout. Node 22 and Node 24 read it differently. On 24 it is
+// a limit per test. On 22 the runner applies it to each file as a whole, so a
+// file of many passing tests would be cut off at the limit. Root beforeEach and
+// afterEach hooks behave the same on both, so the limit is kept here.
+//
+// A synchronous test cannot be interrupted by a timer: one that runs past the
+// limit and then returns is not stopped. Only a test that is still waiting
+// when the limit passes is.
+const path = require('node:path');
+
+// The longest one test may run before its file is stopped. The slowest single
+// test in a green Node 22 CI run took 51 seconds, and this is more than three
+// times that, so a slow machine is not mistaken for a stall. It is also short
+// enough that a stalled run ends within five minutes.
+const LIMIT_MS = 240 * 1000;
+
+// How long a file may stay open once its tests have finished: as long as one
+// test may run. Some files wait out a two-minute timer of the app's before they
+// close on their own, and must not be mistaken for a file left open.
+const EXIT_GRACE_MS = LIMIT_MS;
+
+// The same wait is also cut short at this long after the file started, so a
+// file left open ends within five minutes however long its passing tests took.
+// The files that close on their own after the app's two-minute timer do so
+// well inside it.
+const FILE_DEADLINE_MS = 270 * 1000;
+
+// A file whose tests finish close to that deadline, or past it, still gets this
+// long to close on its own. A file whose tests are slow and which then closes
+// promptly is never stopped for being slow.
+const MIN_EXIT_GRACE_MS = 30 * 1000;
+
+const timers = new Map();
+
+function fileName() {
+  return path.relative(process.cwd(), process.argv[1] || '') || 'a test file';
+}
+
+// Ends this file's process with a failure, once the reason is written. The
+// runner reports the file as failed and moves on to the rest of the run.
+function stop(reason) {
+  process.exitCode = 1;
+  process.stderr.write(`\n[stalled test] ${fileName()}: ${reason}\n`, () => process.exit(1));
+}
+
+// Starts test t's clock: t has ms to finish. Called again for the same test, it
+// starts the clock again with the new limit, which is how a test that runs
+// another test run inside it asks for longer than LIMIT_MS.
+function setLimit(t, ms = LIMIT_MS) {
+  clearTimeout(timers.get(t));
+  const timer = setTimeout(() => {
+    if (t.passed || t.error) return;
+    stop(`test "${t.fullName}" did not finish within ${ms / 1000} seconds.`);
+  }, ms);
+  timer.unref();
+  timers.set(t, timer);
+}
+
+function clearLimit(t) {
+  clearTimeout(timers.get(t));
+  timers.delete(t);
+}
+
+// How long a file whose tests finished doneAtMs after it started may stay open:
+// the full grace, cut short at the file's deadline, and never less than the
+// shortest grace.
+function exitGraceMs(doneAtMs) {
+  return Math.max(MIN_EXIT_GRACE_MS, Math.min(EXIT_GRACE_MS, FILE_DEADLINE_MS - doneAtMs));
+}
+
+// The process `node --test` itself runs in only hands files out to child
+// processes; the tests run in those, so that is where the hooks go.
+if (!process.execArgv.includes('--test')) {
+  const { beforeEach, afterEach, after } = require('node:test');
+  beforeEach((t) => setLimit(t));
+  afterEach((t) => clearLimit(t));
+  // Every test has passed, but a server, timer or child the file left running
+  // can still hold it open with nothing more to report. Ending the file with
+  // --test-force-exit would hide that, and pass; this ends it as a failure
+  // that names what was still open.
+  // The file's process started when it loaded this, so its uptime is how long
+  // the file has run.
+  after(() => {
+    const grace = exitGraceMs(process.uptime() * 1000);
+    setTimeout(() => {
+      const open = [...new Set(process.getActiveResourcesInfo())].join(', ');
+      stop(`every test finished, but the file was still open ${Math.round(grace / 1000)} seconds later, `
+        + `${Math.round(process.uptime())} seconds after it started (open: ${open}).`);
+    }, grace).unref();
+  });
+}
+
+module.exports = { LIMIT_MS, EXIT_GRACE_MS, FILE_DEADLINE_MS, MIN_EXIT_GRACE_MS, exitGraceMs, setLimit };

@@ -569,7 +569,7 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
     const registryNames = [
       ...hook.SECRET_RELATIVE_PATHS, ...hook.PERSISTENCE_SURFACE_DIRS, ...hook.PERSISTENCE_SURFACE_FILES,
       ...hook.CODEX_SECRET_RELATIVE_PATHS, ...hook.CODEX_PERSISTENCE_SURFACE_DIRS, ...hook.CODEX_PERSISTENCE_SURFACE_FILES,
-      ...hook.HOME_SECRET_FILES,
+      ...hook.HOME_SECRET_FILES, ...hook.SECRET_RELATIVE_DIRS, ...hook.CODEX_SECRET_RELATIVE_DIRS,
     ];
     for (const name of registryNames) {
       assert.ok(passage.includes(name), `the boundary passage names ${name}, which the registry enforces`);
@@ -852,6 +852,26 @@ describe('the agent\'s own folder: three tiers, one registry', () => {
         'the actual decision the server consults still cards it: no grant over the wider root silences a secrets-tier crossing');
       assert.strictEqual(boundary.crossingCovered({ path: path.join(home, '.claude', 'notes.md') }, home), true,
         'an ordinary file in the same folder IS covered: the refusal is specific to the registry, not the whole root');
+    } finally {
+      config.setWorkspace(original);
+    }
+  });
+
+  test('a standing grant over the whole runtime home does not silence its backups folder, or a copy at any depth in it', () => {
+    const home = tmp('af-wide-grant-backups-home-');
+    const backups = path.join(home, '.claude', 'backups');
+    fs.mkdirSync(path.join(backups, 'older'), { recursive: true });
+    const ws = tmp('af-wide-grant-backups-ws-');
+    const original = config.getWorkspace();
+    config.setWorkspace(ws);
+    try {
+      boundary.addBoundaryGrant(path.join(home, '.claude'));
+      for (const p of [backups, path.join(backups, '.claude.json.backup.1700000000000'), path.join(backups, 'older', '.claude.json.backup.1600000000000')]) {
+        assert.strictEqual(boundary.boundaryGrantCovers(p), true, `fixture sanity: the naive per-path check covers ${path.relative(home, p)}`);
+        assert.strictEqual(boundary.crossingCovered({ path: p }, home), false, `${path.relative(home, p)} still cards under the grant`);
+      }
+      assert.strictEqual(boundary.crossingCovered({ path: path.join(home, '.claude', 'notes.md') }, home), true,
+        'an ordinary file beside the folder IS covered');
     } finally {
       config.setWorkspace(original);
     }

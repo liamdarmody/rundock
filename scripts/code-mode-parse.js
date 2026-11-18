@@ -280,12 +280,19 @@ const REDIRECT_ATTACHED = /^(\d*|&|\*)(>>?|<)(&\d+|.+)$/;
 //            %NAME% in cmd), outside single quotes
 //   glob     it holds an unquoted *, ? or [
 //   quoted   any part of it was quoted
-function lexWords(segment, dialect = 'bash') {
+// A redirection's target is not a word of the command; `targets`, when given,
+// is a list each target is added to as it is dropped, one standing alone with
+// its operator as `op`. `joined` reads `$'...'` and `$"..."` as bash does,
+// the `$` dropped, and `$'...'` holding an escape as `${}`, known only when
+// the line runs.
+function lexWords(segment, dialect = 'bash', targets = null, joined = false) {
   const s = String(segment);
   const words = [];
   let w = null;
   let quote = null;
   let depth = 0;
+  let ansi = -1;
+  let unknown = false;
   const start = () => { if (!w) w = { text: '', raw: '', expands: false, glob: false, quoted: false }; };
   const end = () => { if (w) { words.push(w); w = null; } };
   for (let i = 0; i < s.length; i++) {
@@ -301,6 +308,8 @@ function lexWords(segment, dialect = 'bash') {
     }
     w.raw += ch;
     if (quote) {
+      if (ansi >= 0 && ch === '\\' && i + 1 < s.length) { w.raw += s[++i]; unknown = true; continue; }
+      if (ansi >= 0 && ch === quote) { quote = null; if (unknown) { w.text = w.text.slice(0, ansi) + '${}'; w.expands = true; } ansi = -1; unknown = false; continue; }
       if (ch === quote) { quote = null; continue; }
       if (quote === '"') {
         if (ch === '\\' && dialect === 'bash' && DQ_ESCAPABLE.includes(s[i + 1])) { const n = s[++i]; w.raw += n; w.text += n; continue; }
@@ -311,6 +320,7 @@ function lexWords(segment, dialect = 'bash') {
       w.text += ch;
       continue;
     }
+    if (joined && ch === '$' && (s[i + 1] === "'" || s[i + 1] === '"')) { if (s[i + 1] === "'") ansi = w.text.length; continue; }
     if (ch === "'" || ch === '"') { quote = ch; w.quoted = true; continue; }
     if (ch === '\\' && dialect === 'bash' && i + 1 < s.length) { const n = s[++i]; w.raw += n; w.text += n; continue; }
     if (ch === '^' && dialect === 'cmd' && i + 1 < s.length) { const n = s[++i]; w.raw += n; w.text += n; continue; }
@@ -329,11 +339,11 @@ function lexWords(segment, dialect = 'bash') {
     // A here-string's `<<<` is kept with its word: the verdict decides what
     // the word is to the command (data, or a script to a shell).
     if (!words[i].quoted && t === '<<<') { out.push(words[i]); continue; }
-    if (!words[i].quoted && REDIRECT_ALONE.test(t)) { i++; continue; }
-    if (!words[i].quoted && REDIRECT_ATTACHED.test(t) && !/^-/.test(t)) continue;
+    if (!words[i].quoted && REDIRECT_ALONE.test(t)) { if (targets && words[i + 1]) targets.push({ ...words[i + 1], op: t }); i++; continue; }
+    if (!words[i].quoted && REDIRECT_ATTACHED.test(t) && !/^-/.test(t)) { if (targets) targets.push(words[i]); continue; }
     out.push(words[i]);
   }
   return out;
 }
 
-module.exports = { lexSegments, lexWords, substitutions, stripHeredocs };
+module.exports = { lexSegments, lexWords, substitutions, stripHeredocs, closeParen };

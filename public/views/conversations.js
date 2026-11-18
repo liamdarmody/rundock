@@ -15,9 +15,9 @@
 // Shared state stays in app.js and is reached through the global lexical
 // environment at call time: ws, agents, conversations, activeConversation,
 // convoState, conversationsLoaded, lastActiveConversationId,
-// pendingActiveProcesses, pendingMessageAnchor, workingConvos, unread,
-// convoLists, activeSidebarPill, workspaceAnalysis, workspaceMode,
-// setupComplete, and pendingListAdd (openConvoListMenu writes it; the WS lists
+// pendingActiveProcesses, pendingMessageAnchor, pendingPermissionsByConvo,
+// workingConvos, unread, convoLists, activeSidebarPill, workspaceAnalysis,
+// workspaceMode, setupComplete, and pendingListAdd (openConvoListMenu writes it; the WS lists
 // handler reads and clears it, so its declaration stays in app.js). Helpers
 // reached the same way: esc, escAttr, stripMd, formatMd, persist,
 // getConvoState, getGuide, getTeamAgents, pickDefaultConversation,
@@ -25,8 +25,9 @@
 // createHistoryDivider, renderPendingPermissionCards, scrollBottom, setNavState,
 // switchNav, showView, closeFindBar, and the section 9 chat surface
 // (addUserMsg, addAgentMsg, addSystemMsg, sendMessage, cancelProcessing,
-// startProcessing, handleActiveProcesses), plus the classic-script global
-// RundockConvoList (ordering and filtering, unit-tested separately).
+// startProcessing, handleActiveProcesses), plus the classic-script globals
+// RundockConvoList (ordering and filtering, unit-tested separately) and
+// RundockPermissions.
 //
 // Every function body is byte-identical to the app.js original at column 0.
 (/** @param {any} root @param {() => object} factory */ function (root, factory) {
@@ -152,6 +153,8 @@ function createConversation(agentId, title) {
   const convo = { id: Date.now().toString(), agentId: agent.id, agent, title: title || `Chat with ${agent.displayName}`, messages: [], status: 'active', createdAt: new Date().toISOString() };
   conversations.unshift(convo);
   activeConversation = convo;
+  // Leaving for a new conversation leaves the last one waiting, as any switch does.
+  renderPendingPermissionCards(convo.id);
   // Don't persist yet: conversation is saved on first message send (lazy creation)
   renderConvoList();
   setupChat(convo);
@@ -416,6 +419,8 @@ function deleteConversation(id, evt) {
   conversations = conversations.filter(c => c.id !== id);
   delete convoState[id];
   unread.clearConvo(id);
+  // Its open requests can never be drawn again, so they must not mark it waiting.
+  RundockPermissions.clearPendingPermissions(pendingPermissionsByConvo, id);
   workingConvos.delete(id);
   updateUnreadBadge();
   if (activeConversation?.id === id) {
@@ -795,7 +800,11 @@ function renderConvoItem(c, variant) {
 function discardIfEmpty() {
   if (!activeConversation) return;
   const hasUserMsg = activeConversation.messages.some(m => m.role === 'user');
-  if (!hasUserMsg && !activeConversation.persisted) {
+  // An open card keeps it: dropped, its card could never be reached again.
+  const holdsCard = RundockPermissions.holdsOpenRequest(pendingPermissionsByConvo, activeConversation.id);
+  // A saved one whose history is on its way keeps it too: its messages are
+  // not here yet, and dropped, it would vanish until a reload.
+  if (!hasUserMsg && !activeConversation.persisted && !holdsCard && !activeConversation.historyAskedOn) {
     conversations = conversations.filter(c => c.id !== activeConversation.id);
     activeConversation = null;
     renderConvoList();
@@ -824,8 +833,9 @@ function replayConversationInto(el, c) {
     const m = c.messages[i];
     if (m.role === 'user') addUserMsg(m.content, false);
     else if (m.role === 'agent') addAgentMsg(m.content, m.agentId, false, m.timestamp || null);
+    else if (m.type === 'compaction') { if (typeof m.key === 'string' && m.key) el.appendChild(createSummarisedDivider({ key: m.key })); }
     else if (m.role === 'system') addSystemMsg(m.content);
-    if (m.isHistory) {
+    if (m.isHistory && m.type !== 'compaction') {
       const last = el.lastElementChild;
       if (last) last.classList.add('history-msg');
     }
@@ -863,12 +873,16 @@ function openConversation(id, withAnchor) {
   // A TRANSCRIPT IS HISTORY TOO. A conversation whose every session Claude
   // Code removed is kept for its transcript; asking for nothing, it opened
   // with its title over an empty body.
-  if(c.persisted && c.messages.length===0 && (c.sessionId || (c.sessionIds && c.sessionIds.length) || c.hasTranscript)) {
+  if((c.persisted || c.historyAskedOn) && c.messages.length===0 && (c.sessionId || (c.sessionIds && c.sessionIds.length) || c.hasTranscript)) {
     // Persisted conversation from a previous session: load history from JSONL transcript(s)
     el.innerHTML=`<div id="history-loading" style="text-align:center;padding:24px 0;color:var(--text-3);font-size:var(--caption)">Loading conversation history...</div>`;
     // Send all sessionIds so server can merge history across delegation chain
     const sessionIds = (c.sessionIds && c.sessionIds.length) ? c.sessionIds : (c.sessionId ? [{ sessionId: c.sessionId, agentId: c.agentId }] : []);
-    ws.send(JSON.stringify({
+    // ASKED ONCE PER CONNECTION. Opened again before the reply comes, it
+    // waits for that reply, which is drawn once. A reply lost with a dropped
+    // connection is asked for again on the new one. The mark is cleared when
+    // the reply arrives (renderSessionHistory).
+    if (c.historyAskedOn !== ws) ws.send(JSON.stringify({
       type: 'get_session_history',
       sessionId: c.sessionId,
       sessionIds: sessionIds,
@@ -877,6 +891,7 @@ function openConversation(id, withAnchor) {
       // matched message is present even when it's deep in the conversation.
       limit: withAnchor ? 999 : 200
     }));
+    c.historyAskedOn = ws;
     // Mark as no longer purely persisted: messages are now in memory for this
     // session. Status is NOT touched here: opening an archived conversation to
     // read past context should not silently un-archive it. Status flips back
@@ -925,8 +940,9 @@ function openConversation(id, withAnchor) {
     document.getElementById('msg-input').disabled=false;
     document.getElementById('msg-input').focus();
   }
-  // Approval cards that arrived while this conversation was in the
-  // background render now, at the bottom of the thread, still answerable
+  // Approval cards this conversation holds, whether they arrived in the
+  // background or were drawn before the person left, render now, at the
+  // bottom of the thread, still answerable
   // until the server's permission timeout expires them. (Session-history
   // loads prepend above existing content, so these cards keep their place.)
   renderPendingPermissionCards(id);

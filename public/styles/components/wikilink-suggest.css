@@ -1,0 +1,18 @@
+/* The list of notes that opens when [[ is typed in the editor.
+
+   public/editor/plugins/wikilink-suggest.js places it under the cursor in
+   fixed coordinates, so the editor pane's scroll box cannot clip it. It sits
+   above the find bar and the approvals dock, below the search palette. Rows
+   mirror the palette's: a neutral card fill for the pointer, the accent glow
+   for the keyboard selection. No shadow: there is no elevation token yet, so
+   the border gives the edge. */
+.wikilink-suggest { position: fixed; z-index: 110; width: min(360px, calc(100vw - 16px)); max-height: min(320px, 50vh); overflow-y: auto; padding: 4px; background: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.wikilink-suggest[hidden] { display: none; }
+.wikilink-suggest-item { padding: 6px 8px; border-radius: var(--radius-md); cursor: pointer; }
+.wikilink-suggest-item:hover { background: var(--card); }
+.wikilink-suggest-item.selected { background: var(--accent-glow); }
+.wikilink-suggest-title { font-size: var(--body); font-weight: 500; color: var(--text-1); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.wikilink-suggest-meta { font-size: var(--caption); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.wikilink-suggest-empty { padding: 6px 8px; font-size: var(--body); color: var(--text-2); }
+/* The typed [[query, while the list is open. */
+.ProseMirror .wikilink-suggest-query { color: var(--link-text); }

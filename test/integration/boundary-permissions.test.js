@@ -780,6 +780,62 @@ describe('workspace file-access boundary', () => {
       }
     }
   });
+
+  test('every registry entry cards as a secret on a file-tool read and write and a shell read, in both modes, with no grant directory', async () => {
+    // EVERY ENTRY, TAKEN FROM THE HOOK'S OWN LISTS, so an entry added to the
+    // registry is carried through the real hook and the real server the day it
+    // is added: each secret file, a copy in each folder of copies, and those
+    // of a runtime home moved by CLAUDE_CONFIG_DIR, which the hook reads from
+    // its own environment. A plain boundary card here would offer a folder
+    // grant and fall to Code mode's ordinary rules, so the secret marker is
+    // asserted on the crossing at the file itself.
+    const { secretsRegistry, secretFolders } = require('../../scripts/permission-hook.js');
+    const home = os.homedir();
+    const moved = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-moved-home-'));
+    const MOVE = { CLAUDE_CONFIG_DIR: moved };
+    const copyIn = dir => path.join(dir, '.claude.json.backup.1700000000000');
+    const atDefault = [...secretsRegistry(home, {}), ...secretFolders(home, {}).map(copyIn)];
+    const withMoved = [...secretsRegistry(home, MOVE), ...secretFolders(home, MOVE).map(copyIn)];
+    const entries = [
+      ...atDefault.map(file => [file, {}]),
+      ...withMoved.filter(file => !atDefault.includes(file)).map(file => [file, MOVE]),
+    ];
+    assert.ok(entries.some(([, env]) => env === MOVE), 'the moved home adds entries of its own');
+    assert.ok(atDefault.some(file => file.includes(`${path.sep}.claude${path.sep}backups${path.sep}`)), 'the default home\'s folder of copies is carried');
+    const made = [];
+    try {
+      for (const [file] of entries) {
+        if (fs.existsSync(file)) continue;
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, '{}');
+        made.push(file);
+      }
+      for (const [file, moveEnv] of entries) {
+        for (const [tool, input] of [
+          ['Read', { file_path: file }],
+          ['Write', { file_path: file, content: 'x' }],
+          ['Bash', { command: `cat ${file}` }],
+        ]) {
+          for (const mode of [{}, { RUNDOCK_CODE_MODE: '1' }]) {
+            const label = `${tool} ${path.basename(path.dirname(file))}/${path.basename(file)}${moveEnv === MOVE ? ' (moved home)' : ''}${mode.RUNDOCK_CODE_MODE ? ' in code mode' : ''}`;
+            const since = client.messages.length;
+            const pending = runHook(tool, input, { ...mode, ...moveEnv });
+            const { msg } = await client.waitFor(m => m.type === 'control_request'
+              && m.request && m.request.boundary === true, { since, label: `${label}: a card` });
+            const crossing = (msg.request.crossings || []).find(c => c.path === canonicalize(file));
+            assert.ok(crossing, `${label}: the crossing names the file: ${JSON.stringify(msg.request.crossings)}`);
+            assert.strictEqual(crossing.secret, true, `${label}: the secret marker is set`);
+            assert.strictEqual(msg.request.grant_dir, null, `${label}: no grant directory is offered for the secrets tier`);
+            client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: 'boundary-test', allow: false });
+            assert.strictEqual(decisionOf(await pending), 'deny', `${label}: the request is not silently allowed`);
+          }
+        }
+      }
+    } finally {
+      for (const file of made) fs.rmSync(file, { force: true });
+      fs.rmSync(moved, { recursive: true, force: true });
+    }
+  });
 });
 
 // THE FLAG MUST SURVIVE THE PROCESS BOUNDARY, which unit tests cannot show.

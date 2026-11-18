@@ -1690,7 +1690,11 @@ describe('ARCHITECTURE.md: a write to a stopped process is logged, left to its c
     }
     assert.deepStrictEqual(uncaught, [], 'nothing reaches the server as an uncaught exception');
     assert.strictEqual(lines.length, 1, 'one line, for the one failed write');
-    assert.match(lines[0], /a child that never reads pid=\d+: a write failed \((EPIPE|ECONNRESET): /, 'naming the process and the error');
+    // Part of the write is still queued when the child exits, and Node closes a
+    // child's stdin when the child exits. When that close comes before the
+    // kernel refuses the write, the queued write is cancelled rather than
+    // failed, with ECANCELED.
+    assert.match(lines[0], /a child that never reads pid=\d+: a write failed \((EPIPE|ECONNRESET|ECANCELED): /, 'naming the process and the error');
   });
 
   test('both start paths hand back a stdin that already has its handler', { timeout: 30000 }, async () => {
@@ -2741,6 +2745,141 @@ describe('rundock-guide.md: Doc types <, > and & as the characters themselves', 
     const dashes = [0x2013, 0x2014].map((c) => String.fromCharCode(c));
     assert.ok(!dashes.some((d) => rule.includes(d)), 'no em or en dashes');
     assert.doesNotMatch(rule, /iz(?:e|es|ed|ing|ation)\b|yz(?:e|es|ed|ing)\b|\b(?:color|behavior|favor|honor|center|catalog|canceled|traveled|license)\b/i, 'UK spelling');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ARCHITECTURE.md and the hook's own comment: each shell word is also read as
+// bash joins it, and the crossings are the union of both readings
+// ---------------------------------------------------------------------------
+
+describe('each shell word is also read as bash joins it, as the page and the hook say', () => {
+  const HEADING = '**Each word of a shell command is also read as bash joins it.**';
+  const passage = (() => {
+    const at = architecture.indexOf(HEADING);
+    return at < 0 ? '' : architecture.slice(at, architecture.indexOf('\n', at));
+  })();
+
+  test('the page says how a word is joined, that home counts quoted or not, that the readings are a union, and what a variable asks', () => {
+    assert.ok(passage, 'ARCHITECTURE.md has the passage');
+    for (const said of [
+      'the hook reads each word as bash forms it, with quotes and escapes taken out and its pieces joined',
+      '`~/.claude/".credentials.json"` and `"$HOME/.claude"/.credentials.json` are the file they name',
+      '`~`, `$HOME` or `${HOME}` at the start of the joined word is home, quoted or not',
+      'The crossings are the union of both readings, so the joined one only adds',
+      'A word holding a variable or a substitution asks as a credential file when the text after the last one ends in that file\'s path below home, or is its name straight after it',
+      'A line the joined reading cannot read asks',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+  });
+
+  test('the comment above shellPathWords says the same, and no longer that quotes are read as written', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8');
+    const end = src.indexOf('function shellPathWords');
+    const comment = src.slice(src.lastIndexOf('// The same words, each with where it starts', end), end).replace(/\n\/\/ ?/g, ' ');
+    assert.ok(comment.includes('Each word is also read as bash joins it (joinedPathWords)'), comment);
+    assert.ok(comment.includes('the crossings are the union of both readings'), comment);
+    assert.ok(!comment.includes('quotes as written'), 'the old claim is gone');
+    assert.ok(src.includes('function joinedPathWords('), 'the function the comment names is there');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ARCHITECTURE.md and the hook's own comment: the backups folder, a runtime
+// home moved by its variable, and a workspace's own location
+// ---------------------------------------------------------------------------
+
+describe('a copy of a secret, a moved runtime home and the workspace\'s own location, as the page and the hook say', () => {
+  const HEADING = '**A copy of a secret is a secret, and so are the account and credential files in a runtime home moved by its variable.**';
+  const passage = (() => {
+    const at = architecture.indexOf(HEADING);
+    return at < 0 ? '' : architecture.slice(at, architecture.indexOf('\n', at));
+  })();
+  const hook = require('../../scripts/permission-hook.js');
+  const os = require('node:os');
+
+  function places() {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doc-claims-secret-places-')));
+    const home = path.join(base, 'home');
+    const ws = path.join(base, 'ws');
+    fs.mkdirSync(path.join(home, '.claude', 'backups'), { recursive: true });
+    fs.mkdirSync(ws);
+    fs.writeFileSync(path.join(home, '.claude.json'), '{}');
+    fs.writeFileSync(path.join(home, '.claude', 'backups', '.claude.json.backup.1700000000000'), '{}');
+    fs.writeFileSync(path.join(home, 'notes.md'), 'notes');
+    fs.writeFileSync(path.join(ws, 'plain.md'), 'notes');
+    fs.symlinkSync(path.join(home, '.claude.json'), path.join(ws, 'link.json'));
+    return { base, home, ws, copy: path.join(home, '.claude', 'backups', '.claude.json.backup.1700000000000') };
+  }
+
+  test('the page names the backups folder, the moved homes and what was measured, and that a workspace\'s location hides nothing', () => {
+    assert.ok(passage, 'ARCHITECTURE.md has the passage');
+    for (const said of [
+      'Claude Code keeps timed copies of `~/.claude.json` in `~/.claude/backups/`',
+      'The folder and everything under it card on any read or write, by every file tool and every shell spelling, in both modes, and listing the folder cards too',
+      'Its name lives in `SECRET_RELATIVE_DIRS` in `scripts/permission-hook.js`',
+      'What each runtime keeps in the moved folder was measured, not assumed (`scripts/runtime-home-truth/captured-runtime-homes.json`)',
+      'with `CLAUDE_CONFIG_DIR` set, Claude Code wrote `.claude.json` and `backups/` into that folder and nothing into the home folder',
+      'with `CODEX_HOME` set, Codex wrote its sign-in file, `auth.json`, into that folder and nothing into the home folder',
+      'Claude Code\'s credential file was not measured there, because only a real sign-in places it, and is joined as `.credentials.json` on the basis the record states beside that',
+      'joining a name that may never appear only adds a card and frees nothing',
+      'as well as in the default homes, never in their place, and following the variable only adds',
+      'One function, `relocatedRuntimeHomes`, reads the variables: the hook from its own environment, and the server from its own when it writes the block',
+      'A block written with a variable set is recognized as Rundock\'s own with it unset, and the reverse',
+      '**A workspace\'s own location never hides a secret.**',
+      'A workspace that is the home folder, a runtime home, or a folder above either still asks about each secret in it, on a read or a write by any tool and any shell spelling',
+      'A workspace path that is a link, or sits under a linked folder, and leads to a secret asks as the secret',
+    ]) assert.ok(passage.includes(said), `the page says: ${said}`);
+  });
+
+  test('the comment above RELOCATED_HOMES says the same', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8');
+    const end = src.indexOf('const RELOCATED_HOMES');
+    const comment = src.slice(src.lastIndexOf('// `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move', end), end).replace(/\n\/\/ ?/g, ' ');
+    assert.ok(comment.includes('What each runtime keeps there was MEASURED, not assumed'), comment);
+    assert.ok(comment.includes('One entry is joined unmeasured, on a basis the record states'), comment);
+    assert.ok(comment.includes('AS WELL AS THE DEFAULT HOMES, NEVER IN PLACE OF THEM'), comment);
+    assert.ok(comment.includes('it ONLY ADDS'), comment);
+  });
+
+  test('the backups folder and a copy in it are secrets, read whole, listed or named', () => {
+    const p = places();
+    try {
+      assert.deepStrictEqual(hook.SECRET_RELATIVE_DIRS, ['backups']);
+      assert.strictEqual(hook.classifyFileAccess('Read', { file_path: p.copy }, p.ws, [], p.home).secret, true, 'a copy, by the Read tool');
+      const listed = hook.classifyShellAccess('Bash', { command: `ls ${path.dirname(p.copy)}` }, p.ws, [], p.home);
+      assert.ok(listed.crossings.some(c => c.secret === true), 'the folder, listed');
+    } finally { fs.rmSync(p.base, { recursive: true, force: true }); }
+  });
+
+  test('each variable adds its folder\'s entries to the default homes\', the credential files among them', () => {
+    const home = path.join(os.tmpdir(), 'doc-claims-home');
+    const moved = path.join(os.tmpdir(), 'doc-claims-moved');
+    const movedCodex = path.join(os.tmpdir(), 'doc-claims-moved-codex');
+    const env = { CLAUDE_CONFIG_DIR: moved, CODEX_HOME: movedCodex };
+    const [row, codex] = hook.relocatedRuntimeHomes(env);
+    assert.deepStrictEqual([row.variable, row.secrets, row.secretDirs], ['CLAUDE_CONFIG_DIR', ['.claude.json', '.credentials.json'], ['backups']]);
+    assert.deepStrictEqual([codex.variable, codex.secrets, codex.secretDirs], ['CODEX_HOME', ['auth.json'], []]);
+    const withVariable = hook.secretsRegistry(home, env);
+    for (const f of hook.secretsRegistry(home, {})) assert.ok(withVariable.includes(f), `the default entry ${f} stays`);
+    for (const f of [path.join(row.root, '.claude.json'), path.join(row.root, '.credentials.json'), path.join(codex.root, 'auth.json')]) {
+      assert.ok(withVariable.includes(f), `and the moved ${path.basename(f)} is added`);
+    }
+  });
+
+  test('a workspace at home asks about its secret, keeps an ordinary file inside, and a link asks as where it leads', () => {
+    const p = places();
+    try {
+      const atHome = hook.classifyFileAccess('Read', { file_path: path.join(p.home, '.claude.json') }, p.home, [], p.home);
+      assert.strictEqual(atHome.secret, true, 'the account file, read from a workspace at home');
+      assert.strictEqual(atHome.grantDir, null, 'with no folder to remember');
+      const written = hook.classifyFileAccess('Write', { file_path: path.join(p.home, '.claude.json'), content: '' }, p.home, [], p.home);
+      assert.strictEqual(written.secret, true, 'and written');
+      assert.deepStrictEqual(hook.classifyFileAccess('Read', { file_path: path.join(p.home, 'notes.md') }, p.home, [], p.home),
+        { where: 'inside', resolvedPath: path.join(p.home, 'notes.md') }, 'an ordinary file stays inside');
+      const linked = hook.classifyShellAccess('Bash', { command: 'cat link.json' }, p.ws, [], p.home);
+      assert.ok(linked.crossings.some(c => c.secret === true && c.path === path.join(p.home, '.claude.json')), 'a bare link');
+      assert.strictEqual(hook.classifyShellAccess('Bash', { command: 'cat plain.md' }, p.ws, [], p.home), null, 'an ordinary file');
+    } finally { fs.rmSync(p.base, { recursive: true, force: true }); }
   });
 });
 

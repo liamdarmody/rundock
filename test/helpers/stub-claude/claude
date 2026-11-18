@@ -42,13 +42,18 @@
 //     "refusalExitMs": 0,            // how long the refused process lingers
 //     "refusalSplitAt": 0,           // write the refusal line in pieces
 //     "refusalPreamble": "...",      // stderr written just before the refusal
+//     "refusalPreambleJoined": false, // write that preamble and the first piece
+//                                    // of the refusal in ONE write
+//     "refusalPreambleSplitAt": 0,   // write the preamble itself in two pieces,
+//                                    // cut at that character
 //     "refusalAfterInit": false,     // send the init envelope before refusing
 //     "loadAgentFiles": false,       // read agent files as Claude Code does, and
 //                                    // refuse an --agent no file loads for
 //                                    // (see AGENT_NOT_LOADED below)
 //     "refusalUntilFile": "..." }    // hold that refusal open until this file
 //                                    // exists, then exit as it would have
-// A crash rule may give "stderrChunks": [...] to write its stderr in pieces.
+// A rule may give "stderrChunks": [...] to write stderr in pieces: a crash
+// rule before it exits, an ordinary turn before it answers.
 // A crash rule may give "beforeSession": true to fail at startup, before the
 // session's transcript exists, as an expired login does.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
@@ -60,6 +65,9 @@
 // exit, as a runtime that finishes its turn when asked to stop: see emitTurn.
 // Such a rule may give "pauseAfterTextMs": n to wait that long once its text
 // is out, so a test can land a SIGTERM there every time. No rule, no pause.
+// A turn may give a block { "holdUntil": "<path>" } to write the turn up to
+// that block and hold the rest until the file exists, so a test decides the
+// moment between two events of one turn: see writeEvents.
 // A rule may give "shell": ["rm a.md", "mv b.md c.md"], commands the run
 // gives its shell tool. Each is put to the PreToolUse hooks the --settings
 // file names first, as Claude Code does, and really runs unless a hook or the
@@ -101,15 +109,35 @@ if (argv.includes('--version')) {
 // reconnect card's "I've reconnected" runs): answer at once, without a
 // scenario or a log line. A test signs the stub out with STUB_CLAUDE_SIGNED_OUT,
 // or fails the turn for a reason that is not the sign-in with
-// STUB_CLAUDE_CHECK_FAILS.
+// STUB_CLAUDE_CHECK_FAILS. STUB_CLAUDE_SIGNED_IN_WITH signs it in only when it
+// is started with that CLAUDE_CONFIG_DIR, as Claude Code finds its sign-in.
 if (argv.includes('--print') && argv[argv.indexOf('--output-format') + 1] === 'text') {
-  if (process.env.STUB_CLAUDE_SIGNED_OUT === '1') {
+  const signedInWith = process.env.STUB_CLAUDE_SIGNED_IN_WITH;
+  if (process.env.STUB_CLAUDE_SIGNED_OUT === '1' || (signedInWith && process.env.CLAUDE_CONFIG_DIR !== signedInWith)) {
     process.stderr.write('Invalid API key. Please run /login\n');
     process.exit(1);
   }
   if (process.env.STUB_CLAUDE_CHECK_FAILS === '1') {
     process.stderr.write('API Error: Connection error.\n');
     process.exit(1);
+  }
+  // STUB_CLAUDE_CHECK_HANGS holds the check unanswered, as a Claude Code that
+  // never replies, until whatever started it ends it. STUB_CLAUDE_CHECK_STDERR
+  // and STUB_CLAUDE_CHECK_STDOUT (base64, so any bytes can be given) fail it
+  // with that output, and STUB_CLAUDE_CHECK_EXIT gives its code (1 if unset).
+  // STUB_CLAUDE_CHECK_STDERR_TIMES writes the stderr that many times in a row,
+  // for more output than one environment variable can carry; every byte is
+  // written before the exit, however much each write takes.
+  if (process.env.STUB_CLAUDE_CHECK_HANGS === '1') {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);
+    process.exit(0);
+  }
+  const said = (name) => Buffer.from(process.env[name] || '', 'base64');
+  if ('STUB_CLAUDE_CHECK_STDERR' in process.env || 'STUB_CLAUDE_CHECK_STDOUT' in process.env || process.env.STUB_CLAUDE_CHECK_EXIT) {
+    const stderr = Buffer.concat(Array(Number(process.env.STUB_CLAUDE_CHECK_STDERR_TIMES || 1)).fill(said('STUB_CLAUDE_CHECK_STDERR')));
+    for (let at = 0; at < stderr.length;) at += fs.writeSync(2, stderr, at);
+    fs.writeSync(1, said('STUB_CLAUDE_CHECK_STDOUT'));
+    process.exit(Number(process.env.STUB_CLAUDE_CHECK_EXIT || 1));
   }
   process.stdout.write('ok\n');
   process.exit(0);
@@ -148,6 +176,8 @@ try {
       RUNDOCK_HOOK_TOKEN: process.env.RUNDOCK_HOOK_TOKEN || null,
       // The workspace the permission hook is told it is answering for.
       RUNDOCK_WORKSPACE: process.env.RUNDOCK_WORKSPACE || null,
+      // Where this copy looks for its sign-in.
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || null,
     },
     // The folder this process was started in, which is also where this log
     // and the scenario are read from.
@@ -402,13 +432,19 @@ if (REFUSED_RESUME) {
   // `refusalSplitAt` writes the line in pieces a moment apart (cut at that
   // character, then the newline on its own), the way a pipe may deliver it.
   // `refusalPreamble` is stderr written on its own just before the refusal,
-  // such as Claude Code's warning that it read no stdin.
+  // such as Claude Code's warning that it read no stdin. `refusalPreambleJoined`
+  // writes it in the same write as the first piece of the refusal (the whole
+  // line when it is not split), so the server reads both in one chunk.
+  // `refusalPreambleSplitAt` cuts the preamble itself at that character into
+  // two writes, and only its second piece is joined to the refusal.
   const line = `No conversation found with session ID: ${RESUME}`;
   const cut = Number(TOP.refusalSplitAt) || 0;
-  const pieces = [
-    ...(TOP.refusalPreamble ? [String(TOP.refusalPreamble)] : []),
-    ...(cut > 0 ? [line.slice(0, cut), line.slice(cut), '\n'] : [`${line}\n`]),
-  ];
+  const pieces = cut > 0 ? [line.slice(0, cut), line.slice(cut), '\n'] : [`${line}\n`];
+  const preamble = TOP.refusalPreamble ? String(TOP.refusalPreamble) : '';
+  const preambleCut = Number(TOP.refusalPreambleSplitAt) || 0;
+  const before = !preamble ? [] : preambleCut > 0 ? [preamble.slice(0, preambleCut), preamble.slice(preambleCut)] : [preamble];
+  if (before.length > 0 && TOP.refusalPreambleJoined) pieces[0] = before.pop() + pieces[0];
+  pieces.unshift(...before);
   const wait = Number(TOP.refusalExitMs) || 0;
   const finish = () => (wait > 0 ? setTimeout(() => exitWhenWritten(1), wait) : exitWhenWritten(1));
   // `refusalAfterInit` sends the init envelope for the refused id first. The
@@ -477,6 +513,18 @@ function matches(rule, prompt) {
   return true;
 }
 
+// The holds a turn's blocks asked for, told apart from envelopes by identity,
+// so no envelope a scenario writes can be taken for one.
+const HOLDS = new WeakSet();
+
+// Write a turn's envelopes in order, waiting at each hold for its file.
+function writeEvents(events, then) {
+  const at = events.findIndex((e) => HOLDS.has(e));
+  for (const e of at < 0 ? events : events.slice(0, at)) writeOut(JSON.stringify(e) + '\n');
+  if (at < 0) { then(); return; }
+  whenFileExists(events[at].holdUntil, () => writeEvents(events.slice(at + 1), then));
+}
+
 function buildEnvelopes(rule) {
   const events = [];
   if (!initSent) { events.push(fx.init(SESSION_ID)); initSent = true; }
@@ -500,6 +548,10 @@ function buildEnvelopes(rule) {
       events.push(...fx.toolUseFlow(block.tool.name, block.tool.input || {}, toolIndex++));
     } else if (block.raw) {
       events.push(block.raw);
+    } else if (block.holdUntil) {
+      const hold = { holdUntil: String(block.holdUntil) };
+      HOLDS.add(hold);
+      events.push(hold);
     }
   }
   // Faithful end-of-message shape: the real stream closes the message with
@@ -633,6 +685,13 @@ function emitTurn(rule, prompt) {
     else carryOn();
     return;
   }
+  if (events.some((e) => HOLDS.has(e))) {
+    writeEvents(events, () => {
+      if (rule.exitAfterTurn != null) exitWhenWritten(Number(rule.exitAfterTurn));
+      else if (PRINT) exitWhenWritten(0);
+    });
+    return;
+  }
   if (rule.singleChunk) {
     // One write -> one 'data' chunk on the server side (small payloads do not
     // get split by the pipe). Used to pin per-chunk guard behavior.
@@ -735,9 +794,15 @@ function handleUserMessage(content) {
     return;
   }
   const delay = rule.delayMs || 0;
-  const speak = () => whenFileExists(rule.untilFile, () => {
+  const answer = () => {
     if (delay > 0) setTimeout(() => emitTurn(rule, content), delay);
     else emitTurn(rule, content);
+  };
+  // `stderrChunks` on an ordinary turn writes that stderr in those pieces, a
+  // moment apart, before the turn answers, as a warning printed at startup is.
+  const speak = () => whenFileExists(rule.untilFile, () => {
+    if (Array.isArray(rule.stderrChunks)) writePieces(rule.stderrChunks, answer);
+    else answer();
   });
   if (Array.isArray(rule.hooks)) runHookCalls(rule.hooks, speak);
   else speak();
