@@ -110,10 +110,11 @@ function desktopProfile() {
 
 // The environment both surfaces start in: the fixture's workspace and home,
 // the desktop profile, no scheduler. What the app sets for itself
-// (RUNDOCK_ELECTRON, ELECTRON_RUN_AS_NODE) and the packaged-boot check's
-// switch are never inherited from whoever runs this.
+// (RUNDOCK_ELECTRON, ELECTRON_RUN_AS_NODE), the packaged-boot check's switch
+// and Claude Code's own folder are never inherited from whoever runs this.
 function launchEnv(fixture, profile, base = process.env) {
   const env = { ...base, HOME: fixture.home, WORKSPACE: fixture.ws, RUNDOCK_USER_DATA_DIR: profile, RUNDOCK_DISABLE_SCHEDULER: '1' };
+  delete env.CLAUDE_CONFIG_DIR;
   delete env.RUNDOCK_ELECTRON;
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.RUNDOCK_SMOKE_TEST;

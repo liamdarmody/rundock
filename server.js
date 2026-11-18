@@ -406,15 +406,19 @@ const { buildHandbackPayload, transcriptTurnsSince } = createHandbackBuilder({
   maxChars: SPECIALIST_OUTPUT_MAX_CHARS,
 });
 
-// Session history: read Claude Code JSONL transcripts from disk
+// Session history: read Claude Code JSONL transcripts from disk, from
+// wherever Claude Code keeps them now (CLAUDE_CONFIG_DIR moves them). If that
+// cannot be worked out, nothing is found: home is not read instead.
+const { claudeHome } = require('./lib/runtime/claude-home.js');
 function getSessionJsonlPath(sessionId) {
   if (!WORKSPACE || !sessionId) return null;
   const home = process.env.HOME || process.env.USERPROFILE || '';
+  let projectsDir;
+  try { projectsDir = path.join(claudeHome(home).folder, 'projects'); } catch (e) { return null; }
   const projectHash = WORKSPACE.replace(/\//g, '-');
-  const jsonlPath = path.join(home, '.claude', 'projects', projectHash, sessionId + '.jsonl');
+  const jsonlPath = path.join(projectsDir, projectHash, sessionId + '.jsonl');
   if (fs.existsSync(jsonlPath)) return jsonlPath;
   // Fallback: scan project dirs for the session file
-  const projectsDir = path.join(home, '.claude', 'projects');
   try {
     for (const dir of fs.readdirSync(projectsDir)) {
       const candidate = path.join(projectsDir, dir, sessionId + '.jsonl');
@@ -2795,8 +2799,8 @@ let searchProbe = null;             // cached capability probe
 let searchFilesReconciledAt = 0;    // TTL gate for the files walk (not per-keystroke)
 const SEARCH_FILES_RECONCILE_TTL_MS = 2000;
 // Session-id -> {path|null, ts} memo. Missing session files (Claude Code
-// prunes transcripts) would otherwise trigger a full ~/.claude/projects
-// directory scan per session per keystroke. Negative entries expire so a
+// prunes transcripts) would otherwise trigger a full scan of Claude Code's
+// projects folder per session per keystroke. Negative entries expire so a
 // session whose jsonl appears moments later becomes visible.
 const _sessionPathMemo = new Map();
 const SESSION_PATH_NEGATIVE_TTL_MS = 30000;
@@ -3138,8 +3142,8 @@ function ensureSearchEngine() {
 }
 
 // Session-file map for the indexer: [{conversationId, sessions:[{sessionId,
-// agentId, filePath}]}]. Paths resolve into ~/.claude/projects (outside the
-// workspace); the index itself stays inside .rundock/.
+// agentId, filePath}]}]. Paths resolve into Claude Code's projects folder
+// (outside the workspace); the index itself stays inside .rundock/.
 function resolveSessionPathCached(sessionId) {
   const now = Date.now();
   const memo = _sessionPathMemo.get(sessionId);
@@ -3151,9 +3155,9 @@ function resolveSessionPathCached(sessionId) {
       return null;
     }
   }
-  // Claude sessions live under ~/.claude/projects; Codex threads live under
-  // ~/.codex/sessions as rollout files. Thread ids are uuid-shaped like
-  // Claude session ids, so resolution simply tries both homes.
+  // Claude sessions live under Claude Code's projects folder; Codex threads
+  // live under ~/.codex/sessions as rollout files. Thread ids are uuid-shaped
+  // like Claude session ids, so resolution simply tries both homes.
   const resolved = getSessionJsonlPath(sessionId) || codexRuntime.findCodexThreadFile(sessionId);
   _sessionPathMemo.set(sessionId, { path: resolved || null, ts: now });
   return resolved;
