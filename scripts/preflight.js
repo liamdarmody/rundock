@@ -138,6 +138,9 @@ const REGISTRY_SUITES = [
   // A browser-spec retry that docs/FLAKES.md does not name, or a register row
   // whose test or retry has gone.
   'test/unit/flake-register.test.js',
+  // A reader that joins Claude Code's folder onto home instead of asking where
+  // it is; runs against a made-up home in a fraction of a second.
+  'test/unit/claude-home.test.js',
 ];
 
 /**

@@ -303,6 +303,8 @@ function hookEnv(world, { port, codeMode = true, extraDirs, home } = {}) {
     GIT_CONFIG_NOSYSTEM: '1',
   };
   if (codeMode) env.RUNDOCK_CODE_MODE = '1'; else delete env.RUNDOCK_CODE_MODE;
+  // Claude Code's folder is the made-up home's, never an inherited one.
+  delete env.CLAUDE_CONFIG_DIR;
   env.NODE_V8_COVERAGE = '';
   return env;
 }

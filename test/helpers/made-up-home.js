@@ -4,6 +4,7 @@
 // that reads the home folder: HOME points at a fresh temp folder, the desktop
 // app's layout puts Rundock's own records there too, and ZDOTDIR and
 // XDG_CONFIG_HOME are cleared so the zsh and fish files resolve under it.
+// CLAUDE_CONFIG_DIR is cleared so Claude Code's own folder does too.
 // The test preload refuses the account's own home anyway, and fails the run
 // naming the files (account-home-refused.js), so it is loaded here too.
 require('./account-home-refused.js');
@@ -16,6 +17,7 @@ process.env.HOME = home;
 process.env.RUNDOCK_ELECTRON = '1';
 delete process.env.ZDOTDIR;
 delete process.env.XDG_CONFIG_HOME;
+delete process.env.CLAUDE_CONFIG_DIR;
 process.on('exit', () => { try { fs.rmSync(home, { recursive: true, force: true }); } catch (e) { /* best effort */ } });
 
 module.exports = { home };

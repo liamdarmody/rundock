@@ -61,6 +61,9 @@ async function boot(opts = {}) {
   // home too, not under an inherited ZDOTDIR or XDG_CONFIG_HOME.
   delete process.env.ZDOTDIR;
   delete process.env.XDG_CONFIG_HOME;
+  // And Claude Code's own folder: an inherited CLAUDE_CONFIG_DIR would point
+  // history, transcripts and the Connectors tab at a real one.
+  delete process.env.CLAUDE_CONFIG_DIR;
   for (const [k, v] of Object.entries(opts.env || {})) process.env[k] = v;
 
   workspaceDir = makeWorkspace({ agents: opts.agents || standardTeam(), claudeMd: '# Test Workspace\n', ...(opts.workspaceOpts || {}) });

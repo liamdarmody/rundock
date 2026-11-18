@@ -33,7 +33,7 @@ const { extractLinks } = require('./lib/links.js');
 
 // Bumping this rebuilds every index on next open. That is the whole migration
 // story: rebuild, never migrate.
-const SCHEMA_VERSION = 5; // 5: compact summaries left out; 4: links table; 3: HTML/SVG artifact content + frontmatter values in file indexing
+const SCHEMA_VERSION = 6; // 6: a session's mark records its file; 5: compact summaries left out; 4: links table; 3: HTML/SVG artifact content + frontmatter values in file indexing
 
 const MAX_QUERY_LENGTH = 256;
 const MAX_QUERY_TOKENS = 12;
@@ -295,7 +295,8 @@ CREATE TABLE IF NOT EXISTS session_marks (
   byte_offset INTEGER NOT NULL DEFAULT 0,
   seq_next INTEGER NOT NULL DEFAULT 0,
   mtime_ms REAL NOT NULL DEFAULT 0,
-  size INTEGER NOT NULL DEFAULT 0
+  size INTEGER NOT NULL DEFAULT 0,
+  file_path TEXT NOT NULL DEFAULT ''
 );
 `;
 
@@ -755,7 +756,7 @@ Object.assign(SearchIndex.prototype, {
     const validSet = new Set(
       opts.validConversationIds || (convos || []).map(c => c && c.conversationId).filter(Boolean)
     );
-    const getMark = this.db.prepare('SELECT conversation_id, byte_offset, seq_next, mtime_ms, size FROM session_marks WHERE session_id = ?');
+    const getMark = this.db.prepare('SELECT conversation_id, byte_offset, seq_next, mtime_ms, size, file_path FROM session_marks WHERE session_id = ?');
     for (const c of convos || []) {
       if (!c || !c.conversationId || !Array.isArray(c.sessions)) continue;
       for (const s of c.sessions) {
@@ -772,11 +773,14 @@ Object.assign(SearchIndex.prototype, {
             inherit = true; // owner is gone: take over from zero
           }
         }
+        // The same session read from another file (Claude Code's folder moved)
+        // is a replacement: its old rows describe a transcript no longer used.
+        const replaced = !!mark && mark.file_path !== s.filePath;
         if (!mark) mark = { byte_offset: 0, seq_next: 0, mtime_ms: 0, size: 0 };
-        if (!inherit && st.mtimeMs === mark.mtime_ms && st.size === mark.size) continue;
+        if (!inherit && !replaced && st.mtimeMs === mark.mtime_ms && st.size === mark.size) continue;
         let offset = mark.byte_offset;
         let seq = mark.seq_next;
-        const wipe = inherit || st.size < mark.byte_offset || st.size < mark.size;
+        const wipe = inherit || replaced || st.size < mark.byte_offset || st.size < mark.size;
         if (wipe) { offset = 0; seq = 0; }
         const read = this._readSessionDelta(s.filePath, offset, st.size);
         sessionsRead++;
@@ -811,12 +815,13 @@ Object.assign(SearchIndex.prototype, {
             sessionIndexed++;
           }
           this.db.prepare(`
-            INSERT INTO session_marks (session_id, conversation_id, byte_offset, seq_next, mtime_ms, size)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO session_marks (session_id, conversation_id, byte_offset, seq_next, mtime_ms, size, file_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
               conversation_id = excluded.conversation_id, byte_offset = excluded.byte_offset,
-              seq_next = excluded.seq_next, mtime_ms = excluded.mtime_ms, size = excluded.size
-          `).run(s.sessionId, owner, read.nextOffset, seq, st.mtimeMs, st.size);
+              seq_next = excluded.seq_next, mtime_ms = excluded.mtime_ms, size = excluded.size,
+              file_path = excluded.file_path
+          `).run(s.sessionId, owner, read.nextOffset, seq, st.mtimeMs, st.size, s.filePath);
           this.db.exec('COMMIT');
           indexed += sessionIndexed;
         } catch (e) {
