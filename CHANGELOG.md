@@ -4,6 +4,31 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## 0.15.9: Sign-In That Says Why (2026-11-18)
+
+Rundock now works with a Claude Code folder moved by `CLAUDE_CONFIG_DIR`, and the setup screen tells you why sign-in failed when you ask. Agents can no longer reach your Claude Code or Codex sign-in files by spelling the path another way, and wherever the sandbox is on, it now refuses those reads itself. Notes suggest links as you type `[[`, the nav rail has keyboard shortcuts, and a Claude Code or Codex installed through npm now starts on Windows. Updating is recommended.
+
+### Added
+
+- **Link to a note as you type:** typing `[[` in a note opens a list of notes to link to, narrowed as you type. The arrow keys move through it, and Enter, Tab or a click puts the link in, which one undo takes out again. Escape closes the list and leaves what you typed. Notes that share a name show their folder.
+- **Keyboard shortcuts for the nav rail:** Cmd+1 to Cmd+7 open Conversations, Team, Skills, Routines, Files, Pins and Map, and Cmd+, opens Settings. On Windows and Linux it's Ctrl. Each rail icon's tooltip shows its shortcut.
+- **See where a conversation was summarised:** when a conversation grows too long, the runtime summarises the earlier part to make room. A quiet line now marks the spot, "Earlier messages were summarised to make room", with a Why? that explains what that means. While a summary runs, the line says so.
+- **The setup screen says why sign-in failed, when you ask:** once Sign in to Claude has opened the terminal, a new I've finished signing in button checks straight away. If sign-in still hasn't worked, the step shows Claude Code's own words, such as "Not logged in · Please run /login", and on a Mac a hint about `CLAUDE_CONFIG_DIR`. The checks Rundock makes by itself while you sign in stay quiet. Reported by @ryantaylor16.
+
+### Changed
+
+- **Rundock follows a moved Claude Code folder:** the Mac app opened from Finder or the Dock doesn't see variables set in your shell profile, so with `CLAUDE_CONFIG_DIR` set there, the setup screen looped on sign-in. Rundock now reads the variable from your login shell, only after a sign-in check fails, and uses it when it names Claude Code's usual folder, as in the report. With the variable set, past conversations, the Connectors view and the sandbox status now read from the folder it names, and the card for secrets covers the sign-in files kept there. A folder elsewhere isn't taken from your shell profile yet: set it with `launchctl setenv` for now. Reported by @ryantaylor16.
+
+### Fixed
+
+- **Your sign-in files are better protected:** a command that named Claude Code's or Codex's sign-in file with joined quotes or escapes, such as `cat ~/.claude/".credentials.json"`, could read it with no card. It now raises the card for secrets. So does reading one from a workspace opened at your home folder, through a link in the workspace, or in Claude Code's backups folder. When Rundock's permission check can't reach Rundock, a read of a sign-in file is now refused, where it was allowed. Wherever the sandbox is on, it now refuses reads of the sign-in files as well as writes, so a command that reaches one in a way the check doesn't spot is still stopped. Workspaces are updated the next time you open them.
+- **A permission card stays when you switch conversations:** a card that arrived while its conversation was on screen was lost if you switched away and back, and the request was denied when it timed out. It now stays until you answer it, and the conversation shows a dot in the list while it waits.
+- **Claude Code and Codex installed through npm start on Windows:** Rundock couldn't start npm's `claude.cmd` or `codex.cmd`, so a runtime installed only that way never started a chat. Rundock now starts the program the package names directly.
+- **A PowerShell Always allow covers only what it names:** on Windows, an Always allow saved for one PowerShell command could answer later commands that only began the same way, a write included. It now covers only the command it was saved for.
+- **Agents point you to Add routine:** asked to schedule one of their skills, agents wrote out a `routines:` block and told you to ask Doc to add it. Every agent now points you to Add routine, under Routines in the rail or on the agent's page, which schedules the skill and approves the routine when you save it. Doc writes a routine by hand only when it runs no skill, and tells you it waits in Routines until you approve it.
+- **A routine that searches with `find` no longer stops on a card:** a search for a file named by a shell variable, such as `find . -path ./.rundock -prune -o -name "$t.md" -print`, was judged as possibly changing every folder it named. Because it named Rundock's own settings folder, if only to skip it, the card asked every time, so a routine with nobody there to answer stopped. A variable in double quotes that is the name or path pattern `find` matches against now counts as part of a read. Any other variable in a command still raises a card.
+- **Smaller fixes:** a saved conversation you leave before its history loads no longer drops out of the sidebar, and its history no longer appears in the conversation you switched to. A saved agent or skill file that ends with a code example keeps its closing fence. Doc now types `<`, `>` and `&` as themselves rather than as `&lt;`, `&gt;` and `&amp;`. The README now says Rundock works with your Claude and ChatGPT subscriptions.
+
 ## 0.15.8: Routines That Run Without You (2026-11-13)
 
 Routines can now run on the days you choose or once a month, can be switched off on one computer, and keep going when you switch workspace. With nobody watching, a routine now gets through its reads and the commands you've already allowed, and carries on or says it failed when a step is refused. Only Doc can now change your agents and skills, and it asks you first when another agent brings it in. This release also closes several ways an agent could run a command or change a file without asking, so updating is recommended.
