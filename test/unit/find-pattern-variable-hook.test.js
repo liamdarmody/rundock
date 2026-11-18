@@ -27,6 +27,7 @@ const { spawn } = require('node:child_process');
 const fx = require('../helpers/code-mode-fixture.js');
 const P = require('../../public/permissions.js');
 const S = require('../../public/read-only-shell.js');
+const hook = require('../../scripts/permission-hook.js');
 
 const HOOK = path.join(__dirname, '..', '..', 'scripts', 'permission-hook.js');
 const SHARED = path.join(__dirname, '..', '..', 'public', 'read-only-shell.js');
@@ -171,7 +172,30 @@ describe("through the real hook, a quoted variable that is find's pattern is ans
       assertAnsweredAsRead(held, SEARCH('$t.md'), codeMode);
       assert.deepStrictEqual(outcome(held), outcome(literal), 'the same answer as the literal name');
     });
+  }
 
+  // THE REPORTED LINE AS SENT: the same search after a `cd` into the workspace
+  // by its real path, the whole line as it was written.
+  const AS_SENT = (pattern) => `cd ${fs.realpathSync(ws)} && ${SEARCH(pattern)}`;
+  test('the search as sent, after a cd into the workspace, is a read with no crossing', () => {
+    const line = AS_SENT('$t.md');
+    assert.strictEqual(S.isReadOnlyShellCommand(line), true, `the shared definition reads it: ${show(line)}`);
+    assert.strictEqual(S.isReadOnlyShellCommand(AS_SENT('alpha.md')), true, 'as it reads the literal name');
+    assert.ok(fs.existsSync(path.join(ws, '.rundock', 'state.json')), 'sanity: the workspace holds the answer file the search prunes');
+    const access = hook.classifyShellAccess('Bash', { command: line }, ws, [], home);
+    assert.deepStrictEqual(hook.boundaryCrossingsFor(access), [], `no crossing: ${JSON.stringify(access)}`);
+  });
+  for (const [mode, codeMode] of MODES) {
+    test(`${mode}: the search as sent, after a cd into the workspace, is answered as a read, as the literal name is`, async () => {
+      const held = await runHook(AS_SENT('$t.md'), { codeMode });
+      const literal = await runHook(AS_SENT('alpha.md'), { codeMode });
+      assertAnsweredAsRead(literal, 'the literal name, as sent', codeMode);
+      assertAnsweredAsRead(held, AS_SENT('$t.md'), codeMode);
+      assert.deepStrictEqual(outcome(held), outcome(literal), 'the same answer as the literal name');
+    });
+  }
+
+  for (const [mode, codeMode] of MODES) {
     test(`${mode}: each line of the new shape is answered as a read`, async () => {
       for (const command of ['find . -name "$t.md" -print', 'find notes -iname "${t}*"', 'find notes -name "$t*"',
         'find . -path ./.rundock -prune -o -name "$t.md" -print', 'find . -path "./$d/*" -print',

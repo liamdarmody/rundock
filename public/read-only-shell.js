@@ -894,7 +894,10 @@
   // the third: a plain parameter inside double quotes, `"$t"` or `"${t}"`,
   // kept in its word as written, with the word's index pushed onto `held`.
   // findOnlyReads lets that word through only as the operand of a pattern
-  // primary, which find takes as a pattern whatever the shell puts there. Not
+  // primary, which find takes as a pattern whatever the shell puts there. A
+  // quoted parameter that names an array is still one word: zsh joins it, and
+  // bash and zsh's KSH_ARRAYS take its first element, as the shells test
+  // (test/unit/quoted-parameter-one-word-shells.test.js) checks. Not
   // plain, so still not followed: a special parameter (`"$1"`, `"$@"`), a
   // brace holding more than a name (`"${t:-x}"`), a name followed by anything
   // but the few characters that end it in bash and zsh alike (`"$t[1]"` and

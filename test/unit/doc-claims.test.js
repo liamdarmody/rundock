@@ -2091,6 +2091,7 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'are the only three exceptions to the rule that a character outside the plain set makes the segment not a read',
       'reads for `find` alone and only as the word after a pattern primary such as `-name`, `-path` or `-regex`',
       'find takes that word as the pattern, whatever the variable holds, so it is never an option or a path',
+      'A quoted parameter that names an array is still one word: zsh joins it, and bash and zsh\'s `KSH_ARRAYS` take its first element, as `test/unit/quoted-parameter-one-word-shells.test.js` checks against the real bash and zsh.',
       'Anywhere else a `$` still asks',
       'No quote character that opens nothing in bash hides a command either',
       'every reading reads the line that way as well as as written',
@@ -2117,6 +2118,7 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'A WILDCARD THAT CANNOT START WITH A DASH.',
       'makes two of the only three exceptions to the plain set',
       'findOnlyReads lets that word through only as the operand of a pattern primary',
+      'A quoted parameter that names an array is still one word: zsh joins it, and bash and zsh\'s KSH_ARRAYS take its first element, as the shells test (test/unit/quoted-parameter-one-word-shells.test.js) checks.',
       'A word holding a quoted variable (`held`, from shellWords) reads only as the operand of a pattern primary',
       'The one word it need not show is a pattern held in a quoted variable',
       'So no segment of these reads that did not read before, but for a find pattern held in a quoted variable',
@@ -2124,6 +2126,7 @@ describe('ARCHITECTURE.md: an option is judged as the shell hands it to the prog
       'shellView gives the line back with each of those characters made a space',
       'A FAILURE INSIDE THIS READING IS AN ANSWER',
     ]) assert.ok(sharedSrc.includes(said), `the shared definition says: ${said}`);
+    assert.ok(fs.existsSync(path.join(ROOT, 'test', 'unit', 'quoted-parameter-one-word-shells.test.js')), 'the shells test the page and the module name is there');
     const hookSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'permission-hook.js'), 'utf-8').replace(/\n\s*\/\/ ?/g, ' ');
     assert.ok(hookSrc.includes('which the crossing check reads as well (shellCrossings), so none of them hides a path'), 'the hook says where an escaped quote is read');
   });

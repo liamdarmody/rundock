@@ -1311,7 +1311,10 @@ describe("a quoted variable that is find's pattern reads, and every other variab
       'find . -name "$t,$u"', 'find . -name "$t-$u"', 'find . -name "$t?"', 'find . -name "$t".md -print',
       'find . -name "$t x"', 'find . -name "$t\tx"', 'find . -name "${t}[1]"', 'find . -name "${t}:h"', 'find . ! -name "$t"',
       'find . -not -path "./$d/*" -name "$t"', 'find . -ipath "*/$d/$t-$u,x?"', 'find . -name "$t" -o -name "$u" -print',
-      'find . -type f -name "$t" -newer x', 'find . -iregex ".*/${t}[.]md" -maxdepth 2', 'find . -name "$_x$T_2"']) {
+      'find . -type f -name "$t" -newer x', 'find . -iregex ".*/${t}[.]md" -maxdepth 2', 'find . -name "$_x$T_2"',
+      // In zsh, setting PATH sets the array `path`: the quoted array is one
+      // word, which -name takes as a pattern (the shells test runs this line).
+      "for PATH in 'x:-o:-delete'; do /usr/bin/find . -name \"$path\" -print; done"]) {
       assertReads(cmd);
     }
   });

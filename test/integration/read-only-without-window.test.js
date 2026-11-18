@@ -28,6 +28,8 @@ const { agentFile, makeTempDir } = require('../helpers/workspace.js');
 const route = require('../helpers/permission-route.js');
 const ROUTER = require('../../lib/http-router.js');
 const P = require('../../public/permissions.js');
+const S = require('../../public/read-only-shell.js');
+const hook = require('../../scripts/permission-hook.js');
 const auth = require('../../lib/auth/index.js');
 const { keychainVerdict } = require('../../scripts/code-mode-verdict.js');
 const { refusalNotice } = require('../../scripts/refusal-notice.js');
@@ -721,5 +723,50 @@ describe('a search over several names held in a quoted variable runs with no win
     }
     assert.strictEqual(record.refusedCards, undefined, 'the run\'s record counts no refused card');
     assert.strictEqual(linesFor(run.name).length, 2, 'the server answered each as a read');
+  });
+
+  // THE LINE AS SENT: the same search after a `cd` into the workspace by its
+  // real path, the whole line as the agent wrote it, beside the same line with
+  // the literal name in place of the variable.
+  const asSent = (pattern) => `cd ${fs.realpathSync(h.workspaceDir)} && ${SEARCH.replace('"$t.md"', pattern)}`;
+  test('the search as sent, after a cd into the workspace, is a read with no crossing', () => {
+    const line = asSent('"$t.md"');
+    assert.strictEqual(S.isReadOnlyShellCommand(line), true, `the shared definition reads it: ${line}`);
+    assert.strictEqual(S.isReadOnlyShellCommand(asSent('alpha.md')), true, 'as it reads the literal name');
+    assert.ok(fs.existsSync(path.join(h.workspaceDir, '.rundock', 'state.json')), 'the workspace holds its state file');
+    const access = hook.classifyShellAccess('Bash', { command: line }, h.workspaceDir, [], os.homedir());
+    assert.deepStrictEqual(hook.boundaryCrossingsFor(access), [], `no crossing: ${JSON.stringify(access)}`);
+  });
+
+  test('through the real hook, a conversation\'s search as sent, after a cd, is allowed with no card and nothing stored to wait', async () => {
+    await noWindow();
+    const line = asSent('"$t.md"');
+    const convo = 'ro-held-pattern-as-sent';
+    const out = await runHook('Bash', { command: line }, { convo });
+    assert.strictEqual(out.permissionDecision, 'allow', JSON.stringify(out));
+    assert.deepStrictEqual(cardsFor(line), [], 'no card was broadcast');
+    assert.deepStrictEqual(filedFor(line), [], 'it never waited on a card');
+    assert.ok(await h.waitUntil(() => readOnlyEvents(convo).length === 1), 'recorded as a read the server answered');
+  });
+
+  test('a routine run\'s search as sent, after a cd, is allowed with no window and no card', async () => {
+    await noWindow();
+    const line = asSent('"$t.md"');
+    const run = startRoutine({ hooks: [{ tool: 'Bash', input: { command: line } }] });
+    const record = await finished(run);
+    assert.strictEqual(record.status, 'succeeded', JSON.stringify(record));
+    assert.deepStrictEqual(answersOf(record).map((a) => a && a.permissionDecision), ['allow'], 'the hook was told to allow it');
+    assert.deepStrictEqual(cardsFor(line).filter((m) => m._run && m._run.id === record.id), [], 'no card');
+    assert.deepStrictEqual(filedFor(line).filter((f) => f.run && f.run.id === record.id), [], 'never waited');
+    assert.strictEqual(record.refusedCards, undefined, 'the run\'s record counts no refused card');
+    assert.strictEqual(linesFor(run.name).length, 1, 'the server answered it as a read');
+  });
+
+  test('in Code mode, the search as sent, after a cd, is answered as the same line with the literal name', async () => {
+    const env = { RUNDOCK_CODE_MODE: '1' };
+    const held = await runHook('Bash', { command: asSent('"$t.md"') }, { convo: 'ro-held-pattern-code', env });
+    const literal = await runHook('Bash', { command: asSent('alpha.md') }, { convo: 'ro-literal-pattern-code', env });
+    assert.strictEqual(literal.permissionDecision, 'allow', `sanity: the literal name is allowed: ${JSON.stringify(literal)}`);
+    assert.deepStrictEqual(held, literal, 'the same answer as the literal name');
   });
 });
