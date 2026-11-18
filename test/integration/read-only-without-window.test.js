@@ -675,3 +675,51 @@ describe('the window still answers a low-risk read the server did not answer', (
     assert.strictEqual(record.refusedCards, undefined, 'the run counts no refused card');
   });
 });
+
+// ---------------------------------------------------------------------------
+// A search over several names, each held in a quoted variable
+// ---------------------------------------------------------------------------
+
+// A routine's agent searched for notes by name, one name at a time, with each
+// name held in a variable and `.git` and `.rundock` pruned. find takes the
+// word after `-name` as the pattern, whatever it says, so the line reads, the
+// pruned folder is no crossing, and the server answers it with no window. The
+// same line in Code mode is in test/unit/find-pattern-variable-hook.test.js.
+describe('a search over several names held in a quoted variable runs with no window and no card', () => {
+  const SEARCH = 'for t in alpha beta; do echo "== $t"; find . -path ./.git -prune -o -path ./.rundock -prune -o -name "$t.md" -print; done';
+  const LISTING = "find notes -name '*.md'";
+  before(() => {
+    const state = path.join(h.workspaceDir, '.rundock', 'state.json');
+    if (!fs.existsSync(state)) { fs.mkdirSync(path.dirname(state), { recursive: true }); fs.writeFileSync(state, '{}\n'); }
+    fs.mkdirSync(path.join(h.workspaceDir, 'notes'), { recursive: true });
+    fs.writeFileSync(path.join(h.workspaceDir, 'notes', 'alpha.md'), '# alpha\n');
+  });
+
+  test('through the real hook, a conversation\'s search is allowed as a read: no card, nothing stored to wait', async () => {
+    await noWindow();
+    assert.ok(fs.existsSync(path.join(h.workspaceDir, '.rundock', 'state.json')), 'the workspace holds its state file');
+    const convo = 'ro-held-pattern';
+    const out = await runHook('Bash', { command: SEARCH }, { convo });
+    assert.strictEqual(out.permissionDecision, 'allow', JSON.stringify(out));
+    assert.deepStrictEqual(cardsFor(SEARCH), [], 'no card was broadcast');
+    assert.deepStrictEqual(filedFor(SEARCH), [], 'it never waited on a card');
+    assert.ok(await h.waitUntil(() => readOnlyEvents(convo).length === 1), 'recorded as a read the server answered');
+  });
+
+  // THE MOST COMMON NEXT STEP: the search, then a plain listing, in one run.
+  test('a routine run\'s search over several names, then a plain listing, are both allowed with no card', async () => {
+    await noWindow();
+    const run = startRoutine({ hooks: [SEARCH, LISTING].map((command) => ({ tool: 'Bash', input: { command } })) });
+    const record = await finished(run);
+    assert.strictEqual(record.status, 'succeeded', JSON.stringify(record));
+    const answers = answersOf(record);
+    assert.strictEqual(answers.length, 2, 'both lines were put to the hook');
+    for (const a of answers) assert.strictEqual(a && a.permissionDecision, 'allow', JSON.stringify(a));
+    for (const command of [SEARCH, LISTING]) {
+      assert.deepStrictEqual(cardsFor(command).filter((m) => m._run && m._run.id === record.id), [], `no card: ${command}`);
+      assert.deepStrictEqual(filedFor(command).filter((f) => f.run && f.run.id === record.id), [], `never waited: ${command}`);
+    }
+    assert.strictEqual(record.refusedCards, undefined, 'the run\'s record counts no refused card');
+    assert.strictEqual(linesFor(run.name).length, 2, 'the server answered each as a read');
+  });
+});
