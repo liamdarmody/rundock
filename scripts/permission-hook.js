@@ -912,11 +912,12 @@ const WHAT_RUNS_FILES = ['.mcp.json', '.claude/settings.json', MCP_SECRETS_FILE]
 const WHAT_RUNS_DIRS = ['.claude/hooks'];
 const WORKSPACE_ANSWER_FILES = [...RUNDOCK_ANSWER_FILES, ...RUNTIME_GUARDED_ANSWER_FILES, ...LAUNCHER_FILES, ...WHAT_RUNS_FILES];
 // RUNDOCK'S CONSOLE FOLDER, under the home folder rather than any workspace.
-// It holds the script Rundock opens in Terminal when a person reconnects
-// Claude Code, so whatever it says runs outside every sandbox the moment they
-// press the button. A write there, the folder itself and everything in it, is
-// asked about every time like an answer file, wherever the workspace is: with
-// the workspace at the home folder it is otherwise ordinary work inside it.
+// It holds the scripts Rundock opens in Terminal when a person signs in to
+// Claude Code from the setup screen or reconnects it, so whatever they say
+// runs outside every sandbox the moment they press the button. A write there,
+// the folder itself and everything in it, is asked about every time like an
+// answer file, wherever the workspace is: with the workspace at the home
+// folder it is otherwise ordinary work inside it.
 const RUNDOCK_CONSOLE_DIR = '.rundock-console';
 function isRundockConsolePath(resolvedPath, home = os.homedir(), foldsCase = hostFoldsCase(), pmod = path) {
   return matchesAnswerFileSet([RUNDOCK_CONSOLE_DIR], resolvedPath, home, foldsCase, pmod, true);
