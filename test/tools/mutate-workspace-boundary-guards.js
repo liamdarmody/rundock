@@ -3789,8 +3789,11 @@ const MUTATIONS = [
   // The window's title and Claude Code's words go onto a command line, so only
   // fixed words may.
   [CLAUDE_CONSOLE, 'Reconnect: the console takes its title and words from the caller',
-    "Object.prototype.hasOwnProperty.call(CONSOLE_TITLES, purpose) ? purpose : 'signin'",
+    "typeof purpose === 'string' && Object.prototype.hasOwnProperty.call(CONSOLE_TITLES, purpose) ? purpose : 'signin'",
     'purpose'],
+  [CLAUDE_CONSOLE, 'Sign in: a purpose that is not a string is taken for the console it reads as',
+    "typeof purpose === 'string' && ",
+    ''],
   [CONSOLE_SERVER, 'Reconnect: the card\'s console from the server is the wizard\'s, "Sign in to Claude" running a bare claude',
     "{ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version, purpose: 'reconnect' }",
     '{ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version }'],
@@ -3800,8 +3803,37 @@ const MUTATIONS = [
   // With a refused session a bare `claude` can start ready to chat and say
   // "Please run /login" only once a message is sent: nobody is logged in.
   [CLAUDE_CONSOLE, 'Reconnect: the card\'s console runs a bare claude',
-    "const CONSOLE_WORDS = { signin: [], reconnect: ['auth', 'login'] };",
-    'const CONSOLE_WORDS = { signin: [], reconnect: [] };'],
+    "const CONSOLE_WORDS = { signin: ['auth', 'login'], reconnect: ['auth', 'login'] };",
+    "const CONSOLE_WORDS = { signin: ['auth', 'login'], reconnect: [] };"],
+  // A bare `claude` first asks whether the home folder is trusted, before any
+  // sign-in: the setup screen's console runs the login command too.
+  [CLAUDE_CONSOLE, 'Sign in: the setup screen\'s console runs a bare claude',
+    "const CONSOLE_WORDS = { signin: ['auth', 'login'], reconnect: ['auth', 'login'] };",
+    "const CONSOLE_WORDS = { signin: [], reconnect: ['auth', 'login'] };"],
+  [CLAUDE_CONSOLE, 'Sign in: the setup screen\'s console runs claude auth login whatever the Claude Code version',
+    'hasAuthLogin(version) ? CONSOLE_WORDS[known] : []',
+    "hasAuthLogin(version) || known === 'signin' ? CONSOLE_WORDS[known] : []"],
+  [CLAUDE_CONSOLE, 'Sign in: the window\'s title is taken from the caller',
+    'const title = CONSOLE_TITLES[known];',
+    'const title = known === purpose ? CONSOLE_TITLES[known] : String(purpose);'],
+  // Each console writes only its own macOS script, its name a constant.
+  [CLAUDE_CONSOLE, 'Sign in: both consoles write the same macOS script',
+    "const CONSOLE_SCRIPT_NAMES = { signin: 'Sign in to Claude.command', reconnect: 'Reconnect Claude.command' };",
+    "const CONSOLE_SCRIPT_NAMES = { signin: 'Reconnect Claude.command', reconnect: 'Reconnect Claude.command' };"],
+  [CLAUDE_CONSOLE, 'Sign in: the macOS script\'s name is taken from the caller',
+    'CONSOLE_SCRIPT_NAMES[known]',
+    'CONSOLE_SCRIPT_NAMES[purpose]'],
+  [CLAUDE_CONSOLE, 'Sign in: the setup screen\'s macOS script is written through whatever is at its path',
+    '    if (c && c.script) writeConsoleScript(c.script.file, c.script.content);',
+    '    if (c && c.script) (path.basename(c.script.file) === CONSOLE_SCRIPT_NAMES.signin ? fs.writeFileSync : writeConsoleScript)(c.script.file, c.script.content);'],
+  // Claude Code's words are its own arguments, never one word, and on Windows
+  // never inside the path's quotes.
+  [CLAUDE_CONSOLE, 'Sign in: on Linux the login words are passed as one argument',
+    "args: ['-e', bin, ...words]",
+    "args: ['-e', bin, words.join(' ')]"],
+  [CLAUDE_CONSOLE, 'Sign in: on Windows the login words are inside the path\'s quotes',
+    'const line = [`"${bin}"`, ...words].join(\' \');',
+    'const line = `"${[bin, ...words].join(\' \')}"`;'],
   // `claude auth login` arrived in Claude Code 2.1.41: an older one, or one
   // whose version is not known, would show an unknown command.
   [CLAUDE_CONSOLE, 'Reconnect: the console runs claude auth login whatever the Claude Code version',

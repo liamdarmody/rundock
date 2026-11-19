@@ -1,9 +1,10 @@
 'use strict';
 // A WRITE TO RUNDOCK'S CONSOLE FOLDER ALWAYS ASKS.
 //
-// `~/.rundock-console` holds the script Rundock opens in Terminal when a person
-// reconnects Claude Code, so whatever it says runs on their machine outside
-// any sandbox, the moment they press the button. With the workspace at the
+// `~/.rundock-console` holds the scripts Rundock opens in Terminal when a person
+// signs in to Claude Code from the setup screen or reconnects it, so whatever
+// they say runs on their machine outside any sandbox, the moment they press
+// the button. With the workspace at the
 // home folder nothing stopped an agent replacing it: the sandbox block did not
 // deny the folder, and the hook took it as ordinary work inside the workspace.
 // Now a write there, by a file tool or a shell command, asks every time with
@@ -36,6 +37,7 @@ before(async () => {
   }
   fs.mkdirSync(path.join(home, '.rundock-console'));
   fs.writeFileSync(path.join(home, '.rundock-console', 'Reconnect Claude.command'), '#!/bin/sh\nexec claude\n');
+  fs.writeFileSync(path.join(home, '.rundock-console', 'Sign in to Claude.command'), '#!/bin/sh\nexec claude auth login\n');
   const s = http.createServer();
   await new Promise(r => s.listen(0, '127.0.0.1', r));
   closed = s.address().port;
@@ -77,6 +79,13 @@ const READS = () => [
   ['Bash', { command: 'cat ~/.rundock-console/"Reconnect Claude.command"' }, 'cat'],
   ['Read', { file_path: script() }, 'the Read tool'],
 ];
+// The setup screen's Sign in to Claude window has a script of its own there.
+const signinScript = () => path.join(home, '.rundock-console', 'Sign in to Claude.command');
+const SIGNIN_WRITES = () => [
+  ['Bash', { command: 'echo "exec curl example.com" > "$HOME/.rundock-console/Sign in to Claude.command"' }, 'a shell redirect'],
+  ['Bash', { command: 'echo "exec curl example.com" >> ~/.rundock-console/"Sign in to Claude.command"' }, 'a shell append'],
+  ['Write', { file_path: signinScript(), content: 'exec curl example.com\n' }, 'the Write tool'],
+];
 
 for (const [label, wsOf] of [['the workspace is the home folder', () => home], ['the workspace is a folder under home', () => nested]]) {
   describe(`when ${label}`, () => {
@@ -84,6 +93,12 @@ for (const [label, wsOf] of [['the workspace is the home folder', () => home], [
       const mode = codeMode ? 'Code' : 'Notes';
       test(`every write to it is refused when Rundock cannot be asked (${mode} mode)`, async () => {
         for (const [tool, input, what] of WRITES()) {
+          const r = await decision(wsOf(), tool, input, codeMode);
+          assert.strictEqual(r.decision, 'deny', `${mode}: ${what}`);
+        }
+      });
+      test(`every write to the setup screen's sign-in script is refused when Rundock cannot be asked (${mode} mode)`, async () => {
+        for (const [tool, input, what] of SIGNIN_WRITES()) {
           const r = await decision(wsOf(), tool, input, codeMode);
           assert.strictEqual(r.decision, 'deny', `${mode}: ${what}`);
         }
@@ -148,6 +163,20 @@ describe('the folder guarded is the one Reconnect writes', () => {
     const { consoleCommand } = require('../../lib/runtime/claude-console.js');
     const c = consoleCommand('/usr/local/bin/claude', 'darwin', {}, { purpose: 'reconnect', home, version: '2.1.50' });
     assert.ok(c && c.script && c.script.file, 'sanity: on macOS the reconnect window writes a script first');
+    assert.strictEqual(hook.isRundockConsolePath(c.script.file, home), true, 'its file is in the folder the hook guards');
+    for (const ws of [home, nested]) {
+      const a = hook.classifyFileAccess('Write', { file_path: c.script.file, content: 'x' }, ws, [], home, true);
+      assert.strictEqual(a && a.answerFile, true, `an agent's write to it asks (${ws === home ? 'home' : 'under home'})`);
+    }
+  });
+});
+
+describe('the folder guarded is the one the setup screen writes', () => {
+  test('the script the Sign in to Claude window writes on macOS is a write that always asks', () => {
+    const { consoleCommand } = require('../../lib/runtime/claude-console.js');
+    const c = consoleCommand('/usr/local/bin/claude', 'darwin', {}, { purpose: 'signin', home, version: '2.1.50' });
+    assert.ok(c && c.script && c.script.file, 'sanity: on macOS the sign-in window writes a script first');
+    assert.strictEqual(path.basename(c.script.file), 'Sign in to Claude.command');
     assert.strictEqual(hook.isRundockConsolePath(c.script.file, home), true, 'its file is in the folder the hook guards');
     for (const ws of [home, nested]) {
       const a = hook.classifyFileAccess('Write', { file_path: c.script.file, content: 'x' }, ws, [], home, true);

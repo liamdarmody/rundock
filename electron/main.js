@@ -96,8 +96,8 @@ function ensurePath() {
 }
 
 // What `claude --version` said the last time findClaude found Claude Code:
-// the reconnect console runs Claude Code's login command only on a version
-// that has it (lib/runtime/claude-console.js, hasAuthLogin).
+// both consoles run Claude Code's login command only on a version that has
+// it (lib/runtime/claude-console.js, hasAuthLogin).
 let claudeFoundVersion = null;
 function findClaude() {
   ensurePath();
@@ -221,10 +221,11 @@ function launchCodexSignIn() {
 // succeeds; the chat's reconnect card waits for the person to say they are
 // done. The console per platform is lib/runtime/claude-console.js, the one the
 // server opens for a browser running from source. `purpose` chooses the
-// console: the wizard's, "Sign in to Claude", runs `claude`; the card's,
-// 'reconnect', runs Claude Code's own login command, `claude auth login`
-// (on macOS through a script the opener writes first), on a Claude Code
-// whose version has it. The opener is handed the lookup rather than its
+// console: the wizard's, "Sign in to Claude", or the card's, 'reconnect'.
+// Each runs Claude Code's own login command, `claude auth login` (on macOS
+// through a script of its own the opener writes first), on a Claude Code
+// whose version has it, and `claude` bare on one that does not or whose
+// version is not known. The opener is handed the lookup rather than its
 // answer, so it runs findClaude (a command, on this process) only once its
 // gate has let the ask through, never for an ask while a console opens or
 // just after; it then asks for the version that lookup just read. Resolves

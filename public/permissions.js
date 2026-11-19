@@ -895,7 +895,7 @@
         + 'refuse the change even after you allow it here. An agent can request a change to it, but never keep the '
         + 'permission: this asks every time, and there is no option to stop being asked.',
     },
-    // `~/.rundock-console`: the script Rundock opens in Terminal to reconnect.
+    // `~/.rundock-console`: the scripts Rundock opens in Terminal to sign in or reconnect.
     console: {
       summary: 'Wants to change what Rundock opens in Terminal',
       context: 'This folder holds the script Rundock opens in Terminal when you reconnect Claude Code, so a change to it '
