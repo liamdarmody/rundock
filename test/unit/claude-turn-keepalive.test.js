@@ -43,7 +43,15 @@ const wire = {
   result: (text) => ({ type: 'result', subtype: 'success', result: text, session_id: 's1' }),
 };
 
-function harness({ lib = engineLib, idle } = {}) {
+// What every real onResult does once it has stored the turn's reply (the
+// chat's in server.js and the engine's own): it parks the entry until its next
+// message.
+function parkOnResult(e) {
+  e.responseText = '';
+  e.idle = true; e.idleSince = Date.now();
+}
+
+function harness({ lib = engineLib, idle, onResult } = {}) {
   const sent = [];
   const deps = {};
   for (const name of lib.DEP_NAMES) deps[name] = () => {};
@@ -66,14 +74,14 @@ function harness({ lib = engineLib, idle } = {}) {
     };
     if (opts.idle !== undefined) entry.idle = opts.idle;
     deps.processes.set(convoId, entry);
-    engine.wireProcessHandlers(entry, convoId, null, {});
+    engine.wireProcessHandlers(entry, convoId, null, { onResult: opts.onResult });
     const emit = (...objs) => {
       for (const o of objs) proc.stdout.emit('data', Buffer.from(JSON.stringify(o) + '\n'));
     };
     return { entry, proc, emit };
   };
 
-  const first = start('c1', 'p1', { idle });
+  const first = start('c1', 'p1', { idle, onResult });
   const beats = (processId) => sent.filter(m => m.type === 'system' && m.subtype === 'keepalive'
     && (!processId || m._processId === processId));
   return { sent, deps, engine, start, beats, ...first };
@@ -252,29 +260,45 @@ describe('the heartbeat stops', () => {
     assert.strictEqual(h.beats('p1').length, 3, 'the old process closing does not stop the new one');
   });
 
-  test('a late result from a replaced process leaves its successor\'s heartbeat running, and the successor\'s own result stops it', (t) => {
+  test('a late result from a replaced process reaches neither the screen nor its successor\'s turn, whose heartbeat runs until its own result', (t) => {
     t.mock.timers.enable({ apis: ['setInterval'] });
-    const h = harness();
+    // Both processes are wired as the real handlers wire them: a result parks
+    // the entry until its next message, which silences the heartbeat.
+    const h = harness({ idle: false, onResult: parkOnResult });
     t.mock.timers.tick(INTERVAL);
     assert.strictEqual(h.beats('p1').length, 1, 'beating for the first process');
     // A fresh start reuses the entry with a new process (startWithoutSession).
     const oldProc = h.proc;
     const next = fakeProcess();
     h.entry.process = next; h.entry.buffer = ''; h.entry.exited = false;
-    h.engine.wireProcessHandlers(h.entry, 'c1', null, {});
-    const emitFrom = (proc, obj) => proc.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
+    h.engine.wireProcessHandlers(h.entry, 'c1', null, { onResult: parkOnResult });
+    const emitFrom = (proc, ...objs) => {
+      for (const o of objs) proc.stdout.emit('data', Buffer.from(JSON.stringify(o) + '\n'));
+    };
+    emitFrom(next, wire.textDelta('Still working. '));
     t.mock.timers.tick(INTERVAL);
     const quiet = h.beats('p1').length;
     assert.strictEqual(quiet, 2, 'the new process beats while it works quietly');
-    emitFrom(oldProc, wire.result('A late answer from the replaced process.'));
+    const before = h.sent.length;
+    emitFrom(oldProc, wire.textDelta('A late answer from the replaced process.'),
+      wire.result('A late answer from the replaced process.'));
+    const late = h.sent.slice(before);
     for (let i = 1; i <= 4; i++) {
       t.mock.timers.tick(INTERVAL);
       assert.strictEqual(h.beats('p1').length - quiet, i, `the new process still beats in interval ${i} after the old one's late result`);
     }
+    assert.strictEqual(h.entry.idle, false, 'the late result does not park the new process\'s turn');
+    assert.ok(!h.entry.resultSent, 'nor mark its turn answered');
+    assert.strictEqual(h.entry.responseText, 'Still working. ', 'nor touch the reply the new process is writing');
+    assert.deepStrictEqual(late, [], 'nothing the replaced process printed reaches the screen: no text, no result, no done');
     emitFrom(next, wire.result('The new process answers.'));
+    assert.strictEqual(h.entry.idle, true, 'control: the new process\'s own result parks the entry');
+    assert.ok(h.sent.some(m => m.type === 'result' && m.result === 'The new process answers.'), 'and reaches the screen');
     const answered = h.beats('p1').length;
     t.mock.timers.tick(INTERVAL * 4);
     assert.strictEqual(h.beats('p1').length, answered, 'the new process\'s own result stops its heartbeat');
+    assert.ok(!h.sent.some(m => JSON.stringify(m).includes('replaced process')),
+      'and nothing the replaced process printed reached the screen later either');
   });
 
   test('no heartbeat timer outlives its process or holds the event loop open', (t) => {

@@ -82,13 +82,13 @@ const MUTATIONS = [
     ''],
   // ===== IT STOPS =====
   [ENGINE, 'the result stops it',
-    '          entry.resultSent = true;\n          stopForThisProcess();\n',
+    '          entry.resultSent = true;\n          stopClaudeTurnKeepalive(entry);\n',
     '          entry.resultSent = true;\n'],
-  // A late result from a process that has since been replaced is that
-  // process's own: its successor's heartbeat keeps running.
-  [ENGINE, 'only its own process\'s result stops it',
-    '          entry.resultSent = true;\n          stopForThisProcess();\n',
-    '          entry.resultSent = true;\n          stopClaudeTurnKeepalive(entry);\n'],
+  // A process replaced in its entry no longer speaks for it: a late result
+  // from it would park its successor's turn and so silence its heartbeat.
+  [ENGINE, 'a replaced process\'s output never reaches its entry',
+    '    if (entry.process !== keepaliveProc) return;\n',
+    ''],
   [ENGINE, 'close stops it',
     "  keepaliveProc.on('close', stopForThisProcess);\n",
     ''],
