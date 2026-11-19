@@ -204,6 +204,7 @@ polls, which would make them prove nothing.
 | Location | Sleep | Outlives |
 |---|---|---|
 | `test/integration/boundary-permissions.test.js:65,101,138,221,242` | 300 | "no permission card is coming" |
+| `test/integration/claude-keepalive.test.js:80` | `KEEPALIVE_MS * 4` | "the heartbeat has stopped" |
 | `test/integration/codex-approvals.test.js:185,207` | 200, 300 | "no duplicate `done` envelope is coming" |
 | `test/integration/codex-delegation.test.js:145,180` | 400 | "the stale `end_delegation` did not kill the restored parent" |
 | `test/integration/codex-keepalive.test.js:80` | `KEEPALIVE_MS * 4` | "the heartbeat has stopped" |

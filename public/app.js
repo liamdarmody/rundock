@@ -695,9 +695,10 @@ function handle(d) {
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
       }
-      // Keepalive heartbeat from a silent Codex turn: the reducer bumps the
-      // stream-activity clock (ctx.now keeps it pure) so the 90s watchdog
-      // never declares a legitimately working turn dead. No render effect.
+      // Keepalive heartbeat from a quiet Claude Code or Codex turn: the reducer
+      // bumps the stream-activity clock (ctx.now keeps it pure) so the 90s
+      // watchdog never declares a legitimately working turn dead. No render
+      // effect.
       if(d.subtype==='keepalive' && convoId) {
         const r = RundockConversationState.reduce(getConvoState(convoId), d, { now: Date.now() });
         convoState[convoId] = r.state;
