@@ -82,10 +82,19 @@ const MUTATIONS = [
     ''],
   // ===== IT STOPS =====
   [ENGINE, 'the result stops it',
-    '          entry.resultSent = true;\n          stopClaudeTurnKeepalive(entry);\n',
+    '          entry.resultSent = true;\n          stopForThisProcess();\n',
     '          entry.resultSent = true;\n'],
+  // A late result from a process that has since been replaced is that
+  // process's own: its successor's heartbeat keeps running.
+  [ENGINE, 'only its own process\'s result stops it',
+    '          entry.resultSent = true;\n          stopForThisProcess();\n',
+    '          entry.resultSent = true;\n          stopClaudeTurnKeepalive(entry);\n'],
   [ENGINE, 'close stops it',
     "  keepaliveProc.on('close', stopForThisProcess);\n",
+    ''],
+  // A start that fails emits 'error' and may never close.
+  [ENGINE, 'a failed start stops it when it fails',
+    "  keepaliveProc.on('error', stopForThisProcess);\n",
     ''],
   [STOP, 'Stop stops it at once',
     '    if (entry.stopTurnKeepalive) entry.stopTurnKeepalive();\n',
@@ -112,6 +121,14 @@ const MUTATIONS = [
   [ENGINE, 'the interval cannot be set to a minute or more',
     '  return n >= 50 && n <= 59999 ? n : 25000;',
     '  return n >= 50 && n <= 600000 ? n : 25000;'],
+  // ===== THE CLOSE IT LEAVES TO THE CHAT =====
+  // A turn that closes with no result is finished by the chat's own close
+  // handling, which tells the screen the turn is done and lets the process
+  // go. With that handling removed, a quiet turn that is killed must go red.
+  [only(SERVER_E2E, 'a process killed mid-quiet stops beating at its close, and the server still says the turn is done and lets the process go'),
+    'the existing close handling removed',
+    "            proc.on('close', (code) => {\n              if (entry.spawnFailed) return; // error handler already surfaced\n",
+    "            proc.on('close', (code) => {\n              return;\n              if (entry.spawnFailed) return; // error handler already surfaced\n"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

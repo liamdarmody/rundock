@@ -224,3 +224,43 @@ describe('a quiet Claude Code turn heartbeats until its result', () => {
     h.reapConvo(convoId);
   });
 });
+
+describe('a Claude Code process killed during a quiet turn', () => {
+  // Killed with no result and no Stop, as a crash ends one. The chat's own
+  // close handling in the server runs as it did before the heartbeat: the
+  // screen is told the turn is done and the process is let go.
+  test('a process killed mid-quiet stops beating at its close, and the server still says the turn is done and lets the process go', async () => {
+    const convoId = h.freshConvoId('clka');
+    const hold = holdFile('killed');
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'quiet task that is killed' }, untilFile: hold,
+        turn: [{ text: 'Never answered.' }] },
+    ]);
+
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'quiet task that is killed' });
+    const { msg: started } = await client.waitForEvent('system', 'process_started', convoId, { since });
+    try {
+      await expectHeartbeat(convoId, started, 'before the kill');
+      const entry = h.internal.chatProcesses.get(convoId);
+      assert.strictEqual(entry && entry.processId, started._processId, 'sanity: the server holds the quiet process');
+      entry.process.kill('SIGKILL');
+
+      const doneAt = () => client.messages.findIndex((m, i) => i >= since && m.type === 'system' && m.subtype === 'done'
+        && m._conversationId === convoId && m._processId === started._processId);
+      assert.ok(await h.waitUntil(() => doneAt() >= 0, { timeout: 4000 }),
+        'the screen is told the turn is done, as for any process that closes without a result');
+      assert.ok(await h.waitUntil(() => !h.internal.chatProcesses.has(convoId), { timeout: 4000 }),
+        'and the server lets the process go');
+      assert.ok(!client.messages.slice(since).some((m) => m.type === 'result' && m._conversationId === convoId),
+        'sanity: the turn never gave a result');
+
+      const closedAt = doneAt();
+      await h.delay(KEEPALIVE_MS * 4);
+      const late = client.messages.slice(closedAt + 1).filter((m) => isBeat(m, convoId) && m._processId === started._processId);
+      assert.strictEqual(late.length, 0, 'no keepalive after the close');
+    } finally {
+      h.reapConvo(convoId);
+    }
+  });
+});

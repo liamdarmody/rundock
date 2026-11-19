@@ -188,16 +188,6 @@ describe('the heartbeat stops', () => {
     assert.strictEqual(h.beats('p1').length, 1, 'no keepalive after the exit');
   });
 
-  test('a failed start sends none, while a healthy process beside it does', (t) => {
-    t.mock.timers.enable({ apis: ['setInterval'] });
-    const h = harness();
-    const failed = h.start('c2', 'p2');
-    failed.entry.spawnFailed = true; // what the spawn error handler marks
-    t.mock.timers.tick(INTERVAL * 2);
-    assert.strictEqual(h.beats('p1').length, 2, 'control: the healthy process beats');
-    assert.strictEqual(h.beats('p2').length, 0, 'no keepalive for a process that never started');
-  });
-
   test('Stop stops it at once, before the process has closed', (t) => {
     t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] });
     const w = watchIntervals();
@@ -260,6 +250,31 @@ describe('the heartbeat stops', () => {
     oldProc.emit('close', 0);
     t.mock.timers.tick(INTERVAL);
     assert.strictEqual(h.beats('p1').length, 3, 'the old process closing does not stop the new one');
+  });
+
+  test('a late result from a replaced process leaves its successor\'s heartbeat running, and the successor\'s own result stops it', (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const h = harness();
+    t.mock.timers.tick(INTERVAL);
+    assert.strictEqual(h.beats('p1').length, 1, 'beating for the first process');
+    // A fresh start reuses the entry with a new process (startWithoutSession).
+    const oldProc = h.proc;
+    const next = fakeProcess();
+    h.entry.process = next; h.entry.buffer = ''; h.entry.exited = false;
+    h.engine.wireProcessHandlers(h.entry, 'c1', null, {});
+    const emitFrom = (proc, obj) => proc.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
+    t.mock.timers.tick(INTERVAL);
+    const quiet = h.beats('p1').length;
+    assert.strictEqual(quiet, 2, 'the new process beats while it works quietly');
+    emitFrom(oldProc, wire.result('A late answer from the replaced process.'));
+    for (let i = 1; i <= 4; i++) {
+      t.mock.timers.tick(INTERVAL);
+      assert.strictEqual(h.beats('p1').length - quiet, i, `the new process still beats in interval ${i} after the old one's late result`);
+    }
+    emitFrom(next, wire.result('The new process answers.'));
+    const answered = h.beats('p1').length;
+    t.mock.timers.tick(INTERVAL * 4);
+    assert.strictEqual(h.beats('p1').length, answered, 'the new process\'s own result stops its heartbeat');
   });
 
   test('no heartbeat timer outlives its process or holds the event loop open', (t) => {
@@ -357,11 +372,12 @@ describe('the five sequences', () => {
       'the boundary and the result reach the socket as before, in order');
   });
 
-  test('the control failing: a process killed mid-quiet stops at its close, and its close handlers still run', (t) => {
+  // The chat's own close handling, which tells the screen the turn is done and
+  // lets the process go, lives in the server: a real killed process is driven
+  // through it in test/integration/claude-keepalive.test.js.
+  test('the control failing: a process killed mid-quiet stops at its close', (t) => {
     t.mock.timers.enable({ apis: ['setInterval'] });
     const h = harness();
-    let closedFor = null;
-    h.proc.on('close', (code, signal) => { closedFor = signal; });
     h.emit(wire.compacting());
     t.mock.timers.tick(INTERVAL);
     assert.strictEqual(h.beats('p1').length, 1, 'beating during the quiet');
@@ -369,7 +385,6 @@ describe('the five sequences', () => {
     h.proc.emit('close', null, 'SIGKILL');
     t.mock.timers.tick(INTERVAL * 3);
     assert.strictEqual(h.beats('p1').length, 1, 'no keepalive after the close');
-    assert.strictEqual(closedFor, 'SIGKILL', 'the existing close handling ran');
   });
 });
 
@@ -407,8 +422,9 @@ describe('the interval override', () => {
 });
 
 describe('with no browser connected', () => {
-  // Last in the file: requiring the server builds its own engine, which hands
-  // the shared engine module the server's real safeSend.
+  // Last in the file, with the failed start below: requiring the server builds
+  // its own engine, which hands the shared engine module the server's real
+  // safeSend.
   test('the server drops a keepalive into its reconnect buffer as it does any message, and nothing throws', (t) => {
     t.mock.timers.enable({ apis: ['setInterval'] });
     const { _internal: srv } = require(path.join(ROOT, 'server.js'));
@@ -424,5 +440,52 @@ describe('with no browser connected', () => {
       .filter(m => m.subtype === 'keepalive' && m._processId === 'p-nobrowser');
     assert.strictEqual(buffered.length, 1, 'the keepalive went where every undelivered message goes');
     entry.process.emit('close', 0);
+  });
+});
+
+describe('a Claude Code start that fails', () => {
+  // Driven through the server's own spawn error handler, which every Claude
+  // Code start is given before it is wired (spawnClaude in server.js and the
+  // engine). The process emits 'error' after it is wired, as a start that
+  // fails does, and may never close.
+  test('a failed start sends no keepalive and its heartbeat is cleared when it fails, while a healthy process beside it beats', (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const { _internal: srv } = require(path.join(ROOT, 'server.js'));
+    const said = [];
+    const client = { readyState: 1, send: (raw) => said.push(JSON.parse(raw)) };
+    const entryFor = (processId) => ({
+      process: fakeProcess(), agentId: 'alpha', processId, runtime: 'claude',
+      buffer: '', responseText: '', toolCalls: [], exited: false, pendingAgentTools: [], deliveredTurns: [],
+    });
+    const healthy = entryFor('p-healthy');
+    const failed = entryFor('p-failed');
+    const w = watchIntervals();
+    srv.connectedClients.add(client);
+    try {
+      srv.chatProcesses.set('c-healthy', healthy);
+      srv.wireProcessHandlers(healthy, 'c-healthy', null, {});
+      failed.process.on('error', (err) => srv.handleChatSpawnError(err, 'c-failed'));
+      srv.chatProcesses.set('c-failed', failed);
+      const before = w.made.length;
+      srv.wireProcessHandlers(failed, 'c-failed', null, {});
+      const failedTimers = w.made.slice(before).map((rec) => rec.timer);
+      failed.process.emit('error', Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }));
+      const clearedAtFailure = failedTimers.filter((timer) => w.cleared.has(timer)).length;
+      assert.strictEqual(failed.spawnFailed, true, 'sanity: the spawn error handler marked the failed start');
+      assert.ok(said.some((m) => m._conversationId === 'c-failed' && m.subtype === 'done'), 'sanity: and told the screen it is done');
+      assert.strictEqual(srv.chatProcesses.has('c-failed'), false, 'sanity: and let the failed process go');
+      t.mock.timers.tick(INTERVAL * 2);
+      const beats = (processId) => said.filter((m) => m.subtype === 'keepalive' && m._processId === processId);
+      assert.strictEqual(beats('p-healthy').length, 2, 'control: the healthy process beats');
+      assert.strictEqual(beats('p-failed').length, 0, 'no keepalive for a process that never started');
+      assert.strictEqual(failedTimers.length, 1, 'the failed process was given a heartbeat when it was wired');
+      assert.strictEqual(clearedAtFailure, 1, 'and its heartbeat was cleared when the start failed, not at its next tick');
+    } finally {
+      srv.connectedClients.delete(client);
+      srv.chatProcesses.delete('c-healthy');
+      srv.chatProcesses.delete('c-failed');
+      healthy.process.emit('close', 0);
+      w.restore();
+    }
   });
 });
