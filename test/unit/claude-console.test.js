@@ -8,6 +8,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { EventEmitter } = require('node:events');
+const { createRequire } = require('node:module');
+const { JSDOM } = require('jsdom');
 
 const C = require('../../lib/runtime/claude-console.js');
 
@@ -265,6 +267,34 @@ describe('what each console runs, as opened', () => {
     assert.strictEqual(fs.statSync(signinScriptAt(home)).ino, before);
     assert.deepStrictEqual(C.CONSOLE_SCRIPT_NAMES, { signin: 'Sign in to Claude.command', reconnect: 'Reconnect Claude.command' });
   });
+  test('macOS: a purpose that is not a string, even one that reads as "reconnect", writes and opens Sign in to Claude.command, titled "Sign in to Claude"; only the exact words choose the reconnect console', { skip: POSIX_ONLY }, async () => {
+    const opened = async (purpose) => {
+      const home = madeUpHome();
+      const f = fakeSpawn('spawn');
+      assert.deepStrictEqual(await C.openClaudeConsole({ bin: BIN, version: '2.1.41', platform: 'darwin', spawn: f.spawn, purpose, home, gate: C.consoleGate() }), { ok: true });
+      assert.strictEqual(f.calls.length, 1);
+      const titled = fakeSpawn('spawn');
+      await C.openClaudeConsole({ bin: BIN, version: '2.1.41', platform: 'win32', spawn: titled.spawn, purpose, gate: C.consoleGate() });
+      return {
+        args: f.calls[0].args,
+        written: fs.readdirSync(path.join(home, '.rundock-console')),
+        title: /^start "([^"]*)" /.exec(titled.calls[0].command)[1],
+        home,
+      };
+    };
+    const reads = { toString: () => 'reconnect' };
+    for (const [purpose, at] of [[['reconnect'], "['reconnect']"], [reads, "an object whose toString gives 'reconnect'"], [new String('reconnect'), "new String('reconnect')"]]) {
+      const { args, written, title, home } = await opened(purpose);
+      assert.deepStrictEqual({ args, written, title },
+        { args: ['-a', 'Terminal', signinScriptAt(home)], written: ['Sign in to Claude.command'], title: 'Sign in to Claude' }, at);
+    }
+    const reconnect = await opened('reconnect');
+    assert.deepStrictEqual({ args: reconnect.args, written: reconnect.written, title: reconnect.title },
+      { args: ['-a', 'Terminal', scriptAt(reconnect.home)], written: ['Reconnect Claude.command'], title: 'Reconnect Claude' }, "'reconnect'");
+    const signin = await opened('signin');
+    assert.deepStrictEqual({ args: signin.args, written: signin.written, title: signin.title },
+      { args: ['-a', 'Terminal', signinScriptAt(signin.home)], written: ['Sign in to Claude.command'], title: 'Sign in to Claude' }, "'signin'");
+  });
   test('macOS: with no version known, the wizard\'s console runs claude itself and writes nothing', async () => {
     const home = madeUpHome();
     const f = fakeSpawn('spawn');
@@ -332,20 +362,118 @@ describe('what each console runs, as opened', () => {
     assert.strictEqual(fs.readFileSync(file, 'utf8'), SCRIPT);
     assert.strictEqual(fs.readFileSync(second, 'utf8'), 'an older script\n', 'the old file was replaced, not written through');
   });
-  test('the setup screen\'s Sign in to Claude reaches the wizard\'s console through the desktop, with no purpose and the version its lookup read, and runs claude auth login', async () => {
-    const src = (file) => fs.readFileSync(path.join(__dirname, '..', '..', file), 'utf8');
-    assert.ok(src('electron/wizard.html').includes('const res = await window.electronAPI.signInClaude();'));
-    assert.ok(src('electron/preload.js').includes("signInClaude: () => ipcRenderer.invoke('wizard-signin-claude'),"));
-    const main = src('electron/main.js');
-    assert.ok(main.includes("ipcMain.handle('wizard-signin-claude', () => launchClaudeSignIn());"));
-    assert.ok(main.includes('openClaudeConsole({ findBin: findClaude, findVersion: () => claudeFoundVersion, purpose })'));
-    // What that call opens, with a lookup and a version as the desktop has them.
+  // The setup screen's Sign in to Claude, end to end on the desktop:
+  // wizard.html in JSDOM, preload.js's signInClaude, main.js's channel for it,
+  // launchClaudeSignIn and findClaude, then the real opener. main.js and
+  // preload.js cannot be loaded outside Electron, so those lines are cut from
+  // their source by name, failing loudly when one is renamed or lost, and run
+  // together with stand-ins only for what they reach outside: the commands
+  // findClaude runs, and the IPC between the two processes. The require
+  // main.js's lines are given returns the real opener with this test's seams
+  // added, and records what it was asked and what it answered. Nothing real is
+  // ever spawned.
+  const ELECTRON = path.join(__dirname, '..', '..', 'electron');
+  const piece = (file, pattern, what) => {
+    const found = pattern.exec(fs.readFileSync(path.join(ELECTRON, file), 'utf8'));
+    assert.ok(found, `electron/${file} no longer carries ${what}`);
+    return found;
+  };
+  const LOOKED_UP_VERSION = '2.1.309 (Claude Code)\n';
+  function setupScreen({ platform, env, home }) {
+    const asked = [];
+    const answered = [];
+    const ran = [];
     const f = fakeSpawn('spawn');
-    assert.deepStrictEqual(await C.openClaudeConsole({ findBin: () => BIN, findVersion: () => '2.1.309 (Claude Code)\n', purpose: undefined,
-      platform: 'linux', env: terminalOnPath(), spawn: f.spawn, gate: C.consoleGate() }), { ok: true });
-    assert.deepStrictEqual(f.calls[0].args, ['-e', BIN, 'auth', 'login']);
+    const gate = C.consoleGate();
+    const mainRequire = createRequire(path.join(ELECTRON, 'main.js'));
+    const opener = require.resolve('../../lib/runtime/claude-console.js');
+    const requireForMain = (id) => {
+      assert.strictEqual(mainRequire.resolve(id), opener, `main.js's lines asked for ${id}`);
+      return {
+        ...C,
+        openClaudeConsole: (opts) => {
+          asked.push(opts);
+          return C.openClaudeConsole({ ...opts, platform, env, spawn: f.spawn, gate, home })
+            .then((answer) => { answered.push(answer); return answer; });
+        },
+      };
+    };
+    const execSync = (command) => {
+      ran.push(command);
+      if (command === 'which claude' || command === 'where.exe claude') return `${BIN}\n`;
+      if (command === `"${BIN}" --version`) return Buffer.from(LOOKED_UP_VERSION);
+      throw new Error(`no stand-in for ${command}`);
+    };
+    const handlers = new Map();
+    const ipcMain = { handle: (channel, handler) => { handlers.set(channel, handler); } };
+    new Function('require', 'execSync', 'ensurePath', 'ipcMain', [
+      piece('main.js', /^let claudeFoundVersion = null;\n/m, 'the version its lookup read, let claudeFoundVersion = null;')[0],
+      piece('main.js', /^function findClaude\(\) \{\n[\s\S]*?\n\}\n/m, 'its lookup, findClaude')[0],
+      piece('main.js', /^function launchClaudeSignIn\(purpose\) \{\n[\s\S]*?\n\}\n/m, 'launchClaudeSignIn')[0],
+      piece('main.js', /^ *ipcMain\.handle\('wizard-signin-claude', [^\n]*\);\n/m, "the setup screen's sign-in channel, wizard-signin-claude")[0],
+    ].join('\n'))(requireForMain, execSync, () => {}, ipcMain);
+    // As Electron's invoke: the handler main.js registered gets the call and
+    // its answer comes back as a copy; a channel nothing handles is refused.
+    const ipcRenderer = {
+      invoke: async (channel, ...args) => {
+        const handler = handlers.get(channel);
+        if (!handler) throw new Error(`No handler registered for '${channel}'`);
+        return structuredClone(await handler({}, ...args));
+      },
+    };
+    const signInClaude = new Function('ipcRenderer',
+      `return ${piece('preload.js', /^ *signInClaude: ([^\n]*),\n/m, 'signInClaude')[1]};`)(ipcRenderer);
+    // The wizard as its own suites load it: intervals are recorded and never
+    // fire, and the test runs each automatic check itself.
+    const state = { claude: { status: 'not-authenticated', reason: null }, intervals: [], cleared: [] };
+    const dom = new JSDOM(fs.readFileSync(path.join(ELECTRON, 'wizard.html'), 'utf8'), {
+      runScripts: 'dangerously',
+      beforeParse(window) {
+        window.electronAPI = {
+          platform,
+          checkRuntimes: async () => ({ claude: state.claude, codex: { installed: false, authenticated: false } }),
+          signInClaude,
+          signInCodex: async () => ({ ok: true }),
+          wizardDone: () => {},
+        };
+        window.setInterval = (fn, ms) => state.intervals.push({ fn, ms });
+        window.clearInterval = (id) => { state.cleared.push(id); };
+      },
+    });
+    return {
+      w: dom.window, doc: dom.window.document, state, asked, answered, ran, f,
+      settle: () => new Promise((resolve) => setTimeout(resolve, 20)),
+    };
+  }
+  test('the setup screen\'s Sign in to Claude goes through preload, the desktop\'s channel and launchClaudeSignIn to the wizard\'s console, with no purpose and the version the lookup read, and runs claude auth login; once signed in, the next automatic check moves the wizard on', async () => {
+    const s = setupScreen({ platform: 'linux', env: terminalOnPath() });
+    await s.settle();
+    // The first load's install poll stops itself once Claude Code is found,
+    // so the sign-in starts its own automatic check.
+    await s.state.intervals[0].fn();
+    s.doc.getElementById('btn-signin').click();
+    await s.settle();
+    assert.strictEqual(s.asked.length, 1, 'the click reaches the opener, once');
+    assert.strictEqual(s.asked[0].purpose, undefined, 'no purpose: the wizard\'s console');
+    assert.deepStrictEqual(s.ran, [process.platform === 'win32' ? 'where.exe claude' : 'which claude', `"${BIN}" --version`],
+      'the lookup found Claude Code and read its version');
+    assert.strictEqual(s.asked[0].findVersion(), LOOKED_UP_VERSION, 'the opener is given the version the lookup read');
+    assert.deepStrictEqual(s.answered, [{ ok: true }]);
+    assert.strictEqual(s.f.calls.length, 1);
+    assert.deepStrictEqual({ command: s.f.calls[0].command, args: s.f.calls[0].args },
+      { command: 'x-terminal-emulator', args: ['-e', BIN, 'auth', 'login'] });
+    assert.strictEqual(s.doc.getElementById('btn-signin').textContent, 'Waiting for sign-in...');
+    const poll = s.state.intervals[s.state.intervals.length - 1];
+    assert.strictEqual(poll.fn, s.w.checkStatus, 'signing in schedules the automatic check');
+    assert.strictEqual(poll.ms, 3000);
+    assert.ok(!s.doc.getElementById('step-auth').className.includes('done'), 'not past sign-in before it is done');
+    s.state.claude = { status: 'ready' };
+    await poll.fn();
+    assert.ok(s.doc.getElementById('step-auth').className.includes('done'), 'the wizard is past sign-in');
+    assert.strictEqual(s.doc.getElementById('btn-check').textContent, 'Continue');
+    s.w.close();
   });
-  test('the wizard\'s script that cannot be written, its folder a link or another account\'s, is a failure: nothing opens, and the setup screen says it could not start', { skip: POSIX_ONLY }, async (t) => {
+  test('the wizard\'s script that cannot be written, its folder a link or another account\'s, is a failure and nothing opens', { skip: POSIX_ONLY }, async (t) => {
     const f = fakeSpawn('spawn');
     const home = madeUpHome();
     const elsewhere = madeUpHome();
@@ -362,8 +490,27 @@ describe('what each console runs, as opened', () => {
     } finally { t.mock.restoreAll(); }
     assert.deepStrictEqual(fs.readdirSync(path.join(owned, '.rundock-console')), []);
     assert.strictEqual(f.calls.length, 0);
-    const wizard = fs.readFileSync(path.join(__dirname, '..', '..', 'electron', 'wizard.html'), 'utf8');
-    assert.ok(wizard.includes("failed: 'Something stopped it opening.',") && wizard.includes("('Could not start sign-in: ' + why)"));
+  });
+  test('macOS: when the wizard\'s script cannot be written because its folder is a link, the setup screen\'s Sign in to Claude opens nothing and the screen says it could not start', { skip: POSIX_ONLY }, async () => {
+    const home = madeUpHome();
+    const elsewhere = madeUpHome();
+    fs.symlinkSync(elsewhere, path.join(home, '.rundock-console'));
+    const s = setupScreen({ platform: 'darwin', home });
+    await s.settle();
+    await s.state.intervals[0].fn();
+    const before = s.state.intervals.length;
+    s.doc.getElementById('btn-signin').click();
+    await s.settle();
+    assert.strictEqual(s.asked.length, 1, 'the click reaches the opener, once');
+    assert.strictEqual(s.asked[0].purpose, undefined);
+    assert.strictEqual(s.asked[0].findVersion(), LOOKED_UP_VERSION, 'a version that writes a script first');
+    assert.deepStrictEqual(s.answered, [{ ok: false, reason: 'failed' }]);
+    assert.strictEqual(s.f.calls.length, 0, 'nothing opens');
+    assert.deepStrictEqual(fs.readdirSync(elsewhere), [], 'nothing is written where the link points');
+    assert.strictEqual(s.doc.getElementById('auth-hint').textContent, 'Could not start sign-in: Something stopped it opening.');
+    assert.strictEqual(s.doc.getElementById('btn-signin').textContent, 'Sign in to Claude', 'the button can be pressed again');
+    assert.strictEqual(s.state.intervals.length, before, 'no automatic check waits for a sign-in that never opened');
+    s.w.close();
   });
   test('a script that cannot be written is a failure, and nothing is opened', async () => {
     const home = madeUpHome();

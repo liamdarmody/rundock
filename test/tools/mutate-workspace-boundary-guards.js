@@ -3789,8 +3789,11 @@ const MUTATIONS = [
   // The window's title and Claude Code's words go onto a command line, so only
   // fixed words may.
   [CLAUDE_CONSOLE, 'Reconnect: the console takes its title and words from the caller',
-    "Object.prototype.hasOwnProperty.call(CONSOLE_TITLES, purpose) ? purpose : 'signin'",
+    "typeof purpose === 'string' && Object.prototype.hasOwnProperty.call(CONSOLE_TITLES, purpose) ? purpose : 'signin'",
     'purpose'],
+  [CLAUDE_CONSOLE, 'Sign in: a purpose that is not a string is taken for the console it reads as',
+    "typeof purpose === 'string' && ",
+    ''],
   [CONSOLE_SERVER, 'Reconnect: the card\'s console from the server is the wizard\'s, "Sign in to Claude" running a bare claude',
     "{ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version, purpose: 'reconnect' }",
     '{ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version }'],

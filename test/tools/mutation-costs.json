@@ -1736,6 +1736,7 @@
       "Reconnect: Claude Code is looked for before the gate is asked": 3.64,
       "Reconnect: the desktop app looks for Claude Code before asking the opener": 3.64,
       "Reconnect: the console takes its title and words from the caller": 3.64,
+      "Sign in: a purpose that is not a string is taken for the console it reads as": 3.64,
       "Reconnect: the card's console from the server is the wizard's, \"Sign in to Claude\" running a bare claude": 3.64,
       "Reconnect: the card's console from the desktop app is the wizard's, running a bare claude": 3.64,
       "Reconnect: the card's console runs a bare claude": 3.64,
