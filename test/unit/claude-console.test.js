@@ -402,6 +402,23 @@ describe('what each console runs, as opened', () => {
     assert.deepStrictEqual(await C.openClaudeConsole({ bin: '/opt/R&D/claude', version, platform: 'win32', spawn: f.spawn, gate: C.consoleGate() }), { ok: false, reason: 'unsupported' });
     assert.strictEqual(f.calls.length, 0);
   });
+  test('the wizard\'s console with its login words opens nothing for a path holding a line break or NUL, nor on Windows for one holding &, ^ or %', async () => {
+    const env = terminalOnPath();
+    const f = fakeSpawn('spawn');
+    for (const bad of ['/opt/example/cla\nude', '/opt/example/cla\rude', '/opt/example/cla\0ude']) {
+      for (const platform of ['darwin', 'win32', 'linux']) {
+        const home = madeUpHome();
+        assert.deepStrictEqual(await C.openClaudeConsole({ bin: bad, version, platform, env, spawn: f.spawn, purpose: 'signin', home, gate: C.consoleGate() }),
+          { ok: false, reason: 'unsupported' }, `${platform} ${JSON.stringify(bad)}`);
+        assert.deepStrictEqual(fs.readdirSync(home), []);
+      }
+    }
+    for (const bad of ['/opt/R&D/claude', '/opt/a^b/claude', '/opt/100%/claude', '/opt/%PATH%/claude']) {
+      assert.deepStrictEqual(await C.openClaudeConsole({ bin: bad, version, platform: 'win32', spawn: f.spawn, purpose: 'signin', gate: C.consoleGate() }),
+        { ok: false, reason: 'unsupported' }, bad);
+    }
+    assert.strictEqual(f.calls.length, 0);
+  });
   test('elsewhere those characters are only part of the path: Linux hands it over as one word, and the macOS script quotes it', () => {
     const odd = '/opt/R&D 100%/^/claude';
     assert.deepStrictEqual(C.consoleCommand(odd, 'linux', { DISPLAY: ':0' }, { found: () => true, purpose: 'reconnect', version }).args, ['-e', odd, 'auth', 'login']);
@@ -547,6 +564,49 @@ describe('the script macOS\'s Terminal is opened on', { skip: process.platform =
     try {
       assert.throws(() => C.writeConsoleScript(file, CONTENT), { code: 'EIO' });
     } finally { t.mock.restoreAll(); }
+  });
+});
+
+describe('the wizard\'s script, Sign in to Claude.command, as the opener writes it', { skip: POSIX_ONLY }, () => {
+  const BIN = '/opt/example/claude';
+  const SCRIPT = "#!/bin/sh\nexec '/opt/example/claude' auth login\n";
+  const open = (home, f) => C.openClaudeConsole({ bin: BIN, version: '2.1.309', platform: 'darwin', spawn: f.spawn, purpose: 'signin', home, gate: C.consoleGate() });
+  test('a leftover is replaced by exactly the script, closed to everyone else', async () => {
+    const home = madeUpHome();
+    const file = signinScriptAt(home);
+    fs.mkdirSync(path.dirname(file), { mode: 0o700 });
+    fs.writeFileSync(file, 'an older script, longer than the new one is, by some way\n');
+    fs.chmodSync(file, 0o644);
+    const f = fakeSpawn('spawn');
+    assert.deepStrictEqual(await open(home, f), { ok: true });
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), SCRIPT);
+    assert.strictEqual(fs.lstatSync(file).mode & 0o777, 0o700);
+  });
+  test('a link planted at its path is replaced, never followed', async () => {
+    for (const to of ['a file', 'nowhere']) {
+      const home = madeUpHome();
+      const file = signinScriptAt(home);
+      const target = path.join(home, to === 'a file' ? 'outside.txt' : path.join('missing', 'outside.txt'));
+      if (to === 'a file') fs.writeFileSync(target, 'untouched');
+      fs.mkdirSync(path.dirname(file), { mode: 0o700 });
+      fs.symlinkSync(target, file);
+      const f = fakeSpawn('spawn');
+      assert.deepStrictEqual(await open(home, f), { ok: true }, to);
+      assert.ok(!fs.lstatSync(file).isSymbolicLink() && fs.lstatSync(file).isFile(), to);
+      assert.strictEqual(fs.readFileSync(file, 'utf8'), SCRIPT, to);
+      if (to === 'a file') assert.strictEqual(fs.readFileSync(target, 'utf8'), 'untouched');
+      else assert.strictEqual(fs.existsSync(path.dirname(target)), false, 'nothing made where the link pointed');
+    }
+  });
+  test('one that cannot be written, a folder standing at its path, is a failure and nothing opens', async () => {
+    const home = madeUpHome();
+    const file = signinScriptAt(home);
+    fs.mkdirSync(file, { recursive: true });
+    fs.writeFileSync(path.join(file, 'inside.txt'), 'untouched');
+    const f = fakeSpawn('spawn');
+    assert.deepStrictEqual(await open(home, f), { ok: false, reason: 'failed' });
+    assert.strictEqual(f.calls.length, 0);
+    assert.strictEqual(fs.readFileSync(path.join(file, 'inside.txt'), 'utf8'), 'untouched');
   });
 });
 
