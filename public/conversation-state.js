@@ -411,9 +411,10 @@
 
   function reduceKeepalive(state, message, ctx) {
     // Server heartbeat for turns that legitimately emit nothing for long
-    // stretches (a silent Codex turn thinking or running a long tool). It
-    // counts as stream activity so the watchdog never declares a working
-    // turn dead, and renders nothing. The wall clock arrives as ctx.now:
+    // stretches (a Claude Code turn summarizing a long conversation or
+    // waiting on a permission card, a Codex turn thinking or running a long
+    // tool). It counts as stream activity so the watchdog never declares a
+    // working turn dead, and renders nothing. The wall clock arrives as ctx.now:
     // the reducer stays pure. Keepalives from a superseded process must not
     // keep the UI alive for a turn that no longer owns the conversation.
     if (isStale(state, message)) return none(state);

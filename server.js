@@ -1686,6 +1686,8 @@ wss.on('connection', (ws) => {
             // yet be refused, and then never reads this.
             noteUnstartedWrite(existing, followUp);
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUp } }) + '\n');
+            // A Claude Code turn's heartbeat, until its result.
+            if (existing.startTurnKeepalive) existing.startTurnKeepalive();
           } else {
             // No live process: spawn a new one (first message or after disconnect)
             // Stop any stale entry first (runtime-aware: a leftover Codex

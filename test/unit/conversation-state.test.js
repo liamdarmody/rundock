@@ -821,10 +821,10 @@ test('lastStreamActivity survives reducer reassignment; the live lookup stays fr
 });
 
 // ── system/keepalive (re-gate R2) ───────────────────────────────────────────
-// Silent Codex turns (long tools, silent reasoning) emit no stream events;
-// the server's 25s keepalive keeps the watchdog honest. The reducer bumps the
-// activity clock from ctx.now (wall clock stays in the glue) and renders
-// nothing.
+// Quiet Claude Code and Codex turns (a summary, long tools, silent reasoning)
+// emit no stream events; the server's 25s keepalive keeps the watchdog honest.
+// The reducer bumps the activity clock from ctx.now (wall clock stays in the
+// glue) and renders nothing.
 
 test('keepalive bumps lastStreamActivity to the glue-supplied wall clock with no effects', () => {
   const s = { ...createState(), isProcessing: true, activeProcessId: 'p1', lastStreamActivity: 500 };
@@ -837,6 +837,65 @@ test('a keepalive from a stale process is dropped without touching the activity 
   const s = { ...createState(), isProcessing: true, activeProcessId: 'p2', lastStreamActivity: 500 };
   const r = reduce(s, { type: 'system', subtype: 'keepalive', _processId: 'p1' }, { now: 99999 });
   assert.strictEqual(r.state.lastStreamActivity, 500, 'stale keepalive must not keep a superseded turn "alive"');
+});
+
+// A Claude Code turn goes quiet too: while it summarizes a long conversation,
+// thinks, runs a long command or waits on a card. The server sends it the same
+// keepalive, so the same reducer and the same watchdog decide.
+
+const keepalive = (convoId, processId) => ({ type: 'system', subtype: 'keepalive', _agent: 'alpha', _conversationId: convoId, _processId: processId });
+
+test('a keepalive for the active process moves only the activity clock, and draws nothing', () => {
+  const s = { ...createState(), isProcessing: true, activeProcessId: 'p1', activeAgentId: 'alpha', latestText: 'so far', lastStreamActivity: 500 };
+  const r = reduce(s, keepalive('c1', 'p1'), { now: 99999 });
+  assert.deepStrictEqual(r.state, { ...s, lastStreamActivity: 99999 }, 'nothing but the clock moves');
+  assert.deepStrictEqual(r.effects, [], 'no row, no status line, no render');
+});
+
+test('a keepalive for one conversation changes nothing in another', () => {
+  // The glue reduces a keepalive against the conversation it names, so the
+  // other conversation is never handed it. Handed it anyway, its process id
+  // is not that conversation's, and it is dropped.
+  const a = { ...createState(), isProcessing: true, activeProcessId: 'pA', lastStreamActivity: 100 };
+  const b = { ...createState(), isProcessing: true, activeProcessId: 'pB', lastStreamActivity: 200 };
+  const convoState = { a, b };
+  const msg = keepalive('a', 'pA');
+  convoState[msg._conversationId] = reduce(convoState[msg._conversationId], msg, { now: 5000 }).state;
+  assert.strictEqual(convoState.a.lastStreamActivity, 5000, 'its own conversation counts it');
+  assert.strictEqual(convoState.b, b, 'the other conversation is not touched');
+
+  const handed = reduce(b, msg, { now: 5000 });
+  assert.strictEqual(handed.state, b, 'another conversation\'s keepalive changes nothing');
+  assert.deepStrictEqual(handed.effects, []);
+});
+
+test('keepalives every 25 seconds hold a quiet summary as working past the idle limit, and the result still ends it', () => {
+  const t0 = 1000000;
+  let s = { ...createState(), isProcessing: true, activeProcessId: 'p1', activeAgentId: 'alpha', lastStreamActivity: t0 };
+  s = reduce(s, { type: 'system', subtype: 'status', status: 'compacting', _agent: 'alpha', _processId: 'p1' }, {}).state;
+
+  // 200 seconds of quiet, a keepalive every 25 seconds, the watchdog asked
+  // every second as its interval asks.
+  for (let t = t0 + 1000; t <= t0 + 200000; t += 1000) {
+    if ((t - t0) % 25000 === 0) s = reduce(s, keepalive('c1', 'p1'), { now: t }).state;
+    assert.strictEqual(watchdogVerdict(s, t).action, 'wait', `still working ${(t - t0) / 1000}s into the quiet`);
+  }
+
+  const boundary = reduce(s, { type: 'system', subtype: 'compact_boundary', uuid: 'cb-1', _agent: 'alpha', _processId: 'p1' }, { knownCompactionKeys: [] });
+  assert.deepStrictEqual(boundary.effects.map(e => e.type), ['insert-compaction-divider'], 'the divider is drawn as today');
+  const done = reduce(boundary.state, { type: 'result', result: 'The answer.', _agent: 'alpha', _processId: 'p1' }, RESULT_CTX);
+  assert.ok(done.effects.some(e => e.type === 'finish-processing'), 'the result finishes the turn');
+  assert.strictEqual(watchdogVerdict(done.state, t0 + 201000).action, 'stop', 'and the watchdog stands down');
+});
+
+test('with no keepalive and no stream activity, the watchdog still finishes a turn after 90 seconds', () => {
+  const t0 = 1000000;
+  let s = { ...createState(), isProcessing: true, activeProcessId: 'p1', lastStreamActivity: t0 };
+  s = reduce(s, { type: 'system', subtype: 'status', status: 'compacting', _processId: 'p1' }, {}).state;
+  assert.strictEqual(watchdogVerdict(s, t0 + 90000).action, 'wait', 'the limit is 90 seconds, not less');
+  assert.deepStrictEqual(watchdogVerdict(s, t0 + 90001), { action: 'finish', idleMs: 90001 }, 'and not more');
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', 'public', 'conversation-state.js'), 'utf8');
+  assert.match(src, /const WATCHDOG_IDLE_LIMIT_MS = 90000;/, 'the limit itself is unchanged');
 });
 
 test('a silent switch never starts a working indicator, even for a specialist', () => {

@@ -4,6 +4,7 @@
   "secondsPerRow": {
     "mutate-approve-once-guards.js": 0.89,
     "mutate-atomic-write-guards.js": 0.73,
+    "mutate-claude-keepalive-guards.js": 5,
     "mutate-collision-decisions-guards.js": 0.2,
     "mutate-extension-host-guards.js": 8.13,
     "mutate-extension-install-guards.js": 2.06,
