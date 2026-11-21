@@ -1,0 +1,46 @@
+TAP version 13
+# Subtest: a suite
+    # Subtest: holds a nested test
+    not ok 1 - holds a nested test
+      ---
+      duration_ms: 0.727541
+      type: 'test'
+      location: 'test/fixtures/prove/cases.js:48:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly equal:
+        
+        'a' !== 'b'
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 'b'
+      actual: 'a'
+      operator: 'strictEqual'
+      stack: |-
+        TestContext.<anonymous> (test/fixtures/prove/cases.js:49:12)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1106:25)
+        async Promise.all (index 0)
+        async Suite.run (node:internal/test_runner/test:1518:7)
+        async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3)
+      ...
+    1..1
+not ok 1 - a suite
+  ---
+  duration_ms: 1.074541
+  type: 'suite'
+  location: 'test/fixtures/prove/cases.js:47:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 1
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 49.025459

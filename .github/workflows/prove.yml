@@ -1,0 +1,1853 @@
+name: Prove
+run-name: prove ${{ inputs.nonce }} ${{ inputs.blocked }} ${{ inputs.main }} ${{ inputs.head }} ${{ inputs.inputs_sha256 }}
+
+# Runs each blocker test at the blocked head and at the fix head, and runs each
+# breakage, every one on a fresh runner, so the run's own record shows whether
+# each blocker test fails on an assertion before the fix and passes after it,
+# and whether each breakage is caught.
+#
+#   red <i>    the blocked head with main merged in, the fix head's tests, test i
+#   green <i>  the fix head, test i
+#   break <i>  the fix head with row i applied, the row's test
+#
+# Each job runs its test three times and fails at the first step that went
+# wrong, so the name of that step says why.
+#
+# Started by hand only. Every input reaches a step through env, never as text
+# inside a run block, and `check inputs` checks them all before any is used.
+# Until the test runs, nothing from the commits under test runs except git and
+# an install that runs no package scripts. Steps after `run the test` run after
+# code from the fix head, so they are only as trustworthy as its tests: a test
+# written to deceive can pass.
+#
+# The code inside the run blocks sits between `// begin <name>` and
+# `// end <name>` lines. The tests cut it out from there and run it, and they
+# require the copies of a shared step to be identical in every job.
+
+on:
+  workflow_dispatch:
+    inputs:
+      nonce:
+        description: 32 lowercase hex characters that tell this run apart
+        required: true
+        type: string
+      blocked:
+        description: the blocked head, a full commit SHA
+        required: true
+        type: string
+      main:
+        description: the main commit the fix is built on, a full commit SHA
+        required: true
+        type: string
+      head:
+        description: the fix head, a full commit SHA
+        required: true
+        type: string
+      tests:
+        description: 'the blocker tests, a JSON array of {"i", "file", "name"}'
+        required: true
+        type: string
+      rows:
+        description: 'the breakage rows, a JSON array of {"i", "file", "from", "to", "test"}'
+        required: true
+        type: string
+      inputs_sha256:
+        description: the SHA-256 of tests, a newline, then rows
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    name: red ${{ matrix.i }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      # Every job's result is evidence, so one failure never cancels the rest.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.tests) }}
+    steps:
+      - name: check out the workflow's commit
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: check inputs
+        shell: node {0}
+        env:
+          NONCE: ${{ inputs.nonce }}
+          BLOCKED_SHA: ${{ inputs.blocked }}
+          MAIN_SHA: ${{ inputs.main }}
+          HEAD_SHA: ${{ inputs.head }}
+          TESTS: ${{ inputs.tests }}
+          ROWS: ${{ inputs.rows }}
+          INPUTS_SHA256: ${{ inputs.inputs_sha256 }}
+        run: |
+          'use strict';
+          // begin input checks
+          const HEX = [['NONCE', 'nonce', 32], ['BLOCKED_SHA', 'blocked', 40], ['MAIN_SHA', 'main', 40], ['HEAD_SHA', 'head', 40], ['INPUTS_SHA256', 'inputs_sha256', 64]];
+          // Each hex input has its pattern, and inputs_sha256 is the digest of tests,
+          // a newline, then rows.
+          function shapeCheck(env) {
+            for (const [key, name, length] of HEX) {
+              if (!new RegExp(`^[0-9a-f]{${length}}$`).test(String(env[key]))) return `${name} must be ${length} lowercase hex characters`;
+            }
+            const digest = require('node:crypto').createHash('sha256').update(`${env.TESTS}\n${env.ROWS}`, 'utf8').digest('hex');
+            return digest === env.INPUTS_SHA256 ? null : `inputs_sha256 is not the SHA-256 of tests, a newline and rows, which is ${digest}`;
+          }
+          const KEYS = { tests: 'file,i,name', rows: 'file,from,i,test,to' };
+          // The list, each entry of its shape and the entries indexed 1..n.
+          function listOf(text, label) {
+            let list;
+            try { list = JSON.parse(text); } catch (e) { return { why: `${label} is not JSON` }; }
+            if (!Array.isArray(list) || list.length < 1 || list.length > 20) return { why: `${label} must be an array of 1 to 20 entries` };
+            const str = (v, empty) => typeof v === 'string' && (empty || v !== '');
+            for (const [n, e] of list.entries()) {
+              const ok = e !== null && typeof e === 'object' && !Array.isArray(e) && Object.keys(e).sort().join(',') === KEYS[label]
+                && Number.isInteger(e.i) && str(e.file)
+                && (label === 'tests' ? str(e.name) : str(e.from) && str(e.to, true) && Number.isInteger(e.test));
+              if (!ok) return { why: `${label} entry ${n + 1} must have exactly the keys ${KEYS[label]}, each of its type` };
+            }
+            if (list.map((e) => e.i).sort((a, b) => a - b).some((i, n) => i !== n + 1)) return { why: `${label} must be indexed 1 to ${list.length}, each once` };
+            return { list };
+          }
+          // Each row's test is in tests, and every test is named by a row.
+          function listsCheck(env) {
+            const tests = listOf(env.TESTS, 'tests');
+            if (tests.why) return tests.why;
+            const rows = listOf(env.ROWS, 'rows');
+            if (rows.why) return rows.why;
+            const row = rows.list.find((r) => !tests.list.some((t) => t.i === r.test));
+            if (row) return `row ${row.i} names test ${row.test}, which tests does not hold`;
+            const unnamed = tests.list.find((t) => !rows.list.some((r) => r.test === t.i));
+            return unnamed ? `test ${unnamed.i} is named by no row` : null;
+          }
+          function isAncestor(git, a, b) {
+            try {
+              git(['merge-base', '--is-ancestor', a, b]);
+              return true;
+            } catch (e) {
+              if (e.status === 1) return false;
+              throw e;
+            }
+          }
+          // Main is the tip of main or behind it, and main and the blocked head are
+          // ancestors of the fix head.
+          function commitsCheck(env, git) {
+            git(['fetch', '-q', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
+            for (const sha of [env.BLOCKED_SHA, env.MAIN_SHA, env.HEAD_SHA]) git(['fetch', '-q', '--no-tags', 'origin', sha]);
+            if (!isAncestor(git, env.MAIN_SHA, 'refs/remotes/origin/main')) return 'main is not the tip of main or behind it';
+            if (!isAncestor(git, env.MAIN_SHA, env.HEAD_SHA)) return 'main is not an ancestor of the fix head';
+            if (!isAncestor(git, env.BLOCKED_SHA, env.HEAD_SHA)) return 'the blocked head is not an ancestor of the fix head';
+            return null;
+          }
+          // A path exactly as git prints it: relative, with no empty, . or .. segment.
+          function pathRule(p) {
+            if (p.startsWith('./')) return 'starts with ./';
+            if (p.includes('\\')) return 'holds a backslash';
+            if (p.endsWith('/')) return 'ends with /';
+            const parts = p.split('/');
+            if (parts.includes('')) return 'has an empty segment';
+            if (parts.includes('.')) return 'has a . segment';
+            if (parts.includes('..')) return 'has a .. segment';
+            return null;
+          }
+          // A row may not change the tests, the workflows, or what npm and Node read
+          // at the root.
+          const ROOT_FILES = ['package.json', 'package-lock.json', 'npm-shrinkwrap.json', '.npmrc', '.nvmrc'];
+          function rowRule(p) {
+            if (p.startsWith('test/')) return 'is under test/';
+            if (p.startsWith('.github/')) return 'is under .github/';
+            if (ROOT_FILES.includes(p)) return 'is a root file npm or Node reads';
+            return null;
+          }
+          // Every path in a commit's tree, with its mode.
+          function treeModes(git, sha) {
+            const modes = new Map();
+            for (const entry of String(git(['ls-tree', '-r', '-z', '--full-tree', sha])).split('\0')) {
+              const m = /^(\d{6}) \w+ [0-9a-f]+\t([\s\S]+)$/.exec(entry);
+              if (m) modes.set(m[2], m[1]);
+            }
+            return modes;
+          }
+          function modeRule(p, modes) {
+            const mode = modes.get(p);
+            if (mode === undefined) return 'is not a file in the fix head';
+            if (mode === '120000') return 'is a symlink in the fix head';
+            if (mode === '160000') return 'is a submodule in the fix head';
+            return mode === '100644' || mode === '100755' ? null : `has mode ${mode} in the fix head`;
+          }
+          function pathsCheck(tests, rows, modes) {
+            for (const t of tests) {
+              const why = pathRule(t.file) || (t.file.startsWith('test/') ? null : 'is outside test/') || modeRule(t.file, modes);
+              if (why) return `test ${t.i} names ${JSON.stringify(t.file)}, which ${why}`;
+            }
+            for (const r of rows) {
+              const why = pathRule(r.file) || rowRule(r.file) || modeRule(r.file, modes);
+              if (why) return `row ${r.i} names ${JSON.stringify(r.file)}, which ${why}`;
+            }
+            return null;
+          }
+          // The first check that fails, named, or null.
+          function checkInputs(env, git) {
+            const checks = [
+              ['shape', () => shapeCheck(env)],
+              ['lists', () => listsCheck(env)],
+              ['commits', () => commitsCheck(env, git)],
+              ['paths', () => pathsCheck(JSON.parse(env.TESTS), JSON.parse(env.ROWS), treeModes(git, env.HEAD_SHA))],
+            ];
+            for (const [check, run] of checks) {
+              let why;
+              try {
+                why = run();
+              } catch (e) {
+                why = `git failed: ${JSON.stringify(String(e.stderr || e.message).trim())}`;
+              }
+              if (why) return `${check}: ${why}`;
+            }
+            return null;
+          }
+          // end input checks
+          const { execFileSync } = require('node:child_process');
+          const git = (args) => execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
+          const why = checkInputs(process.env, git);
+          if (why) {
+            console.error(`check inputs failed: ${why}`);
+            process.exit(1);
+          }
+          console.log('every input holds');
+
+      - name: merge main into the blocked head
+        shell: node {0}
+        env:
+          BLOCKED_SHA: ${{ inputs.blocked }}
+          MAIN_SHA: ${{ inputs.main }}
+        run: |
+          'use strict';
+          // begin merge
+          // The blocked head checked out with main merged into it, or why it could not be.
+          function mergeMain(git, env) {
+            try {
+              git(['checkout', '-q', '--detach', env.BLOCKED_SHA]);
+              git(['-c', 'user.name=prove', '-c', 'user.email=prove@example.invalid', 'merge', '--no-edit', env.MAIN_SHA]);
+              return null;
+            } catch (e) {
+              return `git stopped: ${JSON.stringify(`${e.stdout || ''}${e.stderr || ''}`.trim())}`;
+            }
+          }
+          // end merge
+          const { execFileSync } = require('node:child_process');
+          const git = (args) => execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
+          const why = mergeMain(git, process.env);
+          if (why) {
+            console.error(`merge main into the blocked head failed: ${why}`);
+            process.exit(1);
+          }
+          console.log('main is merged into the blocked head');
+
+      - name: check the change
+        shell: node {0}
+        env:
+          ROWS: ${{ inputs.rows }}
+          HEAD_SHA: ${{ inputs.head }}
+        run: |
+          'use strict';
+          // begin change check
+          // Renames are not detected, so a rename is reported as both paths.
+          const DIFF = 'git -c core.quotePath=false diff -z --name-only --no-renames';
+          function changedPaths(git, from, to) {
+            return String(git([...DIFF.split(' ').slice(1), from, to])).split('\0').filter(Boolean);
+          }
+          // Why the change holds more than test/ and the rows' files, or null.
+          function changeCheck(paths, rows) {
+            const files = new Set(rows.map((r) => r.file));
+            const outside = paths.filter((p) => !p.startsWith('test/') && !files.has(p));
+            if (!outside.length) return null;
+            return `${outside.map((p) => JSON.stringify(p)).join(', ')} changed, outside test/ and in no row's file`;
+          }
+          // end change check
+          const { execFileSync } = require('node:child_process');
+          const git = (args) => execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
+          const why = changeCheck(changedPaths(git, 'HEAD', process.env.HEAD_SHA), JSON.parse(process.env.ROWS));
+          if (why) {
+            console.error(`check the change failed: ${why}`);
+            process.exit(1);
+          }
+          console.log("the change is test/ and the rows' files only");
+
+      - name: take the tests from the fix head
+        env:
+          HEAD_SHA: ${{ inputs.head }}
+        run: |
+          rm -rf test
+          git checkout "$HEAD_SHA" -- test
+
+      - name: install
+        run: npm ci --ignore-scripts
+
+      - name: run the test
+        shell: node {0}
+        env:
+          TESTS: ${{ inputs.tests }}
+          ROWS: ${{ inputs.rows }}
+          ENTRY: ${{ matrix.i }}
+          SIDE: ${{ github.job }}
+        run: |
+          'use strict';
+          // begin run
+          const FLAGS = '--test --test-reporter=tap --require ./test/helpers/account-home-refused.js --require ./test/helpers/stall-guard.js';
+          const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          function testArgs(test, dest) {
+            return [...FLAGS.split(' '), `--test-reporter-destination=${dest}`, '--test-name-pattern', `^${escape(test.name)}$`, test.file];
+          }
+          // A red or green job runs the test its entry names; a break job runs
+          // the test its row names.
+          function testFor(side, entry, tests, rows) {
+            const one = (list, i) => list.filter((e) => String(e.i) === String(i));
+            const [row] = side === 'break' ? one(rows, entry) : [{ test: entry }];
+            const found = row ? one(tests, row.test) : [];
+            if (found.length !== 1) throw new Error(`no single test for ${side} ${JSON.stringify(entry)}`);
+            return found[0];
+          }
+          // end run
+          // begin tree
+          // Every file outside test/ and .git/, tracked or not, by path: its
+          // executable bit and content hash, a symlink's target, or "other".
+          function snapshot(root) {
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const crypto = require('node:crypto');
+            const out = new Map();
+            const walk = (rel) => {
+              for (const name of fs.readdirSync(path.join(root, rel)).sort()) {
+                if (!rel && (name === 'test' || name === '.git')) continue;
+                const at = rel ? `${rel}/${name}` : name;
+                const full = path.join(root, at);
+                const st = fs.lstatSync(full);
+                if (st.isDirectory()) walk(at);
+                else if (st.isSymbolicLink()) out.set(at, `link ${fs.readlinkSync(full)}`);
+                else if (st.isFile()) out.set(at, `${st.mode & 0o111 ? 'x' : '-'} ${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`);
+                else out.set(at, 'other');
+              }
+            };
+            walk('');
+            return out;
+          }
+          function treeChange(before, after) {
+            for (const at of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+              if (!after.has(at)) return `${JSON.stringify(at)} was removed`;
+              if (!before.has(at)) return `${JSON.stringify(at)} was added`;
+              if (before.get(at) !== after.get(at)) return `${JSON.stringify(at)} was changed`;
+            }
+            return null;
+          }
+          // end tree
+          // begin classifier
+          // A name as the TAP reporter prints it: control characters as a
+          // backslash and a letter, then every backslash doubled, then # escaped.
+          function tapName(name) {
+            let out = name;
+            for (const [c, e] of [['\b', 'b'], ['\f', 'f'], ['\t', 't'], ['\n', 'n'], ['\r', 'r'], ['\v', 'v']]) out = out.split(c).join(`\\${e}`);
+            return out.split('\\').join('\\\\').split('#').join('\\#');
+          }
+          // The results in a TAP report, each with its parent and full name, or
+          // null for anything but the shape the reporter writes: a version line,
+          // results indented four spaces a level, each level closed by a plan
+          // that counts it, YAML blocks closed where they open, and comments.
+          function parseTap(text) {
+            const lines = text.split('\n');
+            if (lines[lines.length - 1] === '') lines.pop();
+            if (lines[0] !== 'TAP version 13') return null;
+            const pending = [[]];
+            let closed = null;
+            for (let n = 1; n < lines.length; n++) {
+              const line = lines[n];
+              if (/^ *#/.test(line)) continue;
+              const plan = /^( *)1\.\.(\d+)$/.exec(line);
+              if (plan) {
+                const depth = plan[1].length / 4;
+                if (!Number.isInteger(depth) || Number(plan[2]) !== (pending[depth] || []).length) return null;
+                closed = depth;
+                continue;
+              }
+              const m = /^( *)(not ok|ok) \d+(?: - (.*))?$/.exec(line);
+              const depth = m ? m[1].length / 4 : NaN;
+              const d = m && /^((?:\\.|[^\\#])*)(?:# (SKIP|TODO)\b.*)?$/.exec(m[3] || '');
+              if (!d || !Number.isInteger(depth) || pending.slice(depth + 2).some((p) => p.length)) return null;
+              while (pending.length < depth + 2) pending.push([]);
+              const node = {
+                name: d[2] ? d[1].replace(/ $/, '') : d[1], ok: m[2] === 'ok', directive: d[2] || null,
+                depth, code: null, failureType: null, children: pending[depth + 1],
+              };
+              pending[depth + 1] = [];
+              pending[depth].push(node);
+              closed = null;
+              const pad = ' '.repeat(depth * 4 + 2);
+              if (lines[n + 1] !== `${pad}---`) continue;
+              const seen = new Set();
+              for (n += 2; lines[n] !== `${pad}...`; n++) {
+                if (n >= lines.length || !lines[n].startsWith(pad)) return null;
+                const kv = /^(code|failureType): '([^']*)'$/.exec(lines[n].slice(pad.length));
+                if (!kv) continue;
+                if (seen.has(kv[1])) return null;
+                seen.add(kv[1]);
+                node[kv[1]] = kv[2];
+              }
+            }
+            if (closed !== 0 || pending.slice(1).some((p) => p.length)) return null;
+            const all = [];
+            const visit = (node, parent) => {
+              node.parent = parent;
+              node.full = parent ? `${parent.full} ${node.name}` : node.name;
+              all.push(node);
+              node.children.forEach((c) => visit(c, node));
+            };
+            pending[0].forEach((node) => visit(node, null));
+            return all;
+          }
+          // What one run of the named test in the named file did.
+          function outcome(text, name, file) {
+            const all = parseTap(text);
+            if (!all) return 'unparseable';
+            // A file that ran no test, or failed as it loaded, reports itself
+            // under its own name; it is never the test asked for.
+            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file));
+            const want = tapName(name);
+            const selected = all.filter((x) => !files.includes(x) && (x.name === want || x.full === want));
+            if (!selected.length) return files.some((x) => !x.ok) ? 'failed to load' : 'selected 0';
+            if (selected.length > 1) return `selected ${selected.length}`;
+            const [node] = selected;
+            const inside = [];
+            const collect = (x) => { inside.push(x); x.children.forEach(collect); };
+            collect(node);
+            const above = [];
+            for (let p = node.parent; p; p = p.parent) above.push(p);
+            const marks = [...above, ...inside].map((x) => x.directive);
+            if (marks.includes('SKIP')) return 'skipped';
+            if (marks.includes('TODO')) return 'todo';
+            // An enclosing suite fails because the test did; any other failure
+            // outside the test is something else going wrong.
+            const excused = (x) => !node.ok && above.includes(x) && x.failureType === 'subtestsFailed';
+            if (all.some((x) => !x.ok && !inside.includes(x) && !excused(x))) return 'failed outside the test';
+            const failures = inside.filter((x) => !x.ok);
+            if (node.ok) return failures.length ? 'failed on something else' : 'passed';
+            const assertion = (x) => x.code === 'ERR_ASSERTION' && x.failureType === 'testCodeFailure';
+            const onlyAssertions = failures.every((x) => assertion(x) || x.failureType === 'subtestsFailed');
+            return onlyAssertions && failures.some(assertion) ? 'assertion failed' : 'failed on something else';
+          }
+          const WANT = { red: 'assertion failed', green: 'passed', break: 'assertion failed' };
+          // Why the three runs do not give the side its result, or null.
+          function verdict(side, outcomes) {
+            if (!Object.prototype.hasOwnProperty.call(WANT, side)) return `there is no side named ${JSON.stringify(side)}`;
+            if (outcomes.length !== 3) return `there were ${outcomes.length} runs, not 3`;
+            const n = outcomes.findIndex((o) => o !== WANT[side]);
+            return n === -1 ? null : `run ${n + 1}: ${outcomes[n]}, where a ${side} job needs every run to be ${WANT[side]}`;
+          }
+          // Why the name did not select exactly one test in every run, or null.
+          function selectionProblem(outcomes) {
+            const n = outcomes.findIndex((o) => /^selected \d+$/.test(o));
+            return n === -1 ? null : `run ${n + 1}: the name ${outcomes[n]} tests, where it must select exactly one`;
+          }
+          // end classifier
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const { spawnSync } = require('node:child_process');
+          const env = process.env;
+          const test = testFor(env.SIDE, env.ENTRY, JSON.parse(env.TESTS), JSON.parse(env.ROWS));
+          const dir = path.join(env.RUNNER_TEMP, 'prove');
+          fs.mkdirSync(dir, { recursive: true });
+          const save = (n) => fs.writeFileSync(path.join(dir, `tree-${n}.json`), JSON.stringify([...snapshot(process.cwd())]));
+          const childEnv = { ...env };
+          delete childEnv.NODE_TEST_CONTEXT;
+          save(0);
+          // The test is code from the commits under test: every step after this one is
+          // only as trustworthy as that code.
+          const token = require('node:crypto').randomBytes(16).toString('hex');
+          console.log(`::stop-commands::${token}`);
+          for (let n = 1; n <= 3; n++) {
+            spawnSync(process.execPath, testArgs(test, path.join(dir, `run-${n}.tap`)), { env: childEnv, stdio: 'inherit' });
+            save(n);
+          }
+          console.log(`::${token}::`);
+          const read = (n) => { try { return fs.readFileSync(path.join(dir, `run-${n}.tap`), 'utf8'); } catch (e) { return ''; } };
+          const why = selectionProblem([1, 2, 3].map((n) => outcome(read(n), test.name, test.file)));
+          if (why) {
+            console.error(`run the test failed: ${why}`);
+            process.exit(1);
+          }
+          console.log('no run selected zero tests or more than one');
+
+      - name: check the tree
+        shell: node {0}
+        run: |
+          'use strict';
+          // begin tree
+          // Every file outside test/ and .git/, tracked or not, by path: its
+          // executable bit and content hash, a symlink's target, or "other".
+          function snapshot(root) {
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const crypto = require('node:crypto');
+            const out = new Map();
+            const walk = (rel) => {
+              for (const name of fs.readdirSync(path.join(root, rel)).sort()) {
+                if (!rel && (name === 'test' || name === '.git')) continue;
+                const at = rel ? `${rel}/${name}` : name;
+                const full = path.join(root, at);
+                const st = fs.lstatSync(full);
+                if (st.isDirectory()) walk(at);
+                else if (st.isSymbolicLink()) out.set(at, `link ${fs.readlinkSync(full)}`);
+                else if (st.isFile()) out.set(at, `${st.mode & 0o111 ? 'x' : '-'} ${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`);
+                else out.set(at, 'other');
+              }
+            };
+            walk('');
+            return out;
+          }
+          function treeChange(before, after) {
+            for (const at of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+              if (!after.has(at)) return `${JSON.stringify(at)} was removed`;
+              if (!before.has(at)) return `${JSON.stringify(at)} was added`;
+              if (before.get(at) !== after.get(at)) return `${JSON.stringify(at)} was changed`;
+            }
+            return null;
+          }
+          // end tree
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const dir = path.join(process.env.RUNNER_TEMP, 'prove');
+          const load = (n) => new Map(JSON.parse(fs.readFileSync(path.join(dir, `tree-${n}.json`), 'utf8')));
+          for (let n = 1; n <= 3; n++) {
+            const why = treeChange(load(n - 1), load(n));
+            if (why) {
+              console.error(`check the tree failed: during run ${n}, ${why}`);
+              process.exit(1);
+            }
+          }
+          console.log('no file outside test/ changed during the runs');
+
+      - name: judge the result
+        shell: node {0}
+        env:
+          TESTS: ${{ inputs.tests }}
+          ROWS: ${{ inputs.rows }}
+          ENTRY: ${{ matrix.i }}
+          SIDE: ${{ github.job }}
+        run: |
+          'use strict';
+          // begin run
+          const FLAGS = '--test --test-reporter=tap --require ./test/helpers/account-home-refused.js --require ./test/helpers/stall-guard.js';
+          const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          function testArgs(test, dest) {
+            return [...FLAGS.split(' '), `--test-reporter-destination=${dest}`, '--test-name-pattern', `^${escape(test.name)}$`, test.file];
+          }
+          // A red or green job runs the test its entry names; a break job runs
+          // the test its row names.
+          function testFor(side, entry, tests, rows) {
+            const one = (list, i) => list.filter((e) => String(e.i) === String(i));
+            const [row] = side === 'break' ? one(rows, entry) : [{ test: entry }];
+            const found = row ? one(tests, row.test) : [];
+            if (found.length !== 1) throw new Error(`no single test for ${side} ${JSON.stringify(entry)}`);
+            return found[0];
+          }
+          // end run
+          // begin classifier
+          // A name as the TAP reporter prints it: control characters as a
+          // backslash and a letter, then every backslash doubled, then # escaped.
+          function tapName(name) {
+            let out = name;
+            for (const [c, e] of [['\b', 'b'], ['\f', 'f'], ['\t', 't'], ['\n', 'n'], ['\r', 'r'], ['\v', 'v']]) out = out.split(c).join(`\\${e}`);
+            return out.split('\\').join('\\\\').split('#').join('\\#');
+          }
+          // The results in a TAP report, each with its parent and full name, or
+          // null for anything but the shape the reporter writes: a version line,
+          // results indented four spaces a level, each level closed by a plan
+          // that counts it, YAML blocks closed where they open, and comments.
+          function parseTap(text) {
+            const lines = text.split('\n');
+            if (lines[lines.length - 1] === '') lines.pop();
+            if (lines[0] !== 'TAP version 13') return null;
+            const pending = [[]];
+            let closed = null;
+            for (let n = 1; n < lines.length; n++) {
+              const line = lines[n];
+              if (/^ *#/.test(line)) continue;
+              const plan = /^( *)1\.\.(\d+)$/.exec(line);
+              if (plan) {
+                const depth = plan[1].length / 4;
+                if (!Number.isInteger(depth) || Number(plan[2]) !== (pending[depth] || []).length) return null;
+                closed = depth;
+                continue;
+              }
+              const m = /^( *)(not ok|ok) \d+(?: - (.*))?$/.exec(line);
+              const depth = m ? m[1].length / 4 : NaN;
+              const d = m && /^((?:\\.|[^\\#])*)(?:# (SKIP|TODO)\b.*)?$/.exec(m[3] || '');
+              if (!d || !Number.isInteger(depth) || pending.slice(depth + 2).some((p) => p.length)) return null;
+              while (pending.length < depth + 2) pending.push([]);
+              const node = {
+                name: d[2] ? d[1].replace(/ $/, '') : d[1], ok: m[2] === 'ok', directive: d[2] || null,
+                depth, code: null, failureType: null, children: pending[depth + 1],
+              };
+              pending[depth + 1] = [];
+              pending[depth].push(node);
+              closed = null;
+              const pad = ' '.repeat(depth * 4 + 2);
+              if (lines[n + 1] !== `${pad}---`) continue;
+              const seen = new Set();
+              for (n += 2; lines[n] !== `${pad}...`; n++) {
+                if (n >= lines.length || !lines[n].startsWith(pad)) return null;
+                const kv = /^(code|failureType): '([^']*)'$/.exec(lines[n].slice(pad.length));
+                if (!kv) continue;
+                if (seen.has(kv[1])) return null;
+                seen.add(kv[1]);
+                node[kv[1]] = kv[2];
+              }
+            }
+            if (closed !== 0 || pending.slice(1).some((p) => p.length)) return null;
+            const all = [];
+            const visit = (node, parent) => {
+              node.parent = parent;
+              node.full = parent ? `${parent.full} ${node.name}` : node.name;
+              all.push(node);
+              node.children.forEach((c) => visit(c, node));
+            };
+            pending[0].forEach((node) => visit(node, null));
+            return all;
+          }
+          // What one run of the named test in the named file did.
+          function outcome(text, name, file) {
+            const all = parseTap(text);
+            if (!all) return 'unparseable';
+            // A file that ran no test, or failed as it loaded, reports itself
+            // under its own name; it is never the test asked for.
+            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file));
+            const want = tapName(name);
+            const selected = all.filter((x) => !files.includes(x) && (x.name === want || x.full === want));
+            if (!selected.length) return files.some((x) => !x.ok) ? 'failed to load' : 'selected 0';
+            if (selected.length > 1) return `selected ${selected.length}`;
+            const [node] = selected;
+            const inside = [];
+            const collect = (x) => { inside.push(x); x.children.forEach(collect); };
+            collect(node);
+            const above = [];
+            for (let p = node.parent; p; p = p.parent) above.push(p);
+            const marks = [...above, ...inside].map((x) => x.directive);
+            if (marks.includes('SKIP')) return 'skipped';
+            if (marks.includes('TODO')) return 'todo';
+            // An enclosing suite fails because the test did; any other failure
+            // outside the test is something else going wrong.
+            const excused = (x) => !node.ok && above.includes(x) && x.failureType === 'subtestsFailed';
+            if (all.some((x) => !x.ok && !inside.includes(x) && !excused(x))) return 'failed outside the test';
+            const failures = inside.filter((x) => !x.ok);
+            if (node.ok) return failures.length ? 'failed on something else' : 'passed';
+            const assertion = (x) => x.code === 'ERR_ASSERTION' && x.failureType === 'testCodeFailure';
+            const onlyAssertions = failures.every((x) => assertion(x) || x.failureType === 'subtestsFailed');
+            return onlyAssertions && failures.some(assertion) ? 'assertion failed' : 'failed on something else';
+          }
+          const WANT = { red: 'assertion failed', green: 'passed', break: 'assertion failed' };
+          // Why the three runs do not give the side its result, or null.
+          function verdict(side, outcomes) {
+            if (!Object.prototype.hasOwnProperty.call(WANT, side)) return `there is no side named ${JSON.stringify(side)}`;
+            if (outcomes.length !== 3) return `there were ${outcomes.length} runs, not 3`;
+            const n = outcomes.findIndex((o) => o !== WANT[side]);
+            return n === -1 ? null : `run ${n + 1}: ${outcomes[n]}, where a ${side} job needs every run to be ${WANT[side]}`;
+          }
+          // Why the name did not select exactly one test in every run, or null.
+          function selectionProblem(outcomes) {
+            const n = outcomes.findIndex((o) => /^selected \d+$/.test(o));
+            return n === -1 ? null : `run ${n + 1}: the name ${outcomes[n]} tests, where it must select exactly one`;
+          }
+          // end classifier
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const env = process.env;
+          const test = testFor(env.SIDE, env.ENTRY, JSON.parse(env.TESTS), JSON.parse(env.ROWS));
+          const dir = path.join(env.RUNNER_TEMP, 'prove');
+          const read = (n) => { try { return fs.readFileSync(path.join(dir, `run-${n}.tap`), 'utf8'); } catch (e) { return ''; } };
+          const outcomes = [1, 2, 3].map((n) => outcome(read(n), test.name, test.file));
+          const token = require('node:crypto').randomBytes(16).toString('hex');
+          console.log(`::stop-commands::${token}`);
+          for (let n = 1; n <= 3; n++) console.log(`run ${n} TAP:\n${read(n)}`);
+          console.log(`::${token}::`);
+          outcomes.forEach((o, n) => console.log(`run ${n + 1}: ${o}`));
+          const why = verdict(env.SIDE, outcomes);
+          if (why) {
+            console.error(`judge the result failed: ${why}`);
+            process.exit(1);
+          }
+          console.log(`every run is ${WANT[env.SIDE]}, as a ${env.SIDE} job needs`);
+
+  green:
+    name: green ${{ matrix.i }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      # Every job's result is evidence, so one failure never cancels the rest.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.tests) }}
+    steps:
+      - name: check out the workflow's commit
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: check inputs
+        shell: node {0}
+        env:
+          NONCE: ${{ inputs.nonce }}
+          BLOCKED_SHA: ${{ inputs.blocked }}
+          MAIN_SHA: ${{ inputs.main }}
+          HEAD_SHA: ${{ inputs.head }}
+          TESTS: ${{ inputs.tests }}
+          ROWS: ${{ inputs.rows }}
+          INPUTS_SHA256: ${{ inputs.inputs_sha256 }}
+        run: |
+          'use strict';
+          // begin input checks
+          const HEX = [['NONCE', 'nonce', 32], ['BLOCKED_SHA', 'blocked', 40], ['MAIN_SHA', 'main', 40], ['HEAD_SHA', 'head', 40], ['INPUTS_SHA256', 'inputs_sha256', 64]];
+          // Each hex input has its pattern, and inputs_sha256 is the digest of tests,
+          // a newline, then rows.
+          function shapeCheck(env) {
+            for (const [key, name, length] of HEX) {
+              if (!new RegExp(`^[0-9a-f]{${length}}$`).test(String(env[key]))) return `${name} must be ${length} lowercase hex characters`;
+            }
+            const digest = require('node:crypto').createHash('sha256').update(`${env.TESTS}\n${env.ROWS}`, 'utf8').digest('hex');
+            return digest === env.INPUTS_SHA256 ? null : `inputs_sha256 is not the SHA-256 of tests, a newline and rows, which is ${digest}`;
+          }
+          const KEYS = { tests: 'file,i,name', rows: 'file,from,i,test,to' };
+          // The list, each entry of its shape and the entries indexed 1..n.
+          function listOf(text, label) {
+            let list;
+            try { list = JSON.parse(text); } catch (e) { return { why: `${label} is not JSON` }; }
+            if (!Array.isArray(list) || list.length < 1 || list.length > 20) return { why: `${label} must be an array of 1 to 20 entries` };
+            const str = (v, empty) => typeof v === 'string' && (empty || v !== '');
+            for (const [n, e] of list.entries()) {
+              const ok = e !== null && typeof e === 'object' && !Array.isArray(e) && Object.keys(e).sort().join(',') === KEYS[label]
+                && Number.isInteger(e.i) && str(e.file)
+                && (label === 'tests' ? str(e.name) : str(e.from) && str(e.to, true) && Number.isInteger(e.test));
+              if (!ok) return { why: `${label} entry ${n + 1} must have exactly the keys ${KEYS[label]}, each of its type` };
+            }
+            if (list.map((e) => e.i).sort((a, b) => a - b).some((i, n) => i !== n + 1)) return { why: `${label} must be indexed 1 to ${list.length}, each once` };
+            return { list };
+          }
+          // Each row's test is in tests, and every test is named by a row.
+          function listsCheck(env) {
+            const tests = listOf(env.TESTS, 'tests');
+            if (tests.why) return tests.why;
+            const rows = listOf(env.ROWS, 'rows');
+            if (rows.why) return rows.why;
+            const row = rows.list.find((r) => !tests.list.some((t) => t.i === r.test));
+            if (row) return `row ${row.i} names test ${row.test}, which tests does not hold`;
+            const unnamed = tests.list.find((t) => !rows.list.some((r) => r.test === t.i));
+            return unnamed ? `test ${unnamed.i} is named by no row` : null;
+          }
+          function isAncestor(git, a, b) {
+            try {
+              git(['merge-base', '--is-ancestor', a, b]);
+              return true;
+            } catch (e) {
+              if (e.status === 1) return false;
+              throw e;
+            }
+          }
+          // Main is the tip of main or behind it, and main and the blocked head are
+          // ancestors of the fix head.
+          function commitsCheck(env, git) {
+            git(['fetch', '-q', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
+            for (const sha of [env.BLOCKED_SHA, env.MAIN_SHA, env.HEAD_SHA]) git(['fetch', '-q', '--no-tags', 'origin', sha]);
+            if (!isAncestor(git, env.MAIN_SHA, 'refs/remotes/origin/main')) return 'main is not the tip of main or behind it';
+            if (!isAncestor(git, env.MAIN_SHA, env.HEAD_SHA)) return 'main is not an ancestor of the fix head';
+            if (!isAncestor(git, env.BLOCKED_SHA, env.HEAD_SHA)) return 'the blocked head is not an ancestor of the fix head';
+            return null;
+          }
+          // A path exactly as git prints it: relative, with no empty, . or .. segment.
+          function pathRule(p) {
+            if (p.startsWith('./')) return 'starts with ./';
+            if (p.includes('\\')) return 'holds a backslash';
+            if (p.endsWith('/')) return 'ends with /';
+            const parts = p.split('/');
+            if (parts.includes('')) return 'has an empty segment';
+            if (parts.includes('.')) return 'has a . segment';
+            if (parts.includes('..')) return 'has a .. segment';
+            return null;
+          }
+          // A row may not change the tests, the workflows, or what npm and Node read
+          // at the root.
+          const ROOT_FILES = ['package.json', 'package-lock.json', 'npm-shrinkwrap.json', '.npmrc', '.nvmrc'];
+          function rowRule(p) {
+            if (p.startsWith('test/')) return 'is under test/';
+            if (p.startsWith('.github/')) return 'is under .github/';
+            if (ROOT_FILES.includes(p)) return 'is a root file npm or Node reads';
+            return null;
+          }
+          // Every path in a commit's tree, with its mode.
+          function treeModes(git, sha) {
+            const modes = new Map();
+            for (const entry of String(git(['ls-tree', '-r', '-z', '--full-tree', sha])).split('\0')) {
+              const m = /^(\d{6}) \w+ [0-9a-f]+\t([\s\S]+)$/.exec(entry);
+              if (m) modes.set(m[2], m[1]);
+            }
+            return modes;
+          }
+          function modeRule(p, modes) {
+            const mode = modes.get(p);
+            if (mode === undefined) return 'is not a file in the fix head';
+            if (mode === '120000') return 'is a symlink in the fix head';
+            if (mode === '160000') return 'is a submodule in the fix head';
+            return mode === '100644' || mode === '100755' ? null : `has mode ${mode} in the fix head`;
+          }
+          function pathsCheck(tests, rows, modes) {
+            for (const t of tests) {
+              const why = pathRule(t.file) || (t.file.startsWith('test/') ? null : 'is outside test/') || modeRule(t.file, modes);
+              if (why) return `test ${t.i} names ${JSON.stringify(t.file)}, which ${why}`;
+            }
+            for (const r of rows) {
+              const why = pathRule(r.file) || rowRule(r.file) || modeRule(r.file, modes);
+              if (why) return `row ${r.i} names ${JSON.stringify(r.file)}, which ${why}`;
+            }
+            return null;
+          }
+          // The first check that fails, named, or null.
+          function checkInputs(env, git) {
+            const checks = [
+              ['shape', () => shapeCheck(env)],
+              ['lists', () => listsCheck(env)],
+              ['commits', () => commitsCheck(env, git)],
+              ['paths', () => pathsCheck(JSON.parse(env.TESTS), JSON.parse(env.ROWS), treeModes(git, env.HEAD_SHA))],
+            ];
+            for (const [check, run] of checks) {
+              let why;
+              try {
+                why = run();
+              } catch (e) {
+                why = `git failed: ${JSON.stringify(String(e.stderr || e.message).trim())}`;
+              }
+              if (why) return `${check}: ${why}`;
+            }
+            return null;
+          }
+          // end input checks
+          const { execFileSync } = require('node:child_process');
+          const git = (args) => execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
+          const why = checkInputs(process.env, git);
+          if (why) {
+            console.error(`check inputs failed: ${why}`);
+            process.exit(1);
+          }
+          console.log('every input holds');
+
+      - name: check out the fix head
+        env:
+          HEAD_SHA: ${{ inputs.head }}
+        run: git checkout -q --detach "$HEAD_SHA"
+
+      - name: install
+        run: npm ci --ignore-scripts
+
+      - name: run the test
+        shell: node {0}
+        env:
+          TESTS: ${{ inputs.tests }}
+          ROWS: ${{ inputs.rows }}
+          ENTRY: ${{ matrix.i }}
+          SIDE: ${{ github.job }}
+        run: |
+          'use strict';
+          // begin run
+          const FLAGS = '--test --test-reporter=tap --require ./test/helpers/account-home-refused.js --require ./test/helpers/stall-guard.js';
+          const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          function testArgs(test, dest) {
+            return [...FLAGS.split(' '), `--test-reporter-destination=${dest}`, '--test-name-pattern', `^${escape(test.name)}$`, test.file];
+          }
+          // A red or green job runs the test its entry names; a break job runs
+          // the test its row names.
+          function testFor(side, entry, tests, rows) {
+            const one = (list, i) => list.filter((e) => String(e.i) === String(i));
+            const [row] = side === 'break' ? one(rows, entry) : [{ test: entry }];
+            const found = row ? one(tests, row.test) : [];
+            if (found.length !== 1) throw new Error(`no single test for ${side} ${JSON.stringify(entry)}`);
+            return found[0];
+          }
+          // end run
+          // begin tree
+          // Every file outside test/ and .git/, tracked or not, by path: its
+          // executable bit and content hash, a symlink's target, or "other".
+          function snapshot(root) {
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const crypto = require('node:crypto');
+            const out = new Map();
+            const walk = (rel) => {
+              for (const name of fs.readdirSync(path.join(root, rel)).sort()) {
+                if (!rel && (name === 'test' || name === '.git')) continue;
+                const at = rel ? `${rel}/${name}` : name;
+                const full = path.join(root, at);
+                const st = fs.lstatSync(full);
+                if (st.isDirectory()) walk(at);
+                else if (st.isSymbolicLink()) out.set(at, `link ${fs.readlinkSync(full)}`);
+                else if (st.isFile()) out.set(at, `${st.mode & 0o111 ? 'x' : '-'} ${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`);
+                else out.set(at, 'other');
+              }
+            };
+            walk('');
+            return out;
+          }
+          function treeChange(before, after) {
+            for (const at of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+              if (!after.has(at)) return `${JSON.stringify(at)} was removed`;
+              if (!before.has(at)) return `${JSON.stringify(at)} was added`;
+              if (before.get(at) !== after.get(at)) return `${JSON.stringify(at)} was changed`;
+            }
+            return null;
+          }
+          // end tree
+          // begin classifier
+          // A name as the TAP reporter prints it: control characters as a
+          // backslash and a letter, then every backslash doubled, then # escaped.
+          function tapName(name) {
+            let out = name;
+            for (const [c, e] of [['\b', 'b'], ['\f', 'f'], ['\t', 't'], ['\n', 'n'], ['\r', 'r'], ['\v', 'v']]) out = out.split(c).join(`\\${e}`);
+            return out.split('\\').join('\\\\').split('#').join('\\#');
+          }
+          // The results in a TAP report, each with its parent and full name, or
+          // null for anything but the shape the reporter writes: a version line,
+          // results indented four spaces a level, each level closed by a plan
+          // that counts it, YAML blocks closed where they open, and comments.
+          function parseTap(text) {
+            const lines = text.split('\n');
+            if (lines[lines.length - 1] === '') lines.pop();
+            if (lines[0] !== 'TAP version 13') return null;
+            const pending = [[]];
+            let closed = null;
+            for (let n = 1; n < lines.length; n++) {
+              const line = lines[n];
+              if (/^ *#/.test(line)) continue;
+              const plan = /^( *)1\.\.(\d+)$/.exec(line);
+              if (plan) {
+                const depth = plan[1].length / 4;
+                if (!Number.isInteger(depth) || Number(plan[2]) !== (pending[depth] || []).length) return null;
+                closed = depth;
+                continue;
+              }
+              const m = /^( *)(not ok|ok) \d+(?: - (.*))?$/.exec(line);
+              const depth = m ? m[1].length / 4 : NaN;
+              const d = m && /^((?:\\.|[^\\#])*)(?:# (SKIP|TODO)\b.*)?$/.exec(m[3] || '');
+              if (!d || !Number.isInteger(depth) || pending.slice(depth + 2).some((p) => p.length)) return null;
+              while (pending.length < depth + 2) pending.push([]);
+              const node = {
+                name: d[2] ? d[1].replace(/ $/, '') : d[1], ok: m[2] === 'ok', directive: d[2] || null,
+                depth, code: null, failureType: null, children: pending[depth + 1],
+              };
+              pending[depth + 1] = [];
+              pending[depth].push(node);
+              closed = null;
+              const pad = ' '.repeat(depth * 4 + 2);
+              if (lines[n + 1] !== `${pad}---`) continue;
+              const seen = new Set();
+              for (n += 2; lines[n] !== `${pad}...`; n++) {
+                if (n >= lines.length || !lines[n].startsWith(pad)) return null;
+                const kv = /^(code|failureType): '([^']*)'$/.exec(lines[n].slice(pad.length));
+                if (!kv) continue;
+                if (seen.has(kv[1])) return null;
+                seen.add(kv[1]);
+                node[kv[1]] = kv[2];
+              }
+            }
+            if (closed !== 0 || pending.slice(1).some((p) => p.length)) return null;
+            const all = [];
+            const visit = (node, parent) => {
+              node.parent = parent;
+              node.full = parent ? `${parent.full} ${node.name}` : node.name;
+              all.push(node);
+              node.children.forEach((c) => visit(c, node));
+            };
+            pending[0].forEach((node) => visit(node, null));
+            return all;
+          }
+          // What one run of the named test in the named file did.
+          function outcome(text, name, file) {
+            const all = parseTap(text);
+            if (!all) return 'unparseable';
+            // A file that ran no test, or failed as it loaded, reports itself
+            // under its own name; it is never the test asked for.
+            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file));
+            const want = tapName(name);
+            const selected = all.filter((x) => !files.includes(x) && (x.name === want || x.full === want));
+            if (!selected.length) return files.some((x) => !x.ok) ? 'failed to load' : 'selected 0';
+            if (selected.length > 1) return `selected ${selected.length}`;
+            const [node] = selected;
+            const inside = [];
+            const collect = (x) => { inside.push(x); x.children.forEach(collect); };
+            collect(node);
+            const above = [];
+            for (let p = node.parent; p; p = p.parent) above.push(p);
+            const marks = [...above, ...inside].map((x) => x.directive);
+            if (marks.includes('SKIP')) return 'skipped';
+            if (marks.includes('TODO')) return 'todo';
+            // An enclosing suite fails because the test did; any other failure
+            // outside the test is something else going wrong.
+            const excused = (x) => !node.ok && above.includes(x) && x.failureType === 'subtestsFailed';
+            if (all.some((x) => !x.ok && !inside.includes(x) && !excused(x))) return 'failed outside the test';
+            const failures = inside.filter((x) => !x.ok);
+            if (node.ok) return failures.length ? 'failed on something else' : 'passed';
+            const assertion = (x) => x.code === 'ERR_ASSERTION' && x.failureType === 'testCodeFailure';
+            const onlyAssertions = failures.every((x) => assertion(x) || x.failureType === 'subtestsFailed');
+            return onlyAssertions && failures.some(assertion) ? 'assertion failed' : 'failed on something else';
+          }
+          const WANT = { red: 'assertion failed', green: 'passed', break: 'assertion failed' };
+          // Why the three runs do not give the side its result, or null.
+          function verdict(side, outcomes) {
+            if (!Object.prototype.hasOwnProperty.call(WANT, side)) return `there is no side named ${JSON.stringify(side)}`;
+            if (outcomes.length !== 3) return `there were ${outcomes.length} runs, not 3`;
+            const n = outcomes.findIndex((o) => o !== WANT[side]);
+            return n === -1 ? null : `run ${n + 1}: ${outcomes[n]}, where a ${side} job needs every run to be ${WANT[side]}`;
+          }
+          // Why the name did not select exactly one test in every run, or null.
+          function selectionProblem(outcomes) {
+            const n = outcomes.findIndex((o) => /^selected \d+$/.test(o));
+            return n === -1 ? null : `run ${n + 1}: the name ${outcomes[n]} tests, where it must select exactly one`;
+          }
+          // end classifier
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const { spawnSync } = require('node:child_process');
+          const env = process.env;
+          const test = testFor(env.SIDE, env.ENTRY, JSON.parse(env.TESTS), JSON.parse(env.ROWS));
+          const dir = path.join(env.RUNNER_TEMP, 'prove');
+          fs.mkdirSync(dir, { recursive: true });
+          const save = (n) => fs.writeFileSync(path.join(dir, `tree-${n}.json`), JSON.stringify([...snapshot(process.cwd())]));
+          const childEnv = { ...env };
+          delete childEnv.NODE_TEST_CONTEXT;
+          save(0);
+          // The test is code from the commits under test: every step after this one is
+          // only as trustworthy as that code.
+          const token = require('node:crypto').randomBytes(16).toString('hex');
+          console.log(`::stop-commands::${token}`);
+          for (let n = 1; n <= 3; n++) {
+            spawnSync(process.execPath, testArgs(test, path.join(dir, `run-${n}.tap`)), { env: childEnv, stdio: 'inherit' });
+            save(n);
+          }
+          console.log(`::${token}::`);
+          const read = (n) => { try { return fs.readFileSync(path.join(dir, `run-${n}.tap`), 'utf8'); } catch (e) { return ''; } };
+          const why = selectionProblem([1, 2, 3].map((n) => outcome(read(n), test.name, test.file)));
+          if (why) {
+            console.error(`run the test failed: ${why}`);
+            process.exit(1);
+          }
+          console.log('no run selected zero tests or more than one');
+
+      - name: check the tree
+        shell: node {0}
+        run: |
+          'use strict';
+          // begin tree
+          // Every file outside test/ and .git/, tracked or not, by path: its
+          // executable bit and content hash, a symlink's target, or "other".
+          function snapshot(root) {
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const crypto = require('node:crypto');
+            const out = new Map();
+            const walk = (rel) => {
+              for (const name of fs.readdirSync(path.join(root, rel)).sort()) {
+                if (!rel && (name === 'test' || name === '.git')) continue;
+                const at = rel ? `${rel}/${name}` : name;
+                const full = path.join(root, at);
+                const st = fs.lstatSync(full);
+                if (st.isDirectory()) walk(at);
+                else if (st.isSymbolicLink()) out.set(at, `link ${fs.readlinkSync(full)}`);
+                else if (st.isFile()) out.set(at, `${st.mode & 0o111 ? 'x' : '-'} ${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`);
+                else out.set(at, 'other');
+              }
+            };
+            walk('');
+            return out;
+          }
+          function treeChange(before, after) {
+            for (const at of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+              if (!after.has(at)) return `${JSON.stringify(at)} was removed`;
+              if (!before.has(at)) return `${JSON.stringify(at)} was added`;
+              if (before.get(at) !== after.get(at)) return `${JSON.stringify(at)} was changed`;
+            }
+            return null;
+          }
+          // end tree
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const dir = path.join(process.env.RUNNER_TEMP, 'prove');
+          const load = (n) => new Map(JSON.parse(fs.readFileSync(path.join(dir, `tree-${n}.json`), 'utf8')));
+          for (let n = 1; n <= 3; n++) {
+            const why = treeChange(load(n - 1), load(n));
+            if (why) {
+              console.error(`check the tree failed: during run ${n}, ${why}`);
+              process.exit(1);
+            }
+          }
+          console.log('no file outside test/ changed during the runs');
+
+      - name: judge the result
+        shell: node {0}
+        env:
+          TESTS: ${{ inputs.tests }}
+          ROWS: ${{ inputs.rows }}
+          ENTRY: ${{ matrix.i }}
+          SIDE: ${{ github.job }}
+        run: |
+          'use strict';
+          // begin run
+          const FLAGS = '--test --test-reporter=tap --require ./test/helpers/account-home-refused.js --require ./test/helpers/stall-guard.js';
+          const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          function testArgs(test, dest) {
+            return [...FLAGS.split(' '), `--test-reporter-destination=${dest}`, '--test-name-pattern', `^${escape(test.name)}$`, test.file];
+          }
+          // A red or green job runs the test its entry names; a break job runs
+          // the test its row names.
+          function testFor(side, entry, tests, rows) {
+            const one = (list, i) => list.filter((e) => String(e.i) === String(i));
+            const [row] = side === 'break' ? one(rows, entry) : [{ test: entry }];
+            const found = row ? one(tests, row.test) : [];
+            if (found.length !== 1) throw new Error(`no single test for ${side} ${JSON.stringify(entry)}`);
+            return found[0];
+          }
+          // end run
+          // begin classifier
+          // A name as the TAP reporter prints it: control characters as a
+          // backslash and a letter, then every backslash doubled, then # escaped.
+          function tapName(name) {
+            let out = name;
+            for (const [c, e] of [['\b', 'b'], ['\f', 'f'], ['\t', 't'], ['\n', 'n'], ['\r', 'r'], ['\v', 'v']]) out = out.split(c).join(`\\${e}`);
+            return out.split('\\').join('\\\\').split('#').join('\\#');
+          }
+          // The results in a TAP report, each with its parent and full name, or
+          // null for anything but the shape the reporter writes: a version line,
+          // results indented four spaces a level, each level closed by a plan
+          // that counts it, YAML blocks closed where they open, and comments.
+          function parseTap(text) {
+            const lines = text.split('\n');
+            if (lines[lines.length - 1] === '') lines.pop();
+            if (lines[0] !== 'TAP version 13') return null;
+            const pending = [[]];
+            let closed = null;
+            for (let n = 1; n < lines.length; n++) {
+              const line = lines[n];
+              if (/^ *#/.test(line)) continue;
+              const plan = /^( *)1\.\.(\d+)$/.exec(line);
+              if (plan) {
+                const depth = plan[1].length / 4;
+                if (!Number.isInteger(depth) || Number(plan[2]) !== (pending[depth] || []).length) return null;
+                closed = depth;
+                continue;
+              }
+              const m = /^( *)(not ok|ok) \d+(?: - (.*))?$/.exec(line);
+              const depth = m ? m[1].length / 4 : NaN;
+              const d = m && /^((?:\\.|[^\\#])*)(?:# (SKIP|TODO)\b.*)?$/.exec(m[3] || '');
+              if (!d || !Number.isInteger(depth) || pending.slice(depth + 2).some((p) => p.length)) return null;
+              while (pending.length < depth + 2) pending.push([]);
+              const node = {
+                name: d[2] ? d[1].replace(/ $/, '') : d[1], ok: m[2] === 'ok', directive: d[2] || null,
+                depth, code: null, failureType: null, children: pending[depth + 1],
+              };
+              pending[depth + 1] = [];
+              pending[depth].push(node);
+              closed = null;
+              const pad = ' '.repeat(depth * 4 + 2);
+              if (lines[n + 1] !== `${pad}---`) continue;
+              const seen = new Set();
+              for (n += 2; lines[n] !== `${pad}...`; n++) {
+                if (n >= lines.length || !lines[n].startsWith(pad)) return null;
+                const kv = /^(code|failureType): '([^']*)'$/.exec(lines[n].slice(pad.length));
+                if (!kv) continue;
+                if (seen.has(kv[1])) return null;
+                seen.add(kv[1]);
+                node[kv[1]] = kv[2];
+              }
+            }
+            if (closed !== 0 || pending.slice(1).some((p) => p.length)) return null;
+            const all = [];
+            const visit = (node, parent) => {
+              node.parent = parent;
+              node.full = parent ? `${parent.full} ${node.name}` : node.name;
+              all.push(node);
+              node.children.forEach((c) => visit(c, node));
+            };
+            pending[0].forEach((node) => visit(node, null));
+            return all;
+          }
+          // What one run of the named test in the named file did.
+          function outcome(text, name, file) {
+            const all = parseTap(text);
+            if (!all) return 'unparseable';
+            // A file that ran no test, or failed as it loaded, reports itself
+            // under its own name; it is never the test asked for.
+            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file));
+            const want = tapName(name);
+            const selected = all.filter((x) => !files.includes(x) && (x.name === want || x.full === want));
+            if (!selected.length) return files.some((x) => !x.ok) ? 'failed to load' : 'selected 0';
+            if (selected.length > 1) return `selected ${selected.length}`;
+            const [node] = selected;
+            const inside = [];
+            const collect = (x) => { inside.push(x); x.children.forEach(collect); };
+            collect(node);
+            const above = [];
+            for (let p = node.parent; p; p = p.parent) above.push(p);
+            const marks = [...above, ...inside].map((x) => x.directive);
+            if (marks.includes('SKIP')) return 'skipped';
+            if (marks.includes('TODO')) return 'todo';
+            // An enclosing suite fails because the test did; any other failure
+            // outside the test is something else going wrong.
+            const excused = (x) => !node.ok && above.includes(x) && x.failureType === 'subtestsFailed';
+            if (all.some((x) => !x.ok && !inside.includes(x) && !excused(x))) return 'failed outside the test';
+            const failures = inside.filter((x) => !x.ok);
+            if (node.ok) return failures.length ? 'failed on something else' : 'passed';
+            const assertion = (x) => x.code === 'ERR_ASSERTION' && x.failureType === 'testCodeFailure';
+            const onlyAssertions = failures.every((x) => assertion(x) || x.failureType === 'subtestsFailed');
+            return onlyAssertions && failures.some(assertion) ? 'assertion failed' : 'failed on something else';
+          }
+          const WANT = { red: 'assertion failed', green: 'passed', break: 'assertion failed' };
+          // Why the three runs do not give the side its result, or null.
+          function verdict(side, outcomes) {
+            if (!Object.prototype.hasOwnProperty.call(WANT, side)) return `there is no side named ${JSON.stringify(side)}`;
+            if (outcomes.length !== 3) return `there were ${outcomes.length} runs, not 3`;
+            const n = outcomes.findIndex((o) => o !== WANT[side]);
+            return n === -1 ? null : `run ${n + 1}: ${outcomes[n]}, where a ${side} job needs every run to be ${WANT[side]}`;
+          }
+          // Why the name did not select exactly one test in every run, or null.
+          function selectionProblem(outcomes) {
+            const n = outcomes.findIndex((o) => /^selected \d+$/.test(o));
+            return n === -1 ? null : `run ${n + 1}: the name ${outcomes[n]} tests, where it must select exactly one`;
+          }
+          // end classifier
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const env = process.env;
+          const test = testFor(env.SIDE, env.ENTRY, JSON.parse(env.TESTS), JSON.parse(env.ROWS));
+          const dir = path.join(env.RUNNER_TEMP, 'prove');
+          const read = (n) => { try { return fs.readFileSync(path.join(dir, `run-${n}.tap`), 'utf8'); } catch (e) { return ''; } };
+          const outcomes = [1, 2, 3].map((n) => outcome(read(n), test.name, test.file));
+          const token = require('node:crypto').randomBytes(16).toString('hex');
+          console.log(`::stop-commands::${token}`);
+          for (let n = 1; n <= 3; n++) console.log(`run ${n} TAP:\n${read(n)}`);
+          console.log(`::${token}::`);
+          outcomes.forEach((o, n) => console.log(`run ${n + 1}: ${o}`));
+          const why = verdict(env.SIDE, outcomes);
+          if (why) {
+            console.error(`judge the result failed: ${why}`);
+            process.exit(1);
+          }
+          console.log(`every run is ${WANT[env.SIDE]}, as a ${env.SIDE} job needs`);
+
+  break:
+    name: break ${{ matrix.i }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      # Every job's result is evidence, so one failure never cancels the rest.
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.rows) }}
+    steps:
+      - name: check out the workflow's commit
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: check inputs
+        shell: node {0}
+        env:
+          NONCE: ${{ inputs.nonce }}
+          BLOCKED_SHA: ${{ inputs.blocked }}
+          MAIN_SHA: ${{ inputs.main }}
+          HEAD_SHA: ${{ inputs.head }}
+          TESTS: ${{ inputs.tests }}
+          ROWS: ${{ inputs.rows }}
+          INPUTS_SHA256: ${{ inputs.inputs_sha256 }}
+        run: |
+          'use strict';
+          // begin input checks
+          const HEX = [['NONCE', 'nonce', 32], ['BLOCKED_SHA', 'blocked', 40], ['MAIN_SHA', 'main', 40], ['HEAD_SHA', 'head', 40], ['INPUTS_SHA256', 'inputs_sha256', 64]];
+          // Each hex input has its pattern, and inputs_sha256 is the digest of tests,
+          // a newline, then rows.
+          function shapeCheck(env) {
+            for (const [key, name, length] of HEX) {
+              if (!new RegExp(`^[0-9a-f]{${length}}$`).test(String(env[key]))) return `${name} must be ${length} lowercase hex characters`;
+            }
+            const digest = require('node:crypto').createHash('sha256').update(`${env.TESTS}\n${env.ROWS}`, 'utf8').digest('hex');
+            return digest === env.INPUTS_SHA256 ? null : `inputs_sha256 is not the SHA-256 of tests, a newline and rows, which is ${digest}`;
+          }
+          const KEYS = { tests: 'file,i,name', rows: 'file,from,i,test,to' };
+          // The list, each entry of its shape and the entries indexed 1..n.
+          function listOf(text, label) {
+            let list;
+            try { list = JSON.parse(text); } catch (e) { return { why: `${label} is not JSON` }; }
+            if (!Array.isArray(list) || list.length < 1 || list.length > 20) return { why: `${label} must be an array of 1 to 20 entries` };
+            const str = (v, empty) => typeof v === 'string' && (empty || v !== '');
+            for (const [n, e] of list.entries()) {
+              const ok = e !== null && typeof e === 'object' && !Array.isArray(e) && Object.keys(e).sort().join(',') === KEYS[label]
+                && Number.isInteger(e.i) && str(e.file)
+                && (label === 'tests' ? str(e.name) : str(e.from) && str(e.to, true) && Number.isInteger(e.test));
+              if (!ok) return { why: `${label} entry ${n + 1} must have exactly the keys ${KEYS[label]}, each of its type` };
+            }
+            if (list.map((e) => e.i).sort((a, b) => a - b).some((i, n) => i !== n + 1)) return { why: `${label} must be indexed 1 to ${list.length}, each once` };
+            return { list };
+          }
+          // Each row's test is in tests, and every test is named by a row.
+          function listsCheck(env) {
+            const tests = listOf(env.TESTS, 'tests');
+            if (tests.why) return tests.why;
+            const rows = listOf(env.ROWS, 'rows');
+            if (rows.why) return rows.why;
+            const row = rows.list.find((r) => !tests.list.some((t) => t.i === r.test));
+            if (row) return `row ${row.i} names test ${row.test}, which tests does not hold`;
+            const unnamed = tests.list.find((t) => !rows.list.some((r) => r.test === t.i));
+            return unnamed ? `test ${unnamed.i} is named by no row` : null;
+          }
+          function isAncestor(git, a, b) {
+            try {
+              git(['merge-base', '--is-ancestor', a, b]);
+              return true;
+            } catch (e) {
+              if (e.status === 1) return false;
+              throw e;
+            }
+          }
+          // Main is the tip of main or behind it, and main and the blocked head are
+          // ancestors of the fix head.
+          function commitsCheck(env, git) {
+            git(['fetch', '-q', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
+            for (const sha of [env.BLOCKED_SHA, env.MAIN_SHA, env.HEAD_SHA]) git(['fetch', '-q', '--no-tags', 'origin', sha]);
+            if (!isAncestor(git, env.MAIN_SHA, 'refs/remotes/origin/main')) return 'main is not the tip of main or behind it';
+            if (!isAncestor(git, env.MAIN_SHA, env.HEAD_SHA)) return 'main is not an ancestor of the fix head';
+            if (!isAncestor(git, env.BLOCKED_SHA, env.HEAD_SHA)) return 'the blocked head is not an ancestor of the fix head';
+            return null;
+          }
+          // A path exactly as git prints it: relative, with no empty, . or .. segment.
+          function pathRule(p) {
+            if (p.startsWith('./')) return 'starts with ./';
+            if (p.includes('\\')) return 'holds a backslash';
+            if (p.endsWith('/')) return 'ends with /';
+            const parts = p.split('/');
+            if (parts.includes('')) return 'has an empty segment';
+            if (parts.includes('.')) return 'has a . segment';
+            if (parts.includes('..')) return 'has a .. segment';
+            return null;
+          }
+          // A row may not change the tests, the workflows, or what npm and Node read
+          // at the root.
+          const ROOT_FILES = ['package.json', 'package-lock.json', 'npm-shrinkwrap.json', '.npmrc', '.nvmrc'];
+          function rowRule(p) {
+            if (p.startsWith('test/')) return 'is under test/';
+            if (p.startsWith('.github/')) return 'is under .github/';
+            if (ROOT_FILES.includes(p)) return 'is a root file npm or Node reads';
+            return null;
+          }
+          // Every path in a commit's tree, with its mode.
+          function treeModes(git, sha) {
+            const modes = new Map();
+            for (const entry of String(git(['ls-tree', '-r', '-z', '--full-tree', sha])).split('\0')) {
+              const m = /^(\d{6}) \w+ [0-9a-f]+\t([\s\S]+)$/.exec(entry);
+              if (m) modes.set(m[2], m[1]);
+            }
+            return modes;
+          }
+          function modeRule(p, modes) {
+            const mode = modes.get(p);
+            if (mode === undefined) return 'is not a file in the fix head';
+            if (mode === '120000') return 'is a symlink in the fix head';
+            if (mode === '160000') return 'is a submodule in the fix head';
+            return mode === '100644' || mode === '100755' ? null : `has mode ${mode} in the fix head`;
+          }
+          function pathsCheck(tests, rows, modes) {
+            for (const t of tests) {
+              const why = pathRule(t.file) || (t.file.startsWith('test/') ? null : 'is outside test/') || modeRule(t.file, modes);
+              if (why) return `test ${t.i} names ${JSON.stringify(t.file)}, which ${why}`;
+            }
+            for (const r of rows) {
+              const why = pathRule(r.file) || rowRule(r.file) || modeRule(r.file, modes);
+              if (why) return `row ${r.i} names ${JSON.stringify(r.file)}, which ${why}`;
+            }
+            return null;
+          }
+          // The first check that fails, named, or null.
+          function checkInputs(env, git) {
+            const checks = [
+              ['shape', () => shapeCheck(env)],
+              ['lists', () => listsCheck(env)],
+              ['commits', () => commitsCheck(env, git)],
+              ['paths', () => pathsCheck(JSON.parse(env.TESTS), JSON.parse(env.ROWS), treeModes(git, env.HEAD_SHA))],
+            ];
+            for (const [check, run] of checks) {
+              let why;
+              try {
+                why = run();
+              } catch (e) {
+                why = `git failed: ${JSON.stringify(String(e.stderr || e.message).trim())}`;
+              }
+              if (why) return `${check}: ${why}`;
+            }
+            return null;
+          }
+          // end input checks
+          const { execFileSync } = require('node:child_process');
+          const git = (args) => execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
+          const why = checkInputs(process.env, git);
+          if (why) {
+            console.error(`check inputs failed: ${why}`);
+            process.exit(1);
+          }
+          console.log('every input holds');
+
+      - name: check out the fix head
+        env:
+          HEAD_SHA: ${{ inputs.head }}
+        run: git checkout -q --detach "$HEAD_SHA"
+
+      - name: apply the row
+        shell: node {0}
+        env:
+          ROWS: ${{ inputs.rows }}
+          ENTRY: ${{ matrix.i }}
+        run: |
+          'use strict';
+          // begin apply row
+          // The file with the row's from replaced by its to, or why it cannot be.
+          function applyRow(buffer, row) {
+            const from = Buffer.from(row.from, 'utf8');
+            const at = buffer.indexOf(from);
+            const again = at === -1 ? -1 : buffer.indexOf(from, at + 1);
+            if (at === -1 || again !== -1) {
+              return { why: `row ${row.i}: its from occurs ${at === -1 ? 'nowhere' : 'more than once'} in ${JSON.stringify(row.file)}` };
+            }
+            return { buffer: Buffer.concat([buffer.subarray(0, at), Buffer.from(row.to, 'utf8'), buffer.subarray(at + from.length)]) };
+          }
+          // end apply row
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const row = JSON.parse(process.env.ROWS).find((r) => String(r.i) === String(process.env.ENTRY));
+          const file = path.join(process.cwd(), ...row.file.split('/'));
+          const out = applyRow(fs.readFileSync(file), row);
+          if (out.why) {
+            console.error(`apply the row failed: ${out.why}`);
+            process.exit(1);
+          }
+          fs.writeFileSync(file, out.buffer);
+          console.log(`row ${row.i} is applied`);
+
+      - name: install
+        run: npm ci --ignore-scripts
+
+      - name: run the test
+        shell: node {0}
+        env:
+          TESTS: ${{ inputs.tests }}
+          ROWS: ${{ inputs.rows }}
+          ENTRY: ${{ matrix.i }}
+          SIDE: ${{ github.job }}
+        run: |
+          'use strict';
+          // begin run
+          const FLAGS = '--test --test-reporter=tap --require ./test/helpers/account-home-refused.js --require ./test/helpers/stall-guard.js';
+          const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          function testArgs(test, dest) {
+            return [...FLAGS.split(' '), `--test-reporter-destination=${dest}`, '--test-name-pattern', `^${escape(test.name)}$`, test.file];
+          }
+          // A red or green job runs the test its entry names; a break job runs
+          // the test its row names.
+          function testFor(side, entry, tests, rows) {
+            const one = (list, i) => list.filter((e) => String(e.i) === String(i));
+            const [row] = side === 'break' ? one(rows, entry) : [{ test: entry }];
+            const found = row ? one(tests, row.test) : [];
+            if (found.length !== 1) throw new Error(`no single test for ${side} ${JSON.stringify(entry)}`);
+            return found[0];
+          }
+          // end run
+          // begin tree
+          // Every file outside test/ and .git/, tracked or not, by path: its
+          // executable bit and content hash, a symlink's target, or "other".
+          function snapshot(root) {
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const crypto = require('node:crypto');
+            const out = new Map();
+            const walk = (rel) => {
+              for (const name of fs.readdirSync(path.join(root, rel)).sort()) {
+                if (!rel && (name === 'test' || name === '.git')) continue;
+                const at = rel ? `${rel}/${name}` : name;
+                const full = path.join(root, at);
+                const st = fs.lstatSync(full);
+                if (st.isDirectory()) walk(at);
+                else if (st.isSymbolicLink()) out.set(at, `link ${fs.readlinkSync(full)}`);
+                else if (st.isFile()) out.set(at, `${st.mode & 0o111 ? 'x' : '-'} ${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`);
+                else out.set(at, 'other');
+              }
+            };
+            walk('');
+            return out;
+          }
+          function treeChange(before, after) {
+            for (const at of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+              if (!after.has(at)) return `${JSON.stringify(at)} was removed`;
+              if (!before.has(at)) return `${JSON.stringify(at)} was added`;
+              if (before.get(at) !== after.get(at)) return `${JSON.stringify(at)} was changed`;
+            }
+            return null;
+          }
+          // end tree
+          // begin classifier
+          // A name as the TAP reporter prints it: control characters as a
+          // backslash and a letter, then every backslash doubled, then # escaped.
+          function tapName(name) {
+            let out = name;
+            for (const [c, e] of [['\b', 'b'], ['\f', 'f'], ['\t', 't'], ['\n', 'n'], ['\r', 'r'], ['\v', 'v']]) out = out.split(c).join(`\\${e}`);
+            return out.split('\\').join('\\\\').split('#').join('\\#');
+          }
+          // The results in a TAP report, each with its parent and full name, or
+          // null for anything but the shape the reporter writes: a version line,
+          // results indented four spaces a level, each level closed by a plan
+          // that counts it, YAML blocks closed where they open, and comments.
+          function parseTap(text) {
+            const lines = text.split('\n');
+            if (lines[lines.length - 1] === '') lines.pop();
+            if (lines[0] !== 'TAP version 13') return null;
+            const pending = [[]];
+            let closed = null;
+            for (let n = 1; n < lines.length; n++) {
+              const line = lines[n];
+              if (/^ *#/.test(line)) continue;
+              const plan = /^( *)1\.\.(\d+)$/.exec(line);
+              if (plan) {
+                const depth = plan[1].length / 4;
+                if (!Number.isInteger(depth) || Number(plan[2]) !== (pending[depth] || []).length) return null;
+                closed = depth;
+                continue;
+              }
+              const m = /^( *)(not ok|ok) \d+(?: - (.*))?$/.exec(line);
+              const depth = m ? m[1].length / 4 : NaN;
+              const d = m && /^((?:\\.|[^\\#])*)(?:# (SKIP|TODO)\b.*)?$/.exec(m[3] || '');
+              if (!d || !Number.isInteger(depth) || pending.slice(depth + 2).some((p) => p.length)) return null;
+              while (pending.length < depth + 2) pending.push([]);
+              const node = {
+                name: d[2] ? d[1].replace(/ $/, '') : d[1], ok: m[2] === 'ok', directive: d[2] || null,
+                depth, code: null, failureType: null, children: pending[depth + 1],
+              };
+              pending[depth + 1] = [];
+              pending[depth].push(node);
+              closed = null;
+              const pad = ' '.repeat(depth * 4 + 2);
+              if (lines[n + 1] !== `${pad}---`) continue;
+              const seen = new Set();
+              for (n += 2; lines[n] !== `${pad}...`; n++) {
+                if (n >= lines.length || !lines[n].startsWith(pad)) return null;
+                const kv = /^(code|failureType): '([^']*)'$/.exec(lines[n].slice(pad.length));
+                if (!kv) continue;
+                if (seen.has(kv[1])) return null;
+                seen.add(kv[1]);
+                node[kv[1]] = kv[2];
+              }
+            }
+            if (closed !== 0 || pending.slice(1).some((p) => p.length)) return null;
+            const all = [];
+            const visit = (node, parent) => {
+              node.parent = parent;
+              node.full = parent ? `${parent.full} ${node.name}` : node.name;
+              all.push(node);
+              node.children.forEach((c) => visit(c, node));
+            };
+            pending[0].forEach((node) => visit(node, null));
+            return all;
+          }
+          // What one run of the named test in the named file did.
+          function outcome(text, name, file) {
+            const all = parseTap(text);
+            if (!all) return 'unparseable';
+            // A file that ran no test, or failed as it loaded, reports itself
+            // under its own name; it is never the test asked for.
+            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file));
+            const want = tapName(name);
+            const selected = all.filter((x) => !files.includes(x) && (x.name === want || x.full === want));
+            if (!selected.length) return files.some((x) => !x.ok) ? 'failed to load' : 'selected 0';
+            if (selected.length > 1) return `selected ${selected.length}`;
+            const [node] = selected;
+            const inside = [];
+            const collect = (x) => { inside.push(x); x.children.forEach(collect); };
+            collect(node);
+            const above = [];
+            for (let p = node.parent; p; p = p.parent) above.push(p);
+            const marks = [...above, ...inside].map((x) => x.directive);
+            if (marks.includes('SKIP')) return 'skipped';
+            if (marks.includes('TODO')) return 'todo';
+            // An enclosing suite fails because the test did; any other failure
+            // outside the test is something else going wrong.
+            const excused = (x) => !node.ok && above.includes(x) && x.failureType === 'subtestsFailed';
+            if (all.some((x) => !x.ok && !inside.includes(x) && !excused(x))) return 'failed outside the test';
+            const failures = inside.filter((x) => !x.ok);
+            if (node.ok) return failures.length ? 'failed on something else' : 'passed';
+            const assertion = (x) => x.code === 'ERR_ASSERTION' && x.failureType === 'testCodeFailure';
+            const onlyAssertions = failures.every((x) => assertion(x) || x.failureType === 'subtestsFailed');
+            return onlyAssertions && failures.some(assertion) ? 'assertion failed' : 'failed on something else';
+          }
+          const WANT = { red: 'assertion failed', green: 'passed', break: 'assertion failed' };
+          // Why the three runs do not give the side its result, or null.
+          function verdict(side, outcomes) {
+            if (!Object.prototype.hasOwnProperty.call(WANT, side)) return `there is no side named ${JSON.stringify(side)}`;
+            if (outcomes.length !== 3) return `there were ${outcomes.length} runs, not 3`;
+            const n = outcomes.findIndex((o) => o !== WANT[side]);
+            return n === -1 ? null : `run ${n + 1}: ${outcomes[n]}, where a ${side} job needs every run to be ${WANT[side]}`;
+          }
+          // Why the name did not select exactly one test in every run, or null.
+          function selectionProblem(outcomes) {
+            const n = outcomes.findIndex((o) => /^selected \d+$/.test(o));
+            return n === -1 ? null : `run ${n + 1}: the name ${outcomes[n]} tests, where it must select exactly one`;
+          }
+          // end classifier
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const { spawnSync } = require('node:child_process');
+          const env = process.env;
+          const test = testFor(env.SIDE, env.ENTRY, JSON.parse(env.TESTS), JSON.parse(env.ROWS));
+          const dir = path.join(env.RUNNER_TEMP, 'prove');
+          fs.mkdirSync(dir, { recursive: true });
+          const save = (n) => fs.writeFileSync(path.join(dir, `tree-${n}.json`), JSON.stringify([...snapshot(process.cwd())]));
+          const childEnv = { ...env };
+          delete childEnv.NODE_TEST_CONTEXT;
+          save(0);
+          // The test is code from the commits under test: every step after this one is
+          // only as trustworthy as that code.
+          const token = require('node:crypto').randomBytes(16).toString('hex');
+          console.log(`::stop-commands::${token}`);
+          for (let n = 1; n <= 3; n++) {
+            spawnSync(process.execPath, testArgs(test, path.join(dir, `run-${n}.tap`)), { env: childEnv, stdio: 'inherit' });
+            save(n);
+          }
+          console.log(`::${token}::`);
+          const read = (n) => { try { return fs.readFileSync(path.join(dir, `run-${n}.tap`), 'utf8'); } catch (e) { return ''; } };
+          const why = selectionProblem([1, 2, 3].map((n) => outcome(read(n), test.name, test.file)));
+          if (why) {
+            console.error(`run the test failed: ${why}`);
+            process.exit(1);
+          }
+          console.log('no run selected zero tests or more than one');
+
+      - name: check the tree
+        shell: node {0}
+        run: |
+          'use strict';
+          // begin tree
+          // Every file outside test/ and .git/, tracked or not, by path: its
+          // executable bit and content hash, a symlink's target, or "other".
+          function snapshot(root) {
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const crypto = require('node:crypto');
+            const out = new Map();
+            const walk = (rel) => {
+              for (const name of fs.readdirSync(path.join(root, rel)).sort()) {
+                if (!rel && (name === 'test' || name === '.git')) continue;
+                const at = rel ? `${rel}/${name}` : name;
+                const full = path.join(root, at);
+                const st = fs.lstatSync(full);
+                if (st.isDirectory()) walk(at);
+                else if (st.isSymbolicLink()) out.set(at, `link ${fs.readlinkSync(full)}`);
+                else if (st.isFile()) out.set(at, `${st.mode & 0o111 ? 'x' : '-'} ${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`);
+                else out.set(at, 'other');
+              }
+            };
+            walk('');
+            return out;
+          }
+          function treeChange(before, after) {
+            for (const at of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+              if (!after.has(at)) return `${JSON.stringify(at)} was removed`;
+              if (!before.has(at)) return `${JSON.stringify(at)} was added`;
+              if (before.get(at) !== after.get(at)) return `${JSON.stringify(at)} was changed`;
+            }
+            return null;
+          }
+          // end tree
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const dir = path.join(process.env.RUNNER_TEMP, 'prove');
+          const load = (n) => new Map(JSON.parse(fs.readFileSync(path.join(dir, `tree-${n}.json`), 'utf8')));
+          for (let n = 1; n <= 3; n++) {
+            const why = treeChange(load(n - 1), load(n));
+            if (why) {
+              console.error(`check the tree failed: during run ${n}, ${why}`);
+              process.exit(1);
+            }
+          }
+          console.log('no file outside test/ changed during the runs');
+
+      - name: judge the result
+        shell: node {0}
+        env:
+          TESTS: ${{ inputs.tests }}
+          ROWS: ${{ inputs.rows }}
+          ENTRY: ${{ matrix.i }}
+          SIDE: ${{ github.job }}
+        run: |
+          'use strict';
+          // begin run
+          const FLAGS = '--test --test-reporter=tap --require ./test/helpers/account-home-refused.js --require ./test/helpers/stall-guard.js';
+          const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          function testArgs(test, dest) {
+            return [...FLAGS.split(' '), `--test-reporter-destination=${dest}`, '--test-name-pattern', `^${escape(test.name)}$`, test.file];
+          }
+          // A red or green job runs the test its entry names; a break job runs
+          // the test its row names.
+          function testFor(side, entry, tests, rows) {
+            const one = (list, i) => list.filter((e) => String(e.i) === String(i));
+            const [row] = side === 'break' ? one(rows, entry) : [{ test: entry }];
+            const found = row ? one(tests, row.test) : [];
+            if (found.length !== 1) throw new Error(`no single test for ${side} ${JSON.stringify(entry)}`);
+            return found[0];
+          }
+          // end run
+          // begin classifier
+          // A name as the TAP reporter prints it: control characters as a
+          // backslash and a letter, then every backslash doubled, then # escaped.
+          function tapName(name) {
+            let out = name;
+            for (const [c, e] of [['\b', 'b'], ['\f', 'f'], ['\t', 't'], ['\n', 'n'], ['\r', 'r'], ['\v', 'v']]) out = out.split(c).join(`\\${e}`);
+            return out.split('\\').join('\\\\').split('#').join('\\#');
+          }
+          // The results in a TAP report, each with its parent and full name, or
+          // null for anything but the shape the reporter writes: a version line,
+          // results indented four spaces a level, each level closed by a plan
+          // that counts it, YAML blocks closed where they open, and comments.
+          function parseTap(text) {
+            const lines = text.split('\n');
+            if (lines[lines.length - 1] === '') lines.pop();
+            if (lines[0] !== 'TAP version 13') return null;
+            const pending = [[]];
+            let closed = null;
+            for (let n = 1; n < lines.length; n++) {
+              const line = lines[n];
+              if (/^ *#/.test(line)) continue;
+              const plan = /^( *)1\.\.(\d+)$/.exec(line);
+              if (plan) {
+                const depth = plan[1].length / 4;
+                if (!Number.isInteger(depth) || Number(plan[2]) !== (pending[depth] || []).length) return null;
+                closed = depth;
+                continue;
+              }
+              const m = /^( *)(not ok|ok) \d+(?: - (.*))?$/.exec(line);
+              const depth = m ? m[1].length / 4 : NaN;
+              const d = m && /^((?:\\.|[^\\#])*)(?:# (SKIP|TODO)\b.*)?$/.exec(m[3] || '');
+              if (!d || !Number.isInteger(depth) || pending.slice(depth + 2).some((p) => p.length)) return null;
+              while (pending.length < depth + 2) pending.push([]);
+              const node = {
+                name: d[2] ? d[1].replace(/ $/, '') : d[1], ok: m[2] === 'ok', directive: d[2] || null,
+                depth, code: null, failureType: null, children: pending[depth + 1],
+              };
+              pending[depth + 1] = [];
+              pending[depth].push(node);
+              closed = null;
+              const pad = ' '.repeat(depth * 4 + 2);
+              if (lines[n + 1] !== `${pad}---`) continue;
+              const seen = new Set();
+              for (n += 2; lines[n] !== `${pad}...`; n++) {
+                if (n >= lines.length || !lines[n].startsWith(pad)) return null;
+                const kv = /^(code|failureType): '([^']*)'$/.exec(lines[n].slice(pad.length));
+                if (!kv) continue;
+                if (seen.has(kv[1])) return null;
+                seen.add(kv[1]);
+                node[kv[1]] = kv[2];
+              }
+            }
+            if (closed !== 0 || pending.slice(1).some((p) => p.length)) return null;
+            const all = [];
+            const visit = (node, parent) => {
+              node.parent = parent;
+              node.full = parent ? `${parent.full} ${node.name}` : node.name;
+              all.push(node);
+              node.children.forEach((c) => visit(c, node));
+            };
+            pending[0].forEach((node) => visit(node, null));
+            return all;
+          }
+          // What one run of the named test in the named file did.
+          function outcome(text, name, file) {
+            const all = parseTap(text);
+            if (!all) return 'unparseable';
+            // A file that ran no test, or failed as it loaded, reports itself
+            // under its own name; it is never the test asked for.
+            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file));
+            const want = tapName(name);
+            const selected = all.filter((x) => !files.includes(x) && (x.name === want || x.full === want));
+            if (!selected.length) return files.some((x) => !x.ok) ? 'failed to load' : 'selected 0';
+            if (selected.length > 1) return `selected ${selected.length}`;
+            const [node] = selected;
+            const inside = [];
+            const collect = (x) => { inside.push(x); x.children.forEach(collect); };
+            collect(node);
+            const above = [];
+            for (let p = node.parent; p; p = p.parent) above.push(p);
+            const marks = [...above, ...inside].map((x) => x.directive);
+            if (marks.includes('SKIP')) return 'skipped';
+            if (marks.includes('TODO')) return 'todo';
+            // An enclosing suite fails because the test did; any other failure
+            // outside the test is something else going wrong.
+            const excused = (x) => !node.ok && above.includes(x) && x.failureType === 'subtestsFailed';
+            if (all.some((x) => !x.ok && !inside.includes(x) && !excused(x))) return 'failed outside the test';
+            const failures = inside.filter((x) => !x.ok);
+            if (node.ok) return failures.length ? 'failed on something else' : 'passed';
+            const assertion = (x) => x.code === 'ERR_ASSERTION' && x.failureType === 'testCodeFailure';
+            const onlyAssertions = failures.every((x) => assertion(x) || x.failureType === 'subtestsFailed');
+            return onlyAssertions && failures.some(assertion) ? 'assertion failed' : 'failed on something else';
+          }
+          const WANT = { red: 'assertion failed', green: 'passed', break: 'assertion failed' };
+          // Why the three runs do not give the side its result, or null.
+          function verdict(side, outcomes) {
+            if (!Object.prototype.hasOwnProperty.call(WANT, side)) return `there is no side named ${JSON.stringify(side)}`;
+            if (outcomes.length !== 3) return `there were ${outcomes.length} runs, not 3`;
+            const n = outcomes.findIndex((o) => o !== WANT[side]);
+            return n === -1 ? null : `run ${n + 1}: ${outcomes[n]}, where a ${side} job needs every run to be ${WANT[side]}`;
+          }
+          // Why the name did not select exactly one test in every run, or null.
+          function selectionProblem(outcomes) {
+            const n = outcomes.findIndex((o) => /^selected \d+$/.test(o));
+            return n === -1 ? null : `run ${n + 1}: the name ${outcomes[n]} tests, where it must select exactly one`;
+          }
+          // end classifier
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const env = process.env;
+          const test = testFor(env.SIDE, env.ENTRY, JSON.parse(env.TESTS), JSON.parse(env.ROWS));
+          const dir = path.join(env.RUNNER_TEMP, 'prove');
+          const read = (n) => { try { return fs.readFileSync(path.join(dir, `run-${n}.tap`), 'utf8'); } catch (e) { return ''; } };
+          const outcomes = [1, 2, 3].map((n) => outcome(read(n), test.name, test.file));
+          const token = require('node:crypto').randomBytes(16).toString('hex');
+          console.log(`::stop-commands::${token}`);
+          for (let n = 1; n <= 3; n++) console.log(`run ${n} TAP:\n${read(n)}`);
+          console.log(`::${token}::`);
+          outcomes.forEach((o, n) => console.log(`run ${n + 1}: ${o}`));
+          const why = verdict(env.SIDE, outcomes);
+          if (why) {
+            console.error(`judge the result failed: ${why}`);
+            process.exit(1);
+          }
+          console.log(`every run is ${WANT[env.SIDE]}, as a ${env.SIDE} job needs`);

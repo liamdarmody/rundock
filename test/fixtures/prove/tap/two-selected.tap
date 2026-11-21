@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: two tests share this name
+ok 1 - two tests share this name
+  ---
+  duration_ms: 0.639875
+  type: 'test'
+  ...
+# Subtest: two tests share this name
+ok 2 - two tests share this name
+  ---
+  duration_ms: 0.160583
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 49.977042

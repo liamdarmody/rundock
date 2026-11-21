@@ -1,0 +1,36 @@
+TAP version 13
+# node:internal/test_runner/harness:121
+#       throw err;
+#       ^
+# Error: this file fails as it loads
+#     at Object.<anonymous> (test/fixtures/prove/load-error.js:5:7)
+#     at Module._compile (node:internal/modules/cjs/loader:1761:14)
+#     at Object..js (node:internal/modules/cjs/loader:1893:10)
+#     at Module.load (node:internal/modules/cjs/loader:1481:32)
+#     at Module._load (node:internal/modules/cjs/loader:1300:12)
+#     at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+#     at wrapModuleLoad (node:internal/modules/cjs/loader:245:24)
+#     at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+#     at node:internal/main/run_main_module:33:47
+# Node.js v24.12.0
+# Subtest: test/fixtures/prove/load-error.js
+not ok 1 - test/fixtures/prove/load-error.js
+  ---
+  duration_ms: 41.224917
+  type: 'test'
+  location: 'test/fixtures/prove/load-error.js:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 7
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 44.850208
