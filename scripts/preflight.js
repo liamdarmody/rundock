@@ -133,6 +133,10 @@ const REGISTRY_SUITES = [
   'test/unit/confinement-fixtures.test.js',
   // Reads the CI workflow's job names; GitHub is a fake, so nothing leaves the machine.
   'test/unit/release-ci.test.js',
+  // Reads the prove workflow beside ci.yml and package.json, so a change to the
+  // test job's Node versions or to npm test's preloads that it does not follow
+  // is named here; nothing runs and nothing leaves the machine.
+  'test/unit/prove-workflow-static.test.js',
   // Reads the retry workflow and recorded run fixtures; nothing leaves the machine.
   'test/unit/ci-verdict.test.js',
   // A browser-spec retry that docs/FLAKES.md does not name, or a register row
