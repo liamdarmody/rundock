@@ -7,6 +7,8 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert');
 const realFs = require('node:fs');
+const { spawnSync: realSpawnSync } = require('node:child_process');
+const os = require('node:os');
 const crypto = require('node:crypto');
 const path = require('node:path').posix;
 const { readProve, runStep } = require('../helpers/prove-workflow.js');
@@ -27,6 +29,11 @@ const COPY = `${TEST_HOME}/checkout`;
 const NODE_DIR = '/fake/toolcache/node/24.12.0/x64';
 const NODE = `${NODE_DIR}/bin/node`;
 const LIMIT = 64 * 1024 * 1024;
+// Cron's spool, where it reads each user's crontab from the entry named after them.
+const SPOOL = '/var/spool/cron/crontabs';
+// The arguments after the directory with which GNU find lists the names in it,
+// each ended by a 0x00 byte.
+const FIND_NAMES = ['-mindepth', '1', '-maxdepth', '1', '-printf', '%f\\0'];
 const FILE_KEYS = ['GITHUB_ENV', 'GITHUB_PATH', 'GITHUB_OUTPUT', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY'];
 const TESTS = [{ i: 1, file: 'test/a.test.js', name: 'a works' }];
 const ROWS = [{ i: 1, file: 'src/a.js', from: '1', to: '2', test: 1 }];
@@ -53,8 +60,11 @@ const TYPE = { dir: 0o040000, file: 0o100000, link: 0o120000, fifo: 0o010000, so
  * what id prints; user {uid, gid, home} the account useradd makes;
  * chmodSkip(argv) a root chmod that does nothing; immortal pids no kill
  * stops; onNpm(sys) and onRun(n, sys) what npm and each run do besides
- * their default; npm and run(n) their results; crontab, atq and setup(sys);
- * unset {step: [keys]} the variables a step's environment lacks.
+ * their default; npm and run(n) their results; atq and setup(sys);
+ * rootSpawn(call, sys) what a spawn as root answers, in place of the fakes;
+ * unset {step: [keys]} the variables a step's environment lacks. Cron's spool
+ * starts empty, and crontab answers as Ubuntu's does: it refuses a user
+ * named in /etc/cron.deny, even to root, whatever the spool holds.
  */
 function makeSystem(job, cfg = {}) {
   const calls = [];
@@ -248,8 +258,21 @@ function makeSystem(job, cfg = {}) {
       for (const at of under(norm(args[3]))) Object.assign(nodes.get(at), { uid: sys.user.uid, gid: sys.user.gid });
       return result({});
     }
-    if (tool === '/usr/bin/crontab') {
-      return cfg.crontab ? result({ stdout: cfg.crontab }) : result({ status: 1, stderr: `no crontab for ${args[2]}\n` });
+    if (tool === '/usr/bin/crontab' && args[0] === '-l' && args[1] === '-u') {
+      const deny = nodes.get('/etc/cron.deny');
+      if (deny && deny.data.toString().split('\n').includes(args[2])) {
+        return result({ status: 1, stderr: `The user ${args[2]} cannot use this program (crontab)\n` });
+      }
+      const entry = nodes.get(path.join(SPOOL, args[2]));
+      return entry ? result({ stdout: entry.data }) : result({ status: 1, stderr: `no crontab for ${args[2]}\n` });
+    }
+    if (tool === '/usr/bin/find' && JSON.stringify(args.slice(1)) === JSON.stringify(FIND_NAMES)) {
+      // Each entry's name, of any type, never what a symlink points to.
+      const n = nodes.get(norm(args[0]));
+      // GNU find names itself as it was run, and quotes the path as the C locale does.
+      if (!n) return result({ status: 1, stderr: `/usr/bin/find: '${args[0]}': No such file or directory\n` });
+      const names = n.type === 'dir' ? [...children(norm(args[0])).map((name) => Buffer.from(name)), ...(n.extraRaw || [])] : [];
+      return result({ stdout: Buffer.concat(names.flatMap((name) => [name, Buffer.from([0])])) });
     }
     if (tool === '/usr/bin/atq') return result({ stdout: cfg.atq || '' });
     return result({ status: 1, stderr: `${tool} is not faked\n` });
@@ -317,13 +340,15 @@ function makeSystem(job, cfg = {}) {
       return hook || asTestUser(args.slice(2));
     }
     call.argv = args.slice(1);
-    return asRootUser(args.slice(1), opts.input);
+    const hook = cfg.rootSpawn && cfg.rootSpawn(call, sys);
+    return hook || asRootUser(args.slice(1), opts.input);
   }
 
   dir('/');
   for (const d of ['/fake', '/fake/users', '/usr', '/usr/bin', '/usr/sbin', '/bin', '/etc', '/var', '/var/run', '/var/lib',
-    '/var/lib/systemd', '/var/lib/systemd/linger', '/proc']) dir(d);
-  for (const f of ['/usr/bin/at', '/usr/bin/atq', '/usr/bin/crontab', '/usr/bin/id', '/usr/bin/kill', '/usr/bin/env']) file(f, '', 0o755);
+    '/var/lib/systemd', '/var/lib/systemd/linger', '/var/spool', '/var/spool/cron', '/proc']) dir(d);
+  dir(SPOOL, 0o1730);
+  for (const f of ['/usr/bin/at', '/usr/bin/atq', '/usr/bin/crontab', '/usr/bin/find', '/usr/bin/id', '/usr/bin/kill', '/usr/bin/env']) file(f, '', 0o755);
   file('/usr/bin/sudo', '', 0o4755);
   put('/var/run/docker.sock', { type: 'socket', mode: 0o660 });
   for (const d of [RUNNER.home, '/fake/runner/work', RUNNER_TEMP, COMMANDS, '/fake/runner/work/rundock', CHECKOUT]) dir(d, 0o755, RUNNER.uid);
@@ -343,6 +368,7 @@ function makeSystem(job, cfg = {}) {
   file(`${NODE_DIR}/lib/npm-cli.js`, '', 0o777, RUNNER.uid);
 
   sys.fs = fs;
+  sys.result = result;
   sys.dir = dir;
   sys.file = file;
   sys.link = link;
@@ -374,7 +400,15 @@ function stepEnv(sys, k) {
   return env;
 }
 
-/** Runs one step whole, returning its exit code, what it printed and its calls. */
+// The spawns that run crontab, as a program or as a word of a command line.
+const crontabCalls = (calls) => calls.filter((c) => c.fn === 'spawnSync'
+  && [c.cmd, ...c.args].some((a) => String(a).split(/\s+/).some((word) => /(^|\/)crontab$/.test(word))));
+
+/**
+ * Runs one step whole, returning its exit code, what it printed and its calls.
+ * Stop the test user must never run crontab, whatever else it finds, so every
+ * run of it checks its recorded calls for one.
+ */
 function step(sys, name) {
   sys.step = name;
   const from = { out: sys.out.length, err: sys.err.length, calls: sys.calls.length };
@@ -392,7 +426,11 @@ function step(sys, name) {
     if (!(e instanceof Exit)) throw e;
     code = e.code;
   }
-  return { code, env: proc.env, out: sys.out.slice(from.out).join(''), err: sys.err.slice(from.err).join(''), calls: sys.calls.slice(from.calls) };
+  const calls = sys.calls.slice(from.calls);
+  if (name === 'stop the test user') {
+    assert.deepStrictEqual(crontabCalls(calls).map((c) => [c.cmd, ...c.args]), [], 'stop the test user never runs crontab');
+  }
+  return { code, env: proc.env, out: sys.out.slice(from.out).join(''), err: sys.err.slice(from.err).join(''), calls };
 }
 
 /**
@@ -784,8 +822,107 @@ describe('the test-user steps, run whole on fake system calls', () => {
       } }, (s) => `process ${s.left} of the test user is still running after kill -KILL -1`);
     });
 
-    test('fails when the test user has a crontab', () => {
-      failsAt('red', 'stop the test user', { crontab: '* * * * * /bin/true\n' }, 'the test user has a crontab, or crontab -l could not show it has none');
+    // The crontab check lists cron's spool as root and never runs crontab,
+    // whose deny list refuses the test user even to root. Each run of the
+    // step, in these cases and every other, checks that it ran no crontab.
+    const STOP = 'stop the test user';
+    const SPOOL_ERROR = (cause, stderr) => `cron's spool "${SPOOL}" cannot be listed as root (${cause}): ${JSON.stringify(stderr)}`;
+    const HAS_CRONTAB = `the test user has a crontab, "${SPOOL}/prove-test"`;
+    const listings = (calls) => calls.filter((c) => c.as === 'root' && c.argv[0] === '/usr/bin/find').map((c) => c.argv);
+    // Answers the spool listing with `answer(sys)` in place of the fake find.
+    const listing = (answer) => ({ rootSpawn: (c, s) => (s.step === STOP && c.argv[0] === '/usr/bin/find' ? answer(s) : null) });
+    // Runs the steps before stop the test user, each of which must pass, then
+    // stop the test user, which must pass too.
+    function stops(job, cfg) {
+      const sys = makeSystem(job, cfg);
+      for (const before of STEPS.slice(0, STEPS.indexOf(STOP))) assert.strictEqual(step(sys, before).code, 0, before);
+      const r = step(sys, STOP);
+      assert.strictEqual(r.code, 0, r.err);
+      assert.strictEqual(r.out, "the test user left nothing behind, and each run's exit status agrees with its TAP\n");
+      return { sys, r };
+    }
+    const failsStop = (cfg, why) => failsAt('red', STOP, cfg, why).r;
+
+    test("the fake crontab refuses the test user once it is in cron.deny, as Ubuntu's does, whatever the spool holds", () => {
+      const sys = makeSystem('red');
+      assert.strictEqual(step(sys, 'prepare the test user').code, 0);
+      const crontab = () => sys.require('node:child_process').spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/crontab', '-l', '-u', 'prove-test'], {});
+      const refused = (r) => [r.status, String(r.stderr)];
+      assert.deepStrictEqual(refused(crontab()), [1, 'The user prove-test cannot use this program (crontab)\n']);
+      sys.file(`${SPOOL}/prove-test`, '* * * * * /bin/true\n', 0o600, 1001);
+      assert.deepStrictEqual(refused(crontab()), [1, 'The user prove-test cannot use this program (crontab)\n']);
+    });
+
+    for (const job of ['red', 'green', 'break']) {
+      test(`passes in a ${job} job when nothing is left behind, listing the spool as root and never running crontab`, () => {
+        const { r } = stops(job);
+        assert.deepStrictEqual(listings(r.calls), [['/usr/bin/find', SPOOL, ...FIND_NAMES]]);
+      });
+    }
+
+    test("fails, naming it, when the spool holds a regular file named the test user's name", () => {
+      failsStop({ setup: (sys) => sys.file(`${SPOOL}/prove-test`, '* * * * * /bin/true\n', 0o600, 1001) }, HAS_CRONTAB);
+    });
+
+    for (const [what, add] of [
+      ['a directory', (sys) => sys.dir(`${SPOOL}/prove-test`, 0o700, 1001)],
+      ['a dangling symlink', (sys) => sys.link(`${SPOOL}/prove-test`, '/fake/nowhere', 1001)],
+    ]) {
+      test(`fails, naming it, when the spool holds ${what} named the test user's name`, () => {
+        failsStop({ setup: add }, HAS_CRONTAB);
+      });
+    }
+
+    test('passes when the spool holds entries for other users only, root, prove-test2 and xprove-test among them', () => {
+      stops('red', { setup: (sys) => {
+        for (const name of ['root', 'prove-test2', 'xprove-test', 'prove-tes', 'Prove-test']) sys.file(`${SPOOL}/${name}`, '', 0o600);
+      } });
+    });
+
+    // Each name is read whole, up to the 0x00 find ends it with, so a newline
+    // in a name never splits it. Neither name is exactly the test user's, and
+    // cron reads a user's crontab only from the entry named exactly after
+    // them, so neither is the test user's crontab: passing is safe.
+    test("passes when entries' names hold a newline beside the test user's name, since no name is exactly the test user's", () => {
+      stops('red', { setup: (sys) => {
+        for (const name of ['x\nprove-test', 'prove-test\nx']) sys.file(`${SPOOL}/${name}`, '* * * * * /bin/true\n', 0o600);
+      } });
+    });
+
+    test("fails, naming it, when the test user's entry sits beside names that hold a newline or bytes that are not UTF-8", () => {
+      failsStop({ setup: (sys) => {
+        for (const name of ['x\nprove-test', 'prove-test\nx', 'prove-test', '\nprove-test\n']) sys.file(`${SPOOL}/${name}`, '', 0o600);
+        sys.nodes.get(SPOOL).extraRaw = [Buffer.from([0x70, 0xff, 0x0a])];
+      } }, HAS_CRONTAB);
+    });
+
+    test('fails, naming why, when the listing holds a name it cannot read whole', () => {
+      for (const [stdout, shown] of [['root\0prove-te', '"root\\u0000prove-te"'], ['root\0\0', '"root\\u0000\\u0000"']]) {
+        failsStop(listing((s) => s.result({ stdout })), `cron's spool "${SPOOL}" lists a name that cannot be read: ${shown}`);
+      }
+    });
+
+    test('fails, naming the directory, when the spool is missing', () => {
+      failsStop({ setup: (sys) => sys.nodes.delete(SPOOL) }, SPOOL_ERROR('exit status 1', `/usr/bin/find: '${SPOOL}': No such file or directory`));
+    });
+
+    test('fails, naming the status and the stderr, when the listing exits nonzero', () => {
+      failsStop(listing((s) => s.result({ status: 1, stdout: 'root\0', stderr: `find: '${SPOOL}/root': Input/output error\n` })),
+        SPOOL_ERROR('exit status 1', `find: '${SPOOL}/root': Input/output error`));
+    });
+
+    test('fails, naming the spawn error, when the listing cannot be started', () => {
+      const error = Object.assign(new Error('spawnSync /usr/bin/sudo ENOENT'), { code: 'ENOENT', errno: -2, syscall: 'spawnSync /usr/bin/sudo', path: '/usr/bin/sudo' });
+      failsStop(listing(() => ({ error, pid: 0, status: null, signal: null, output: null, stdout: undefined, stderr: undefined })), SPOOL_ERROR('spawn error ENOENT', ''));
+    });
+
+    test('fails, naming the signal, when the listing is ended by a signal', () => {
+      failsStop(listing((s) => s.result({ status: null, signal: 'SIGKILL', stdout: 'root\0prove-' })), SPOOL_ERROR('signal SIGKILL', ''));
+    });
+
+    test('lists no spool when crontab is not installed, as before', () => {
+      const { r } = stops('red', { setup: (sys) => sys.nodes.delete('/usr/bin/crontab') });
+      assert.deepStrictEqual(listings(r.calls), []);
     });
 
     test('fails when the test user has an at job', () => {
@@ -881,6 +1018,122 @@ describe('judge the result, run whole on the evidence the steps before it leave'
       const r = judge(job, {}, (sys) => sys.nodes.delete(`${EVIDENCE}/run-3.tap`));
       assert.strictEqual(r.err, `judge the result failed: run 3: unparseable, where a ${job} job needs every run to be ${WANT[job]}`);
       assert.strictEqual(r.code, 1);
+    });
+  }
+});
+
+// The fake find beside GNU find itself, so the listings stop the test user is
+// tested on are the ones the real tool gives. Each tree is made for real in a
+// directory this test makes and removes, never in cron's spool, and the same
+// way in the fake file system, and both are listed with the arguments the
+// step passes, taken from a run of it. GNU find is /usr/bin/find on Linux,
+// where CI runs the suite, and there a find that is missing or is not GNU
+// find fails these tests rather than skipping them.
+describe('the fake find, beside GNU find', () => {
+  const GNU_FIND = '/usr/bin/find';
+  const SKIP = process.platform === 'linux' ? false
+    : `the fake find is compared with GNU find, which is ${GNU_FIND} on Linux only, and this is ${process.platform}`;
+  // In the C locale find quotes a path in its messages with ' marks, and in
+  // a UTF-8 one with curly marks. The step passes a message on whatever its
+  // wording, and the fake answers as the C locale does.
+  const LOCALE = { LC_ALL: 'C' };
+  // Each tree: what it is, what stands at the directory's path, and the
+  // entries in it, each a type and a name. A name given as bytes is not UTF-8.
+  const TREES = [
+    ['an empty directory', 'dir', []],
+    ['a directory holding a regular file named prove-test', 'dir', [['file', 'prove-test']]],
+    ['a directory holding a directory named prove-test, with a file in it', 'dir', [['dir', 'prove-test'], ['file', 'prove-test/crontab']]],
+    ['a directory holding a dangling symlink named prove-test', 'dir', [['link', 'prove-test']]],
+    ['a directory holding root, prove-test2 and xprove-test', 'dir', [['file', 'root'], ['file', 'prove-test2'], ['file', 'xprove-test']]],
+    ['a directory holding names with a newline beside prove-test', 'dir', [['file', 'x\nprove-test'], ['file', 'prove-test\nx']]],
+    ['a directory holding prove-test beside names with a newline or bytes that are not UTF-8', 'dir',
+      [['file', 'prove-test'], ['file', '\nprove-test\n'], ['file', Buffer.from([0x70, 0xff, 0x0a])]]],
+    ['a regular file in place of the directory', 'file', []],
+    ['a missing directory', 'missing', []],
+  ];
+
+  // The arguments after the directory that stop the test user lists cron's
+  // spool with, from a run of the step, so a change to them is compared too.
+  let stepArgs = null;
+  function findArgs() {
+    if (stepArgs) return stepArgs;
+    const sys = makeSystem('red');
+    for (const name of STEPS.slice(0, STEPS.indexOf('stop the test user'))) assert.strictEqual(step(sys, name).code, 0, name);
+    const finds = step(sys, 'stop the test user').calls.filter((c) => c.as === 'root' && c.argv[0] === '/usr/bin/find');
+    assert.strictEqual(finds.length, 1, 'stop the test user lists the spool once, with find');
+    assert.strictEqual(finds[0].argv[1], SPOOL);
+    stepArgs = finds[0].argv.slice(2);
+    return stepArgs;
+  }
+
+  function assertGnuFind() {
+    const r = realSpawnSync(GNU_FIND, ['--version'], { env: LOCALE, stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.ok(!r.error, `${GNU_FIND} cannot be run: ${r.error && r.error.message}`);
+    assert.match(String(r.stdout), /^find \(GNU findutils\) /, `${GNU_FIND} is not GNU find: ${JSON.stringify(String(r.stdout) + String(r.stderr))}`);
+  }
+
+  const named = (at, name) => Buffer.concat([Buffer.from(`${at}/`), Buffer.from(name)]);
+  function makeReal(spool, top, entries) {
+    if (top === 'file') realFs.writeFileSync(spool, '');
+    if (top !== 'dir') return;
+    realFs.mkdirSync(spool);
+    for (const [type, name] of entries) {
+      if (type === 'dir') realFs.mkdirSync(named(spool, name));
+      if (type === 'file') realFs.writeFileSync(named(spool, name), '');
+      if (type === 'link') realFs.symlinkSync(`${spool}-nowhere`, named(spool, name));
+    }
+  }
+  function makeFake(top, entries) {
+    const sys = makeSystem('red');
+    sys.nodes.delete(SPOOL);
+    if (top === 'file') sys.file(SPOOL, '');
+    if (top !== 'dir') return sys;
+    const spool = sys.dir(SPOOL, 0o1730);
+    for (const [type, name] of entries) {
+      if (Buffer.isBuffer(name)) spool.extraRaw = [...(spool.extraRaw || []), name];
+      else if (type === 'dir') sys.dir(`${SPOOL}/${name}`);
+      else if (type === 'file') sys.file(`${SPOOL}/${name}`, '');
+      else sys.link(`${SPOOL}/${name}`, `${SPOOL}-nowhere`);
+    }
+    return sys;
+  }
+
+  // What a listing answers: how it ended, its stderr with the directory's path
+  // written as cron's spool, and its stdout as the records each 0x00 ends,
+  // then whatever follows the last 0x00. find lists a directory in the order
+  // the file system reads it, which no one chooses, so the records are sorted:
+  // every byte is compared, but not their order.
+  function answer(r, spool) {
+    const stdout = Buffer.from(r.stdout || '');
+    const records = [];
+    let from = 0;
+    for (let k = 0; k < stdout.length; k++) {
+      if (stdout[k] === 0) {
+        records.push(stdout.subarray(from, k + 1).toString('latin1'));
+        from = k + 1;
+      }
+    }
+    return {
+      error: r.error ? r.error.code : null, status: r.status, signal: r.signal,
+      records: records.sort(), rest: stdout.subarray(from).toString('latin1'),
+      stderr: String(r.stderr || '').split(spool).join(SPOOL),
+    };
+  }
+
+  for (const [what, top, entries] of TREES) {
+    test(`answers as GNU find does for ${what}`, { skip: SKIP }, () => {
+      assertGnuFind();
+      const args = findArgs();
+      const tmp = realFs.mkdtempSync(path.join(os.tmpdir(), 'prove-find-'));
+      try {
+        const spool = `${tmp}/crontabs`;
+        makeReal(spool, top, entries);
+        const real = realSpawnSync(GNU_FIND, [spool, ...args], { cwd: tmp, env: LOCALE, stdio: ['ignore', 'pipe', 'pipe'] });
+        const fake = makeFake(top, entries).require('node:child_process').spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/find', SPOOL, ...args], {});
+        assert.deepStrictEqual(answer(fake, SPOOL), answer(real, spool));
+      } finally {
+        realFs.rmSync(tmp, { recursive: true, force: true });
+      }
     });
   }
 });

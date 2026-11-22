@@ -1640,6 +1640,40 @@ jobs:
           SIDE: ${{ github.job }}
         run: &stop-the-test-user-run |
           'use strict';
+          // begin bytes
+          // Names read as bytes are decoded strictly: a byte that is not part of
+          // well-formed UTF-8 is never read as U+FFFD, so a name holding byte 0xFF
+          // never equals one holding a real U+FFFD. A leading byte order mark is kept.
+          const DECODE = { fatal: true, ignoreBOM: true };
+          // The text the bytes spell, or null when they are not well-formed UTF-8.
+          function decoded(bytes) {
+            try {
+              return new TextDecoder('utf-8', DECODE).decode(bytes);
+            } catch (e) {
+              return null;
+            }
+          }
+          // The bytes as a JSON string, each byte that does not decode written \xHH.
+          function showBytes(bytes) {
+            let out = '';
+            for (let at = 0; at < bytes.length;) {
+              const width = [1, 2, 3, 4].find((w) => at + w <= bytes.length && decoded(bytes.subarray(at, at + w)) !== null);
+              out += width ? JSON.stringify(decoded(bytes.subarray(at, at + width))).slice(1, -1) : `\\x${bytes[at].toString(16).toUpperCase().padStart(2, '0')}`;
+              at += width || 1;
+            }
+            return `"${out}"`;
+          }
+          // The bytes split on 0x00, without the empty field after a final 0x00.
+          function nulFields(bytes) {
+            const out = [];
+            for (let at = 0; at < bytes.length;) {
+              const end = bytes.indexOf(0, at);
+              out.push(bytes.subarray(at, end === -1 ? bytes.length : end));
+              at = end === -1 ? bytes.length : end + 1;
+            }
+            return out;
+          }
+          // end bytes
           // begin run
           const FLAGS = '--test --test-reporter=tap --require ./test/helpers/account-home-refused.js --require ./test/helpers/stall-guard.js';
           const escape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1953,9 +1987,20 @@ jobs:
             const user = testUser();
             const left = killAndCheck(user);
             if (left) return left;
+            // Cron reads a user's crontab from the entry in its spool named
+            // exactly after the user, whatever its type. crontab -l refuses a
+            // user in cron.deny even to root, so the spool is listed instead,
+            // as root, each name ended by 0x00 and compared byte for byte.
             if (exists('/usr/bin/crontab')) {
-              const r = rootRun(['/usr/bin/crontab', '-l', '-u', TEST_USER]);
-              if (r.error || r.status === 0 || !/^no crontab for /.test(String(r.stderr))) return 'the test user has a crontab, or crontab -l could not show it has none';
+              const spool = '/var/spool/cron/crontabs';
+              const r = rootRun(['/usr/bin/find', spool, '-mindepth', '1', '-maxdepth', '1', '-printf', '%f\\0']);
+              const cause = r.error ? `spawn error ${r.error.code || r.error.message}` : r.signal ? `signal ${r.signal}` : r.status !== 0 ? `exit status ${r.status}` : null;
+              if (cause) return `cron's spool ${JSON.stringify(spool)} cannot be listed as root (${cause}): ${JSON.stringify(String(r.stderr || '').trim())}`;
+              const names = nulFields(r.stdout);
+              if ((r.stdout.length && r.stdout[r.stdout.length - 1] !== 0) || names.some((name) => !name.length)) {
+                return `cron's spool ${JSON.stringify(spool)} lists a name that cannot be read: ${showBytes(r.stdout)}`;
+              }
+              if (names.some((name) => name.equals(Buffer.from(TEST_USER)))) return `the test user has a crontab, ${JSON.stringify(path.join(spool, TEST_USER))}`;
             }
             if (exists('/usr/bin/atq')) {
               const jobs = String(asRoot(['/usr/bin/atq']).stdout).split('\n').filter((line) => line.trim().split(/\s+/).pop() === TEST_USER);
