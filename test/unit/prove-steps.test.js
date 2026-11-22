@@ -7,6 +7,8 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert');
 const realFs = require('node:fs');
+const { spawnSync: realSpawnSync } = require('node:child_process');
+const os = require('node:os');
 const crypto = require('node:crypto');
 const path = require('node:path').posix;
 const { readProve, runStep } = require('../helpers/prove-workflow.js');
@@ -267,7 +269,8 @@ function makeSystem(job, cfg = {}) {
     if (tool === '/usr/bin/find' && JSON.stringify(args.slice(1)) === JSON.stringify(FIND_NAMES)) {
       // Each entry's name, of any type, never what a symlink points to.
       const n = nodes.get(norm(args[0]));
-      if (!n) return result({ status: 1, stderr: `find: '${args[0]}': No such file or directory\n` });
+      // GNU find names itself as it was run, and quotes the path as the C locale does.
+      if (!n) return result({ status: 1, stderr: `/usr/bin/find: '${args[0]}': No such file or directory\n` });
       const names = n.type === 'dir' ? [...children(norm(args[0])).map((name) => Buffer.from(name)), ...(n.extraRaw || [])] : [];
       return result({ stdout: Buffer.concat(names.flatMap((name) => [name, Buffer.from([0])])) });
     }
@@ -397,7 +400,15 @@ function stepEnv(sys, k) {
   return env;
 }
 
-/** Runs one step whole, returning its exit code, what it printed and its calls. */
+// The spawns that run crontab, as a program or as a word of a command line.
+const crontabCalls = (calls) => calls.filter((c) => c.fn === 'spawnSync'
+  && [c.cmd, ...c.args].some((a) => String(a).split(/\s+/).some((word) => /(^|\/)crontab$/.test(word))));
+
+/**
+ * Runs one step whole, returning its exit code, what it printed and its calls.
+ * Stop the test user must never run crontab, whatever else it finds, so every
+ * run of it checks its recorded calls for one.
+ */
 function step(sys, name) {
   sys.step = name;
   const from = { out: sys.out.length, err: sys.err.length, calls: sys.calls.length };
@@ -415,7 +426,11 @@ function step(sys, name) {
     if (!(e instanceof Exit)) throw e;
     code = e.code;
   }
-  return { code, env: proc.env, out: sys.out.slice(from.out).join(''), err: sys.err.slice(from.err).join(''), calls: sys.calls.slice(from.calls) };
+  const calls = sys.calls.slice(from.calls);
+  if (name === 'stop the test user') {
+    assert.deepStrictEqual(crontabCalls(calls).map((c) => [c.cmd, ...c.args]), [], 'stop the test user never runs crontab');
+  }
+  return { code, env: proc.env, out: sys.out.slice(from.out).join(''), err: sys.err.slice(from.err).join(''), calls };
 }
 
 /**
@@ -808,11 +823,11 @@ describe('the test-user steps, run whole on fake system calls', () => {
     });
 
     // The crontab check lists cron's spool as root and never runs crontab,
-    // whose deny list refuses the test user even to root.
+    // whose deny list refuses the test user even to root. Each run of the
+    // step, in these cases and every other, checks that it ran no crontab.
     const STOP = 'stop the test user';
     const SPOOL_ERROR = (cause, stderr) => `cron's spool "${SPOOL}" cannot be listed as root (${cause}): ${JSON.stringify(stderr)}`;
     const HAS_CRONTAB = `the test user has a crontab, "${SPOOL}/prove-test"`;
-    const runsCrontab = (calls) => calls.some((c) => c.fn === 'spawnSync' && [c.cmd, ...c.args].some((a) => /(^|\/)crontab$/.test(a)));
     const listings = (calls) => calls.filter((c) => c.as === 'root' && c.argv[0] === '/usr/bin/find').map((c) => c.argv);
     // Answers the spool listing with `answer(sys)` in place of the fake find.
     const listing = (answer) => ({ rootSpawn: (c, s) => (s.step === STOP && c.argv[0] === '/usr/bin/find' ? answer(s) : null) });
@@ -824,14 +839,9 @@ describe('the test-user steps, run whole on fake system calls', () => {
       const r = step(sys, STOP);
       assert.strictEqual(r.code, 0, r.err);
       assert.strictEqual(r.out, "the test user left nothing behind, and each run's exit status agrees with its TAP\n");
-      assert.ok(!runsCrontab(r.calls), 'the step never runs crontab');
       return { sys, r };
     }
-    function failsStop(cfg, why) {
-      const { r } = failsAt('red', STOP, cfg, why);
-      assert.ok(!runsCrontab(r.calls), 'the step never runs crontab');
-      return r;
-    }
+    const failsStop = (cfg, why) => failsAt('red', STOP, cfg, why).r;
 
     test("the fake crontab refuses the test user once it is in cron.deny, as Ubuntu's does, whatever the spool holds", () => {
       const sys = makeSystem('red');
@@ -893,7 +903,7 @@ describe('the test-user steps, run whole on fake system calls', () => {
     });
 
     test('fails, naming the directory, when the spool is missing', () => {
-      failsStop({ setup: (sys) => sys.nodes.delete(SPOOL) }, SPOOL_ERROR('exit status 1', `find: '${SPOOL}': No such file or directory`));
+      failsStop({ setup: (sys) => sys.nodes.delete(SPOOL) }, SPOOL_ERROR('exit status 1', `/usr/bin/find: '${SPOOL}': No such file or directory`));
     });
 
     test('fails, naming the status and the stderr, when the listing exits nonzero', () => {
@@ -1008,6 +1018,122 @@ describe('judge the result, run whole on the evidence the steps before it leave'
       const r = judge(job, {}, (sys) => sys.nodes.delete(`${EVIDENCE}/run-3.tap`));
       assert.strictEqual(r.err, `judge the result failed: run 3: unparseable, where a ${job} job needs every run to be ${WANT[job]}`);
       assert.strictEqual(r.code, 1);
+    });
+  }
+});
+
+// The fake find beside GNU find itself, so the listings stop the test user is
+// tested on are the ones the real tool gives. Each tree is made for real in a
+// directory this test makes and removes, never in cron's spool, and the same
+// way in the fake file system, and both are listed with the arguments the
+// step passes, taken from a run of it. GNU find is /usr/bin/find on Linux,
+// where CI runs the suite, and there a find that is missing or is not GNU
+// find fails these tests rather than skipping them.
+describe('the fake find, beside GNU find', () => {
+  const GNU_FIND = '/usr/bin/find';
+  const SKIP = process.platform === 'linux' ? false
+    : `the fake find is compared with GNU find, which is ${GNU_FIND} on Linux only, and this is ${process.platform}`;
+  // In the C locale find quotes a path in its messages with ' marks, and in
+  // a UTF-8 one with curly marks. The step passes a message on whatever its
+  // wording, and the fake answers as the C locale does.
+  const LOCALE = { LC_ALL: 'C' };
+  // Each tree: what it is, what stands at the directory's path, and the
+  // entries in it, each a type and a name. A name given as bytes is not UTF-8.
+  const TREES = [
+    ['an empty directory', 'dir', []],
+    ['a directory holding a regular file named prove-test', 'dir', [['file', 'prove-test']]],
+    ['a directory holding a directory named prove-test, with a file in it', 'dir', [['dir', 'prove-test'], ['file', 'prove-test/crontab']]],
+    ['a directory holding a dangling symlink named prove-test', 'dir', [['link', 'prove-test']]],
+    ['a directory holding root, prove-test2 and xprove-test', 'dir', [['file', 'root'], ['file', 'prove-test2'], ['file', 'xprove-test']]],
+    ['a directory holding names with a newline beside prove-test', 'dir', [['file', 'x\nprove-test'], ['file', 'prove-test\nx']]],
+    ['a directory holding prove-test beside names with a newline or bytes that are not UTF-8', 'dir',
+      [['file', 'prove-test'], ['file', '\nprove-test\n'], ['file', Buffer.from([0x70, 0xff, 0x0a])]]],
+    ['a regular file in place of the directory', 'file', []],
+    ['a missing directory', 'missing', []],
+  ];
+
+  // The arguments after the directory that stop the test user lists cron's
+  // spool with, from a run of the step, so a change to them is compared too.
+  let stepArgs = null;
+  function findArgs() {
+    if (stepArgs) return stepArgs;
+    const sys = makeSystem('red');
+    for (const name of STEPS.slice(0, STEPS.indexOf('stop the test user'))) assert.strictEqual(step(sys, name).code, 0, name);
+    const finds = step(sys, 'stop the test user').calls.filter((c) => c.as === 'root' && c.argv[0] === '/usr/bin/find');
+    assert.strictEqual(finds.length, 1, 'stop the test user lists the spool once, with find');
+    assert.strictEqual(finds[0].argv[1], SPOOL);
+    stepArgs = finds[0].argv.slice(2);
+    return stepArgs;
+  }
+
+  function assertGnuFind() {
+    const r = realSpawnSync(GNU_FIND, ['--version'], { env: LOCALE, stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.ok(!r.error, `${GNU_FIND} cannot be run: ${r.error && r.error.message}`);
+    assert.match(String(r.stdout), /^find \(GNU findutils\) /, `${GNU_FIND} is not GNU find: ${JSON.stringify(String(r.stdout) + String(r.stderr))}`);
+  }
+
+  const named = (at, name) => Buffer.concat([Buffer.from(`${at}/`), Buffer.from(name)]);
+  function makeReal(spool, top, entries) {
+    if (top === 'file') realFs.writeFileSync(spool, '');
+    if (top !== 'dir') return;
+    realFs.mkdirSync(spool);
+    for (const [type, name] of entries) {
+      if (type === 'dir') realFs.mkdirSync(named(spool, name));
+      if (type === 'file') realFs.writeFileSync(named(spool, name), '');
+      if (type === 'link') realFs.symlinkSync(`${spool}-nowhere`, named(spool, name));
+    }
+  }
+  function makeFake(top, entries) {
+    const sys = makeSystem('red');
+    sys.nodes.delete(SPOOL);
+    if (top === 'file') sys.file(SPOOL, '');
+    if (top !== 'dir') return sys;
+    const spool = sys.dir(SPOOL, 0o1730);
+    for (const [type, name] of entries) {
+      if (Buffer.isBuffer(name)) spool.extraRaw = [...(spool.extraRaw || []), name];
+      else if (type === 'dir') sys.dir(`${SPOOL}/${name}`);
+      else if (type === 'file') sys.file(`${SPOOL}/${name}`, '');
+      else sys.link(`${SPOOL}/${name}`, `${SPOOL}-nowhere`);
+    }
+    return sys;
+  }
+
+  // What a listing answers: how it ended, its stderr with the directory's path
+  // written as cron's spool, and its stdout as the records each 0x00 ends,
+  // then whatever follows the last 0x00. find lists a directory in the order
+  // the file system reads it, which no one chooses, so the records are sorted:
+  // every byte is compared, but not their order.
+  function answer(r, spool) {
+    const stdout = Buffer.from(r.stdout || '');
+    const records = [];
+    let from = 0;
+    for (let k = 0; k < stdout.length; k++) {
+      if (stdout[k] === 0) {
+        records.push(stdout.subarray(from, k + 1).toString('latin1'));
+        from = k + 1;
+      }
+    }
+    return {
+      error: r.error ? r.error.code : null, status: r.status, signal: r.signal,
+      records: records.sort(), rest: stdout.subarray(from).toString('latin1'),
+      stderr: String(r.stderr || '').split(spool).join(SPOOL),
+    };
+  }
+
+  for (const [what, top, entries] of TREES) {
+    test(`answers as GNU find does for ${what}`, { skip: SKIP }, () => {
+      assertGnuFind();
+      const args = findArgs();
+      const tmp = realFs.mkdtempSync(path.join(os.tmpdir(), 'prove-find-'));
+      try {
+        const spool = `${tmp}/crontabs`;
+        makeReal(spool, top, entries);
+        const real = realSpawnSync(GNU_FIND, [spool, ...args], { cwd: tmp, env: LOCALE, stdio: ['ignore', 'pipe', 'pipe'] });
+        const fake = makeFake(top, entries).require('node:child_process').spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/find', SPOOL, ...args], {});
+        assert.deepStrictEqual(answer(fake, SPOOL), answer(real, spool));
+      } finally {
+        realFs.rmSync(tmp, { recursive: true, force: true });
+      }
     });
   }
 });
