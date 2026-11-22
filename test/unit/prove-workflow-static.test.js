@@ -5,8 +5,9 @@
 // repository and nothing more, and runs each blocker test and each breakage on
 // a fresh runner. These tests hold the parts of it no run of its code would
 // show: the trigger, the permissions, the runner, which expressions it
-// expands and where, what each job runs before the test, and that the copies
-// of a step shared by several jobs are the same text.
+// expands and where, what each job runs before the test, and that a step
+// shared by several jobs has its run block and env written once, at its first
+// use, and aliased in each later job, so its copies are the same text.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -79,6 +80,50 @@ function rawSteps(job) {
 }
 
 const isNode = (raw) => /^ {8}shell: node \{0\}$/m.test(raw);
+
+// The steps more than one job runs, and the anchor each one's run or env is
+// written under: the step name in lowercase, each run of other characters one
+// hyphen, then -run or -env.
+const SHARED = ["check out the workflow's commit", 'check inputs', 'check out the fix head', 'check the tree', 'install',
+  'judge the result', 'prepare the test user', 'run the test', 'set up Node', 'stop the test user'].sort();
+const anchorOf = (name, key) => `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${key}`;
+
+/** Each job's steps as the file writes them, before any alias is expanded, with each step's run: and env: line. */
+function rawLayout() {
+  const layout = [];
+  let job = null;
+  let step = null;
+  lines.forEach((line, n) => {
+    if (n <= lines.indexOf('jobs:')) return;
+    const head = /^ {2}([\w-]+):\s*$/.exec(line);
+    if (head) {
+      job = { id: head[1], steps: [] };
+      layout.push(job);
+      step = null;
+      return;
+    }
+    const named = /^ {6}- name: (.+)$/.exec(line);
+    if (named && job) {
+      step = { job: job.id, name: named[1], keys: {} };
+      job.steps.push(step);
+      return;
+    }
+    const key = /^ {8}(run|env):/.exec(line);
+    if (key && step) step.keys[key[1]] = { n, line };
+  });
+  return layout;
+}
+
+/** The raw copies of each step, by name, in document order. */
+function rawCopies() {
+  const copies = new Map();
+  for (const job of rawLayout()) for (const s of job.steps) copies.set(s.name, [...(copies.get(s.name) || []), s]);
+  return copies;
+}
+
+// Any line that holds an anchor, an alias or a merge key, written anywhere.
+const MARKED = /^\s*(?:-\s+)*(?:[^\s#][^:#]*:\s+)?[&*][\w-]/;
+const MERGE = /^\s*(?:-\s+)*<<\s*:/;
 
 describe('how the workflow starts and what it may touch', () => {
   test('its top-level keys are the name, run-name, trigger, permissions and jobs, and nothing else', () => {
@@ -159,10 +204,48 @@ describe('the jobs', () => {
       const [first, ...rest] = copies.get(name);
       for (const c of rest) assert.strictEqual(c.raw, first.raw, `"${name}" in ${c.job} is the text it is in ${first.job}`);
     }
+    // Each later copy reuses the first one's run and env through an alias, so
+    // a copy written out in full again fails here even when it is identical.
+    for (const [name, [, ...later]] of rawCopies()) {
+      for (const s of later) {
+        for (const [key, { line }] of Object.entries(s.keys)) {
+          assert.strictEqual(line, `        ${key}: *${anchorOf(name, key)}`, `"${name}" in ${s.job} aliases its ${key}`);
+        }
+      }
+    }
   });
 
-  test('the workflow carries no YAML anchors or aliases', () => {
-    assert.ok(!lines.some((l) => /^\s*[\w-]+:\s*[&*][\w-]+/.test(l) || /^\s*<<:/.test(l)));
+  test("a shared step's run and env are anchored at its first use and aliased in each later job, and no other line holds an anchor, an alias or a merge key", () => {
+    const copies = rawCopies();
+    const allowed = new Set();
+    for (const name of SHARED) {
+      const [first, ...later] = copies.get(name);
+      assert.ok(later.length, `"${name}" is in more than one job`);
+      const parsed = workflow.jobs[first.job].steps.find((s) => s.name === name);
+      const has = { run: parsed.run !== undefined, env: Object.keys(parsed.env).length > 0 };
+      for (const key of ['run', 'env']) {
+        if (!has[key]) continue;
+        const anchor = anchorOf(name, key);
+        const def = first.keys[key];
+        assert.ok(def && new RegExp(`^ {8}${key}: &${anchor}(?: \\S.*)?$`).test(def.line),
+          `"${name}" in ${first.job} anchors its ${key} as ${anchor}`);
+        allowed.add(def.n);
+        for (const s of later) {
+          assert.strictEqual(s.keys[key] && s.keys[key].line, `        ${key}: *${anchor}`, `"${name}" in ${s.job} aliases its ${key}`);
+          allowed.add(s.keys[key].n);
+        }
+      }
+    }
+    for (const [name, [only, ...more]] of copies) {
+      if (more.length) continue;
+      for (const [key, { line }] of Object.entries(only.keys)) {
+        assert.ok(!/^ {8}\w+:\s+[&*]/.test(line), `"${name}", run by ${only.job} alone, writes its ${key} out in full`);
+      }
+    }
+    lines.forEach((line, n) => {
+      assert.ok(!MERGE.test(line), `line ${n + 1} is a merge key: ${line}`);
+      assert.strictEqual(MARKED.test(line), allowed.has(n), `line ${n + 1} ${allowed.has(n) ? 'is' : 'is not'} a shared step's run or env anchor or alias: ${line}`);
+    });
   });
 
   test('no step or job is skipped on a condition or lets a failure pass', () => {
@@ -213,15 +296,17 @@ describe('what reaches a run block, and what runs before the test', () => {
   });
 
   test('an expression appears only in the run-name, a job name, a matrix, or a step env value', () => {
-    lines.forEach((line, n) => {
+    // Read with each alias expanded, so every job's env is checked where it stands.
+    const expanded = expandAliases(text, 'prove.yml').split('\n');
+    expanded.forEach((line, n) => {
       if (!line.includes('${{')) return;
       if (n === 1 || /^ {4}name: \w+ \$\{\{ matrix\.i \}\}$/.test(line)) return;
       if (/^ {8}include: \$\{\{ fromJSON\(inputs\.(tests|rows)\) \}\}$/.test(line)) return;
       const m = /^ {10}([A-Z0-9_]+): \$\{\{ ([\w.]+) \}\}$/.exec(line);
-      assert.ok(m, `line ${n + 1} expands an expression where none may stand: ${line}`);
-      assert.strictEqual(ENV[m[1]], m[2], `line ${n + 1}: ${m[1]} comes from ${ENV[m[1]]}`);
-      const owner = lines.slice(0, n).reverse().find((l) => /^ {0,8}\S/.test(l));
-      assert.strictEqual(owner, '        env:', `line ${n + 1} is in a step's env`);
+      assert.ok(m, `expanded line ${n + 1} expands an expression where none may stand: ${line}`);
+      assert.strictEqual(ENV[m[1]], m[2], `expanded line ${n + 1}: ${m[1]} comes from ${ENV[m[1]]}`);
+      const owner = expanded.slice(0, n).reverse().find((l) => /^ {0,8}\S/.test(l));
+      assert.strictEqual(owner, '        env:', `expanded line ${n + 1} is in a step's env`);
     });
   });
 
