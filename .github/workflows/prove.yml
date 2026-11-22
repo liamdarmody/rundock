@@ -631,7 +631,7 @@ jobs:
           function killAndCheck(user) {
             let left = [];
             for (let n = 0; n < 20; n++) {
-              // The exit status says only whether some process was signalled.
+              // The exit status says only whether some process was signaled.
               asTestUser(user, ['/usr/bin/kill', '-KILL', '-1'], user.home);
               left = processesOf(user.uid);
               if (!left.length) return null;
@@ -1020,7 +1020,7 @@ jobs:
           function killAndCheck(user) {
             let left = [];
             for (let n = 0; n < 20; n++) {
-              // The exit status says only whether some process was signalled.
+              // The exit status says only whether some process was signaled.
               asTestUser(user, ['/usr/bin/kill', '-KILL', '-1'], user.home);
               left = processesOf(user.uid);
               if (!left.length) return null;
@@ -1340,7 +1340,7 @@ jobs:
               if (below.plan !== String(below.results.length) && (below.plan !== null || below.results.length)) return null;
               const node = {
                 name: d[2] ? d[1].replace(/ $/, '') : d[1], ok: m[2] === 'ok', directive: d[2] || null,
-                depth, code: null, failureType: null, type: null, children: below.results,
+                depth, code: null, failureType: null, type: null, exitCode: null, children: below.results,
               };
               levels[depth + 1] = { results: [], plan: null };
               at.results.push(node);
@@ -1349,6 +1349,10 @@ jobs:
               const seen = new Set();
               for (n += 2; lines[n] !== `${pad}...`; n++) {
                 if (n >= lines.length || !lines[n].startsWith(pad)) return null;
+                // The reporter prints an exitCode line on a file's own result,
+                // never on a test's.
+                const exit = /^exitCode: (.+)$/.exec(lines[n].slice(pad.length));
+                if (exit) node.exitCode = exit[1];
                 const kv = /^(code|failureType|type): '([^']*)'$/.exec(lines[n].slice(pad.length));
                 if (!kv) continue;
                 if (seen.has(kv[1])) return null;
@@ -1381,9 +1385,14 @@ jobs:
           function outcome(text, name, file) {
             const all = parseTap(text);
             if (!all) return 'unparseable';
-            // A file that ran no test, or failed as it loaded, reports itself
-            // under its own name; it is never the test asked for.
-            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file));
+            // Node reports a file under the file's own name when it selected no
+            // test, after a 1..0 plan directly below the version line, and when
+            // its process failed or a signal ended it, with an exitCode line in
+            // that result's YAML. Either result is the file's, never the test
+            // asked for. A real test can carry the same name, and without that
+            // evidence it is counted as a test.
+            const none = text.split('\n')[1] === '1..0';
+            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file) && (none || x.exitCode !== null));
             const want = tapName(name);
             // Node selects a test by its own name, or by its full name trimmed.
             const selected = all.filter((x) => !files.includes(x) && (x.name === want || trimTap(x.full) === want));
@@ -1511,7 +1520,7 @@ jobs:
           function killAndCheck(user) {
             let left = [];
             for (let n = 0; n < 20; n++) {
-              // The exit status says only whether some process was signalled.
+              // The exit status says only whether some process was signaled.
               asTestUser(user, ['/usr/bin/kill', '-KILL', '-1'], user.home);
               left = processesOf(user.uid);
               if (!left.length) return null;
@@ -1720,7 +1729,7 @@ jobs:
               if (below.plan !== String(below.results.length) && (below.plan !== null || below.results.length)) return null;
               const node = {
                 name: d[2] ? d[1].replace(/ $/, '') : d[1], ok: m[2] === 'ok', directive: d[2] || null,
-                depth, code: null, failureType: null, type: null, children: below.results,
+                depth, code: null, failureType: null, type: null, exitCode: null, children: below.results,
               };
               levels[depth + 1] = { results: [], plan: null };
               at.results.push(node);
@@ -1729,6 +1738,10 @@ jobs:
               const seen = new Set();
               for (n += 2; lines[n] !== `${pad}...`; n++) {
                 if (n >= lines.length || !lines[n].startsWith(pad)) return null;
+                // The reporter prints an exitCode line on a file's own result,
+                // never on a test's.
+                const exit = /^exitCode: (.+)$/.exec(lines[n].slice(pad.length));
+                if (exit) node.exitCode = exit[1];
                 const kv = /^(code|failureType|type): '([^']*)'$/.exec(lines[n].slice(pad.length));
                 if (!kv) continue;
                 if (seen.has(kv[1])) return null;
@@ -1761,9 +1774,14 @@ jobs:
           function outcome(text, name, file) {
             const all = parseTap(text);
             if (!all) return 'unparseable';
-            // A file that ran no test, or failed as it loaded, reports itself
-            // under its own name; it is never the test asked for.
-            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file));
+            // Node reports a file under the file's own name when it selected no
+            // test, after a 1..0 plan directly below the version line, and when
+            // its process failed or a signal ended it, with an exitCode line in
+            // that result's YAML. Either result is the file's, never the test
+            // asked for. A real test can carry the same name, and without that
+            // evidence it is counted as a test.
+            const none = text.split('\n')[1] === '1..0';
+            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file) && (none || x.exitCode !== null));
             const want = tapName(name);
             // Node selects a test by its own name, or by its full name trimmed.
             const selected = all.filter((x) => !files.includes(x) && (x.name === want || trimTap(x.full) === want));
@@ -1891,7 +1909,7 @@ jobs:
           function killAndCheck(user) {
             let left = [];
             for (let n = 0; n < 20; n++) {
-              // The exit status says only whether some process was signalled.
+              // The exit status says only whether some process was signaled.
               asTestUser(user, ['/usr/bin/kill', '-KILL', '-1'], user.home);
               left = processesOf(user.uid);
               if (!left.length) return null;
@@ -2215,7 +2233,7 @@ jobs:
               if (below.plan !== String(below.results.length) && (below.plan !== null || below.results.length)) return null;
               const node = {
                 name: d[2] ? d[1].replace(/ $/, '') : d[1], ok: m[2] === 'ok', directive: d[2] || null,
-                depth, code: null, failureType: null, type: null, children: below.results,
+                depth, code: null, failureType: null, type: null, exitCode: null, children: below.results,
               };
               levels[depth + 1] = { results: [], plan: null };
               at.results.push(node);
@@ -2224,6 +2242,10 @@ jobs:
               const seen = new Set();
               for (n += 2; lines[n] !== `${pad}...`; n++) {
                 if (n >= lines.length || !lines[n].startsWith(pad)) return null;
+                // The reporter prints an exitCode line on a file's own result,
+                // never on a test's.
+                const exit = /^exitCode: (.+)$/.exec(lines[n].slice(pad.length));
+                if (exit) node.exitCode = exit[1];
                 const kv = /^(code|failureType|type): '([^']*)'$/.exec(lines[n].slice(pad.length));
                 if (!kv) continue;
                 if (seen.has(kv[1])) return null;
@@ -2256,9 +2278,14 @@ jobs:
           function outcome(text, name, file) {
             const all = parseTap(text);
             if (!all) return 'unparseable';
-            // A file that ran no test, or failed as it loaded, reports itself
-            // under its own name; it is never the test asked for.
-            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file));
+            // Node reports a file under the file's own name when it selected no
+            // test, after a 1..0 plan directly below the version line, and when
+            // its process failed or a signal ended it, with an exitCode line in
+            // that result's YAML. Either result is the file's, never the test
+            // asked for. A real test can carry the same name, and without that
+            // evidence it is counted as a test.
+            const none = text.split('\n')[1] === '1..0';
+            const files = all.filter((x) => x.depth === 0 && x.name === tapName(file) && (none || x.exitCode !== null));
             const want = tapName(name);
             // Node selects a test by its own name, or by its full name trimmed.
             const selected = all.filter((x) => !files.includes(x) && (x.name === want || trimTap(x.full) === want));

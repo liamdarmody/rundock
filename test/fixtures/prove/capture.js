@@ -74,6 +74,8 @@ const CASES = [
   ['nested-by-full-name', 'cases.js', 'a suite holds a nested test'],
   ['blocker-top', 'blocker-top.js', 'blocker'],
   ['blocker-nested', 'blocker-nested.js', 'blocker'],
+  ['path-named', 'path-named.js', 'test/fixtures/prove/path-named.js'],
+  ['signal-ended', 'signal-ended.js', 'test/fixtures/prove/signal-ended.js'],
 ];
 
 function main() {

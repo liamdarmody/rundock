@@ -54,6 +54,12 @@ const EXPECTED = {
   // its suite's name, and Node leaves it out of the report.
   'blocker-top': 'selected 2',
   'blocker-nested': 'assertion failed',
+  // A real test can carry its file's path as its name, the name Node also
+  // reports a file under when it selects nothing or fails to load.
+  'path-named': 'passed',
+  // A test named as its file whose process a signal ends before it reports
+  // leaves only the file's own result, under that same name.
+  'signal-ended': 'failed to load',
 };
 
 // The eight summary lines Node prints after the top-level plan, for TAP
@@ -327,6 +333,26 @@ describe('names, selection and the shape of a verdict', () => {
     const text = tap('assertion-failure').replace("failureType: 'testCodeFailure'", "failureType: 'hookFailure'");
     const { name, file } = caseOf('assertion-failure');
     assert.strictEqual(outcome(text, name, file), 'failed on something else');
+  });
+
+  // Node reports a file that selects no test, or that ends with an exit code
+  // or a signal before its tests report, as a top-level result named as the
+  // file. Asked for a test with that same name, the classifier still tells
+  // the file's own result from a test.
+  test('a file that selected nothing is not the test, even when the test asked for is named as the file', () => {
+    const { file } = caseOf('none-selected');
+    assert.strictEqual(outcome(tap('none-selected'), file, file), 'selected 0');
+  });
+
+  test('a file that failed as it loaded is not the test, even when the test asked for is named as the file', () => {
+    const { file } = caseOf('load-error');
+    assert.strictEqual(outcome(tap('load-error'), file, file), 'failed to load');
+  });
+
+  test('a file ended by a signal is not the test, even when the test asked for is named as the file', () => {
+    const { file, name } = caseOf('signal-ended');
+    assert.strictEqual(name, file);
+    assert.strictEqual(outcome(tap('signal-ended'), name, file), 'failed to load');
   });
 
   test('a failure outside the selected test is refused', () => {

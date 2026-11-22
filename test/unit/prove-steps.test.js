@@ -13,6 +13,8 @@ const { readProve, runStep } = require('../helpers/prove-workflow.js');
 
 const WORKFLOW = readProve().workflow;
 const STEPS = ['prepare the test user', 'install', 'run the test', 'stop the test user', 'check the tree'];
+// The step after them, which judges the evidence they leave.
+const JUDGE = 'judge the result';
 const { O_NOFOLLOW } = realFs.constants;
 
 const RUNNER = { uid: 1000, home: '/fake/runner' };
@@ -377,7 +379,7 @@ function step(sys, name) {
   sys.step = name;
   const from = { out: sys.out.length, err: sys.err.length, calls: sys.calls.length };
   const proc = {
-    env: stepEnv(sys, STEPS.indexOf(name)), execPath: NODE, getuid: () => RUNNER.uid, cwd: () => CHECKOUT,
+    env: stepEnv(sys, [...STEPS, JUDGE].indexOf(name)), execPath: NODE, getuid: () => RUNNER.uid, cwd: () => CHECKOUT,
     stdout: { write: (s) => { sys.out.push(String(s)); return true; } },
     stderr: { write: (s) => { sys.err.push(String(s)); return true; } },
     exit: (code) => { throw new Exit(code); },
@@ -808,4 +810,77 @@ describe('the test-user steps, run whole on fake system calls', () => {
       });
     }
   });
+});
+
+describe('judge the result, run whole on the evidence the steps before it leave', () => {
+  const WANT = { red: 'assertion failed', green: 'passed', break: 'assertion failed' };
+
+  // Runs the steps before it, each of which must pass, then `between(sys)`,
+  // then judge the result. The step prints through console rather than its
+  // process, so its lines are taken by standing in for console.log and
+  // console.error while it runs.
+  function judge(job, cfg = {}, between = () => {}) {
+    const sys = makeSystem(job, cfg);
+    for (const name of STEPS) {
+      const r = step(sys, name);
+      assert.strictEqual(r.code, 0, `${name} was to pass: ${r.err}`);
+    }
+    between(sys);
+    const said = { out: [], err: [] };
+    const { log, error } = console;
+    console.log = (...a) => { said.out.push(a.join(' ')); };
+    console.error = (...a) => { said.err.push(a.join(' ')); };
+    let r;
+    try {
+      r = step(sys, JUDGE);
+    } finally {
+      console.log = log;
+      console.error = error;
+    }
+    return { code: r.code, out: said.out.join('\n'), err: said.err.join('\n') };
+  }
+
+  for (const job of ['red', 'green', 'break']) {
+    test(`passes a ${job} job whose three runs are each ${WANT[job]}`, () => {
+      const r = judge(job);
+      assert.strictEqual(r.err, '');
+      assert.strictEqual(r.code, 0);
+      assert.deepStrictEqual(r.out.split('\n').slice(-4), [
+        `run 1: ${WANT[job]}`, `run 2: ${WANT[job]}`, `run 3: ${WANT[job]}`, `every run is ${WANT[job]}, as a ${job} job needs`,
+      ]);
+    });
+  }
+
+  for (const job of ['red', 'break']) {
+    test(`fails a ${job} job whose runs pass`, () => {
+      const r = judge(job, { run: () => ({ tap: PASS_TAP, status: 0 }) });
+      assert.strictEqual(r.err, `judge the result failed: run 1: passed, where a ${job} job needs every run to be assertion failed`);
+      assert.strictEqual(r.code, 1);
+    });
+  }
+
+  test('fails a green job whose runs fail on an assertion', () => {
+    const r = judge('green', { run: () => ({ tap: FAIL_TAP, status: 1 }) });
+    assert.strictEqual(r.err, 'judge the result failed: run 1: assertion failed, where a green job needs every run to be passed');
+    assert.strictEqual(r.code, 1);
+  });
+
+  for (const [job, n, result, got] of [
+    ['red', 3, { tap: PASS_TAP, status: 0 }, 'passed'],
+    ['green', 2, { tap: FAIL_TAP, status: 1 }, 'assertion failed'],
+  ]) {
+    test(`fails a ${job} job when run ${n} alone is ${got}`, () => {
+      const r = judge(job, { run: (k) => (k === n ? result : null) });
+      assert.strictEqual(r.err, `judge the result failed: run ${n}: ${got}, where a ${job} job needs every run to be ${WANT[job]}`);
+      assert.strictEqual(r.code, 1);
+    });
+  }
+
+  for (const job of ['red', 'green', 'break']) {
+    test(`fails a ${job} job when the TAP of run 3 is missing`, () => {
+      const r = judge(job, {}, (sys) => sys.nodes.delete(`${EVIDENCE}/run-3.tap`));
+      assert.strictEqual(r.err, `judge the result failed: run 3: unparseable, where a ${job} job needs every run to be ${WANT[job]}`);
+      assert.strictEqual(r.code, 1);
+    });
+  }
 });
