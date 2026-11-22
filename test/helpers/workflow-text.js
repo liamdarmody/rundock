@@ -12,6 +12,15 @@
 // IT REFUSES RATHER THAN RETURNING SHORT. A workflow with no jobs, or a job
 // with no steps, throws, so a reshaped file fails the tests that read it
 // instead of passing them on nothing.
+//
+// YAML ANCHORS ARE READ IN ONE FORM ONLY: a `run:` or `env:` value written once
+// as `run: &name` and reused as the whole value `run: *name`. Each alias is
+// replaced by the value it names, moved to the alias's indentation, before
+// anything else reads the text, so every reader sees each step written out in
+// full. Any other anchor, alias or merge key is refused, and so is an anchor
+// defined twice or never used, an alias with no anchor before it, and an
+// alias with anything after its name. A workflow with none passes through
+// unchanged.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -20,6 +29,95 @@ const ROOT = path.join(__dirname, '..', '..');
 
 const indent = (line) => line.length - line.trimStart().length;
 const isComment = (line) => line.trimStart().startsWith('#');
+
+const ANCHORED_KEYS = ['run', 'env'];
+const BLOCK_SCALAR = /^[|>][0-9+-]*\s*(#.*)?$/;
+
+/**
+ * A line's indentation, its `- ` list markers, its key when it has one, and
+ * what follows: the key's value, or the rest of the line when there is no key.
+ */
+function lineParts(line) {
+  const [, lead, dashes, rest] = /^( *)((?:- +)*)(.*)$/.exec(line);
+  const at = lead.length + dashes.length;
+  const keyed = /^([^\s#&*!|>'"[\]{},][^:#]*?|"[^"]*"|'[^']*')[ \t]*:(?=[ \t]|$)[ \t]*(.*)$/.exec(rest);
+  if (!keyed) return { lead, dashes, at, value: rest };
+  return { lead, dashes, at, key: keyed[1], head: line.slice(0, line.indexOf(':', at) + 1), value: keyed[2] };
+}
+
+/** Whether a flow collection (`[...]` or `{...}`) holds an anchor or alias outside its quoted text. */
+function flowMarks(value) {
+  const unquoted = value.replace(/"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'/g, '""');
+  return /(^|[\s[{,:])[&*][^\s,[\]{}]/.test(unquoted);
+}
+
+/**
+ * The workflow text with each `run:` or `env:` alias replaced by the value its
+ * anchor names, and each anchor dropped from where it is defined. `label`
+ * names the workflow in a refusal.
+ */
+function expandAliases(text, label = 'the workflow') {
+  const lines = text.split('\n');
+  const bare = lines.map((l) => l.replace(/\r$/, ''));
+  const refuse = (n, cause) => { throw new Error(`${label}: line ${n + 1}: ${cause} (${bare[n].trim()})`); };
+  const ELSEWHERE = 'an anchor or alias anywhere but the whole value of run or env';
+  const anchors = new Map();
+  const sites = new Map();
+  let block = -1;
+  let within = -1;
+  for (let n = 0; n < bare.length; n++) {
+    const line = bare[n];
+    if (block !== -1) {
+      if (!line.trim() || indent(line) > block) continue;
+      block = -1;
+    }
+    if (!line.trim() || isComment(line)) continue;
+    const { lead, dashes, at, key, head, value } = lineParts(line);
+    if (key === '<<') refuse(n, 'a merge key');
+    let rest = value;
+    if (/^[&*]/.test(value)) {
+      if (key === undefined) refuse(n, dashes ? 'an anchor or alias on a list item' : ELSEWHERE);
+      if (!ANCHORED_KEYS.includes(key) || n <= within) refuse(n, ELSEWHERE);
+      if (value.startsWith('*')) {
+        const [, name, after] = /^\*([\w-]*)(.*)$/.exec(value);
+        if (after || !name) refuse(n, 'an alias with something after its name');
+        if (!anchors.has(name)) refuse(n, 'an alias with no anchor before it');
+        const below = bare.findIndex((l, m) => m > n && l.trim());
+        if (below !== -1 && indent(bare[below]) > at) refuse(below, 'an alias with something after its name');
+        anchors.get(name).used = true;
+        sites.set(n, { alias: name, head, at });
+        continue;
+      }
+      const [, name, after] = /^&([\w-]*)(.*)$/.exec(value);
+      if (!name || (after && !/^\s/.test(after))) refuse(n, 'an anchor with something joined to its name');
+      if (anchors.has(name)) refuse(n, `an anchor defined twice, first at line ${anchors.get(name).n + 1}`);
+      rest = after.trim();
+      let end = n;
+      for (let m = n + 1; m < bare.length && (!bare[m].trim() || indent(bare[m]) > at); m++) if (bare[m].trim()) end = m;
+      anchors.set(name, { n, at, rest, value: lines.slice(n + 1, end + 1), used: false });
+      sites.set(n, { anchor: name, head, rest });
+      within = end;
+    }
+    if (/^[[{]/.test(rest) && flowMarks(rest)) refuse(n, ELSEWHERE);
+    if (BLOCK_SCALAR.test(rest)) block = key === undefined ? lead.length + Math.max(dashes.length - 2, 0) : at;
+  }
+  for (const [, a] of anchors) if (!a.used) refuse(a.n, 'an anchor never used');
+  if (!sites.size) return text;
+
+  const out = [];
+  lines.forEach((line, n) => {
+    const site = sites.get(n);
+    if (!site) return out.push(line);
+    const cr = line.endsWith('\r') ? '\r' : '';
+    const anchor = anchors.get(site.alias || site.anchor);
+    out.push(`${site.head}${anchor.rest ? ` ${anchor.rest}` : ''}${cr}`);
+    if (!site.alias) return undefined;
+    const shift = site.at - anchor.at;
+    for (const l of anchor.value) out.push(!l.trim() ? l : shift >= 0 ? ' '.repeat(shift) + l : l.slice(-shift));
+    return undefined;
+  });
+  return out.join('\n');
+}
 
 /**
  * The keys of a block mapping, each with its inline value and the deeper
@@ -101,7 +199,7 @@ function stepsOf(lines) {
 
 /** A workflow's jobs by id, from its text. `label` names it in a refusal. */
 function parseWorkflow(text, label = 'the workflow') {
-  const lines = text.split('\n');
+  const lines = expandAliases(text, label).split('\n');
   const start = lines.findIndex((l) => /^jobs:\s*$/.test(l));
   const bodies = {};
   let current = null;
@@ -147,4 +245,4 @@ function runCommands(workflow) {
     .map((s) => ({ job: job.id, step: s.name, run: s.run })));
 }
 
-module.exports = { parseWorkflow, readWorkflow, runCommands };
+module.exports = { expandAliases, parseWorkflow, readWorkflow, runCommands };

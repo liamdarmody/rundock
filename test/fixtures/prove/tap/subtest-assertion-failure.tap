@@ -1,0 +1,52 @@
+TAP version 13
+# Subtest: a subtest assertion fails
+    # Subtest: the inner check
+    not ok 1 - the inner check
+      ---
+      duration_ms: 2.490166
+      type: 'test'
+      location: 'test/fixtures/prove/cases.js:13:11'
+      failureType: 'testCodeFailure'
+      error: |-
+        Expected values to be strictly deep-equal:
+        + actual - expected
+        
+          {
+        +   a: 1
+        -   a: 2
+          }
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected:
+        a: 2
+      actual:
+        a: 1
+      operator: 'deepStrictEqual'
+      stack: |-
+        TestContext.<anonymous> (test/fixtures/prove/cases.js:14:12)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1106:25)
+        async TestContext.<anonymous> (test/fixtures/prove/cases.js:13:3)
+        async Test.run (node:internal/test_runner/test:1113:7)
+        async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3)
+      ...
+    1..1
+not ok 1 - a subtest assertion fails
+  ---
+  duration_ms: 3.312333
+  type: 'test'
+  location: 'test/fixtures/prove/cases.js:12:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 64.846792

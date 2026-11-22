@@ -1,0 +1,29 @@
+TAP version 13
+# Subtest: the result varies between runs
+not ok 1 - the result varies between runs
+  ---
+  duration_ms: 0.734209
+  type: 'test'
+  location: 'test/fixtures/prove/varies.js:8:1'
+  failureType: 'testCodeFailure'
+  error: 'this run drew the failing half'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (test/fixtures/prove/varies.js:9:10)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1106:25)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 55.146417
