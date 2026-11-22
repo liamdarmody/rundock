@@ -49,11 +49,30 @@ function pieceCopies(name, workflow = readProve().workflow) {
   return copies;
 }
 
-/** The named piece evaluated, returning the declarations listed in `names`. */
-function loadPiece(name, names) {
-  const [{ text }] = pieceCopies(name);
+/**
+ * The named piece evaluated, returning the declarations listed in `names`. A
+ * list of names evaluates those pieces together, in that order, for a piece
+ * that uses another's declarations. `req` is the `require` the pieces see.
+ */
+function loadPiece(name, names, req = require) {
+  const text = [].concat(name).map((n) => pieceCopies(n)[0].text).join('\n');
   // eslint-disable-next-line no-new-func
-  return new Function('require', `${text}\nreturn { ${names.join(', ')} };`)(require);
+  return new Function('require', `${text}\nreturn { ${names.join(', ')} };`)(req);
 }
 
-module.exports = { FILE, readProve, pieceCopies, loadPiece };
+/**
+ * Runs one step's whole `run:` text as a function handed `req` as its
+ * `require` and `proc` as its `process`, the way the step's Node runs it,
+ * so a test can hand it fakes. The step is taken from the named job.
+ */
+function runStep(jobId, stepName, req, proc, workflow = readProve().workflow) {
+  const job = workflow.jobs[jobId];
+  const steps = job ? job.steps.filter((s) => s.name === stepName) : [];
+  if (steps.length !== 1 || steps[0].run === undefined) {
+    throw new Error(`prove.yml: job ${jobId} has no single step "${stepName}" with a run block`);
+  }
+  // eslint-disable-next-line no-new-func
+  return new Function('require', 'process', steps[0].run)(req, proc);
+}
+
+module.exports = { FILE, readProve, pieceCopies, loadPiece, runStep };

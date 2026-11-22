@@ -2,7 +2,7 @@ TAP version 13
 # Subtest: an assertion fails
 not ok 1 - an assertion fails
   ---
-  duration_ms: 1.492208
+  duration_ms: 1.532416
   type: 'test'
   location: 'test/fixtures/prove/cases.js:8:1'
   failureType: 'testCodeFailure'
@@ -30,4 +30,4 @@ not ok 1 - an assertion fails
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 58.945917
+# duration_ms 58.120042

@@ -3,7 +3,7 @@ TAP version 13
     # Subtest: holds a nested test
     not ok 1 - holds a nested test
       ---
-      duration_ms: 0.727541
+      duration_ms: 0.7795
       type: 'test'
       location: 'test/fixtures/prove/cases.js:48:3'
       failureType: 'testCodeFailure'
@@ -28,7 +28,7 @@ TAP version 13
     1..1
 not ok 1 - a suite
   ---
-  duration_ms: 1.074541
+  duration_ms: 1.142042
   type: 'suite'
   location: 'test/fixtures/prove/cases.js:47:1'
   failureType: 'subtestsFailed'
@@ -43,4 +43,4 @@ not ok 1 - a suite
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 49.025459
+# duration_ms 52.609167

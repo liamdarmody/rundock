@@ -2,7 +2,7 @@ TAP version 13
 # Subtest: a module is missing
 not ok 1 - a module is missing
   ---
-  duration_ms: 0.663708
+  duration_ms: 0.760875
   type: 'test'
   location: 'test/fixtures/prove/cases.js:32:1'
   failureType: 'testCodeFailure'
@@ -31,4 +31,4 @@ not ok 1 - a module is missing
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 50.381833
+# duration_ms 55.455125

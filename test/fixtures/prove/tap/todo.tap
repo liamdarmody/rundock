@@ -2,7 +2,7 @@ TAP version 13
 # Subtest: the test is todo
 not ok 1 - the test is todo # TODO
   ---
-  duration_ms: 0.965584
+  duration_ms: 1.146
   type: 'test'
   location: 'test/fixtures/prove/cases.js:40:1'
   failureType: 'testCodeFailure'
@@ -30,4 +30,4 @@ not ok 1 - the test is todo # TODO
 # cancelled 0
 # skipped 0
 # todo 1
-# duration_ms 48.596
+# duration_ms 58.252458

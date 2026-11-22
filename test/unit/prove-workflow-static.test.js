@@ -14,7 +14,7 @@ const path = require('node:path');
 
 const { readProve, loadPiece } = require('../helpers/prove-workflow.js');
 const { readWorkflow } = require('../helpers/workflow-text.js');
-const { FLAGS: CAPTURE_FLAGS } = require('../fixtures/prove/capture.js');
+const { FLAGS: CAPTURE_FLAGS, NODE_VERSION: CAPTURE_NODE } = require('../fixtures/prove/capture.js');
 const { REQUIRED_CI_CHECKS } = require('../../scripts/release-ci.js');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -23,14 +23,32 @@ const lines = text.split('\n');
 const jobs = Object.values(workflow.jobs);
 
 const INPUTS = ['nonce', 'blocked', 'main', 'head', 'tests', 'rows', 'inputs_sha256'];
+const TEST_USER_STEPS = ['prepare the test user', 'install', 'run the test', 'stop the test user', 'check the tree', 'judge the result'];
 const STEPS = {
   red: ["check out the workflow's commit", 'set up Node', 'check inputs', 'merge main into the blocked head',
-    'check the change', 'take the tests from the fix head', 'install', 'run the test', 'check the tree', 'judge the result'],
-  green: ["check out the workflow's commit", 'set up Node', 'check inputs', 'check out the fix head', 'install',
-    'run the test', 'check the tree', 'judge the result'],
+    'check the change', 'take the tests from the fix head', ...TEST_USER_STEPS],
+  green: ["check out the workflow's commit", 'set up Node', 'check inputs', 'check out the fix head', ...TEST_USER_STEPS],
   break: ["check out the workflow's commit", 'set up Node', 'check inputs', 'check out the fix head', 'apply the row',
-    'install', 'run the test', 'check the tree', 'judge the result'],
+    ...TEST_USER_STEPS],
 };
+// The environment variables each step written in Node reads. The runner sets
+// RUNNER_TEMP and the GITHUB_ file-command paths; every other name comes from
+// the step's own env.
+const FILE_COMMANDS = ['GITHUB_ENV', 'GITHUB_OUTPUT', 'GITHUB_PATH', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY'];
+const ENTRY_NAMES = ['ENTRY', 'ROWS', 'RUNNER_TEMP', 'SIDE', 'TESTS'];
+const READS = {
+  'check inputs': ['BLOCKED_SHA', 'HEAD_SHA', 'INPUTS_SHA256', 'MAIN_SHA', 'NONCE', 'ROWS', 'TESTS'],
+  'merge main into the blocked head': ['BLOCKED_SHA', 'MAIN_SHA'],
+  'check the change': ['HEAD_SHA', 'ROWS'],
+  'apply the row': ['ENTRY', 'ROWS'],
+  'prepare the test user': ['RUNNER_TEMP'],
+  install: FILE_COMMANDS,
+  'run the test': [...ENTRY_NAMES, ...FILE_COMMANDS].sort(),
+  'stop the test user': ENTRY_NAMES,
+  'check the tree': ['RUNNER_TEMP'],
+  'judge the result': ENTRY_NAMES,
+};
+const FROM_RUNNER = ['RUNNER_TEMP', ...FILE_COMMANDS];
 
 /** The lines of a top-level block, from the line after its key to the next top-level line. */
 function topBlock(key) {
@@ -135,7 +153,8 @@ describe('the jobs', () => {
     }
     const shared = [...copies].filter(([, c]) => c.length > 1).map(([name]) => name).sort();
     assert.deepStrictEqual(shared, ["check out the workflow's commit", 'check inputs', 'check out the fix head',
-      'check the tree', 'install', 'judge the result', 'run the test', 'set up Node'].sort());
+      'check the tree', 'install', 'judge the result', 'prepare the test user', 'run the test', 'set up Node',
+      'stop the test user'].sort());
     for (const name of shared) {
       const [first, ...rest] = copies.get(name);
       for (const c of rest) assert.strictEqual(c.raw, first.raw, `"${name}" in ${c.job} is the text it is in ${first.job}`);
@@ -146,6 +165,16 @@ describe('the jobs', () => {
     assert.ok(!lines.some((l) => /^\s*[\w-]+:\s*[&*][\w-]+/.test(l) || /^\s*<<:/.test(l)));
   });
 
+  test('no step or job is skipped on a condition or lets a failure pass', () => {
+    lines.forEach((line, n) => {
+      assert.ok(!/^\s*(-\s+)?(if|continue-on-error):/.test(line), `line ${n + 1} sets a condition or lets a failure pass: ${line}`);
+    });
+  });
+
+  test('nothing in the workflow names /tmp, /var/tmp or /dev/shm', () => {
+    for (const dir of ['/tmp', '/var/tmp', '/dev/shm']) assert.ok(!text.includes(dir), `prove.yml does not name ${dir}`);
+  });
+
   test('the checkout is the workflow commit, with full history and no stored credentials', () => {
     for (const job of jobs) {
       const step = job.steps[0];
@@ -153,14 +182,15 @@ describe('the jobs', () => {
     }
   });
 
-  test("Node is 24, one of the versions CI's test job runs, with no package cache", () => {
+  test("Node is exactly 24.12.0, the version the captures were taken on, in CI's 24 line, with no package cache", () => {
     const ci = Object.values(readWorkflow('ci.yml').jobs).find((j) => j.name === 'Test (Node ${{ matrix.node }})');
     assert.ok(ci, "ci.yml's test job is found");
     const matrix = /^\s*node: \[([^\]]+)\]/m.exec(ci.text);
     const versions = matrix ? matrix[1].split(',').map((v) => v.trim().replace(/'/g, '')) : [];
     assert.ok(versions.includes('24'), `24 is in ${versions.join(', ')}`);
+    assert.strictEqual(CAPTURE_NODE, 'v24.12.0');
     for (const job of jobs) {
-      assert.deepStrictEqual(job.steps[1].with, { 'node-version': "'24'", 'package-manager-cache': 'false' }, job.id);
+      assert.deepStrictEqual(job.steps[1].with, { 'node-version': `'${CAPTURE_NODE.slice(1)}'`, 'package-manager-cache': 'false' }, job.id);
     }
     assert.ok(!/^\s*cache:/m.test(text), 'no cache is restored');
   });
@@ -195,8 +225,8 @@ describe('what reaches a run block, and what runs before the test', () => {
     });
   });
 
-  test('every install is npm ci with package scripts off, and no shell step runs anything else from the commits', () => {
-    const allowed = ['npm ci --ignore-scripts', 'git checkout -q --detach "$HEAD_SHA"', 'rm -rf test', 'git checkout "$HEAD_SHA" -- test'];
+  test('the only install is npm ci with package scripts off, run as the test user, and no shell step runs anything from the commits', () => {
+    const allowed = ['git checkout -q --detach "$HEAD_SHA"', 'rm -rf test', 'git checkout "$HEAD_SHA" -- test'];
     for (const job of jobs) {
       for (const [name, raw] of rawSteps(job)) {
         const step = job.steps.find((s) => s.name === name);
@@ -206,17 +236,21 @@ describe('what reaches a run block, and what runs before the test', () => {
           assert.ok(allowed.includes(command.trim()), `${job.id}, "${name}" runs ${command}`);
         }
       }
-      const raws = rawSteps(job);
-      const installs = job.steps.filter((s) => s.run && !isNode(raws.get(s.name)) && s.run.includes('npm'));
-      assert.deepStrictEqual(installs.map((s) => s.run.trim()), ['npm ci --ignore-scripts'], job.id);
+      // npm named as a program: a quoted argument, or a shell line.
+      const npm = job.steps.filter((s) => s.run && /['"`]npm['"`]|^\s*npm\s/m.test(s.run));
+      assert.deepStrictEqual(npm.map((s) => s.name), ['install'], `${job.id}: only install starts npm`);
+      const install = npm[0].run;
+      assert.strictEqual(install.split("asTestUser(user, ['npm', 'ci', '--ignore-scripts'], user.copy)").length, 2, `${job.id}: install starts npm ci --ignore-scripts once, as the test user`);
+      assert.strictEqual(install.split("'npm'").length, 2, `${job.id}: install names npm nowhere else`);
     }
   });
 
   test('the code in a node step loads only modules built into Node', () => {
+    const TAIL = ['prepare the test user', 'install', 'run the test', 'stop the test user', 'check the tree', 'judge the result'];
     const NODE_STEPS = {
-      red: ['check inputs', 'merge main into the blocked head', 'check the change', 'run the test', 'check the tree', 'judge the result'],
-      green: ['check inputs', 'run the test', 'check the tree', 'judge the result'],
-      break: ['check inputs', 'apply the row', 'run the test', 'check the tree', 'judge the result'],
+      red: ['check inputs', 'merge main into the blocked head', 'check the change', ...TAIL],
+      green: ['check inputs', ...TAIL],
+      break: ['check inputs', 'apply the row', ...TAIL],
     };
     for (const job of jobs) {
       const names = [...rawSteps(job)].filter(([, raw]) => isNode(raw)).map(([name]) => name);
@@ -233,6 +267,69 @@ describe('what reaches a run block, and what runs before the test', () => {
   test("the change is read with git's exact path list, renames not detected", () => {
     assert.ok(text.includes("const DIFF = 'git -c core.quotePath=false diff -z --name-only --no-renames';"));
   });
+
+  // The test user's own environment is read by the one script that prints
+  // its names; that text runs as the test user, never in the step.
+  const KEYS_SCRIPT = "\"process.stdout.write(Object.keys(process.env).sort().join(' '))\"";
+
+  test('each node step reads exactly the environment variables listed here, through env alone', () => {
+    for (const job of jobs) {
+      for (const [name, raw] of rawSteps(job)) {
+        if (!isNode(raw)) continue;
+        const run = job.steps.find((s) => s.name === name).run;
+        assert.ok(READS[name], `${job.id}, "${name}" is listed here`);
+        const code = run.split(KEYS_SCRIPT).join('');
+        assert.deepStrictEqual(code.match(/process\.env\b.*$/gm), ['process.env;'], `${job.id}, "${name}" reads process.env once`);
+        assert.strictEqual(code.split('const env = process.env;').length, 2, `${job.id}, "${name}" names it env`);
+        assert.ok(!/\benv\s*\[/.test(code), `${job.id}, "${name}" reads env only by name`);
+        assert.ok(!/\{[^}]*\}\s*=\s*env\b/.test(code), `${job.id}, "${name}" does not destructure env`);
+        assert.ok(!/\b(Object\.(keys|values|entries|assign)|JSON\.stringify)\(\s*env\b/.test(code), `${job.id}, "${name}" does not walk env`);
+        const read = [...new Set([...code.matchAll(/\benv\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
+        assert.deepStrictEqual(read, [...READS[name]].sort(), `${job.id}, "${name}" reads ${read.join(' ')}`);
+        const rawLines = raw.split('\n');
+        const at = rawLines.indexOf('        env:');
+        const rest = at === -1 ? [] : rawLines.slice(at + 1);
+        const end = rest.findIndex((l) => !/^ {10}/.test(l));
+        const given = keysAt(end === -1 ? rest : rest.slice(0, end), 10);
+        assert.deepStrictEqual(given.sort(), read.filter((k) => !FROM_RUNNER.includes(k)), `${job.id}, "${name}" is given in env what it reads`);
+      }
+    }
+  });
+});
+
+describe('how the test user is started', () => {
+  // The test-user piece, its child_process faked so the arguments of each
+  // spawn can be read without starting anything.
+  const spawned = [];
+  const fakeRequire = (name) => {
+    if (name === 'node:child_process') return { spawnSync: (cmd, args, opts) => { spawned.push({ cmd, args, opts }); return { status: 0, stdout: Buffer.from('') }; } };
+    return require(name);
+  };
+  const { asTestUser, LIMIT, SUDO, TEST_USER } = loadPiece('test user', ['asTestUser', 'LIMIT', 'SUDO', 'TEST_USER'], fakeRequire);
+
+  test('through sudo by full path, with env -i and exactly five variables before the command', () => {
+    spawned.length = 0;
+    const user = { name: TEST_USER, home: '/fake/users/u', tmp: '/fake/users/u/scratch', bin: '/fake/node/bin' };
+    asTestUser(user, ['cmd', 'arg'], '/fake/users/u/checkout');
+    assert.strictEqual(SUDO, '/usr/bin/sudo');
+    assert.strictEqual(TEST_USER, 'prove-test');
+    assert.deepStrictEqual(spawned.map((s) => [s.cmd, s.args]), [[SUDO, ['-n', '-u', TEST_USER, '--', '/usr/bin/env', '-i',
+      'PATH=/fake/node/bin:/usr/bin:/bin', 'HOME=/fake/users/u', 'TMPDIR=/fake/users/u/scratch', 'LANG=C.UTF-8', 'CI=true', 'cmd', 'arg']]]);
+    assert.deepStrictEqual(spawned[0].opts, { argv0: 'sudo', cwd: '/fake/users/u/checkout', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: LIMIT });
+    assert.strictEqual(LIMIT, 64 * 1024 * 1024);
+  });
+
+  test('every step that starts the test user does so only through that one function', () => {
+    for (const job of jobs) {
+      for (const step of job.steps) {
+        if (!step.run) continue;
+        // sudo -n -u is how a process starts as another user.
+        const starts = step.run.split(/['"`]-n['"`]\s*,\s*['"`]-u['"`]/).length - 1;
+        assert.strictEqual(starts, step.run.includes('function asTestUser(') ? 1 : 0, `${job.id}, "${step.name}" starts another user only in asTestUser`);
+        if (starts) assert.ok(step.run.includes("spawnSync(SUDO, ['-n', '-u', user.name, '--', '/usr/bin/env', '-i',"), `${job.id}, "${step.name}"`);
+      }
+    }
+  });
 });
 
 describe('how the test is run', () => {
@@ -246,16 +343,17 @@ describe('how the test is run', () => {
     assert.strictEqual(CAPTURE_FLAGS, FLAGS, 'the captures were taken with the same flags');
   });
 
-  test('the full name, escaped and anchored, is the only name pattern', () => {
+  test('the full name, escaped and anchored, is the only name pattern, and the TAP goes to standard output', () => {
     const name = 'a (b) [c] {d} * + ? . ^ $ | \\ / end';
-    const args = testArgs({ name, file: 'test/x.test.js' }, '/runner/run-1.tap');
-    assert.deepStrictEqual(args.slice(0, -3), [...FLAGS.split(' '), '--test-reporter-destination=/runner/run-1.tap']);
+    const args = testArgs({ name, file: 'test/x.test.js' });
+    assert.deepStrictEqual(args.slice(0, -3), FLAGS.split(' '));
     assert.deepStrictEqual(args.slice(-3, -1), ['--test-name-pattern', `^${escape(name)}$`]);
     assert.strictEqual(args[args.length - 1], 'test/x.test.js');
     const pattern = new RegExp(args[args.length - 2]);
     assert.ok(pattern.test(name), 'the name matches itself');
     for (const other of [`${name} more`, `more ${name}`, name.replace('(', '['), 'a b c d']) assert.ok(!pattern.test(other), other);
-    assert.ok(testArgs({ name: '/x/i', file: 'f' }, 'd')[args.length - 2].startsWith('^'), 'a name in slashes is never read as a regex literal');
+    assert.ok(testArgs({ name: '/x/i', file: 'f' })[args.length - 2].startsWith('^'), 'a name in slashes is never read as a regex literal');
+    assert.ok(!text.includes('--test-reporter-destination'), 'no reporter writes to a file');
   });
 
   test('a red or green entry runs its own test, and a break entry the test its row names', () => {
@@ -268,9 +366,9 @@ describe('how the test is run', () => {
     assert.throws(() => testFor('red', '3', tests, rows));
   });
 
-  test('three runs, each to its own TAP file under the runner temp directory', () => {
+  test('three runs, the TAP and exit status of each kept in the evidence directory under the runner temp directory', () => {
     const run = rawSteps(workflow.jobs.red).get('run the test');
-    assert.ok(run.includes("path.join(env.RUNNER_TEMP, 'prove')"));
-    assert.ok(run.includes('for (let n = 1; n <= 3; n++)') && run.includes('`run-${n}.tap`'));
+    assert.ok(run.includes("path.join(env.RUNNER_TEMP, 'prove-evidence')"));
+    assert.ok(run.includes('for (let n = 1; n <= 3; n++)') && run.includes('`run-${n}.tap`') && run.includes('`exit-${n}.json`'));
   });
 });

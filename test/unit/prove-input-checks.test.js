@@ -22,7 +22,7 @@ const { loadPiece } = require('../helpers/prove-workflow.js');
 const { makeTempDir } = require('../helpers/workspace.js');
 
 const { shapeCheck, listsCheck, pathsCheck, checkInputs } =
-  loadPiece('input checks', ['shapeCheck', 'listsCheck', 'pathsCheck', 'checkInputs']);
+  loadPiece(['bytes', 'input checks'], ['shapeCheck', 'listsCheck', 'pathsCheck', 'checkInputs']);
 const { mergeMain } = loadPiece('merge', ['mergeMain']);
 const { applyRow } = loadPiece('apply row', ['applyRow']);
 
@@ -47,8 +47,8 @@ function makeRepo(dir) {
     ...process.env,
     GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1', XDG_CONFIG_HOME: dir,
   };
-  const git = (args) => execFileSync('git', args, { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  const out = (args) => String(git(args)).trim();
+  const git = (args, input) => execFileSync('git', args, { cwd: dir, env, input, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+  const out = (args, input) => String(git(args, input)).trim();
   const write = (rel, text) => {
     fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
     fs.writeFileSync(path.join(dir, rel), text);
@@ -272,6 +272,32 @@ describe('every check, through the step, in a repository', () => {
       assert.ok(why.endsWith(`, which ${reason}`), why);
     });
   }
+
+  const NAMES = [['a trailing space', 'a works '], ['a leading tab', '\ta works'], ['a trailing no-break space', 'a works\u00a0']];
+  for (const [what, name] of NAMES) {
+    test(`a test name with ${what} fails the names check`, () => {
+      assert.strictEqual(run({ tests: [{ i: 1, file: 'test/a.test.js', name }] }),
+        'names: test 1 has a name that starts or ends with whitespace');
+    });
+  }
+
+  test("a lone surrogate in a test's name or a row's from fails the well-formed check", () => {
+    assert.strictEqual(run({ tests: [{ i: 1, file: 'test/a.test.js', name: 'a \ud800 works' }] }),
+      'well-formed: test 1 has a name that is not well-formed Unicode');
+    assert.strictEqual(run({ rows: [{ i: 1, file: 'src/a.js', from: 'x\udc00', to: '2', test: 1 }] }),
+      'well-formed: row 1 has a from that is not well-formed Unicode');
+  });
+
+  test('a fix head whose tree holds a path with byte 0xFF fails the paths check, naming it', () => {
+    // A file system may refuse a name that is not UTF-8, so the tree is
+    // written with git mktree, which takes bytes, on top of the fix head.
+    const blob = repo.out(['hash-object', '-w', '--stdin'], '1;\n');
+    const entry = Buffer.concat([Buffer.from(`100644 blob ${blob}\t`), Buffer.from([0xff, 0x2e, 0x6a, 0x73]), Buffer.from([0])]);
+    const tree = String(repo.git(['mktree', '-z'], Buffer.concat([repo.git(['ls-tree', '-z', sha.head]), entry]))).trim();
+    const head = String(repo.git(['commit-tree', tree, '-p', sha.head, '-m', 'name as bytes'])).trim();
+    repo.git(['update-ref', 'refs/heads/name-as-bytes', head]);
+    assert.strictEqual(run({ head }), 'paths: the fix head holds the path "\\xFF.js", which is not well-formed UTF-8');
+  });
 
   test('a test no row names fails the lists check', () => {
     const why = run({ tests: [...T('test/a.test.js'), { i: 2, file: 'test/a.test.js', name: 'other' }] });

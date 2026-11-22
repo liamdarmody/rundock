@@ -16,7 +16,7 @@ TAP version 13
 # Subtest: test/fixtures/prove/load-error.js
 not ok 1 - test/fixtures/prove/load-error.js
   ---
-  duration_ms: 41.224917
+  duration_ms: 47.575667
   type: 'test'
   location: 'test/fixtures/prove/load-error.js:1:1'
   failureType: 'testCodeFailure'
@@ -33,4 +33,4 @@ not ok 1 - test/fixtures/prove/load-error.js
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 44.850208
+# duration_ms 52.376792

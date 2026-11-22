@@ -4,20 +4,26 @@
 // Each capture runs one test from a fixture in this directory the way the
 // workflow runs a blocker test: `node --test` with the TAP reporter, the
 // preloads `npm test` uses, and the test's name escaped and anchored as the
-// name pattern. What the reporter wrote is kept, with every absolute path to
-// the repository (plain or as a file URL) made relative to it. A capture that
+// name pattern. The TAP is read from the run's standard output through a
+// pipe, as the workflow reads it, and kept with every absolute path to the
+// repository (plain or as a file URL) made relative to it. A capture that
 // still holds a home directory is refused rather than written.
+//
+// The workflow pins Node to one exact version, and the reporter's output can
+// change between versions, so captures are taken only on that version.
 //
 //   node test/fixtures/prove/capture.js
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const ROOT = path.join(__dirname, '..', '..', '..');
 const OUT = path.join(__dirname, 'tap');
 const HERE = path.relative(ROOT, __dirname).split(path.sep).join('/');
+
+// The Node the workflow's jobs run, and so the only one captures come from.
+const NODE_VERSION = 'v24.12.0';
 
 // The same flags the workflow's `run the test` step passes.
 const FLAGS = '--test --test-reporter=tap --require ./test/helpers/account-home-refused.js --require ./test/helpers/stall-guard.js';
@@ -34,15 +40,14 @@ function relative(text) {
 }
 
 function run(file, name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prove-capture-'));
-  const dest = path.join(dir, 'out.tap');
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
-  const args = [...FLAGS.split(' '), `--test-reporter-destination=${dest}`, '--test-name-pattern', `^${escape(name)}$`, `${HERE}/${file}`];
-  const result = spawnSync(process.execPath, args, { cwd: ROOT, env, encoding: 'utf8' });
-  const tap = fs.readFileSync(dest, 'utf8');
-  fs.rmSync(dir, { recursive: true, force: true });
-  return { status: result.status, tap: relative(tap) };
+  const args = [...FLAGS.split(' '), '--test-name-pattern', `^${escape(name)}$`, `${HERE}/${file}`];
+  const result = spawnSync(process.execPath, args, {
+    cwd: ROOT, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  return { status: result.status, tap: relative(result.stdout) };
 }
 
 function write(slug, tap) {
@@ -67,9 +72,14 @@ const CASES = [
   ['none-selected', 'cases.js', 'no test has this name'],
   ['two-selected', 'cases.js', 'two tests share this name'],
   ['nested-by-full-name', 'cases.js', 'a suite holds a nested test'],
+  ['blocker-top', 'blocker-top.js', 'blocker'],
+  ['blocker-nested', 'blocker-nested.js', 'blocker'],
 ];
 
 function main() {
+  if (process.version !== NODE_VERSION) {
+    throw new Error(`captures are taken on Node ${NODE_VERSION}, the version the workflow runs, not on ${process.version}`);
+  }
   fs.mkdirSync(OUT, { recursive: true });
   for (const [slug, file, name] of CASES) write(slug, run(file, name).tap);
 
@@ -89,4 +99,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { CASES, FLAGS, relative };
+module.exports = { CASES, FLAGS, NODE_VERSION, relative };

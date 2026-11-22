@@ -2,7 +2,7 @@ TAP version 13
 # Subtest: the result varies between runs
 not ok 1 - the result varies between runs
   ---
-  duration_ms: 0.702958
+  duration_ms: 0.734209
   type: 'test'
   location: 'test/fixtures/prove/varies.js:8:1'
   failureType: 'testCodeFailure'
@@ -26,4 +26,4 @@ not ok 1 - the result varies between runs
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 47.560042
+# duration_ms 55.146417
