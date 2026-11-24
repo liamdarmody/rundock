@@ -592,6 +592,7 @@ describe('kill-window follow-up: cancel-then-crash', () => {
   test('a follow-up cancels the auto-return, then the delegate crashes: NO spurious handback, no stale output injected', async () => {
     const convoId = h.freshConvoId('f1');
     h.clearInvocations();
+    h.clearPrompts();
     h.writeScenario([
       // 1. Orchestrator delegates to content-lead via an intercepted Agent tool.
       { match: { agent: 'chief-of-staff', promptIncludes: 'f1-parent please' },
@@ -611,8 +612,8 @@ describe('kill-window follow-up: cancel-then-crash', () => {
       { match: { agent: 'chief-of-staff', promptIncludes: ['returned because the request was outside their scope', 'STALE-PAYLOAD-SENTINEL'] },
         turn: [{ text: 'SPURIOUS-HANDBACK-FIRED' }] },
       // 4b. CORRECT path (post-fix): no marker survives, parent restarts silently
-      //     with an empty output block.
-      { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM: pipeline-complete]' },
+      //     with an empty output block, told the delegate stopped before finishing.
+      { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM: delegate-failed]' },
         turn: [{ text: '<silent>' }] },
     ]);
 
@@ -658,6 +659,12 @@ describe('kill-window follow-up: cancel-then-crash', () => {
       assert.strictEqual(s.silent, true,
         'parent restart after a cancelled-then-crashed delegate must be a silent park, not a visible RETURN auto-continue');
     }
+
+    // (iv) The restarted parent is told the delegate stopped before finishing,
+    //      never that it completed its work.
+    const told = h.promptsFor('chief-of-staff').filter(p => p.includes('[SYSTEM:'));
+    assert.ok(told.length > 0 && told.every(p => p.includes('[SYSTEM: delegate-failed] content-lead stopped before finishing')),
+      `the parent is told the delegate stopped: ${JSON.stringify(told)}`);
 
     h.reapConvo(convoId);
   });

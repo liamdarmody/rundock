@@ -203,11 +203,15 @@ function heldWren(tag) {
   return { holdAfterText: path.join(h.workspaceDir, `never-${tag}-${Date.now()}`), turn: [{ text: `${tag} partial work` }] };
 }
 
-/** Cos answers once and stays live; then a `delegate` request hands Wren the brief. */
-async function delegateFromLiveCos(tag, wrenRule) {
+/**
+ * Cos answers once and stays live; then a `delegate` request hands Wren the
+ * brief. `laterWrenRules` answer Wren's later turns, matched by their own words.
+ */
+async function delegateFromLiveCos(tag, wrenRule, laterWrenRules = []) {
   const convoId = h.freshConvoId(tag);
   h.writeScenario([
     { match: { agent: 'chief-of-staff', promptIncludes: `${tag} open` }, turn: [{ text: 'ready' }] },
+    ...laterWrenRules.map((r) => ({ ...r, match: { agent: 'content-lead', ...r.match } })),
     { ...wrenRule, match: { agent: 'content-lead', promptIncludes: `${tag} brief` } },
     { match: { agent: 'chief-of-staff' }, turn: [{ text: 'noted' }] },
   ]);
@@ -379,6 +383,61 @@ describe('the line a person reads when a delegate stopped', () => {
     assert.strictEqual(notices.length, 1, 'drawn once');
     const drawn = `${notices[0].querySelector('.stopped-title').textContent}\n${notices[0].querySelector('.stopped-reason').textContent}`;
     assert.strictEqual(drawn, CRASH1_TEXT, 'with the words the line had live');
+    h.reapConvo(convoId);
+  });
+});
+
+// What Cos is told when Wren stopped. Cos is either started again with a
+// prompt (Wren was handed the work through Cos's Agent tool) or still live and
+// woken after a moment (Wren was handed it directly). Started again, it is
+// told Wren stopped, with what Wren wrote, and stays quiet; still live, it is
+// not woken with a prompt that would say Wren just returned.
+const SILENT = "\n\nYour output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, "
+  + "summarise, or quote the specialist's output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.";
+
+describe('what Cos is told when Wren stopped', () => {
+  test('Cos, started again, is told Wren stopped, is given what Wren wrote, and stays quiet', async () => {
+    h.clearPrompts();
+    routeToWren('ds-told', [
+      { match: { promptIncludes: 'ds-told brief' }, turn: [{ text: 'DS-TOLD-PARTIAL the first half of the post' }], isError: true, exitAfterTurn: 1 },
+    ]);
+    const { convoId, since } = startConversation('ds-told');
+    await untilClosed(convoId, since);
+    assert.ok(await h.waitUntil(() => h.promptsFor('chief-of-staff').some((p) => p.includes('[SYSTEM:'))),
+      'Cos, started again, was written to');
+    const prompt = h.promptsFor('chief-of-staff').find((p) => p.includes('[SYSTEM:'));
+    const opening = '[SYSTEM: delegate-failed] content-lead stopped before finishing (Claude Code reported an error).';
+    const at = prompt.indexOf(opening);
+    assert.ok(at > -1, `the prompt says Wren stopped and why: ${prompt}`);
+    const told = prompt.slice(at);
+    assert.ok(told.includes('DS-TOLD-PARTIAL the first half of the post'), `with what Wren wrote before stopping: ${told}`);
+    assert.ok(told.includes("Do not describe content-lead's part as done."), told);
+    assert.ok(told.endsWith(SILENT), `and the same instruction to stay quiet: ${told}`);
+    assert.ok(!told.includes('completed their work') && !told.includes('has finished the delegated work'), told);
+    assert.ok(await h.waitUntil(() => {
+      const e = h.internal.chatProcesses.get(convoId);
+      return Boolean(e && e.agentId === 'chief-of-staff' && e.idle === true);
+    }), 'Cos is parked, waiting for the person');
+    h.reapConvo(convoId);
+  });
+
+  test('Cos, still live, is not woken to carry on when Wren stopped after a follow-up', async () => {
+    const { convoId, since } = await delegateFromLiveCos('ds-nowake', { turn: [{ text: 'DS-NOWAKE-FIRST done' }] }, [
+      { match: { promptIncludes: 'ds-nowake again' }, crash: 1 },
+    ]);
+    await waitForResult(convoId, 'DS-NOWAKE-FIRST', since, 'Wren finished the first turn');
+    h.clearPrompts();
+    const next = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'ds-nowake again' });
+    const seen = await untilClosed(convoId, next);
+    assert.strictEqual(seen.filter(isLine(convoId)).length, 1, 'sanity: Wren stopped');
+    const cos = h.internal.chatProcesses.get(convoId);
+    assert.ok(cos && cos.agentId === 'chief-of-staff' && cos.process && cos.process.stdin.writable,
+      'sanity: Cos is live and could be written to');
+    // Twice the 300 ms the wake waits: the one deliberate wait in this file.
+    await h.delay(600);
+    const woken = h.promptsFor('chief-of-staff').filter((p) => p.includes('[SYSTEM: The specialist just returned'));
+    assert.deepStrictEqual(woken, [], 'Cos is not told Wren just returned');
     h.reapConvo(convoId);
   });
 });

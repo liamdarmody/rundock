@@ -1014,10 +1014,11 @@ describe('the stored conversation can only reach a delegate through the cap', ()
       // An orchestrator taking back control from a sub-delegate.
       ['orchestratorEntry.process', 'prompt'],
       // A mid-level parent resumed on each of its three exits, each carrying
-      // the catch-up it is owed.
+      // the catch-up it is owed. The third picks its prompt by whether the
+      // delegate finished, and both carry the same specialist output block.
       ['resumeProc', 'parentCatchUp + resumePrompt'],
       ['resumeProc', 'parentCatchUp + completePrompt'],
-      ['resumeProc', 'parentCatchUp + normalPrompt'],
+      ['resumeProc', 'parentCatchUp + exitPrompt'],
       // The original agent restored after a delegation ends.
       ['orig.process', 'prompt'],
     ], 'the engine writes into a runtime somewhere this list does not know about. Say what the '

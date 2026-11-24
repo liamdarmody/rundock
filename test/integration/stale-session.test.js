@@ -313,7 +313,7 @@ describe('delegating to an agent whose stored session is gone', () => {
       { match: { resume: true, promptIncludes: 'TRY-ONE-C', promptExcludes: 'DELEGATION BRIEF' },
         turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to the lead.', prompt: 'BRIEF-ONE go' } }] },
       { match: { agent: 'content-lead', promptIncludes: 'BRIEF-ONE' }, crash: 1, stderr: 'Something else went wrong\n' },
-      { match: { agent: 'chief-of-staff', promptIncludes: 'pipeline-complete' }, turn: [{ text: '<silent>' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM: delegate-failed]' }, turn: [{ text: '<silent>' }] },
       { match: { agent: 'chief-of-staff', promptIncludes: 'TRY-TWO-C' },
         turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to the lead again.', prompt: 'BRIEF-TWO go' } }] },
       { match: { agent: 'content-lead', promptIncludes: 'BRIEF-TWO' }, turn: [{ text: 'LEAD-COLD-C' }] },
@@ -324,7 +324,8 @@ describe('delegating to an agent whose stored session is gone', () => {
     win.send('TRY-ONE-C please');
     await client.waitFor(m => m.type === 'error' && m._conversationId === convoId && /Something else went wrong/.test(m.content),
       { since, label: 'the fresh start fails for another reason, which is said as itself', timeout: 15000 });
-    await h.waitUntil(() => h.promptsFor('chief-of-staff').some(p => p.includes('pipeline-complete')));
+    assert.ok(await h.waitUntil(() => h.promptsFor('chief-of-staff').some(p => p.includes('[SYSTEM: delegate-failed]'))),
+      'the restarted parent is told the lead stopped before finishing');
     win.sync();
     await settled();
 
