@@ -443,16 +443,20 @@ describe('every spelling of either file is refused through the hook', () => {
   }
 
   // Through the hook the host decides, as it does in the app: where case
-  // folds, `.rundock/PERMISSIONS.json` is the permissions file.
+  // folds, `.rundock/PERMISSIONS.json` is the permissions file. The host's
+  // answer is read from the hook once it is known to export it, so a hook
+  // without it fails on that assertion rather than on a missing function.
   for (const [label, ws, who] of RUNS) {
     test(`a case variant is refused exactly where the host folds case, in ${label}`, async () => {
+      assert.strictEqual(typeof hook.hostFoldsCase, 'function', 'the hook exports hostFoldsCase');
+      const folds = hook.hostFoldsCase();
       const env = envFor(ws, who);
       for (const target of [path.join(ws, '.rundock', 'PERMISSIONS.json'), path.join(ws, '.RUNDOCK', 'state.json')]) {
         asked.length = 0;
         const r = await runHook(env, edit('Write', target));
         assert.strictEqual(r.status, 0, r.err);
-        assert.strictEqual(r.reason === SAID[who], hook.hostFoldsCase(), `${path.relative(ws, target)}: refused as one of Rundock's own files exactly where case folds (${r.reason})`);
-        if (hook.hostFoldsCase()) assert.strictEqual(asked.length, 0, 'with no card');
+        assert.strictEqual(r.reason === SAID[who], folds, `${path.relative(ws, target)}: refused as one of Rundock's own files exactly where case folds (${r.reason})`);
+        if (folds) assert.strictEqual(asked.length, 0, 'with no card');
       }
     });
   }
@@ -680,6 +684,8 @@ fs.writeFileSync(FAILS, `
 describe('the control failing: the call is refused and the hook never crashes', () => {
   for (const [label, ws, who] of RUNS) {
     test(`the control failing: a forced failure of the check refuses as unchecked, with no card, in ${label}`, async () => {
+      assert.strictEqual(typeof (hook.rundockAnswerFileSeam && hook.rundockAnswerFileSeam.beforeChecking), 'function',
+        'the seam the preload makes throw is a module attribute');
       const env = envFor(ws, who);
       const said = who === 'routine' ? `${COULD_NOT_CHECK} ${hook.UNATTENDED_NEXT_UNLOADED}` : COULD_NOT_CHECK;
       for (const target of [permissionsFile(ws), stateFile(ws), noteFile(ws)]) {
