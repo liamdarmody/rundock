@@ -7,6 +7,7 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const { spawnSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -29,6 +30,8 @@ const LONGEST_ID = 'a'.repeat(64);
 const STORED_NAME = /^[1-9][0-9]{0,8}-[A-Za-z0-9_-]{1,60}\.(png|jpg|gif|webp|pdf|txt|md|csv)$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const LINKS = { skip: process.platform === 'win32' && 'links need privileges on Windows' };
+const FIFOS = { skip: process.platform === 'win32' && 'FIFOs need a POSIX system' };
+const STORE_PATH = path.join(__dirname, '..', '..', 'lib', 'attachments', 'store.js');
 
 // Real-pathed: the walk compares paths as written, and on macOS the temp
 // folder sits behind a link.
@@ -697,5 +700,469 @@ describe('writeMessageFiles: the conversation lock', () => {
     ]);
     assert.deepStrictEqual([a.files[0].file, b.files[0].file], ['1-a.png', '2-b.png']);
     assert.deepStrictEqual(store.readRecord(ws, 'alpha').messages, [a, b]);
+  });
+});
+
+// A FIFO opened for reading without O_NONBLOCK blocks the whole process,
+// which the stall guard can't interrupt, so each FIFO check runs in a child
+// with a timeout.
+const CHILD = [
+  'const store = require(process.argv[1]);',
+  'const [ws, kind, file] = process.argv.slice(2);',
+  'let answer;',
+  "if (kind === 'check') answer = store.checkRecordedFile(ws, 'alpha', file);",
+  "else { try { store.readRecord(ws, 'alpha'); answer = 'read'; } catch (e) { answer = e.code; } }",
+  'process.stdout.write(String(answer));',
+].join('\n');
+function inChild(...args) {
+  const result = spawnSync(process.execPath, ['-e', CHILD, STORE_PATH, ...args], { encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_V8_COVERAGE: '' } });
+  assert.strictEqual(result.error, undefined, 'the child finished without waiting');
+  assert.strictEqual(result.status, 0, result.stderr);
+  return result.stdout;
+}
+function makeFifo(file) {
+  const made = spawnSync('mkfifo', [file], { encoding: 'utf8' });
+  assert.strictEqual(made.status, 0, made.stderr);
+}
+
+describe('checkRecordedFile', () => {
+  async function written() {
+    const ws = workspace();
+    const message = MESSAGE();
+    const entry = await store.writeMessageFiles(ws, 'alpha', message);
+    const stored = entry.files[0].file;
+    return { ws, message, entry, stored, file: path.join(folderOf(ws), stored) };
+  }
+
+  test('every bad ID throws bad-id and touches nothing', () => {
+    ready('checkRecordedFile');
+    const ws = workspace();
+    for (const id of BAD_IDS) assert.throws(() => store.checkRecordedFile(ws, id, '1-a.png'), refused('bad-id'), JSON.stringify(id));
+    assert.deepStrictEqual(fs.readdirSync(ws), []);
+  });
+
+  test('a file the store wrote and nothing has touched is present', async () => {
+    ready('checkRecordedFile');
+    const { ws, entry } = await written();
+    for (const described of entry.files) assert.strictEqual(store.checkRecordedFile(ws, 'alpha', described.file), 'present', described.file);
+  });
+
+  test('a file off the stored-name pattern answers missing and is never opened', (t) => {
+    ready('checkRecordedFile');
+    const ws = workspace();
+    const planted = Buffer.from('{"planted": true}');
+    writeJson(path.join(attachmentsOf(ws), 'record.json'), planted.toString());
+    writeJson(recordOf(ws), { messages: [{ id: 'm', files: [{ file: '../record.json', name: 'x.txt', type: 'txt', bytes: planted.length, sha256: sha256(planted) }] }], sent: {} });
+    const opened = [];
+    const realOpenSync = fs.openSync;
+    t.mock.method(fs, 'openSync', function openSync(file, ...rest) { opened.push(String(file)); return realOpenSync.call(fs, file, ...rest); });
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', '../record.json'), 'missing');
+    assert.deepStrictEqual(opened.filter((file) => file === path.join(attachmentsOf(ws), 'record.json')), []);
+  });
+
+  test('every other name off the pattern answers missing', async () => {
+    ready('checkRecordedFile');
+    const { ws } = await written();
+    for (const name of ['record.json', '0-a.png', '1-a.exe', '1-a.png/../2-b.png', `1-${'a'.repeat(61)}.png`, '1000000000-a.png', '1-a b.png', 42, null]) {
+      assert.strictEqual(store.checkRecordedFile(ws, 'alpha', name), 'missing', String(name));
+    }
+  });
+
+  test('a planted file the record does not list answers missing', async () => {
+    ready('checkRecordedFile');
+    const { ws } = await written();
+    fs.writeFileSync(path.join(folderOf(ws), '9-planted.txt'), 'planted');
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', '9-planted.txt'), 'missing');
+  });
+
+  test('an unreadable record answers missing', async () => {
+    ready('checkRecordedFile');
+    const { ws, stored } = await written();
+    fs.writeFileSync(recordOf(ws), '{"messages": [');
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', stored), 'missing');
+  });
+
+  test('an absent file answers missing', async () => {
+    ready('checkRecordedFile');
+    const { ws, stored, file } = await written();
+    fs.rmSync(file);
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', stored), 'missing');
+  });
+
+  test('a folder at the name answers missing', async () => {
+    ready('checkRecordedFile');
+    const { ws, stored, file } = await written();
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', stored), 'missing');
+  });
+
+  test('a link at the name answers missing, even to an identical copy', LINKS, async () => {
+    ready('checkRecordedFile');
+    const { ws, stored, file } = await written();
+    const copy = path.join(ws, 'copy.png');
+    fs.copyFileSync(file, copy);
+    fs.rmSync(file);
+    fs.symlinkSync(copy, file);
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', stored), 'missing');
+  });
+
+  test('a path through a link at the conversation folder answers missing', LINKS, async () => {
+    ready('checkRecordedFile');
+    const { ws, stored } = await written();
+    const moved = path.join(ws, 'moved');
+    fs.renameSync(folderOf(ws), moved);
+    fs.symlinkSync(moved, folderOf(ws));
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', stored), 'missing');
+  });
+
+  test('a path through a link at .rundock answers missing', LINKS, async () => {
+    ready('checkRecordedFile');
+    const { ws, stored } = await written();
+    const outside = outsideFolder();
+    fs.renameSync(path.join(ws, '.rundock'), path.join(outside, 'moved'));
+    fs.symlinkSync(path.join(outside, 'moved'), path.join(ws, '.rundock'));
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', stored), 'missing');
+  });
+
+  test('a size that differs from the record answers changed before any hashing', async (t) => {
+    ready('checkRecordedFile');
+    const { ws, stored, file } = await written();
+    fs.appendFileSync(file, 'x');
+    const hash = t.mock.method(crypto, 'createHash');
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', stored), 'changed');
+    assert.strictEqual(hash.mock.callCount(), 0);
+  });
+
+  test('a file of the same size one byte different answers changed', async () => {
+    ready('checkRecordedFile');
+    const { ws, stored, file } = await written();
+    const bytes = fs.readFileSync(file);
+    bytes[bytes.length - 1] ^= 1;
+    fs.writeFileSync(file, bytes);
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', stored), 'changed');
+  });
+
+  test('a FIFO at the name answers missing without waiting', FIFOS, async () => {
+    ready('checkRecordedFile');
+    const { ws, stored, file } = await written();
+    fs.rmSync(file);
+    makeFifo(file);
+    assert.strictEqual(inChild(ws, 'check', stored), 'missing');
+  });
+
+  test('a FIFO at record.json is unreadable without waiting', FIFOS, async () => {
+    ready('readRecord');
+    const { ws } = await written();
+    fs.rmSync(recordOf(ws));
+    makeFifo(recordOf(ws));
+    assert.strictEqual(inChild(ws, 'read'), 'record-unreadable');
+  });
+});
+
+describe('deleteAttachments', () => {
+  test('every bad ID is refused bad-id and touches nothing', async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    for (const id of BAD_IDS) await assert.rejects(store.deleteAttachments(ws, id), refused('bad-id'), JSON.stringify(id));
+    assert.deepStrictEqual(fs.readdirSync(ws), []);
+  });
+
+  test('removes the conversation folder and lists the ID in deleted.json', async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+    await store.writeMessageFiles(ws, 'beta', MESSAGE());
+    await store.deleteAttachments(ws, 'alpha');
+    assert.strictEqual(fs.existsSync(folderOf(ws)), false);
+    assert.strictEqual(fs.readdirSync(folderOf(ws, 'beta')).length, 4);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(attachmentsOf(ws), 'deleted.json'), 'utf8')), ['alpha']);
+  });
+
+  test('a link at .rundock is refused delete-refused, and nothing is written or removed through it', LINKS, async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    const outside = outsideFolder();
+    writeJson(path.join(outside, 'attachments', 'alpha', 'record.json'), { messages: [], sent: {} });
+    fs.symlinkSync(outside, path.join(ws, '.rundock'));
+    const before = { ws: snapshot(ws), outside: snapshot(outside) };
+    await assert.rejects(store.deleteAttachments(ws, 'alpha'), refused('delete-refused'));
+    assert.deepStrictEqual({ ws: snapshot(ws), outside: snapshot(outside) }, before);
+    assert.strictEqual(fs.existsSync(path.join(outside, 'attachments', 'deleted.json')), false);
+  });
+
+  test('a link at .rundock/attachments is refused delete-refused, and nothing is written or removed through it', LINKS, async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    const outside = outsideFolder();
+    writeJson(path.join(outside, 'alpha', 'record.json'), { messages: [], sent: {} });
+    fs.mkdirSync(path.join(ws, '.rundock'));
+    fs.symlinkSync(outside, attachmentsOf(ws));
+    const before = { ws: snapshot(ws), outside: snapshot(outside) };
+    await assert.rejects(store.deleteAttachments(ws, 'alpha'), refused('delete-refused'));
+    assert.deepStrictEqual({ ws: snapshot(ws), outside: snapshot(outside) }, before);
+    assert.strictEqual(fs.existsSync(path.join(outside, 'deleted.json')), false);
+  });
+
+  test('a link at the conversation folder to a folder outside removes only the link', LINKS, async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    const outside = outsideFolder();
+    const before = snapshot(outside);
+    fs.mkdirSync(attachmentsOf(ws), { recursive: true });
+    fs.symlinkSync(outside, folderOf(ws));
+    await store.deleteAttachments(ws, 'alpha');
+    assert.throws(() => fs.lstatSync(folderOf(ws)), { code: 'ENOENT' });
+    assert.deepStrictEqual(snapshot(outside), before);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(attachmentsOf(ws), 'deleted.json'), 'utf8')), ['alpha']);
+  });
+
+  test('a dangling link at the conversation folder is removed', LINKS, async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    fs.mkdirSync(attachmentsOf(ws), { recursive: true });
+    fs.symlinkSync(path.join(ws, 'nowhere'), folderOf(ws));
+    await store.deleteAttachments(ws, 'alpha');
+    assert.throws(() => fs.lstatSync(folderOf(ws)), { code: 'ENOENT' });
+    assert.strictEqual(fs.existsSync(path.join(ws, 'nowhere')), false);
+  });
+
+  test('a folder of read-only files is removed completely', async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    const entry = await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+    for (const described of entry.files) fs.chmodSync(path.join(folderOf(ws), described.file), 0o444);
+    fs.chmodSync(folderOf(ws), 0o555);
+    await store.deleteAttachments(ws, 'alpha');
+    assert.strictEqual(fs.existsSync(folderOf(ws)), false);
+  });
+
+  test('an ID with no folder is listed and the delete succeeds, on a workspace with no .rundock at all', async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    await store.deleteAttachments(ws, 'alpha');
+    assert.deepStrictEqual(fs.readdirSync(attachmentsOf(ws)), ['deleted.json']);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(attachmentsOf(ws), 'deleted.json'), 'utf8')), ['alpha']);
+  });
+
+  test('IDs already listed are kept, and an ID is listed once however often it is deleted', async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    writeJson(path.join(attachmentsOf(ws), 'deleted.json'), ['beta']);
+    await store.deleteAttachments(ws, 'alpha');
+    await store.deleteAttachments(ws, 'alpha');
+    await store.deleteAttachments(ws, 'beta');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(attachmentsOf(ws), 'deleted.json'), 'utf8')), ['beta', 'alpha']);
+  });
+
+  test('a send to a deleted ID is refused deleted and writes nothing, its folder included', async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+    await store.deleteAttachments(ws, 'alpha');
+    const before = snapshot(ws);
+    await assert.rejects(store.writeMessageFiles(ws, 'alpha', MESSAGE()), refused('deleted'));
+    assert.deepStrictEqual(snapshot(ws), before);
+    assert.strictEqual(fs.existsSync(folderOf(ws)), false);
+  });
+
+  const DELETED_JUNK = [
+    ['a link', (file, outside) => { writeJson(path.join(outside, 'deleted.json'), []); fs.symlinkSync(path.join(outside, 'deleted.json'), file); }, LINKS],
+    ['a folder', (file) => { fs.mkdirSync(file); }],
+    ['text that is not JSON', (file) => { fs.writeFileSync(file, '["alpha"'); }],
+    ['an object', (file) => { fs.writeFileSync(file, '{"alpha": true}'); }],
+    ['an array holding a number', (file) => { fs.writeFileSync(file, '["beta", 3]'); }],
+    ['an array holding an ID off the pattern', (file) => { fs.writeFileSync(file, '["../.."]'); }],
+  ];
+  for (const [label, plant, options] of DELETED_JUNK) {
+    test(`deleted.json holding ${label} refuses the delete delete-refused, with nothing removed`, options || {}, async () => {
+      ready('deleteAttachments');
+      const ws = workspace();
+      const outside = outsideFolder();
+      await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+      plant(path.join(attachmentsOf(ws), 'deleted.json'), outside);
+      const before = { ws: snapshot(ws), outside: snapshot(outside) };
+      await assert.rejects(store.deleteAttachments(ws, 'alpha'), refused('delete-refused'));
+      assert.deepStrictEqual({ ws: snapshot(ws), outside: snapshot(outside) }, before);
+    });
+  }
+
+  test('any other failure is delete-refused, with nothing removed', async (t) => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+    const before = snapshot(ws);
+    const realRenameSync = fs.renameSync;
+    t.mock.method(fs, 'renameSync', function renameSync(from, to) {
+      if (to === path.join(attachmentsOf(ws), 'deleted.json')) throw systemError('EIO', 'i/o error', 'rename');
+      return realRenameSync.call(fs, from, to);
+    });
+    await assert.rejects(store.deleteAttachments(ws, 'alpha'), refused('delete-refused'));
+    t.mock.restoreAll();
+    assert.deepStrictEqual(snapshot(ws), before);
+  });
+
+  test('while the lock is held, a delete for that ID changes nothing on disk until it is released', async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+    const before = snapshot(ws);
+    const held = deferred();
+    const holding = store.withConversationLock('alpha', () => held.promise);
+    const deleting = store.deleteAttachments(ws, 'alpha');
+    await turns();
+    assert.deepStrictEqual(snapshot(ws), before);
+    held.settle();
+    await holding;
+    await deleting;
+    assert.strictEqual(fs.existsSync(folderOf(ws)), false);
+  });
+
+  test('a delete started while a send holds the lock finishes after it, and a send started after the delete is refused deleted', async (t) => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    const order = [];
+    let deleting;
+    let later;
+    // What the folder held when the delete came to remove it.
+    let atRemoval;
+    const realRmSync = fs.rmSync;
+    t.mock.method(fs, 'rmSync', function rmSync(target, options) {
+      if (target === folderOf(ws) && !atRemoval) atRemoval = { files: Object.keys(snapshot(target)).sort(), record: store.readRecord(ws, 'alpha') };
+      return realRmSync.call(fs, target, options);
+    });
+    const create = (target, bytes) => {
+      if (!deleting) {
+        deleting = store.deleteAttachments(ws, 'alpha').then(() => { order.push('delete'); });
+        later = store.writeMessageFiles(ws, 'alpha', [{ name: 'later.txt', bytes: Buffer.from('later') }]).then(
+          () => { order.push('later written'); },
+          (e) => { order.push(`later ${e.code}`); },
+        );
+      }
+      return writeFileExclusive(target, bytes);
+    };
+    const entry = await store.writeMessageFiles(ws, 'alpha', MESSAGE(), { create });
+    await deleting;
+    await later;
+    assert.deepStrictEqual(entry.files.map((f) => f.file), ['1-Screen_Shot.png', '2-Report.pdf', '3-notes.txt']);
+    assert.ok(atRemoval, 'the delete removed the folder');
+    assert.deepStrictEqual(atRemoval.files, ['', '1-Screen_Shot.png', '2-Report.pdf', '3-notes.txt', 'record.json']);
+    assert.deepStrictEqual(atRemoval.record.messages, [entry]);
+    assert.deepStrictEqual(order, ['delete', 'later deleted']);
+    assert.strictEqual(fs.existsSync(folderOf(ws)), false);
+  });
+});
+
+describe('the five sequences', () => {
+  test('the inverse: a write then a delete leaves no folder, the ID listed, no messages and a refused write', async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    const entry = await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+    await store.deleteAttachments(ws, 'alpha');
+    assert.strictEqual(fs.existsSync(folderOf(ws)), false);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(attachmentsOf(ws), 'deleted.json'), 'utf8')), ['alpha']);
+    assert.deepStrictEqual(store.readRecord(ws, 'alpha'), { messages: [], sent: {} });
+    for (const described of entry.files) assert.strictEqual(store.checkRecordedFile(ws, 'alpha', described.file), 'missing');
+    await assert.rejects(store.writeMessageFiles(ws, 'alpha', MESSAGE()), refused('deleted'));
+    assert.strictEqual(fs.existsSync(folderOf(ws)), false);
+  });
+
+  test('the undo: a write that fails on its second file leaves the folder as it was, and the same message then takes the same numbers', async (t) => {
+    ready('writeMessageFiles');
+    const ws = workspace();
+    await store.writeMessageFiles(ws, 'alpha', [{ name: 'earlier.txt', bytes: Buffer.from('earlier') }]);
+    const before = snapshot(ws);
+    const tried = [];
+    const create = (target, bytes) => { tried.push(path.basename(target)); return writeFileExclusive(target, bytes); };
+    t.mock.method(fs, 'writeSync', scripted(Infinity, enospc(), Infinity));
+    await assert.rejects(store.writeMessageFiles(ws, 'alpha', MESSAGE(), { create }), refused('disk-full', { name: 'Report.pdf' }));
+    t.mock.restoreAll();
+    assert.deepStrictEqual(snapshot(ws), before);
+    assert.strictEqual(store.readRecord(ws, 'alpha').messages.length, 1);
+    const entry = await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+    assert.deepStrictEqual(entry.files.map((f) => f.file), ['2-Screen_Shot.png', '3-Report.pdf', '4-notes.txt']);
+    assert.deepStrictEqual(tried, ['2-Screen_Shot.png', '3-Report.pdf']);
+  });
+
+  test('the retry: a message written twice is stored twice, a planted file is skipped, and a second delete lists the ID once', async () => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    const message = MESSAGE();
+    const first = await store.writeMessageFiles(ws, 'alpha', message);
+    const firstCopy = snapshot(folderOf(ws));
+    const second = await store.writeMessageFiles(ws, 'alpha', message);
+    assert.deepStrictEqual(second.files.map((f) => f.file), ['4-Screen_Shot.png', '5-Report.pdf', '6-notes.txt']);
+    for (const described of first.files) assert.strictEqual(snapshot(folderOf(ws))[described.file], firstCopy[described.file]);
+    assert.deepStrictEqual(store.readRecord(ws, 'alpha').messages, [first, second]);
+    fs.writeFileSync(path.join(folderOf(ws), '7-planted.txt'), 'planted');
+    const third = await store.writeMessageFiles(ws, 'alpha', [{ name: 'a.png', bytes: pngBytes() }]);
+    assert.strictEqual(third.files[0].file, '8-a.png');
+    await store.deleteAttachments(ws, 'alpha');
+    await store.deleteAttachments(ws, 'alpha');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(attachmentsOf(ws), 'deleted.json'), 'utf8')), ['alpha']);
+  });
+
+  test('the most common next step: each stored file is present, and a second message continues the numbering', async () => {
+    ready('checkRecordedFile');
+    const ws = workspace();
+    const first = await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+    for (const described of first.files) assert.strictEqual(store.checkRecordedFile(ws, 'alpha', described.file), 'present');
+    const second = await store.writeMessageFiles(ws, 'alpha', [{ name: 'later.md', bytes: Buffer.from('# later') }]);
+    assert.deepStrictEqual(second.files.map((f) => f.file), ['4-later.md']);
+    assert.strictEqual(store.checkRecordedFile(ws, 'alpha', '4-later.md'), 'present');
+  });
+
+  describe('the control failing closed', () => {
+    test('an unreadable record refuses the write with nothing left behind, and the check answers missing', async () => {
+      ready('checkRecordedFile');
+      const ws = workspace();
+      const entry = await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+      fs.writeFileSync(recordOf(ws), '[]');
+      const before = snapshot(ws);
+      await assert.rejects(store.writeMessageFiles(ws, 'alpha', MESSAGE()), refused('save-failed'));
+      assert.deepStrictEqual(snapshot(ws), before);
+      assert.strictEqual(store.checkRecordedFile(ws, 'alpha', entry.files[0].file), 'missing');
+    });
+
+    test('an unreadable deleted.json refuses the write with nothing left behind and the delete with nothing removed', async () => {
+      ready('deleteAttachments');
+      const ws = workspace();
+      const entry = await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+      fs.writeFileSync(path.join(attachmentsOf(ws), 'deleted.json'), 'not json');
+      const before = snapshot(ws);
+      await assert.rejects(store.writeMessageFiles(ws, 'alpha', MESSAGE()), refused('save-failed'));
+      await assert.rejects(store.deleteAttachments(ws, 'alpha'), refused('delete-refused'));
+      assert.deepStrictEqual(snapshot(ws), before);
+      assert.strictEqual(store.checkRecordedFile(ws, 'alpha', entry.files[0].file), 'present');
+    });
+
+    test('a link on the path refuses the write and the delete, and the check answers missing', LINKS, async () => {
+      ready('deleteAttachments');
+      const ws = workspace();
+      const outside = outsideFolder();
+      const entry = await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+      fs.renameSync(path.join(ws, '.rundock'), path.join(outside, 'moved'));
+      fs.symlinkSync(path.join(outside, 'moved'), path.join(ws, '.rundock'));
+      const before = { ws: snapshot(ws), outside: snapshot(outside) };
+      await assert.rejects(store.writeMessageFiles(ws, 'alpha', MESSAGE()), refused('save-failed'));
+      await assert.rejects(store.deleteAttachments(ws, 'alpha'), refused('delete-refused'));
+      assert.strictEqual(store.checkRecordedFile(ws, 'alpha', entry.files[0].file), 'missing');
+      assert.deepStrictEqual({ ws: snapshot(ws), outside: snapshot(outside) }, before);
+    });
+
+    test('an unexpected error refuses the write with nothing left behind, the delete with nothing removed, and the check answers missing', async (t) => {
+      ready('deleteAttachments');
+      const ws = workspace();
+      const entry = await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+      const before = snapshot(ws);
+      const eio = () => { throw systemError('EIO', 'i/o error', 'fsync'); };
+      t.mock.method(fs, 'fsyncSync', eio);
+      await assert.rejects(store.writeMessageFiles(ws, 'alpha', MESSAGE()), refused('save-failed'));
+      await assert.rejects(store.deleteAttachments(ws, 'alpha'), refused('delete-refused'));
+      t.mock.method(fs, 'fstatSync', eio);
+      assert.strictEqual(store.checkRecordedFile(ws, 'alpha', entry.files[0].file), 'missing');
+      t.mock.restoreAll();
+      assert.deepStrictEqual(snapshot(ws), before);
+    });
   });
 });
