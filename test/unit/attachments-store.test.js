@@ -121,6 +121,8 @@ function scripted(...steps) {
 }
 
 // A promise and the function that settles it, for holding a lock open.
+// A test that holds a lock with one of these also settles it in t.after, so a
+// failed assertion never leaves the lock held for the tests after it.
 function deferred() {
   let settle;
   const promise = new Promise((resolve) => { settle = resolve; });
@@ -191,10 +193,11 @@ describe('storedBase: the original name made safe for a stored name', () => {
 });
 
 describe('withConversationLock', () => {
-  test('runs the calls for one ID one at a time, in the order they were made', async () => {
+  test('runs the calls for one ID one at a time, in the order they were made', async (t) => {
     ready('withConversationLock');
     const seen = [];
     const first = deferred();
+    t.after(() => first.settle());
     const a = store.withConversationLock('alpha', async () => { seen.push('a starts'); await first.promise; seen.push('a ends'); });
     const b = store.withConversationLock('alpha', () => { seen.push('b'); });
     const c = store.withConversationLock('alpha', async () => { seen.push('c'); });
@@ -218,9 +221,10 @@ describe('withConversationLock', () => {
     assert.strictEqual(await store.withConversationLock('alpha', () => 'after'), 'after');
   });
 
-  test('never makes one ID wait on another', async () => {
+  test('never makes one ID wait on another', async (t) => {
     ready('withConversationLock');
     const held = deferred();
+    t.after(() => held.settle());
     const alpha = store.withConversationLock('alpha', () => held.promise);
     assert.strictEqual(await store.withConversationLock('beta', () => 'beta ran'), 'beta ran');
     held.settle('alpha ran');
@@ -676,10 +680,11 @@ describe('readRecord', () => {
 });
 
 describe('writeMessageFiles: the conversation lock', () => {
-  test('while the lock is held, a write for that ID changes nothing on disk until it is released', async () => {
+  test('while the lock is held, a write for that ID changes nothing on disk until it is released', async (t) => {
     ready('writeMessageFiles');
     const ws = workspace();
     const held = deferred();
+    t.after(() => held.settle());
     const holding = store.withConversationLock('alpha', () => held.promise);
     const writing = store.writeMessageFiles(ws, 'alpha', MESSAGE());
     await turns();
@@ -1002,12 +1007,13 @@ describe('deleteAttachments', () => {
     assert.deepStrictEqual(snapshot(ws), before);
   });
 
-  test('while the lock is held, a delete for that ID changes nothing on disk until it is released', async () => {
+  test('while the lock is held, a delete for that ID changes nothing on disk until it is released', async (t) => {
     ready('deleteAttachments');
     const ws = workspace();
     await store.writeMessageFiles(ws, 'alpha', MESSAGE());
     const before = snapshot(ws);
     const held = deferred();
+    t.after(() => held.settle());
     const holding = store.withConversationLock('alpha', () => held.promise);
     const deleting = store.deleteAttachments(ws, 'alpha');
     await turns();
