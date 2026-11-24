@@ -1672,6 +1672,7 @@ wss.on('connection', (ws) => {
             // a crash) closed without the done that ends the turn, and the
             // window was left waiting.
             existing.resultSent = false;
+            existing.lastTurnOutcome = null;
             existing.idle = false; existing.idleSince = null;
             existing.toolCalls = [];
             existing.turnStartTime = Date.now();
