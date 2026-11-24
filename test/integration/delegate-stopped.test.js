@@ -657,3 +657,49 @@ describe('no line when the close is not Wren\'s to report', () => {
     assert.deepStrictEqual(seen.filter(isReturnTo(convoId)), [], 'and no switch');
   });
 });
+
+// ASKING AGAIN AFTER A STOP. Cos, parked by the prompt that says Wren stopped,
+// takes the person's next message and hands over again. The new handover is
+// drawn like any other, and the new Wren is judged on its own turn: the
+// earlier stop does not count against it, and is not said twice.
+describe('the person asks again after Wren stopped', () => {
+  test('Cos hands over again, the new Wren finishes, and the one line stays the only line', async () => {
+    h.clearInvocations();
+    h.writeScenario([
+      { match: { agent: 'content-lead', promptIncludes: 'ds-retry second brief' }, exitAfterTurn: 0,
+        turn: [{ text: 'DS-RETRY-SECOND the post is drafted' }] },
+      { match: { agent: 'content-lead', promptIncludes: 'ds-retry brief' }, crash: 1 },
+      { match: { promptIncludes: 'ds-retry try once more', promptExcludes: '[SYSTEM:' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to Wren.', prompt: 'ds-retry second brief' } }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'ds-retry request', promptExcludes: '[SYSTEM:' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Over to Wren.', prompt: 'ds-retry brief' } }] },
+      { match: { promptIncludes: '[SYSTEM:' }, turn: [{ text: '<silent>' }] },
+    ]);
+    const { convoId, since } = startConversation('ds-retry');
+    const first = await untilClosed(convoId, since);
+    assert.strictEqual(first.filter(isLine(convoId)).length, 1, 'sanity: Wren stopped, and one line said so');
+    assert.ok(await h.waitUntil(() => {
+      const e = h.internal.chatProcesses.get(convoId);
+      return Boolean(e && e.agentId === 'chief-of-staff' && !e.exited && e.idle === true);
+    }, { timeout: 20000 }), 'Cos has the conversation again and is waiting');
+
+    const next = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ds-retry try once more' });
+    const second = await untilClosed(convoId, next);
+    const forward = second.filter((m) => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === convoId
+      && m.fromAgent === 'chief-of-staff' && m.toAgent === 'content-lead');
+    assert.strictEqual(forward.length, 1, `Cos handed over once: ${JSON.stringify(forward)}`);
+    assert.deepStrictEqual(drawnFor(forward[0]), ['Cos handed over to Wren'], 'and the page draws the handover');
+    assert.ok(second.indexOf(forward[0]) < second.findIndex(isReturnTo(convoId)), 'the handover comes before the handback');
+    assert.ok(second.some((m) => m.type === 'result' && m._conversationId === convoId
+      && String(m.result || '').includes('DS-RETRY-SECOND')), 'sanity: the new Wren finished its turn');
+    assertHandedBack(second, convoId);
+    assert.strictEqual(second.find(isReturnTo(convoId)).failed, undefined, 'the new Wren did not stop');
+
+    const all = await settled(convoId, since);
+    assert.strictEqual(all.filter(isLine(convoId)).length, 1, 'still exactly one line, for the first Wren');
+    assert.strictEqual((h.internal.loadTranscript(convoId) || []).filter((t) => t.type === 'delegation').length, 1,
+      'and one stored');
+    h.reapConvo(convoId);
+  });
+});
