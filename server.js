@@ -22,6 +22,7 @@ const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES, stripRundockMarkers } 
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const config = require('./lib/config.js');
+const { MAX_PAYLOAD } = require('./lib/attachments/receive.js');
 const agentsDiscovery = require('./lib/agents/discovery.js');
 const {
   discoverAgents, readNormalisedFile, extractFrontmatterText, titleCase,
@@ -1049,6 +1050,9 @@ const wss = new WebSocketServer({
   // The page offers `rundock` beside the subprotocol carrying its session
   // token (lib/auth); the token is never chosen, so it is never echoed back.
   handleProtocols: (protocols) => (protocols.has(auth.WS_PROTOCOL) ? auth.WS_PROTOCOL : false),
+  // A message with its files is one frame; a frame past this closes only the
+  // socket that sent it (lib/attachments/receive.js).
+  maxPayload: MAX_PAYLOAD,
 });
 
 // Module-level process tracking: survives WebSocket reconnects
@@ -1530,6 +1534,9 @@ wss.on('connection', (ws) => {
   connectedClients.add(ws);
   ws._alive = true;
   ws.on('pong', () => { ws._alive = true; });
+  // A frame over maxPayload errors on this socket, which then closes with
+  // 1009. Without a listener that error would end the server.
+  ws.on('error', (err) => console.error('[WS] socket error:', err && err.message));
 
   // Tell this client about any active processes so it can restore thinking indicators.
   // Always send this message, even when empty, so the client can reconcile stale state.
