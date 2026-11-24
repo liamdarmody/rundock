@@ -4918,6 +4918,22 @@ fetchAgentNotice((agentNotice) => {
     process.exit(0);
   }
 
+  // Rundock's own two files (isRundockAnswerFileEdit), refused the same way:
+  // before any saved answer, folder grant, mode or card, in every run.
+  if (isRundockAnswerFileEdit(data.tool_name, data.tool_input, wsRoot)) {
+    const ownFile = "This is one of Rundock's own files: it holds this workspace's settings and the person's permission answers, which an agent never changes, so this write was refused. The refusal is deliberate: do not retry it or try another way.";
+    writeDecision(({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: unattendedRun()
+          ? `${ownFile} Say in your final message what you wanted to change. ${UNATTENDED_NEXT_UNLOADED}`
+          : `${ownFile} Tell the person what you wanted to change, so they can make it in Rundock.`,
+      }
+    }));
+    process.exit(0);
+  }
+
   // Workspace file-access boundary. Classified BEFORE the code-mode
   // short-circuit on purpose: code mode trusts commands inside the
   // workspace, it does not extend the workspace to the whole machine.
