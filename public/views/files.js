@@ -212,9 +212,27 @@ function fileSaveFailed(path, left) {
   if (path === currentFilePath) editorDirty = true;
 }
 
+// The largest frame the server reads (MAX_PAYLOAD in
+// lib/attachments/receive.js). A save whose frame is larger would close the
+// connection, so it is not sent, and the status line says why.
+const SAVE_FRAME_LIMIT = 28000000;
+function saveFrameTooLarge(frame) {
+  const tooLarge = new TextEncoder().encode(frame).length > SAVE_FRAME_LIMIT;
+  const statusEl = tooLarge && document.getElementById('editor-status');
+  if (statusEl) {
+    statusEl.style.color = 'var(--attention)';
+    statusEl.textContent = 'Not saved: this file is too large to save from the editor (the limit is 28 MB)';
+  }
+  return tooLarge;
+}
+
 // `origin: 'extension'` marks a save an extension caused, which the server
 // holds to the extension file rule again at write time.
 async function saveFileGuarded(path, content, opts = {}) {
+  const frame = JSON.stringify(opts.origin === 'extension'
+    ? { type: 'save_file', path, content, origin: 'extension' }
+    : { type: 'save_file', path, content });
+  if (saveFrameTooLarge(frame)) return false;
   let disk = null;
   try {
     const res = await fetch('/api/file?path=' + encodeURIComponent(path));
@@ -226,9 +244,7 @@ async function saveFileGuarded(path, content, opts = {}) {
     return false;
   }
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(opts.origin === 'extension'
-      ? { type: 'save_file', path, content, origin: 'extension' }
-      : { type: 'save_file', path, content }));
+    ws.send(frame);
     diskBaselines.set(path, content);
     // Track what we just wrote as the current bytes for the open file. Without
     // this, a surface whose live content falls back to rawFileContent (the
@@ -1556,6 +1572,8 @@ function endSourcesWatch() {
 // editors' save makes, then to the server, which resolves the note's list
 // again before it writes.
 async function saveSourceGuarded(notePath, source, content) {
+  const frame = JSON.stringify({ type: 'save_source', path: notePath, source, content });
+  if (saveFrameTooLarge(frame)) return false;
   let disk = null;
   try {
     const res = await fetch('/api/file?path=' + encodeURIComponent(source));
@@ -1578,7 +1596,7 @@ async function saveSourceGuarded(notePath, source, content) {
     return false;
   }
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'save_source', path: notePath, source, content }));
+    ws.send(frame);
     sourceBaselines.set(source, content);
     sourceHolds.delete(source);
   }

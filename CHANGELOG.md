@@ -9,6 +9,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 ### Changed
 
 - **Handovers you can follow:** when one agent hands the conversation to another, a line now says who handed over to whom and who handed it back. If a teammate stops before finishing, Rundock says so in the conversation, with the reason, instead of carrying on as if the work were done. On Codex this replaces the separate error card, so you see one notice.
+- **The editor stops a save larger than 28 MB:** the file on disk is left as it was, and the editor says why it wasn't saved.
 
 ### Fixed
 
