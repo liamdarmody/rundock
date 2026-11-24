@@ -441,3 +441,159 @@ describe('what Cos is told when Wren stopped', () => {
     h.reapConvo(convoId);
   });
 });
+
+// NO LINE WHERE WREN DID NOT STOP. A turn the person stopped, a marker, or a
+// successful last turn each mean Wren did not stop before finishing, however
+// the process then ended. Each test drives one of those through the server
+// and finds no line sent or stored for the conversation; where control comes
+// back to Cos, the page draws the handback.
+const markup = require(path.join(ROOT, 'public', 'chat-markup.js'));
+
+// The two agents as the page knows them, named as standardTeam() names them.
+const TEAM = {
+  'chief-of-staff': { id: 'chief-of-staff', displayName: 'Cos', icon: 'C', colour: '#E87A5A', type: 'orchestrator' },
+  'content-lead': { id: 'content-lead', displayName: 'Wren', icon: 'W', colour: '#4A90D9', type: 'specialist' },
+};
+
+// What the page draws for this switch, as a screen reader reads it: the
+// avatars are hidden from it, so they are taken out before the words are read.
+function drawnFor(sw) {
+  const ctx = {
+    isActive: true, convoAgentId: 'chief-of-staff',
+    toAgentExists: !!TEAM[sw.toAgent], fromAgentExists: !!TEAM[sw.fromAgent],
+    toAgentType: TEAM[sw.toAgent] ? TEAM[sw.toAgent].type : undefined,
+  };
+  const state = { ...cs.createState(), activeAgentId: sw.fromAgent, delegationActive: true };
+  return cs.reduce(state, sw, ctx).effects
+    .filter((ef) => ef.type === 'show-delegation-divider')
+    .map((ef) => markup.delegationDividerHtml(TEAM[ef.fromAgentId], TEAM[ef.toAgentId], ef.isReturn)
+      .replace(/<span class="avatar xs"[^>]*aria-hidden="true"[^>]*>[^<]*<\/span>/g, ' ')
+      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+}
+
+/**
+ * Everything the window received from `since`, read once the server has
+ * answered a history request sent after it: that reply goes out after
+ * anything a close already sent.
+ */
+async function settled(convoId, since) {
+  const asked = client.messages.length;
+  client.send({ type: 'get_session_history', conversationId: convoId, sessionIds: [], limit: 200 });
+  await client.waitFor((m) => m.type === 'session_history' && m.conversationId === convoId,
+    { since: asked, label: 'the history request was answered', timeout: 20000 });
+  return client.messages.slice(since);
+}
+
+function assertNoLine(seen, convoId) {
+  assert.deepStrictEqual(seen.filter(isLine(convoId)).map((m) => m.content), [], 'no line is sent');
+  assert.deepStrictEqual((h.internal.loadTranscript(convoId) || []).filter((t) => t.type === 'delegation').map((t) => t.text), [],
+    'and none is stored');
+}
+
+function assertHandedBack(seen, convoId) {
+  const back = seen.filter(isReturnTo(convoId));
+  assert.strictEqual(back.length, 1, `control came back to Cos once: ${JSON.stringify(back)}`);
+  assert.deepStrictEqual(drawnFor(back[0]), ['Wren handed back to Cos'], 'and the page draws the handback');
+}
+
+const COMPLETE = '<!-- RUNDOCK:COMPLETE -->';
+
+describe('no line when Wren did not stop before finishing', () => {
+  test('the person stopping Wren mid-turn sends no switch and no line', async () => {
+    h.clearInvocations();
+    routeToWren('ds-cancel', [{ match: { promptIncludes: 'ds-cancel brief' }, ...heldWren('ds-cancel') }]);
+    const { convoId, since } = startConversation('ds-cancel');
+    await waitForWrenPartWay(convoId, since);
+    const wren = h.internal.chatProcesses.get(convoId);
+    assert.strictEqual(wren && wren.agentId, 'content-lead', 'sanity: Wren is the process on screen');
+    let closed = false;
+    wren.process.once('close', () => { closed = true; });
+    client.send({ type: 'cancel', conversationId: convoId });
+    assert.ok(await h.waitUntil(() => closed, { timeout: 20000 }), 'Wren\'s process closed');
+    assert.strictEqual(wren.cancelled, true, 'sanity: stopping Wren marked it stopped by the person');
+    const seen = await settled(convoId, since);
+    assert.deepStrictEqual(seen.filter(isReturnTo(convoId)), [], 'no switch is sent, so nothing says Wren handed back');
+    assertNoLine(seen, convoId);
+    h.reapConvo(convoId);
+  });
+
+  test('a marker and then a non-zero exit is no stop', async () => {
+    h.clearInvocations();
+    routeToWren('ds-markexit', [{ match: { promptIncludes: 'ds-markexit brief' }, isError: true, exitAfterTurn: 1,
+      turn: [{ text: `DS-MARKEXIT the post is drafted ${COMPLETE}` }] }]);
+    const { convoId, since } = startConversation('ds-markexit');
+    const seen = await untilClosed(convoId, since);
+    assertNoLine(seen, convoId);
+    assertHandedBack(seen, convoId);
+    h.reapConvo(convoId);
+  });
+
+  test('a marker and then a kill by a signal is no stop', async () => {
+    h.clearInvocations();
+    routeToWren('ds-markkill', [{ match: { promptIncludes: 'ds-markkill brief' },
+      holdAfterText: path.join(h.workspaceDir, `never-ds-markkill-${Date.now()}`),
+      turn: [{ text: `DS-MARKKILL the post is drafted ${COMPLETE}` }] }]);
+    const { convoId, since } = startConversation('ds-markkill');
+    await waitForWrenPartWay(convoId, since);
+    const wren = h.internal.chatProcesses.get(convoId);
+    assert.strictEqual(wren && wren.agentId, 'content-lead', 'sanity: Wren is the process on screen');
+    wren.process.kill('SIGKILL');
+    const seen = await untilClosed(convoId, since);
+    assert.strictEqual(wren.lastTurnOutcome, null, 'sanity: Wren\'s turn never reached its result');
+    assertNoLine(seen, convoId);
+    assertHandedBack(seen, convoId);
+    h.reapConvo(convoId);
+  });
+
+  test('a fresh start after an expired session whose turn succeeds without a marker is no stop', async () => {
+    h.clearInvocations();
+    const convoId = h.freshConvoId('ds-freshok');
+    const others = h.internal.readConversations().filter((c) => c.id !== convoId);
+    h.internal.writeConversations([{ id: convoId, title: 'ds-freshok', status: 'active', agentId: 'chief-of-staff',
+      sessionId: 'ds-freshok-cos', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'ds-freshok-cos' },
+        { agentId: 'content-lead', sessionId: 'ds-freshok-dead' }] }, ...others]);
+    routeToWren('ds-freshok', [{ match: { promptIncludes: 'ds-freshok brief' }, exitAfterTurn: 0,
+      turn: [{ text: 'DS-FRESHOK the post is drafted' }] }], { cosResumed: true, deadSessions: ['ds-freshok-dead'] });
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ds-freshok request', sessionId: 'ds-freshok-cos' });
+    const seen = await untilClosed(convoId, since);
+    const wren = h.readInvocations().filter((i) => i.agent === 'content-lead' && i.env && i.env.RUNDOCK_CONVO_ID === convoId);
+    assert.deepStrictEqual(wren.map((i) => i.resume), ['ds-freshok-dead', null], 'sanity: the dead id was refused and Wren started fresh');
+    assertNoLine(seen, convoId);
+    assertHandedBack(seen, convoId);
+    h.reapConvo(convoId);
+  });
+
+  test('exit code 0 after a successful result and no marker is no stop, and Cos is told Wren completed their work', async () => {
+    h.clearInvocations();
+    h.clearPrompts();
+    routeToWren('ds-clean', [{ match: { promptIncludes: 'ds-clean brief' }, exitAfterTurn: 0,
+      turn: [{ text: 'DS-CLEAN the post is drafted' }] }]);
+    const { convoId, since } = startConversation('ds-clean');
+    const seen = await untilClosed(convoId, since);
+    assertNoLine(seen, convoId);
+    assertHandedBack(seen, convoId);
+    assert.ok(await h.waitUntil(() => h.promptsFor('chief-of-staff').some((p) => p.includes('[SYSTEM:'))),
+      'Cos, started again, was written to');
+    const prompt = h.promptsFor('chief-of-staff').find((p) => p.includes('[SYSTEM:'));
+    assert.ok(prompt.includes('[SYSTEM: pipeline-complete] content-lead completed their work.'), `the prompt main writes: ${prompt}`);
+    assert.ok(!prompt.includes('[SYSTEM: delegate-failed]'), prompt);
+    h.reapConvo(convoId);
+  });
+
+  test('an earlier turn that ended on an error result is no stop when the last turn succeeded', async () => {
+    h.clearInvocations();
+    routeToWren('ds-recover', [
+      { match: { promptIncludes: 'ds-recover again' }, exitAfterTurn: 0, turn: [{ text: 'DS-RECOVER-SECOND the post is drafted' }] },
+      { match: { promptIncludes: 'ds-recover brief' }, isError: true, turn: [{ text: 'DS-RECOVER-FIRST the tool run hit a snag' }] },
+    ]);
+    const { convoId, since } = startConversation('ds-recover');
+    await waitForResult(convoId, 'DS-RECOVER-FIRST', since, 'Wren\'s first turn ended on an error result');
+    const next = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'ds-recover again' });
+    const seen = await untilClosed(convoId, next);
+    assertNoLine(seen, convoId);
+    assertHandedBack(seen, convoId);
+    h.reapConvo(convoId);
+  });
+});
