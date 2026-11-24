@@ -201,7 +201,7 @@ describe('what cards ahead of a saved answer still cards with no window', { conc
   let turn;
   before(async () => {
     await noWindow();
-    turn = await holdTurn(['saved-classes-plain', ...CLASSES.map(([label]) => convoOfClass(label)), ...GRADES.map(([label]) => convoOfGrade(label))]);
+    turn = await holdTurn(['saved-classes-plain', OWN_FILE_CONVO, ...CLASSES.map(([label]) => convoOfClass(label)), ...GRADES.map(([label]) => convoOfGrade(label))]);
     for (const key of KEYS) await save(key);
     // Each key is live: it answers a plain command of its own at once.
     for (const command of ['python3 tools/report.py', 'echo hi > out.txt']) {
@@ -222,7 +222,9 @@ describe('what cards ahead of a saved answer still cards with no window', { conc
   const CLASSES = [
     ['a high-risk command', 'Bash:python3', () => bashInput('python3 tools/report.py && rm -rf build'), (req) => !req.boundary && !req.answer_file && !req.startup_file && !req.code_mode_verdict, {}],
     ['an uncovered crossing', 'Bash:python3', () => bashInput(`python3 ${path.join(outside, 'notes.py')}`), (req) => req.boundary === true && req.crossings.length === 1, {}],
-    ['an answer-file write by a file tool', 'Write', () => ({ tool: 'Write', input: { file_path: path.join(h.workspaceDir, '.rundock', 'permissions.json'), content: '{"allowedTools":["Bash:curl"]}' } }), (req) => req.answer_file === true, {}],
+    // `.mcp.json`: a file tool's write to Rundock's own two files is refused
+    // before any card (below).
+    ['an answer-file write by a file tool', 'Write', () => ({ tool: 'Write', input: { file_path: path.join(h.workspaceDir, '.mcp.json'), content: '{"mcpServers":{}}' } }), (req) => req.answer_file === true, {}],
     ['an answer-file write by a shell command', 'Bash:echo', () => bashInput('echo \'{"allowedTools":["Bash:curl"]}\' > .rundock/permissions.json'), (req) => req.boundary === true && req.crossings.some((c) => c.answerFile === true), {}],
     ['a shell startup file', 'Bash:echo', () => bashInput(`echo x >> ${zshrc}`), (req) => req.startup_file === zshrc, {}],
     ['a Notes-mode Keychain line', 'Bash:security', () => bashInput('security find-generic-password -w -s example-service'), (req) => !!req.code_mode_verdict && req.code_mode_verdict.reason === 'keychain', KEYCHAIN_ENV],
@@ -243,6 +245,30 @@ describe('what cards ahead of a saved answer still cards with no window', { conc
       assert.deepStrictEqual(savedEvents(convo), [], `${label}: never recorded as allowed`);
     });
   }
+
+  // RUNDOCK'S OWN PERMISSION STORE IS NEVER WRITTEN BY A FILE TOOL, saved
+  // answer or not. The hook refuses the write before it asks the server
+  // anything, so the saved `Write` never meets it, nothing is carded and the
+  // saved answers stay exactly as Rundock wrote them.
+  const OWN_FILE_CONVO = 'saved-rundock-own-file';
+  test('a file tool\'s write to Rundock\'s permission store under a saved `Write` is refused with no card', async () => {
+    const tool = 'Write';
+    const input = { file_path: permissionsFile(), content: '{"allowedTools":["Bash:curl"]}' };
+    assert.strictEqual(P.toolAllowKey(tool, input), 'Write', 'the saved key matches it');
+    const saved = readToolAllows();
+    assert.ok(saved.includes('Write'), `the saved \`Write\` is stored: ${JSON.stringify(saved)}`);
+    const bytes = fs.readFileSync(permissionsFile());
+    const out = await runHook(tool, input, { convo: OWN_FILE_CONVO });
+    assert.strictEqual(out.permissionDecision, 'deny', JSON.stringify(out));
+    assert.strictEqual(out.permissionDecisionReason, "This is one of Rundock's own files: it holds this workspace's settings and the person's permission answers, which an agent never changes, so this write was refused. The refusal is deliberate: do not retry it or try another way. Tell the person what you wanted to change, so they can make it in Rundock.",
+      'refused as one of Rundock\'s own files, in the words a conversation gets');
+    assert.strictEqual(broadcasts.filter((m) => m.type === 'control_request' && m._conversationId === OWN_FILE_CONVO).length, 0, 'no card was raised');
+    assert.strictEqual(filed.filter((f) => f.convo === OWN_FILE_CONVO).length, 0, 'and nothing waited on one');
+    await h.delay(200);
+    assert.deepStrictEqual(savedEvents(OWN_FILE_CONVO), [], 'the saved answer never answered it');
+    assert.deepStrictEqual(readToolAllows(), saved, 'the saved answers are the same list');
+    assert.ok(fs.readFileSync(permissionsFile()).equals(bytes), 'and the file is as it was');
+  });
 
   // EACH GRADE ALONE KEEPS THE CARD, on a command the saved key answers at
   // once without it. Shaped as the hook shapes each field.
