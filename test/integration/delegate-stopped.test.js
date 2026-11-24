@@ -167,6 +167,31 @@ describe('the reason a delegate stopped', () => {
     assertStopped(sw, 'exit code 1');
     h.reapConvo(convoId);
   });
+
+  // The fresh start wires its own close, so the signal has to reach the
+  // decision through that wiring too.
+  test('a fresh start after an expired session killed mid-turn is stopped by the system, and the switch names the signal', async () => {
+    h.clearInvocations();
+    const convoId = h.freshConvoId('ds-freshkill');
+    const others = h.internal.readConversations().filter((c) => c.id !== convoId);
+    h.internal.writeConversations([{ id: convoId, title: 'ds-freshkill', status: 'active', agentId: 'chief-of-staff',
+      sessionId: 'ds-freshkill-cos', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'ds-freshkill-cos' },
+        { agentId: 'content-lead', sessionId: 'ds-freshkill-dead' }] }, ...others]);
+    routeToWren('ds-freshkill', [{ match: { promptIncludes: 'ds-freshkill brief' }, ...heldWren('ds-freshkill') }],
+      { cosResumed: true, deadSessions: ['ds-freshkill-dead'] });
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ds-freshkill request', sessionId: 'ds-freshkill-cos' });
+    await waitForWrenPartWay(convoId, since);
+    const wren = h.readInvocations().filter((i) => i.agent === 'content-lead' && i.env && i.env.RUNDOCK_CONVO_ID === convoId);
+    assert.deepStrictEqual(wren.map((i) => i.resume), ['ds-freshkill-dead', null], 'sanity: the dead id was refused and Wren started fresh');
+    assert.strictEqual((h.internal.chatProcesses.get(convoId) || {}).missingSessionRecovered, true,
+      'sanity: the process on screen is the fresh start');
+    h.internal.chatProcesses.get(convoId).process.kill('SIGKILL');
+    const sw = await waitForReturn(convoId, since);
+    assertStopped(sw, 'stopped by the system');
+    assert.strictEqual((sw.failed || {}).signal, 'SIGKILL', 'the switch names the signal');
+    h.reapConvo(convoId);
+  });
 });
 
 const CRASH1_TEXT = "Wren stopped before finishing\nWren's session ended before a final answer (exit code 1). "

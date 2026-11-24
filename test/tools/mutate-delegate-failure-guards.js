@@ -87,6 +87,11 @@ const MUTATIONS = [
     'the signal is dropped at the close wiring',
     "  if (delegateProc) delegateProc.on('close', handleDelegateClose);",
     "  if (delegateProc) delegateProc.on('close', (code) => handleDelegateClose(code));"],
+  // A fresh start after an expired session wires its own close.
+  [only(ENGINE_E2E, 'a fresh start after an expired session killed mid-turn is stopped by the system, and the switch names the signal'),
+    'the signal is dropped at the fresh-start close wiring',
+    "  proc.on('close', onClose);",
+    "  proc.on('close', (code) => onClose(code));"],
   // ===== THE WORDS =====
   [WORDS, 'an error result ranks below a signal or a code',
     "  if (lastTurnOutcome === 'error') return 'Claude Code reported an error';\n  if (signal) return 'stopped by the system';\n"
