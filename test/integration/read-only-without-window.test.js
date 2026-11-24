@@ -152,8 +152,9 @@ describe('everything graded, and everything not low risk, still cards with no wi
   const CLASSES = [
     ['an uncovered crossing', () => bashInput(`cat ${path.join(outside, 'notes.md')}`), (req) => req.boundary === true && req.crossings.length === 1 && !req.crossings[0].secret, {}],
     // A file tool's write to an answer file, and a shell command's, which the
-    // hook tags on its crossing instead.
-    ['an answer-file write by a file tool', () => ({ tool: 'Write', input: { file_path: path.join(h.workspaceDir, '.rundock', 'permissions.json'), content: '{"allow":["Bash"]}' } }), (req) => req.answer_file === true, {}],
+    // hook tags on its crossing instead. The file tool writes `.mcp.json`: its
+    // write to Rundock's own two files is refused before any card (below).
+    ['an answer-file write by a file tool', () => ({ tool: 'Write', input: { file_path: path.join(h.workspaceDir, '.mcp.json'), content: '{"mcpServers":{}}' } }), (req) => req.answer_file === true, {}],
     ['an answer-file write by a shell command', () => bashInput('echo \'{"allow":["Bash"]}\' > .rundock/permissions.json'), (req) => req.boundary === true && req.crossings.some((c) => c.answerFile === true), {}],
     ['a shell startup file', () => bashInput(`echo x >> ${zshrc}`), (req) => req.startup_file === zshrc, {}],
     ['a Keychain line', () => bashInput('security find-generic-password -w -s example-service'), (req) => !!req.code_mode_verdict && req.code_mode_verdict.reason === 'keychain', { RUNDOCK_TEST_SEAMS: '1', RUNDOCK_TEST_PLATFORM: 'darwin' }],
@@ -177,6 +178,23 @@ describe('everything graded, and everything not low risk, still cards with no wi
       assert.ok(!readOnlyEvents(convo).length, `${label}: never recorded as a read`);
     });
   }
+
+  // A file tool's write to Rundock's own permission store never reaches the
+  // server: the hook refuses it with no card, window or not.
+  test("a file tool's write to Rundock's permission store is refused with no card", async () => {
+    await noWindow();
+    const target = path.join(h.workspaceDir, '.rundock', 'permissions.json');
+    const convo = 'ro-class-rundock-own-file';
+    const before = fs.existsSync(target) ? fs.readFileSync(target) : null;
+    const out = await runHook('Write', { file_path: target, content: '{"allow":["Bash"]}' }, { convo });
+    assert.strictEqual(out.permissionDecision, 'deny', JSON.stringify(out));
+    assert.strictEqual(out.permissionDecisionReason, "This is one of Rundock's own files: it holds this workspace's settings and the person's permission answers, which an agent never changes, so this write was refused. The refusal is deliberate: do not retry it or try another way. Tell the person what you wanted to change, so they can make it in Rundock.",
+      'refused as one of Rundock\'s own files, in the words a conversation gets');
+    assert.strictEqual(broadcasts.filter((m) => m.type === 'control_request' && m._conversationId === convo).length, 0, 'no card was raised');
+    assert.strictEqual(filed.filter((f) => f.convo === convo).length, 0, 'and nothing waited on one');
+    const after = fs.existsSync(target) ? fs.readFileSync(target) : null;
+    assert.deepStrictEqual(after, before, 'the file is as it was');
+  });
 
   // EACH GRADE ALONE KEEPS THE CARD, on a command the read-only definition
   // reads as a read. The hook's grade is the word on these, never the

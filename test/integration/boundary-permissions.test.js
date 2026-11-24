@@ -851,12 +851,13 @@ describe('workspace file-access boundary', () => {
 // whether the server ever sends it. This drives the real hook against the real
 // server and asserts on the message that actually reaches the browser.
 describe('the answer-file reason reaches the browser', () => {
-  // Uses Rundock's OWN permission store, not the runtime's settings file. The
-  // settings file is now refused outright (the runtime guards it, measured), so
-  // it never reaches a card at all; the case below covers that. These two files
-  // are the ones whose card IS the protection.
-  test("a write to Rundock's permission store arrives worded as an answer file, not a crossing", async () => {
-    const target = path.join(h.workspaceDir, '.rundock', 'permissions.json');
+  // Uses `.mcp.json`, which decides what runs and still cards. The runtime's
+  // settings file is refused outright (the runtime guards it, measured), and a
+  // file tool's write to Rundock's own two files in `.rundock/` is refused by
+  // the hook before any card, so neither reaches a card at all; the case below
+  // covers the settings file.
+  test('a write to .mcp.json arrives worded as an answer file, not a crossing', async () => {
+    const target = path.join(h.workspaceDir, '.mcp.json');
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const since = client.messages.length;
     const pending = runHook('Write', { file_path: target, content: '{}' });

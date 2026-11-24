@@ -94,7 +94,8 @@ const UNCHANGED = [
   ['a read inside the workspace', 'Read', { file_path: '<root>/ws/notes.md' }],
   ['a read inside the workspace', 'Bash', { command: 'cat notes.md' }],
   ['a Keychain line', 'Bash', { command: KEYCHAIN_LINE }, KEYCHAIN],
-  ['an answer-file write', 'Write', { file_path: '<root>/ws/.rundock/permissions.json', content: '{}' }],
+  // A shell write only: a file tool's write to this file is now refused before
+  // any card, which test/unit/rundock-files-refused.test.js holds.
   ['an answer-file write', 'Bash', { command: 'echo {} > .rundock/permissions.json' }],
   ['a connector send', 'mcp__example_mail__send_message', { text: 'hello' }],
 ];

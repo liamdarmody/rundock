@@ -4,6 +4,12 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 > Versions prior to 0.7.1 used minor bumps for all changes. From 0.7.1 onward, minor = new capabilities, patch = refinements and fixes.
 
+## Unreleased
+
+### Fixed
+
+- **Agents can no longer change your permission answers or workspace settings:** before, when an agent edited the files that hold them, Rundock showed a card, and allowing it saved whatever the agent had written, "Always allow" answers included. Now the edit is refused with no card, and the agent tells you what it wanted to change, so you can make the change yourself in Rundock. A shell command that writes those files still asks.
+
 ## 0.15.9: Sign-In That Says Why (2026-11-18)
 
 Rundock now works with a Claude Code folder moved by `CLAUDE_CONFIG_DIR`, and the setup screen tells you why sign-in failed when you ask. Agents can no longer reach your Claude Code or Codex sign-in files by spelling the path another way, and wherever the sandbox is on, it now refuses those reads itself. Notes suggest links as you type `[[`, the nav rail has keyboard shortcuts, and a Claude Code or Codex installed through npm now starts on Windows. Updating is recommended.

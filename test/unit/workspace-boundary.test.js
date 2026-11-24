@@ -2308,10 +2308,12 @@ describe('code mode and the answer files', () => {
 // honoured, and a user met exactly that: card shown, approval recorded,
 // write refused, agent reporting "not approved".
 //
-// The two `.rundock/` files have no such floor. An agent edits them freely and
-// readToolAllows trusts whatever strings it finds, so a write is a grant of
-// standing permissions nobody issued. THE CARD IS THE ONLY PROTECTION THEY
-// HAVE, which is why the two sets must never be collapsed back together.
+// The two `.rundock/` files have no such floor in the runtime. readToolAllows
+// trusts whatever strings it finds, so a write is a grant of standing
+// permissions nobody issued. The hook is their floor instead: a file tool's
+// write to either is refused before any card, and a shell command's write
+// still raises one, the only protection on that path. That is why the two sets
+// must never be collapsed back together.
 describe('answer files split by who guards them', () => {
   const { spawnSync } = require('node:child_process');
   const HOOK = require.resolve('../../scripts/permission-hook.js');
@@ -2347,10 +2349,10 @@ describe('answer files split by who guards them', () => {
         'and the refusal says why, because silence would read as permission');
     });
 
-    // ASSERTED AS "NEVER ALLOWED", not as "asks", because those differ by
-    // something outside the test: with Rundock running the write goes to a
-    // card, and without it the hook now refuses, since the card that is this
-    // file's only protection cannot be shown. Both are the guarantee. An
+    // ASSERTED AS "NEVER ALLOWED", not as "asks": a file tool's write to
+    // either file is refused by the hook before any card, with or without
+    // Rundock running, and a shell command's goes to a card, which the hook
+    // refuses when Rundock cannot show it. Both are the guarantee. An
     // earlier version asserted 'ask' and passed only because a development
     // server happened to be listening; it failed the moment the port was free,
     // which is how the fail-open hole was found.
@@ -2373,10 +2375,12 @@ describe('answer files split by who guards them', () => {
 
 // WHEN NOBODY CAN BE ASKED, THE ANSWER FILES ARE STILL NOT CHANGED.
 //
-// The card is the ONLY guard on `.rundock/state.json` and
-// `.rundock/permissions.json`: no sandbox rule covers them, the runtime does not
-// refuse them, and readToolAllows trusts whatever strings it finds. So "the
-// server is unreachable" must not mean "go ahead". It did, until this.
+// No sandbox rule covers `.rundock/state.json` or `.rundock/permissions.json`,
+// the runtime does not refuse them, and readToolAllows trusts whatever strings
+// it finds. A file tool's write to either is refused by the hook before any
+// card, so it gets that refusal whether or not a server is there. A shell
+// command's write is guarded by the card alone, so "the server is unreachable"
+// must not mean "go ahead". It did, until this.
 //
 // The hole survived a suite that covered these files well, because those tests
 // spawned the hook with no port pinned and so reached a real Rundock on 3000.
@@ -2387,6 +2391,8 @@ describe('the server cannot be reached, and the answer files hold anyway', () =>
   const { spawnSync } = require('node:child_process');
   const HOOK = require.resolve('../../scripts/permission-hook.js');
 
+  // A shell command (toolName 'Bash') writes `rel` with a redirect, run from
+  // the workspace; any other tool names it in file_path.
   function decideWithNoServer(rel, toolName, codeMode) {
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'noserver-'));
     fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
@@ -2396,10 +2402,11 @@ describe('the server cannot be reached, and the answer files hold anyway', () =>
     const r = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({
         tool_name: toolName,
-        tool_input: { file_path: path.join(ws, ...rel.split('/')) },
+        tool_input: toolName === 'Bash' ? { command: `echo {} > ${rel}` } : { file_path: path.join(ws, ...rel.split('/')) },
         session_id: 's',
+        cwd: ws,
       }),
-      env, encoding: 'utf-8', timeout: 10000,
+      cwd: ws, env, encoding: 'utf-8', timeout: 10000,
     });
     return r.stdout || '';
   }
@@ -2410,7 +2417,15 @@ describe('the server cannot be reached, and the answer files hold anyway', () =>
       test(`${f} is refused, not approved, with no server to ask (${label})`, () => {
         const out = decideWithNoServer(f, 'Write', mode);
         assert.match(out, /"permissionDecision":"deny"/,
-          'the card is the only guard on this file, so an unreachable server cannot become a yes');
+          'a file tool never writes this file, so an unreachable server cannot become a yes');
+        assert.match(out, /one of Rundock's own files/,
+          'and the agent is told why, so it does not read as an unexplained failure');
+      });
+
+      test(`a shell command writing ${f} is refused, not approved, with no server to ask (${label})`, () => {
+        const out = decideWithNoServer(f, 'Bash', mode);
+        assert.match(out, /"permissionDecision":"deny"/,
+          'the card is the only guard on a shell write to this file, so an unreachable server cannot become a yes');
         assert.match(out, /never changed without asking/,
           'and the agent is told why, so it does not read as an unexplained failure');
       });
