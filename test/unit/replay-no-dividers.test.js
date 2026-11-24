@@ -116,31 +116,33 @@ describe('who is announced, on the document, through the real executor', () => {
     const draw = executor('show-delegation-divider');
     const r = cs.reduce(cs.createState(), message, CTX);
     for (const ef of r.effects) if (ef.type === 'show-delegation-divider') draw('c1', ef);
-    return rows().filter((el) => el.className.includes('msg-delegation'))
-      .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim());
+    // What a screen reader reads: the avatars are hidden from it.
+    return rows().filter((el) => el.className.includes('msg-delegation')).map((el) => {
+      const copy = el.cloneNode(true);
+      for (const hidden of copy.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
+      return (copy.textContent || '').replace(/\s+/g, ' ').trim();
+    });
   }
 
-  test('somebody arriving to take the work is announced by name', () => {
+  test('somebody arriving to take the work is announced with who handed it over', () => {
     const drawn = run({ type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
       fromAgent: 'default', toAgent: 'vox' });
-    assert.strictEqual(drawn.length, 1, 'one announcement');
-    assert.match(drawn[0], /Vox joined/, 'naming who now has the work');
+    assert.deepStrictEqual(drawn, ['Roo handed over to Vox'], 'one announcement, naming both agents');
   });
 
-  test('a handback to a mid-level lead announces nothing', () => {
+  test('a handback to a mid-level lead says who handed it back', () => {
     // THE REPORTED CASE. Ren is a specialist, so a rule keyed on the
-    // destination being the orchestrator called this an arrival and announced
-    // an agent that had the work all along.
+    // destination being the orchestrator called this an arrival. It is a
+    // return, and it reads as one: Ren had the work before and has it again.
     const drawn = run({ type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
       fromAgent: 'fact-checker', toAgent: 'research-lead', returning: true });
-    assert.deepStrictEqual(drawn, [],
-      'Ren already had the work; announcing her arrival is announcing something that did not happen');
+    assert.deepStrictEqual(drawn, ['Sage handed back to Ren']);
   });
 
-  test('a handback to the orchestrator announces nothing either', () => {
+  test('a handback to the orchestrator reads the same way', () => {
     const drawn = run({ type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p1',
       fromAgent: 'vox', toAgent: 'default', returning: true, });
-    assert.deepStrictEqual(drawn, [], 'the same rule, and one rule rather than two');
+    assert.deepStrictEqual(drawn, ['Vox handed back to Roo'], 'the same rule, and one rule rather than two');
   });
 });
 

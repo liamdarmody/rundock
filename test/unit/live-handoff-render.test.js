@@ -145,7 +145,16 @@ describe('the whole pipeline puts it on screen, in order, live and on reload', (
       kind: el.className.includes('msg-delegation') ? 'divider'
         : el.className.includes('msg-agent') ? 'agent' : 'other',
       text: (el.textContent || '').replace(/\s+/g, ' ').trim(),
+      spoken: spokenText(el),
+      classes: [...el.classList],
     }));
+  }
+
+  // What a screen reader reads: the text with the hidden avatars left out.
+  function spokenText(el) {
+    const copy = el.cloneNode(true);
+    for (const hidden of copy.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
+    return (copy.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
   test('the handoff line is on screen before the arrival, with nothing streamed', () => {
@@ -171,6 +180,26 @@ describe('the whole pipeline puts it on screen, in order, live and on reload', (
     assert.ok(arrival > -1, `the arrival divider is drawn too: ${JSON.stringify(seen)}`);
     assert.ok(turn < arrival,
       'it is said before the next agent arrives, not after, which is the order a person reads');
+    assert.strictEqual(seen[arrival].spoken, 'Roo handed over to Vox',
+      'the divider says who handed the conversation to whom');
+    assert.ok(seen[arrival].classes.includes('handover'), 'and is drawn as a handover');
+  });
+
+  test('a return draws who handed the conversation back', () => {
+    freshDom();
+    global.conversations = [{ id: 'c1', agentId: 'default', messages: [] }];
+    global.activeConversation = { id: 'c1', agentId: 'default' };
+    global.getConvoState = () => ({ currentStreamingMsg: null });
+
+    runPipeline({
+      type: 'system', subtype: 'agent_switch', _conversationId: 'c1', _processId: 'p2',
+      fromAgent: 'vox', toAgent: 'default', returning: true, silent: true,
+    }, { ...createState(), activeAgentId: 'vox', delegationActive: true });
+
+    const dividers = nodes().filter((n) => n.kind === 'divider');
+    assert.deepStrictEqual(dividers.map((n) => n.spoken), ['Vox handed back to Roo'],
+      'one handback, naming both agents');
+    assert.ok(!/joined|resumed/.test(dividers[0].text), dividers[0].text);
   });
 
   test('the live turn carries the words alone, not the transcript bookkeeping', () => {

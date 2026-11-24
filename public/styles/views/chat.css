@@ -270,6 +270,10 @@ body.light .permission-fields { background: var(--elevated); }
 .msg-delegation { display: flex; align-items: center; gap: 12px; padding: 12px 0; margin: 8px 0; }
 .delegation-line { flex: 1; height: 1px; background: var(--border); }
 .delegation-badge { display: flex; align-items: center; gap: 6px; font-size: var(--caption); font-weight: 600; white-space: nowrap; }
+/* The words and names take theme text colours, never an agent colour, which
+   fails contrast in the light theme; the avatars carry the agent colour. */
+.handover .delegation-badge { color: var(--text-2-strong); font-weight: 500; }
+.handover .hv-name { color: var(--text-1); font-weight: 600; }
 .section-label { font-size: var(--label); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); margin-bottom: 8px; text-align: left; }
 
 /* Where a long conversation was summarised to make room. Existing tokens only:

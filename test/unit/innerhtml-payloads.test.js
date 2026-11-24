@@ -194,12 +194,29 @@ describe('an agent cannot write script into the chat thread through its own file
     assertLegible(m, 'startProcessing');
   });
 
-  test('the delegation divider renders it as text', () => {
+  test('the delegation divider renders it as text, as the agent handing over and as the one taking over', () => {
+    const PLAIN = { id: 'example-agent', displayName: 'Cos', icon: 'C', colour: '#E87A5A' };
+    // The markup a name alone can carry, with no other field hostile.
+    const NAMED = { id: 'alpha', displayName: '<img src=x onerror=alert(1)>', icon: 'A', colour: '#4A90D9' };
+    for (const [from, to, label] of [
+      [HOSTILE_AGENT, PLAIN, 'hostile agent handing over'],
+      [PLAIN, HOSTILE_AGENT, 'hostile agent taking over'],
+      [NAMED, PLAIN, 'hostile name handing over'],
+      [PLAIN, NAMED, 'hostile name taking over'],
+    ]) {
+      const m = messages();
+      m.appendChild(chat.buildDelegationDivider(from, to));
+      assertInert(m, `buildDelegationDivider, ${label}`);
+      assertLegible(m, `buildDelegationDivider, ${label}`);
+      assert.ok(m.textContent.includes('handed over to'), 'sanity: the divider still says what it says');
+    }
     const m = messages();
-    m.appendChild(chat.buildDelegationDivider(HOSTILE_AGENT, false));
-    assertInert(m, 'buildDelegationDivider');
-    assertLegible(m, 'buildDelegationDivider');
-    assert.ok(m.textContent.includes('joined'), 'sanity: the divider still says what it says');
+    m.appendChild(chat.buildDelegationDivider(NAMED, NAMED, { isReturn: true }));
+    assert.strictEqual(m.querySelectorAll('.hv-name').length, 2, 'sanity: both names were drawn');
+    for (const name of m.querySelectorAll('.hv-name')) {
+      assert.strictEqual(name.textContent, '<img src=x onerror=alert(1)>', 'each name reads as the text it is');
+    }
+    assert.ok(m.textContent.includes('handed back to'));
   });
 
   test('replayed history renders it as text, on every open of the conversation', () => {
@@ -208,7 +225,7 @@ describe('an agent cannot write script into the chat thread through its own file
     // transcript every time the conversation is opened.
     const m = messages();
     const frag = document.createElement('div');
-    frag.appendChild(chat.buildDelegationDivider(HOSTILE_AGENT, false, { historyClass: true }));
+    frag.appendChild(chat.buildDelegationDivider(HOSTILE_AGENT, HOSTILE_AGENT, { historyClass: true }));
     m.appendChild(frag);
     m.appendChild(chat.addAgentMsg('a stored reply', 'helper', false, '2026-08-25T09:41:00Z'));
     assertInert(m, 'history replay');

@@ -361,27 +361,24 @@
     // this one wrong whenever a sub-delegate handed back to a mid-level lead.
     const isReturn = message.returning === true;
     if (ctx.isActive) {
-      // A SILENT SWITCH STILL SWITCHES, IT JUST DRAWS NOTHING.
+      // A SILENT FORWARD SWITCH STILL SWITCHES, IT JUST DRAWS NOTHING.
       //
-      // On a pipeline-complete handback the orchestrator is spawned only to
-      // park, so drawing its arrival showed an agent joining and then doing
-      // nothing, which reads as a hang. The divider is the only part of this
-      // reducer that is purely presentation, so it is the only part the flag
-      // skips: activeAgentId, delegationActive, the outgoing agent's working
-      // indicator and the chat header all still update.
+      // The divider is the only part of this reducer that is purely
+      // presentation, so it is the only part the flag skips: activeAgentId,
+      // delegationActive, the outgoing agent's working indicator and the chat
+      // header all still update. Withholding the message itself was tried and
+      // was worse: it left the conversation marked delegated with the departed
+      // specialist still showing as working, a spinner that never stopped.
       //
-      // The alternative, withholding the message itself, was tried and was
-      // worse: it left the conversation marked delegated with the departed
-      // specialist still showing as working, turning a phantom arrival into a
-      // spinner that never stopped.
-      // A RETURN DRAWS NOTHING. Somebody walking into the room is worth
-      // announcing; somebody who was already in it speaking again is not. The
-      // bubble beneath carries the avatar and the name, and since this release
-      // the departing agent says where the work is going in its own words, so a
-      // divider saying "Roo resumed" is the third telling of the same fact one
-      // line apart. Only a forward delegation changes who owns the work and who
-      // the person is addressing, which is the change worth marking.
-      if (ctx.toAgentExists && ctx.fromAgentExists && !message.silent && !isReturn) {
+      // A RETURN ALWAYS DRAWS, SILENT OR NOT. "Wren handed back to Cos" is how
+      // the person learns who has the conversation again, and a parked parent
+      // that will say nothing is exactly when no bubble beneath would tell them.
+      //
+      // A FAILED RETURN DRAWS NO DIVIDER. The stopped line the server sends
+      // alongside it already says who stopped and who has the conversation, so
+      // a divider too would tell it twice, and "handed back" would claim a
+      // handback that never happened.
+      if (ctx.toAgentExists && ctx.fromAgentExists && !message.failed && (isReturn || !message.silent)) {
         effects.push({
           type: 'show-delegation-divider',
           toAgentId: message.toAgent,

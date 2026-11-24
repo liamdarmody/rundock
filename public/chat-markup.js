@@ -201,18 +201,21 @@
   }
 
   // The rule between two agents in a thread: a hairline either side of a badge
-  // naming who just took the work.
+  // saying who handed the conversation to whom, on the way out and on the way
+  // back, so the person can always tell who has it.
   //
-  // ONE WORD, because there is one case. This used to say `resumed` when the
-  // thread came back to an agent that already had it, and returns no longer
-  // draw anything: the bubble beneath carries that agent's avatar and name, and
-  // the one handing back says so in its own words. A second label for a divider
-  // that is never built would be a word the product cannot show, sitting in the
-  // source telling the next reader it can.
-  /** @param {AgentLike} agent */
-  function delegationDividerHtml(agent) {
-    const { colour, icon, name } = identity(agent);
-    return `<div class="delegation-line"></div><div class="delegation-badge" style="color:${colour}"><span class="avatar xs" style="background:${colour}">${icon}</span>${name} joined</div><div class="delegation-line"></div>`;
+  // The words take the theme's text colours, never the agent's: an agent colour
+  // as text fails contrast in the light theme. Each avatar carries its agent's
+  // colour instead, and is hidden from screen readers so the badge reads as one
+  // sentence: "Cos handed over to Wren".
+  /** @param {AgentLike} fromAgent @param {AgentLike} toAgent @param {boolean} [isReturn] */
+  function delegationDividerHtml(fromAgent, toAgent, isReturn) {
+    const party = (agent) => {
+      const { colour, icon, name } = identity(agent);
+      return `<span class="avatar xs" style="background:${colour}" aria-hidden="true">${icon}</span> <span class="hv-name">${name}</span>`;
+    };
+    const verb = isReturn ? 'handed back to' : 'handed over to';
+    return `<div class="delegation-line"></div><div class="delegation-badge">${party(fromAgent)} ${verb} ${party(toAgent)}</div><div class="delegation-line"></div>`;
   }
 
   // What a permission card becomes once it has been answered, whether the user

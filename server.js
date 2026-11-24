@@ -2624,7 +2624,7 @@ function handleChatSpawnError(err, convoId) {
       chatProcesses.set(convoId, parent);
       safeSend(JSON.stringify({
         type: 'system', subtype: 'agent_switch', _conversationId: convoId,
-        fromAgent: entry.agentId, toAgent: parent.agentId,
+        fromAgent: entry.agentId, toAgent: parent.agentId, returning: true,
       }));
       console.log(`[SpawnError] convo=${convoId} delegate spawn failed, restored parked parent ${parent.agentId}`);
       return;

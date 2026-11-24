@@ -166,27 +166,52 @@ test('module exports exactly its nine helpers and nothing else', () => {
 
 // ── delegationDividerHtml ───────────────────────────────────────────────────
 
-test('delegationDividerHtml matches the markup buildDelegationDivider held', () => {
+const FROM = { colour: '#f00', icon: 'C', displayName: 'Cos' };
+const TO = { colour: '#0a0', icon: 'W', displayName: 'Wren' };
+// What a screen reader announces: the avatars are hidden from it, so this is
+// the badge's text with them taken out and whitespace collapsed.
+function spokenText(html) {
+  return html.replace(/<span class="avatar xs"[^>]*>[^<]*<\/span>/g, ' ')
+    .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+test('delegationDividerHtml names who handed the conversation to whom', () => {
   assert.strictEqual(
-    delegationDividerHtml(AGENT, false),
-    '<div class="delegation-line"></div><div class="delegation-badge" style="color:#f00"><span class="avatar xs" style="background:#f00">D</span>Dev joined</div><div class="delegation-line"></div>'
+    delegationDividerHtml(FROM, TO, false),
+    '<div class="delegation-line"></div><div class="delegation-badge">'
+    + '<span class="avatar xs" style="background:#f00" aria-hidden="true">C</span> <span class="hv-name">Cos</span>'
+    + ' handed over to '
+    + '<span class="avatar xs" style="background:#0a0" aria-hidden="true">W</span> <span class="hv-name">Wren</span>'
+    + '</div><div class="delegation-line"></div>'
   );
+  assert.strictEqual(spokenText(delegationDividerHtml(FROM, TO, false)), 'Cos handed over to Wren');
 });
 
-test('delegationDividerHtml announces an arrival, and has no second wording', () => {
-  // ONE CASE, ONE WORD. The divider is only ever built for somebody arriving to
-  // take the work: a return is not drawn at all, because the bubble beneath it
-  // carries that agent's avatar and name and the agent handing back says so
-  // itself. A `resumed` wording would be a word the product cannot show.
-  assert.ok(delegationDividerHtml(AGENT).includes('Dev joined'));
-  assert.ok(!/resumed/.test(delegationDividerHtml(AGENT)),
-    'no second label, and no flag that could select one');
+test('a return reads as handed back, naming both agents', () => {
+  assert.strictEqual(spokenText(delegationDividerHtml(TO, FROM, true)), 'Wren handed back to Cos');
+});
+
+test('no divider says joined or resumed, whichever way it points', () => {
+  for (const html of [delegationDividerHtml(FROM, TO, false), delegationDividerHtml(TO, FROM, true)]) {
+    assert.ok(!/joined|resumed/.test(html), html);
+  }
+});
+
+test('the badge names no colour; each avatar keeps its own and is hidden from screen readers', () => {
+  const html = delegationDividerHtml(FROM, TO, false);
+  assert.ok(!/class="delegation-badge"[^>]*style=/.test(html), 'the words take the theme colour, never the agent colour');
+  assert.ok(!/color:/.test(html), 'no text colour anywhere in the divider');
+  const count = (needle) => html.split(needle).length - 1;
+  assert.strictEqual(count('<span class="hv-name">'), 2, 'each name in its own span');
+  assert.strictEqual(count('<span class="avatar xs" style="background:#f00" aria-hidden="true">')
+    + count('<span class="avatar xs" style="background:#0a0" aria-hidden="true">'), 2,
+  'each avatar keeps its own colour and is hidden from screen readers');
 });
 
 test('delegationDividerHtml falls back the same way the sender line does', () => {
-  const html = delegationDividerHtml(null);
-  assert.ok(html.includes('color:var(--accent)'));
-  assert.ok(html.includes('>?</span>Agent joined'));
+  const html = delegationDividerHtml(null, undefined, false);
+  assert.ok(html.includes('background:var(--accent)'));
+  assert.strictEqual(spokenText(html), 'Agent handed over to Agent');
 });
 
 // ── permissionResolvedHtml ──────────────────────────────────────────────────

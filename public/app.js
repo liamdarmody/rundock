@@ -1050,18 +1050,19 @@ const EFFECT_EXECUTORS = {
   },
   'render-convo-list': () => renderConvoList(),
   'show-delegation-divider': (convoId, ef) => {
-    // DRAWN, AND NOT KEPT. An arrival is a notification: it tells the person,
-    // at the moment it happens, that somebody new has taken the work. It used
+    // DRAWN, AND NOT KEPT. A handover is a notification: it tells the person,
+    // at the moment it happens, who handed the conversation to whom. It used
     // to be recorded into the conversation so it survived navigating away and
     // back, which made re-reading a conversation behave one way after a
     // navigation and another after a reload, for no reason a person could
     // predict. Both are the same intent, re-reading, and neither is the moment
-    // the arrival happened. What carries it afterwards is the avatar and name
+    // the handover happened. What carries it afterwards is the avatar and name
     // on every bubble, and the departing agent's own sentence saying where the
     // work went.
+    const fromAgent = agents.find(a => a.id === ef.fromAgentId);
     const toAgent = agents.find(a => a.id === ef.toAgentId);
     const m = document.getElementById('messages');
-    m.appendChild(buildDelegationDivider(toAgent));
+    m.appendChild(buildDelegationDivider(fromAgent, toAgent, { isReturn: ef.isReturn === true }));
     scrollBottom();
   },
   'update-chat-header': (convoId, ef) => {
