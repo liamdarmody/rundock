@@ -326,6 +326,33 @@ describe('the line a person reads when a delegate stopped', () => {
     h.reapConvo(convoId);
   });
 
+  // The transcript is made unwritable only once Wren's words are out, so the
+  // first write to fail is the stopped line's: a directory stands where the
+  // file was, which makes the write throw on every platform.
+  test('a stopped line that cannot be stored is still sent once, and the close still follows', async () => {
+    h.clearInvocations();
+    routeToWren('ds-unstored', [{ match: { promptIncludes: 'ds-unstored brief' }, ...heldWren('ds-unstored') }]);
+    const { convoId, since } = startConversation('ds-unstored');
+    await waitForWrenPartWay(convoId, since);
+    const file = path.join(h.workspaceDir, '.rundock', 'transcripts', `${convoId}.json`);
+    assert.ok(fs.existsSync(file), 'sanity: the conversation has a transcript on disk');
+    fs.renameSync(file, `${file}.aside`);
+    fs.mkdirSync(file);
+    try {
+      h.internal.chatProcesses.get(convoId).process.kill('SIGKILL');
+      const seen = await untilClosed(convoId, since);
+      assert.deepStrictEqual(seen.filter(isLine(convoId)).map((m) => m.content), [CRASH1_TEXT.replace('(exit code 1)', '(stopped by the system)')],
+        'the line is sent once, with its words');
+      const close = seen[seen.length - 1];
+      assert.ok(close.type === 'system' && close.subtype === 'done' && close._agent === 'content-lead',
+        `Wren's closing done follows it: ${JSON.stringify(close)}`);
+    } finally {
+      fs.rmSync(file, { recursive: true, force: true });
+      fs.renameSync(`${file}.aside`, file);
+    }
+    h.reapConvo(convoId);
+  });
+
   test('with no parent left to take it back, the line leaves out who has the conversation', async () => {
     h.clearInvocations();
     const { convoId, since } = await delegateFromLiveCos('ds-orphan', heldWren('ds-orphan'));
