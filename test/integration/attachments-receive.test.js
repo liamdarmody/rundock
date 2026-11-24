@@ -156,10 +156,25 @@ describe('the frame limit', () => {
     const c = await h.connect();
     let code = null;
     c.ws.on('close', (closedWith) => { code = closedWith; });
-    c.ws.send(padded('get_conversations', 28000001));
-    await h.waitUntil(() => code !== null, { timeout: 10000 });
+    // The server runs in this process, where node:test would catch an error
+    // the server left unhandled, so the server staying up is checked here.
+    const uncaught = [];
+    const logged = [];
+    const onUncaught = (e) => uncaught.push(e && e.message);
+    const error = console.error;
+    process.on('uncaughtException', onUncaught);
+    console.error = (...args) => { logged.push(args.map(String).join(' ')); };
+    try {
+      c.ws.send(padded('get_conversations', 28000001));
+      await h.waitUntil(() => code !== null, { timeout: 10000 });
+    } finally {
+      console.error = error;
+      process.removeListener('uncaughtException', onUncaught);
+    }
     assert.strictEqual(code, 1009, 'the frame one byte over closes its socket as too big');
     assert.ok(!c.messages.some((m) => m.type === 'conversations'), 'and is never read');
+    assert.deepStrictEqual(uncaught, [], 'the socket\'s error is handled, so it cannot end the server');
+    assert.ok(logged.some((line) => line.startsWith('[WS] socket error:')), 'and it is logged');
 
     const fresh = await h.connect();
     fresh.send({ type: 'get_conversations' });
@@ -635,7 +650,7 @@ describe('deleting a conversation deletes its attachments, and says when it coul
     const error = console.error;
     console.error = (...args) => { logged.push(args.map(String).join(' ')); };
     try {
-      await handleDeleteConversation(h.internal.wsHandlerContext, { send() { throw new Error('socket gone'); } }, { id });
+      await assert.doesNotReject(async () => handleDeleteConversation(h.internal.wsHandlerContext, { send() { throw new Error('socket gone'); } }, { id }));
     } finally {
       console.error = error;
     }
