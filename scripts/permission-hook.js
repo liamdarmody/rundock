@@ -894,10 +894,12 @@ function hiddenHomeRootOf(p, home = os.homedir()) {
 // it would be a promise the floor refuses to keep, and the user clicking it
 // learns that approving does nothing.
 //
-// The two `.rundock/` files have NO such floor. An agent edits them freely, and
+// The two `.rundock/` files have NO such floor in the runtime, and
 // `readToolAllows` trusts whatever strings it finds. They hold the standing
 // answers a person gave, so a write is a grant of permissions nobody issued.
-// THE CARD ON THESE IS THE ONLY PROTECTION THEY HAVE. Do not "simplify" it.
+// THIS HOOK IS THEIR FLOOR: a file tool's write to either is refused before
+// any card (isRundockAnswerFileEdit), and a shell command's write raises a
+// card, the only protection on that path. Do not "simplify" either.
 const RUNTIME_GUARDED_ANSWER_FILES = ['.claude/settings.local.json'];
 const RUNDOCK_ANSWER_FILES = ['.rundock/state.json', '.rundock/permissions.json'];
 // THE LAUNCHER THIS HOOK IS STARTED THROUGH. lib/workspace/scaffold.js writes
@@ -4942,7 +4944,7 @@ fetchAgentNotice((agentNotice) => {
   // read of a credential file the workspace holds, so an ordinary command
   // keeps whatever card it already had: the instant-allow branch below stays
   // reachable only by file tools.
-  // No refusal reaches here: both exit above, so this guard is the tool-name
+  // No refusal reaches here: each exits above, so this guard is the tool-name
   // check alone rather than restating them.
   // Where the command runs: the hook input's cwd follows the agent.
   const codeMode = process.env.RUNDOCK_CODE_MODE === '1';
@@ -5167,7 +5169,9 @@ fetchAgentNotice((agentNotice) => {
   // It is exactly wrong for the ANSWER FILES. `.rundock/state.json` and
   // `.rundock/permissions.json` have NO floor beneath them: no sandbox rule
   // covers them, the runtime does not refuse them, and readToolAllows trusts
-  // whatever strings it finds. The card IS the guard. Failing open there means
+  // whatever strings it finds. A file tool's write to either is refused before
+  // any card (isRundockAnswerFileEdit) and never gets here; for a shell
+  // command's write, the card IS the guard. Failing open there means
   // that whenever this server is down, an agent may write itself standing
   // permissions nobody ever granted, and they persist into every later session.
   //
