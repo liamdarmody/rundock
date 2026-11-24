@@ -339,3 +339,50 @@ describe('checkReference: a reference names an entry of the conversation\'s own 
     assert.strictEqual(receive.checkReference(ws, ref(alpha)), false);
   });
 });
+
+describe('filesLeft: whether a refused delete left anything of the conversation\'s folder', () => {
+  const noLinks = { skip: process.platform === 'win32' && 'links need privileges on Windows' };
+
+  test('nothing is left when .rundock, attachments or the folder is missing, or sits under a file', () => {
+    ready('filesLeft');
+    const ws = workspace();
+    assert.strictEqual(receive.filesLeft(ws, 'alpha'), false);
+    fs.mkdirSync(path.join(ws, '.rundock'));
+    assert.strictEqual(receive.filesLeft(ws, 'alpha'), false);
+    fs.mkdirSync(attachmentsOf(ws));
+    assert.strictEqual(receive.filesLeft(ws, 'alpha'), false);
+    const flat = workspace();
+    fs.writeFileSync(path.join(flat, '.rundock'), 'a file');
+    assert.strictEqual(receive.filesLeft(flat, 'alpha'), false);
+  });
+
+  test('the folder itself is something left', () => {
+    ready('filesLeft');
+    const ws = workspace();
+    fs.mkdirSync(folderOf(ws), { recursive: true });
+    assert.strictEqual(receive.filesLeft(ws, 'alpha'), true);
+  });
+
+  test('a link on the way is something left, whatever it points at', noLinks, () => {
+    ready('filesLeft');
+    for (const at of ['.rundock', path.join('.rundock', 'attachments'), path.join('.rundock', 'attachments', 'alpha')]) {
+      const ws = workspace();
+      fs.mkdirSync(path.dirname(path.join(ws, at)), { recursive: true });
+      fs.symlinkSync(path.join(ws, 'nowhere'), path.join(ws, at));
+      assert.strictEqual(receive.filesLeft(ws, 'alpha'), true, `a link at ${at}`);
+    }
+  });
+
+  test('a look that fails for another reason is something left',
+    { skip: (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) && 'permissions do not bind here' }, () => {
+      ready('filesLeft');
+      const ws = workspace();
+      fs.mkdirSync(folderOf(ws), { recursive: true });
+      fs.chmodSync(path.join(ws, '.rundock'), 0o000);
+      try {
+        assert.strictEqual(receive.filesLeft(ws, 'alpha'), true);
+      } finally {
+        fs.chmodSync(path.join(ws, '.rundock'), 0o755);
+      }
+    });
+});

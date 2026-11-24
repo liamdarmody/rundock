@@ -18,6 +18,8 @@ const path = require('node:path');
 
 const h = require('../helpers/harness.js');
 const store = require('../../lib/attachments/store.js');
+const { handleDeleteConversation } = require('../../lib/protocol/handlers/conversations.js');
+const { makeTempDir } = require('../helpers/workspace.js');
 
 // The receive is async and the handler ignores its promise, so a rejection it
 // failed to catch would surface only here.
@@ -465,11 +467,14 @@ describe('every path back into the handler writes once and records once', () => 
     const since = client.messages.length;
     chat(id, 'HELD-A see this', [file('Screen Shot.png', png())]);
     chat(id, 'HELD-B and then', undefined);
+    chat(id, 'HELD-X forged', undefined, { attachmentEntry: 'no-such-entry' });
     chat(elsewhere, 'HELD-C meanwhile', undefined);
     try {
       assert.ok(await resultFor(elsewhere, 'DONE-HELD-C', since), 'another conversation is not held');
       assert.deepStrictEqual([spawnsFor(id).length, promptsWith('HELD-A').length, promptsWith('HELD-B').length], [0, 0, 0],
         'neither message reaches a process while the files wait');
+      assert.ok(client.messages.slice(since).some((m) => m.type === 'chat_refused' && m.conversationId === id && m.code === 'bad-entry'),
+        'a forged reference is refused on arrival, not let through behind the hold');
     } finally {
       release();
       await held;
@@ -477,10 +482,165 @@ describe('every path back into the handler writes once and records once', () => 
     const stored = await storedFor(id, since);
     assert.ok(stored, 'the files are stored once released');
     assert.ok(await resultFor(id, 'DONE-HELD-B', since), 'and the text after them is answered');
-    assert.deepStrictEqual(h.readPrompts().map((p) => p.prompt).filter((p) => /HELD-[AB]/.test(p)), [stored.content, 'HELD-B and then'],
-      'in the order sent');
+    assert.deepStrictEqual(h.readPrompts().map((p) => p.prompt).filter((p) => /HELD-[ABX]/.test(p)), [stored.content, 'HELD-B and then'],
+      'in the order sent, and nothing forged');
     h.reapConvo(id);
     h.reapConvo(elsewhere);
+  });
+});
+
+describe('deleting a conversation deletes its attachments, and says when it could not', () => {
+  const kept = (id) => [{ type: 'conversation_files_kept', id,
+    text: `Rundock deleted the conversation but couldn't remove its attached files. They're still in .rundock/attachments/${id}/.` }];
+  const deletedList = () => path.join(attachmentsDir(), 'deleted.json');
+  const listed = () => JSON.parse(fs.readFileSync(deletedList(), 'utf-8'));
+  const inList = (id) => h.internal.readConversations().some((c) => c.id === id);
+  const transcriptOf = (id) => path.join(h.workspaceDir, '.rundock', 'transcripts', `${id}.json`);
+  const contents = (dir) => Object.fromEntries((listing(dir) || []).map((n) => [n, sha256(fs.readFileSync(path.join(dir, n)))]));
+
+  // Sends the delete; once conversation_deleted has arrived and anything after
+  // it has had time to, returns the notices that came with it.
+  async function deleting(id) {
+    const since = client.messages.length;
+    client.send({ type: 'delete_conversation', id });
+    assert.ok(await arrived((m) => m.type === 'conversation_deleted' && m.id === id, { since }), 'conversation_deleted is sent');
+    await h.delay(200);
+    return client.messages.slice(since).filter((m) => m.type === 'conversation_files_kept');
+  }
+
+  // A conversation in the list whose one message stored a file.
+  async function withFiles(prefix) {
+    const id = h.freshConvoId(prefix);
+    answers('ASK-DEL');
+    const since = client.messages.length;
+    chat(id, 'ASK-DEL see this', [file('Screen Shot.png', png())]);
+    assert.ok(await storedFor(id, since) && await resultFor(id, 'DONE-ASK-DEL', since), 'the conversation holds a message\'s files');
+    h.reapConvo(id);
+    seed(id, { agentId: 'chief-of-staff' });
+    return id;
+  }
+
+  // Runs `fn` with deleted.json holding `text`, then puts it back.
+  async function withDeletedList(text, fn) {
+    fs.mkdirSync(attachmentsDir(), { recursive: true });
+    const was = fs.existsSync(deletedList()) ? fs.readFileSync(deletedList()) : null;
+    fs.writeFileSync(deletedList(), text);
+    try { await fn(); } finally { if (was) fs.writeFileSync(deletedList(), was); else fs.rmSync(deletedList(), { force: true }); }
+  }
+
+  // Runs `fn` with the attachments folder moved aside, then puts it back.
+  async function withoutAttachments(fn) {
+    fs.mkdirSync(attachmentsDir(), { recursive: true });
+    const aside = `${attachmentsDir()}-aside`;
+    fs.renameSync(attachmentsDir(), aside);
+    try { await fn(); } finally { fs.rmSync(attachmentsDir(), { recursive: true, force: true }); fs.renameSync(aside, attachmentsDir()); }
+  }
+
+  test('a conversation with a message\'s files: the folder goes, the ID is listed, the transcript stays, and no notice', async () => {
+    const id = await withFiles('del-ok');
+    assert.ok(fs.existsSync(transcriptOf(id)));
+    assert.deepStrictEqual(await deleting(id), []);
+    assert.strictEqual(listing(folderOf(id)), null, 'the folder is gone');
+    assert.ok(listed().includes(id), 'the ID is in deleted.json');
+    assert.ok(fs.existsSync(transcriptOf(id)), 'the transcript is kept');
+    assert.ok(!inList(id), 'the conversation is gone from the list');
+  });
+
+  for (const junk of ['not json', '{}']) {
+    test(`a deleted list holding ${junk}: the conversation goes, its files stay, and the notice says where`, async () => {
+      const id = await withFiles('del-junk');
+      const before = contents(folderOf(id));
+      await withDeletedList(junk, async () => {
+        assert.deepStrictEqual(await deleting(id), kept(id));
+        assert.deepStrictEqual(contents(folderOf(id)), before, 'the folder and its files as they were');
+        assert.ok(!inList(id), 'the conversation is gone from the list');
+      });
+    });
+  }
+
+  for (const junk of ['not json', '{}']) {
+    test(`a deleted list holding ${junk}, and no folder: the conversation goes, and no notice`, async () => {
+      const id = h.freshConvoId('del-none');
+      seed(id, { agentId: 'chief-of-staff' });
+      await withDeletedList(junk, async () => {
+        assert.deepStrictEqual(await deleting(id), []);
+        assert.ok(!inList(id), 'the conversation is gone from the list');
+      });
+    });
+  }
+
+  test('a link at attachments: the notice, and the link\'s target as it was', { skip: process.platform === 'win32' && 'links need privileges on Windows' }, async () => {
+    const id = h.freshConvoId('del-link');
+    seed(id, { agentId: 'chief-of-staff' });
+    const outside = makeTempDir('outside-');
+    fs.mkdirSync(path.join(outside, id));
+    fs.writeFileSync(path.join(outside, id, 'notes.txt'), 'hello');
+    await withoutAttachments(async () => {
+      fs.symlinkSync(outside, attachmentsDir());
+      try {
+        assert.deepStrictEqual(await deleting(id), kept(id));
+      } finally {
+        fs.unlinkSync(attachmentsDir());
+      }
+    });
+    assert.deepStrictEqual([listing(outside), listing(path.join(outside, id))], [[id], ['notes.txt']], 'nothing written or removed there');
+    assert.strictEqual(fs.readFileSync(path.join(outside, id, 'notes.txt'), 'utf-8'), 'hello');
+    assert.ok(!inList(id), 'the conversation is gone from the list');
+  });
+
+  test('an ID of ../..: conversation_deleted, no notice, and nothing created or written', async () => {
+    await withoutAttachments(async () => {
+      assert.deepStrictEqual(await deleting('../..'), []);
+      assert.strictEqual(listing(attachmentsDir()), null, 'no attachments folder is created');
+      for (const dir of [path.join(h.workspaceDir, '.rundock'), h.workspaceDir, path.dirname(h.workspaceDir)]) {
+        assert.ok(!fs.existsSync(path.join(dir, 'deleted.json')), `no deleted.json in ${path.basename(dir)}`);
+      }
+    });
+  });
+
+  test('a chat with files in flight when the delete arrives is stored, then deleted with the conversation, and no notice', async () => {
+    const id = h.freshConvoId('del-flight');
+    seed(id, { agentId: 'chief-of-staff' });
+    answers('ASK-FLIGHT');
+    let release;
+    const held = store.withConversationLock(id, () => new Promise((resolve) => { release = resolve; }));
+    const since = client.messages.length;
+    chat(id, 'ASK-FLIGHT see this', [file('Screen Shot.png', png())]);
+    client.send({ type: 'delete_conversation', id });
+    await h.delay(200);
+    release();
+    await held;
+    assert.ok(await arrived((m) => m.type === 'conversation_deleted' && m.id === id, { since }), 'conversation_deleted is sent');
+    assert.ok(await storedFor(id, since), 'the chat is stored');
+    assert.ok(await resultFor(id, 'DONE-ASK-FLIGHT', since), 'and dispatched');
+    const answered = client.messages.slice(since);
+    assert.ok(!answered.some((m) => m.type === 'chat_refused'), 'the chat is not refused');
+    assert.ok(!answered.some((m) => m.type === 'conversation_files_kept'), 'no notice');
+    assert.strictEqual(listing(folderOf(id)), null, 'the folder is gone');
+    h.reapConvo(id);
+  });
+
+  test('a chat with files sent after the delete is refused, and recreates nothing', async () => {
+    const id = await withFiles('del-after');
+    assert.deepStrictEqual(await deleting(id), []);
+    await refusedWith({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content: 'ASK-DEL again', attachments: [file('notes.txt', Buffer.from('hello'))] },
+      { code: 'deleted', title: 'Message not sent', text: 'This conversation was deleted in another window.' });
+    assert.strictEqual(listing(folderOf(id)), null, 'nothing recreated');
+  });
+
+  test('a delete whose answer cannot be sent ends in the log, never in a rejection', async () => {
+    const id = h.freshConvoId('del-throw');
+    seed(id, { agentId: 'chief-of-staff' });
+    const logged = [];
+    const error = console.error;
+    console.error = (...args) => { logged.push(args.map(String).join(' ')); };
+    try {
+      await handleDeleteConversation(h.internal.wsHandlerContext, { send() { throw new Error('socket gone'); } }, { id });
+    } finally {
+      console.error = error;
+    }
+    assert.ok(logged.some((line) => line.includes('socket gone')), 'the failure is logged');
+    assert.ok(!inList(id), 'the conversation is gone from the list');
   });
 });
 

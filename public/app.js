@@ -957,6 +957,9 @@ function handle(d) {
       handlePaletteResults(d);
       break;
     case 'error': if(!d.content?.includes('no stdin')) addSystemMsgToConvo(d.content, convoId); break;
+    // A deleted conversation's attached files that couldn't be removed: the
+    // delete itself went through, so the line says where they are, not an error.
+    case 'conversation_files_kept': addSystemMsgToConvo(d.text, null, false); break;
   }
 }
 function getConvoState(convoId) {
