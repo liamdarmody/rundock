@@ -267,3 +267,80 @@ test('a delegate whose thread cannot start draws the one line and restores the p
   assertOneLine(await settled(convoId, since), convoId, null);
   await waitForParentRestored(convoId);
 });
+
+// A CLOSE THAT IS NOT IDA'S TO REPORT. A start that failed, or an entry that
+// is no longer the conversation's, returns before anything is decided. A card
+// held for Ida still goes out then, as a direct chat sends it and with the
+// row a direct chat writes, and no line is drawn.
+
+/** Ida's held card, as a direct chat sends it, and the row a direct chat writes. */
+function assertCardReleased(seen, convoId, processId) {
+  const cards = seen.filter(isCard(convoId));
+  assert.strictEqual(cards.length, 1, `the held card goes out once: ${JSON.stringify(cards)}`);
+  assert.deepStrictEqual(cards[0], {
+    type: 'system', subtype: 'codex_error', detail: 'model exploded',
+    _agent: 'researcher', _conversationId: convoId, _processId: processId,
+  }, 'the card is the one a direct chat sends');
+  const stored = storedRows(convoId);
+  assert.deepStrictEqual(stored.cards.map((r) => r.text), ['This turn stopped: the runtime hit a problem.\nCodex: model exploded'],
+    'the card\'s transcript row is written as before');
+  assert.deepStrictEqual(seen.filter(isLine(convoId)).map((m) => m.content), [], 'no line is sent');
+  assert.deepStrictEqual(stored.lines.map((r) => r.text), [], 'and none is stored');
+  assert.deepStrictEqual(seen.filter(isReturn(convoId)), [], 'and no switch');
+}
+
+/** Ida's turn errs and carries on, holding the card, until it is stopped. */
+async function heldCardFor(convoId, tag, laterRules = []) {
+  await startOrchestrator(convoId, `${tag}-setup`);
+  h.writeCodexScenario([
+    ...laterRules,
+    { match: { promptIncludes: `${tag} task` },
+      error: { message: 'model exploded', codexErrorInfo: 'other', thenContinue: true },
+      deltas: ['part one ', 'part two'], holdForInterrupt: true },
+  ]);
+  const since = delegateToIda(convoId, `${tag} task`);
+  const { msg: delta } = await client.waitFor((m) => m.type === 'stream_event' && m._conversationId === convoId
+    && m._agent === 'researcher', { since, label: 'Ida is part way through' });
+  const ida = h.internal.chatProcesses.get(convoId);
+  assert.strictEqual(ida && ida.agentId, 'researcher', 'sanity: Ida is the conversation\'s process');
+  assert.ok(ida.heldCodexNotice, 'sanity: the card is held for her close');
+  return { since, ida, processId: delta._processId };
+}
+
+// A failed start cannot hold a card end to end: the start fails before the
+// turn sends anything, and its guidance goes out directly. So the flag a
+// failed start leaves is set on a live delegate holding a card, and her
+// turn is then ended, which runs her close with both in place.
+test('a card held for Ida goes out as before when her close follows a failed start', async () => {
+  const convoId = h.freshConvoId('cspawnfail');
+  const { since, ida, processId } = await heldCardFor(convoId, 'cspawnfail');
+  try {
+    ida.spawnFailed = true;
+    ida.interrupt();
+    assert.ok(await h.waitUntil(() => ida.exited === true), 'Ida\'s turn ended');
+    assertCardReleased(await settled(convoId, since), convoId, processId);
+  } finally {
+    h.reapConvo(convoId);
+  }
+});
+
+test('a card held for Ida goes out as before when a new message to her replaces her turn', async () => {
+  const convoId = h.freshConvoId('creplaced');
+  const { since, ida, processId } = await heldCardFor(convoId, 'creplaced',
+    [{ match: { promptIncludes: 'creplaced follow-up' }, text: 'Follow-up answer.' }]);
+  // Cos stays parked behind Ida's old entry, which the conversation stops
+  // holding once her turn is replaced, so the test ends that process itself.
+  const parked = ida.delegation && ida.delegation.originalEntry;
+  assert.ok(parked && parked.process, 'sanity: Cos is parked behind Ida\'s entry');
+  try {
+    client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'creplaced follow-up' });
+    assert.ok(await h.waitUntil(() => ida.exited === true), 'Ida\'s replaced turn ended');
+    await client.waitFor((m) => m.type === 'result' && m._conversationId === convoId && m._agent === 'researcher'
+      && String(m.result || '').includes('Follow-up answer.'), { since, label: 'the new turn answered' });
+    assert.notStrictEqual(h.internal.chatProcesses.get(convoId), ida, 'sanity: Ida\'s entry is no longer the conversation\'s');
+    assertCardReleased(await settled(convoId, since), convoId, processId);
+  } finally {
+    parked.process.kill('SIGKILL');
+    h.reapConvo(convoId);
+  }
+});

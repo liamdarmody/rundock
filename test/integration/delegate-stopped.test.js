@@ -597,3 +597,63 @@ describe('no line when Wren did not stop before finishing', () => {
     h.reapConvo(convoId);
   });
 });
+
+// NO LINE WHERE THE CLOSE IS NOT WREN'S TO REPORT. A start that failed has
+// already said so with its own notice, and a process the idle sweep released
+// is no longer the conversation's. Either close returns before deciding
+// anything, so it sends no line and stores none.
+describe('no line when the close is not Wren\'s to report', () => {
+  test('a delegate that could not be started sends no line, and the start error is its only notice', async () => {
+    h.clearInvocations();
+    const claude = require(path.join(ROOT, 'lib', 'runtime', 'claude.js'));
+    let closed = false;
+    // Wren's start in this conversation, and nothing else, names a program
+    // that is not there, so it fails the way a missing install does: an
+    // error, then a close.
+    const prev = claude.wireClaudeRuntimeDeps({
+      spawn: (program, args, opts) => {
+        const at = args.indexOf('--agent');
+        const convo = String((opts && opts.env && opts.env.RUNDOCK_CONVO_ID) || '');
+        if (at < 0 || args[at + 1] !== 'content-lead' || !convo.startsWith('ds-nostart-')) return prev.spawn(program, args, opts);
+        const proc = prev.spawn(path.join(h.workspaceDir, 'no-such-claude'), args, opts);
+        proc.once('close', () => { closed = true; });
+        return proc;
+      },
+    });
+    try {
+      const { convoId, since } = await delegateFromLiveCos('ds-nostart', { turn: [{ text: 'DS-NOSTART never said' }] });
+      assert.ok(await h.waitUntil(() => closed, { timeout: 20000 }), 'Wren\'s process closed');
+      const seen = await settled(convoId, since);
+      const notices = seen.filter((m) => m.type === 'system' && m.subtype === 'info' && m._conversationId === convoId
+        && /Claude Code not found/.test(m.content || ''));
+      assert.strictEqual(notices.length, 1, 'sanity: the start error said Wren could not be started');
+      assertNoLine(seen, convoId);
+      assert.deepStrictEqual(seen.filter(isReturnTo(convoId)).filter((m) => m.failed), [], 'no switch says Wren stopped');
+      h.reapConvo(convoId);
+    } finally {
+      claude.wireClaudeRuntimeDeps({ spawn: prev.spawn });
+    }
+  });
+
+  test('a delegate the idle sweep released sends no line, though its last turn ended on an error result', async () => {
+    h.clearInvocations();
+    routeToWren('ds-reaped', [{ match: { promptIncludes: 'ds-reaped brief' }, isError: true,
+      turn: [{ text: 'DS-REAPED-FIRST the tool run hit a snag' }] }]);
+    const { convoId, since } = startConversation('ds-reaped');
+    await waitForResult(convoId, 'DS-REAPED-FIRST', since, 'Wren\'s turn ended on an error result');
+    assert.ok(await h.waitUntil(() => {
+      const e = h.internal.chatProcesses.get(convoId);
+      return Boolean(e && e.agentId === 'content-lead' && e.idle === true && e.idleSince);
+    }), 'Wren is idle, waiting for the person');
+    const wren = h.internal.chatProcesses.get(convoId);
+    assert.strictEqual(wren.lastTurnOutcome, 'error', 'sanity: a close read now would be a stop');
+    let closed = false;
+    wren.process.once('close', () => { closed = true; });
+    h.internal.reapIdleAgents(Date.now() + 24 * 60 * 60 * 1000);
+    assert.ok(await h.waitUntil(() => closed, { timeout: 20000 }), 'the sweep released Wren\'s process');
+    assert.notStrictEqual(h.internal.chatProcesses.get(convoId), wren, 'sanity: Wren is no longer the conversation\'s process');
+    const seen = await settled(convoId, since);
+    assertNoLine(seen, convoId);
+    assert.deepStrictEqual(seen.filter(isReturnTo(convoId)), [], 'and no switch');
+  });
+});
