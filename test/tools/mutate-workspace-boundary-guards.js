@@ -506,6 +506,10 @@ const STARTUP_PRELOAD = { src: path.join(ROOT, 'test', 'helpers', 'account-home-
 // refused, through the real hook in every mode and run, and the check itself
 // in-process with the case-folding seam set both ways.
 const TEAM_FOLDERS = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/workspace-team-folders.test.js' };
+// A file tool's write to Rundock's own two files is refused before any card,
+// through the real hook in every mode and run, and the check itself
+// in-process with the case-folding argument set both ways.
+const RUNDOCK_FILES_REFUSED = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/rundock-files-refused.test.js' };
 // Each shell word also read as bash joins it, quotes and escapes removed,
 // through the real hook in both modes.
 const JOINED_WORDS = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/joined-path-words.test.js' };
@@ -4935,6 +4939,58 @@ const MUTATIONS = [
   [TEAM_FOLDERS, 'Team folders: only the first path field present is checked',
     "  const targets = [ti.file_path, ti.notebook_path, ti.path].filter((v) => typeof v === 'string' && v);",
     "  const targets = [ti.file_path || ti.notebook_path || ti.path].filter((v) => typeof v === 'string' && v);"],
+  // ===== RUNDOCK'S OWN TWO FILES ARE REFUSED TO FILE TOOLS =====
+  // The refusal never happens: a write to either file is an answer-file card
+  // again, and an Allow keeps what the agent wrote. Caught by: each file tool
+  // is refused for each file in every mode and run.
+  [RUNDOCK_FILES_REFUSED, "Rundock's own files: the refusal is removed",
+    '  if (isRundockAnswerFileEdit(data.tool_name, data.tool_input, wsRoot)) {',
+    '  if (false) {'],
+  // Only file_path read, so a NotebookEdit naming either file in
+  // notebook_path, or a write naming it in path, goes unchecked. Caught by:
+  // the file named in any path field is refused.
+  [RUNDOCK_FILES_REFUSED, "Rundock's own files: only file_path is checked",
+    "  const named = [toolInput.file_path, toolInput.notebook_path, toolInput.path].filter((field) => typeof field === 'string' && field !== '');",
+    "  const named = [toolInput.file_path].filter((field) => typeof field === 'string' && field !== '');"],
+  // The target handed to the matcher as spelled, so a relative spelling is
+  // never matched against the workspace. Caught by: the relative spellings,
+  // in-process (through the hook the working folder is the workspace).
+  [RUNDOCK_FILES_REFUSED, "Rundock's own files: a relative target is not resolved",
+    '    return matchesAnswerFileSet(RUNDOCK_ANSWER_FILES, path.resolve(workspaceRoot, spelled), workspaceRoot, foldsCase);',
+    '    return matchesAnswerFileSet(RUNDOCK_ANSWER_FILES, spelled, workspaceRoot, foldsCase);'],
+  // Case compared as written: `.Rundock/Permissions.json` slips past where
+  // the host folds case. Caught by: the case variant is refused when case
+  // folds, driven both ways through the argument.
+  [RUNDOCK_FILES_REFUSED, "Rundock's own files: case folding is dropped",
+    '    return matchesAnswerFileSet(RUNDOCK_ANSWER_FILES, path.resolve(workspaceRoot, spelled), workspaceRoot, foldsCase);',
+    '    return matchesAnswerFileSet(RUNDOCK_ANSWER_FILES, path.resolve(workspaceRoot, spelled), workspaceRoot, false);'],
+  // A routine gets the conversation's words, telling an agent with nobody to
+  // ask to tell the person. Caught by: the routine words, bound whole.
+  [RUNDOCK_FILES_REFUSED, "Rundock's own files: a routine gets the conversation's words",
+    '`${ownFile} Say in your final message what you wanted to change. ${UNATTENDED_NEXT_UNLOADED}`',
+    '`${ownFile} Tell the person what you wanted to change, so they can make it in Rundock.`'],
+  // A throw inside the check read as "not one of these files", so the write
+  // goes on to the card, and an ordinary write is allowed. Caught by: a
+  // forced failure refuses with the words for a check that could not run.
+  [RUNDOCK_FILES_REFUSED, "Rundock's own files: the check failing is treated as not matched",
+    '  if (isRundockAnswerFileEdit(data.tool_name, data.tool_input, wsRoot)) {',
+    '  if ((() => { try { return isRundockAnswerFileEdit(data.tool_name, data.tool_input, wsRoot); } catch (e) { return false; } })()) {'],
+  // MultiEdit and NotebookEdit left out of the check. Caught by: each file
+  // tool is refused for each file.
+  [RUNDOCK_FILES_REFUSED, "Rundock's own files: MultiEdit and NotebookEdit are left out",
+    '  if (!CLAUDE_EDIT_TOOLS.has(toolName) || !toolInput) return false;',
+    "  if (!CLAUDE_EDIT_TOOLS.has(toolName) || !toolInput || toolName === 'MultiEdit' || toolName === 'NotebookEdit') return false;"],
+  // Every answer file matched, so `.mcp.json`, the runtime's settings and the
+  // launcher get this refusal in place of their own card or reason. Caught
+  // by: the files beside these two keep their answer.
+  [RUNDOCK_FILES_REFUSED, "Rundock's own files: every answer file is matched",
+    '    return matchesAnswerFileSet(RUNDOCK_ANSWER_FILES, path.resolve(workspaceRoot, spelled), workspaceRoot, foldsCase);',
+    '    return matchesAnswerFileSet(WORKSPACE_ANSWER_FILES, path.resolve(workspaceRoot, spelled), workspaceRoot, foldsCase);'],
+  // The state file left out of the set the check matches, so a write to it
+  // is carded again. Caught by: each file tool is refused for each file.
+  [RUNDOCK_FILES_REFUSED, "Rundock's own files: the state file is left out",
+    '    return matchesAnswerFileSet(RUNDOCK_ANSWER_FILES, path.resolve(workspaceRoot, spelled), workspaceRoot, foldsCase);',
+    "    return matchesAnswerFileSet(RUNDOCK_ANSWER_FILES.filter((f) => f !== '.rundock/state.json'), path.resolve(workspaceRoot, spelled), workspaceRoot, foldsCase);"],
   // ===== A PATH IS ALSO READ AS THE SHELL JOINS IT =====
   // Quotes read only as written: a quoted credential path names nothing.
   // Caught by: every spelling generated from a registry entry's path.
