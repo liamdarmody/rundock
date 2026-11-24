@@ -309,6 +309,40 @@ function buildDelegationDivider(fromAgent, toAgent, opts = {}) {
   return divider;
 }
 
+// The notice for a delegate that stopped before finishing, built from the
+// server's line: its first line is the title, the second the reason, and
+// anything after them the detail. Every part is set as text, never markup,
+// because the names and the detail come from agents. Used live (app.js), in
+// the replay when a conversation is opened, and in the history replay below.
+function buildDelegateStoppedNotice(content) {
+  const SVG = 'http://www.w3.org/2000/svg';
+  const n = document.createElement('div');
+  n.className = 'msg-stopped';
+  n.setAttribute('role', 'status');
+  const icon = document.createElementNS(SVG, 'svg');
+  for (const [k, v] of [['width', '16'], ['height', '16'], ['viewBox', '0 0 24 24'], ['fill', 'none'], ['stroke', 'currentColor'],
+    ['stroke-width', '1.8'], ['stroke-linecap', 'round'], ['stroke-linejoin', 'round'], ['aria-hidden', 'true']]) icon.setAttribute(k, v);
+  const circle = document.createElementNS(SVG, 'circle');
+  circle.setAttribute('cx', '12'); circle.setAttribute('cy', '12'); circle.setAttribute('r', '10');
+  icon.appendChild(circle);
+  for (const d of ['m15 9-6 6', 'm9 9 6 6']) {
+    const stroke = document.createElementNS(SVG, 'path');
+    stroke.setAttribute('d', d);
+    icon.appendChild(stroke);
+  }
+  n.appendChild(icon);
+  const [title = '', reason = '', ...rest] = String(content || '').split('\n');
+  const part = (cls, text) => { const el = document.createElement('div'); el.className = cls; el.textContent = text; n.appendChild(el); };
+  part('stopped-title', title);
+  part('stopped-reason', reason);
+  const detail = rest.join('\n');
+  if (detail) part('stopped-detail', detail);
+  return n;
+}
+
+// Draw that notice at the foot of the open thread, live.
+function addDelegateStoppedMsg(content) { document.getElementById('messages').appendChild(buildDelegateStoppedNotice(content)); scrollBottom(); }
+
 // THE CARD SHOWN WHEN CLAUDE CODE'S SESSION HAS EXPIRED (a 401), with one
 // button that reconnects it. The desktop app opens a console running `claude`
 // through its main process; a browser running from source asks the server to
@@ -524,6 +558,15 @@ function renderSessionHistory(d) {
       if (typeof msg.key === 'string' && msg.key) frag.appendChild(createSummarisedDivider({ key: msg.key }));
       continue;
     }
+    // A delegate that stopped before finishing: the server's stored line,
+    // drawn as the notice it was live.
+    if (msg.type === 'delegation') {
+      const notice = buildDelegateStoppedNotice(msg.content || '');
+      notice.classList.add('history-msg');
+      notice.style.animation = 'none';
+      frag.appendChild(notice);
+      continue;
+    }
     const div = document.createElement('div');
     div.style.animation = 'none';
     if (msg.role === 'system') {
@@ -591,11 +634,13 @@ function renderSessionHistory(d) {
   // and the replay loop skips them (auto-divider on the following agent triggers).
   const historyMsgs = d.messages.filter(m => !m.content || !m.content.includes('[WORKSPACE_ANALYSIS]')).map(m => ({
     role: m.type === 'routing' ? 'routing' : (m.role === 'user' || m.role === 'system' ? m.role : 'agent'),
-    content: m.role !== 'user' ? stripRundockMarkers(m.content || '').trim() : m.content,
+    // The stopped line is the server's own words, kept exactly as stored.
+    content: m.type === 'delegation' ? (m.content || '') : (m.role !== 'user' ? stripRundockMarkers(m.content || '').trim() : m.content),
     agentId: m.agentId || convo.agentId,
     timestamp: m.timestamp || null,
     isHistory: true,
-    ...(m.type === 'compaction' ? { type: 'compaction', key: m.key } : {})
+    ...(m.type === 'compaction' ? { type: 'compaction', key: m.key } : {}),
+    ...(m.type === 'delegation' ? { type: 'delegation' } : {})
   }));
   // Prepend to existing messages (load-more adds older messages before existing ones)
   convo.messages = [...historyMsgs, ...convo.messages];
@@ -1986,7 +2031,7 @@ function clearSummarising(convoId) {
 return {
   dispatchMessage, sendMessage, startProcessing, finishProcessing,
   cancelProcessing, handleActiveProcesses, addAgentMsg, addUserMsg,
-  addSystemMsg, toolAllowFailed, streamTextAfterCut, buildDelegationDivider, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
+  addSystemMsg, addDelegateStoppedMsg, toolAllowFailed, streamTextAfterCut, buildDelegationDivider, buildDelegateStoppedNotice, renderAuthErrorCard, copyAuthCmd, agentDisplayName,
   renderCodexQuotaCard, renderCodexGuidanceCard, renderCodexErrorPill,
   createHistoryDivider, renderSessionHistory, classifyRisk,
   describeToolRequest, toolAllowKey, handlePermissionRequest, setStandingToolAllows,

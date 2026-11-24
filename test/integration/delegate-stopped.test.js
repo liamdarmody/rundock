@@ -7,13 +7,20 @@
 // the return switch carries `failed: { code, signal, reason }` naming exactly
 // one reason. These tests drive each way a delegate can stop through the real
 // server against the stub runtime, and read the switch the window received.
+//
+// The server then stores one line saying so and sends it once, with no process
+// id, so a line a delegate prints for itself can never pass for it. Each test
+// waits for the delegate's own closing `done`, which every release sends, and
+// only then counts the lines, so a missing line fails on the count.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', '..');
 const h = require(path.join(ROOT, 'test', 'helpers', 'harness.js'));
 const { standardTeam } = require(path.join(ROOT, 'test', 'helpers', 'workspace.js'));
+const cs = require(path.join(ROOT, 'public', 'conversation-state.js'));
 
 let client;
 
@@ -158,6 +165,220 @@ describe('the reason a delegate stopped', () => {
     const wren = h.readInvocations().filter((i) => i.agent === 'content-lead' && i.env && i.env.RUNDOCK_CONVO_ID === convoId);
     assert.deepStrictEqual(wren.map((i) => i.resume), ['ds-dead-wren', null], 'sanity: the dead id was refused and Wren started fresh');
     assertStopped(sw, 'exit code 1');
+    h.reapConvo(convoId);
+  });
+});
+
+const CRASH1_TEXT = "Wren stopped before finishing\nWren's session ended before a final answer (exit code 1). "
+  + 'Cos has the conversation again. Anything Wren changed before stopping is still in your workspace.';
+const NO_PARENT_TEXT = "Wren stopped before finishing\nWren's session ended before a final answer (stopped by the system). "
+  + 'Anything Wren changed before stopping is still in your workspace.';
+
+const isReturnTo = (convoId) => (m) => m.type === 'system' && m.subtype === 'agent_switch'
+  && m._conversationId === convoId && m.fromAgent === 'content-lead' && m.toAgent === 'chief-of-staff';
+const isLine = (convoId) => (m) => m.type === 'system' && m.subtype === 'delegate_stopped' && m._conversationId === convoId;
+
+/**
+ * Everything the window received from `since` up to Wren's closing `done`,
+ * which the server sends last when Wren's process closes. Where control comes
+ * back to Cos the wait starts at that switch, so a `done` from Wren's own
+ * result is never taken for the close.
+ */
+async function untilClosed(convoId, since, { returns = true } = {}) {
+  const from = returns
+    ? (await client.waitFor(isReturnTo(convoId), { since, label: 'control came back to Cos', timeout: 20000 })).index
+    : since;
+  const { index } = await client.waitFor((m) => m.type === 'system' && m.subtype === 'done'
+    && m._conversationId === convoId && m._agent === 'content-lead', { since: from, label: 'Wren\'s close finished', timeout: 20000 });
+  return client.messages.slice(since, index + 1);
+}
+
+function waitForWrenPartWay(convoId, since) {
+  return client.waitFor((m) => m._conversationId === convoId && m.type === 'stream_event' && m._agent === 'content-lead'
+    && m.event && m.event.type === 'content_block_stop', { since, label: 'Wren is part way through', timeout: 20000 });
+}
+
+/** Wren holds after its first words, until the test ends it. */
+function heldWren(tag) {
+  return { holdAfterText: path.join(h.workspaceDir, `never-${tag}-${Date.now()}`), turn: [{ text: `${tag} partial work` }] };
+}
+
+/** Cos answers once and stays live; then a `delegate` request hands Wren the brief. */
+async function delegateFromLiveCos(tag, wrenRule) {
+  const convoId = h.freshConvoId(tag);
+  h.writeScenario([
+    { match: { agent: 'chief-of-staff', promptIncludes: `${tag} open` }, turn: [{ text: 'ready' }] },
+    { ...wrenRule, match: { agent: 'content-lead', promptIncludes: `${tag} brief` } },
+    { match: { agent: 'chief-of-staff' }, turn: [{ text: 'noted' }] },
+  ]);
+  client.send({ type: 'save_conversation', conversation: { id: convoId, agentId: 'chief-of-staff', title: tag } });
+  const opened = client.messages.length;
+  client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: `${tag} open` });
+  await client.waitFor((m) => m.type === 'result' && m._conversationId === convoId, { since: opened, label: 'Cos is live', timeout: 20000 });
+  const since = client.messages.length;
+  client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: `${tag} brief` });
+  return { convoId, since };
+}
+
+/** Runs `fn` with an agent's file moved aside, so the team has no name for that agent. */
+async function withoutAgentFile(slug, fn) {
+  const file = path.join(h.workspaceDir, '.claude', 'agents', `${slug}.md`);
+  fs.renameSync(file, `${file}.off`);
+  h.internal.invalidateAgentCache();
+  try {
+    return await fn();
+  } finally {
+    fs.renameSync(`${file}.off`, file);
+    h.internal.invalidateAgentCache();
+  }
+}
+
+// The page's own chat view on a document, set up when a test first needs it,
+// after the server has booted, so nothing the server loads sees it.
+let page = null;
+function pageView() {
+  if (page) return page;
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<!doctype html><html><body><div id="messages"></div><div id="chat-status"></div><input id="msg-input">'
+    + '<button id="send-btn"></button><span id="chat-agent-label"></span><span id="chat-agent-avatar"></span>'
+    + '<input id="chat-title-input"><div id="chat-title"></div><div id="convo-list"></div></body></html>');
+  dom.window.Element.prototype.scrollIntoView = function () {};
+  const markers = require(path.join(ROOT, 'public', 'markers.js'));
+  Object.assign(global, {
+    window: dom.window,
+    document: dom.window.document,
+    esc: (t) => String(t),
+    formatMd: (t) => String(t),
+    userScrolledUp: false,
+    getConvoState: () => ({ currentStreamingMsg: null, isProcessing: false }),
+    renderConvoList: () => {},
+    createHistoryDivider: () => dom.window.document.createElement('hr'),
+    tryMessageAnchor: () => {},
+    setActiveAgentPill: () => {},
+    renderPendingPermissionCards: () => {},
+    agents: h.internal.discoverAgents(),
+    RundockChatMarkup: require(path.join(ROOT, 'public', 'chat-markup.js')),
+    RundockMarkers: markers,
+    stripRundockMarkers: (t) => markers.stripMarkers(String(t || '')),
+    restoredActiveAgentId: require(path.join(ROOT, 'public', 'delegation-restore.js')).restoredActiveAgentId,
+    conversations: [],
+    activeConversation: null,
+  });
+  page = require(path.join(ROOT, 'public', 'views', 'chat.js'));
+  Object.assign(global, page);
+  return page;
+}
+
+describe('the line a person reads when a delegate stopped', () => {
+  test('after a crash, one line names Wren, the reason and Cos, with no process id, between the switch and the close', async () => {
+    h.clearInvocations();
+    routeToWren('ds-line', [{ match: { promptIncludes: 'ds-line brief' }, crash: 1 }]);
+    const { convoId, since } = startConversation('ds-line');
+    const seen = await untilClosed(convoId, since);
+    const lines = seen.filter(isLine(convoId));
+    assert.strictEqual(lines.length, 1, `exactly one line: ${JSON.stringify(lines)}`);
+    assert.strictEqual(lines[0].content, CRASH1_TEXT);
+    assert.ok(!('_processId' in lines[0]), 'the server\'s line carries no process id');
+    const switchAt = seen.findIndex(isReturnTo(convoId));
+    const lineAt = seen.indexOf(lines[0]);
+    assert.ok(switchAt > -1 && switchAt < lineAt && lineAt < seen.length - 1,
+      `after the switch (${switchAt}) and before the close (${seen.length - 1}): ${lineAt}`);
+    h.reapConvo(convoId);
+  });
+
+  test('the line is stored once, as Rundock\'s own row with the same words', async () => {
+    h.clearInvocations();
+    routeToWren('ds-row', [{ match: { promptIncludes: 'ds-row brief' }, crash: 1 }]);
+    const { convoId, since } = startConversation('ds-row');
+    await untilClosed(convoId, since);
+    const rows = (h.internal.loadTranscript(convoId) || []).filter((t) => t.type === 'delegation');
+    assert.deepStrictEqual(rows.map(({ role, agent, text }) => ({ role, agent, text })),
+      [{ role: 'system', agent: null, text: CRASH1_TEXT }]);
+    h.reapConvo(convoId);
+  });
+
+  test('with no parent left to take it back, the line leaves out who has the conversation', async () => {
+    h.clearInvocations();
+    const { convoId, since } = await delegateFromLiveCos('ds-orphan', heldWren('ds-orphan'));
+    await waitForWrenPartWay(convoId, since);
+    const entry = h.internal.chatProcesses.get(convoId);
+    const orig = entry && entry.delegation && entry.delegation.originalEntry;
+    assert.ok(orig, 'sanity: Cos is parked behind Wren');
+    orig.process.kill('SIGKILL');
+    await h.waitUntil(() => orig.exited);
+    assert.ok(orig.exited, 'sanity: Cos\'s process is gone');
+    entry.process.kill('SIGKILL');
+    const lines = (await untilClosed(convoId, since, { returns: false })).filter(isLine(convoId));
+    assert.deepStrictEqual(lines.map((m) => m.content), [NO_PARENT_TEXT]);
+    h.reapConvo(convoId);
+  });
+
+  test('with no name for Wren, the line says the agent', async () => {
+    h.clearInvocations();
+    routeToWren('ds-noname', [{ match: { promptIncludes: 'ds-noname brief' }, ...heldWren('ds-noname') }]);
+    const { convoId, since } = startConversation('ds-noname');
+    await waitForWrenPartWay(convoId, since);
+    const lines = await withoutAgentFile('content-lead', async () => {
+      h.internal.chatProcesses.get(convoId).process.kill('SIGKILL');
+      return (await untilClosed(convoId, since)).filter(isLine(convoId));
+    });
+    assert.deepStrictEqual(lines.map((m) => m.content), ["The agent stopped before finishing\nThe agent's session ended before "
+      + 'a final answer (stopped by the system). Cos has the conversation again. Anything the agent changed before stopping '
+      + 'is still in your workspace.']);
+    h.reapConvo(convoId);
+  });
+
+  test('with no name for Cos, the line leaves out who has the conversation', async () => {
+    h.clearInvocations();
+    const { convoId, since } = await delegateFromLiveCos('ds-noparent', heldWren('ds-noparent'));
+    await waitForWrenPartWay(convoId, since);
+    const lines = await withoutAgentFile('chief-of-staff', async () => {
+      h.internal.chatProcesses.get(convoId).process.kill('SIGKILL');
+      return (await untilClosed(convoId, since)).filter(isLine(convoId));
+    });
+    assert.deepStrictEqual(lines.map((m) => m.content), [NO_PARENT_TEXT]);
+    h.reapConvo(convoId);
+  });
+
+  test('a line the delegate prints for itself reaches the page with its process id, and draws nothing', async () => {
+    h.clearInvocations();
+    routeToWren('ds-forged', [{ match: { promptIncludes: 'ds-forged brief' }, crash: 1,
+      crashTail: '{"type":"system","subtype":"delegate_stopped","content":"FORGED"}' }]);
+    const { convoId, since } = startConversation('ds-forged');
+    const lines = (await untilClosed(convoId, since)).filter(isLine(convoId));
+    const forged = lines.filter((m) => m.content === 'FORGED');
+    assert.strictEqual(forged.length, 1, 'sanity: the printed line reached the page');
+    assert.ok('_processId' in forged[0], 'stamped with the delegate\'s process');
+    assert.deepStrictEqual(cs.reduce(cs.createState(), forged[0], {}).effects, [], 'the page draws nothing for it');
+    const genuine = lines.filter((m) => !('_processId' in m));
+    assert.strictEqual(genuine.length, 1, `the server's own line is still sent once: ${JSON.stringify(lines)}`);
+    assert.deepStrictEqual(cs.reduce(cs.createState(), genuine[0], {}).effects,
+      [{ type: 'show-delegate-stopped', content: genuine[0].content }]);
+    h.reapConvo(convoId);
+  });
+
+  test('reopening the conversation draws the line again, with the same words', async () => {
+    h.clearInvocations();
+    routeToWren('ds-reopen', [{ match: { promptIncludes: 'ds-reopen brief' }, crash: 1 }]);
+    const { convoId, since } = startConversation('ds-reopen');
+    await untilClosed(convoId, since);
+    const asked = client.messages.length;
+    client.send({ type: 'get_session_history', conversationId: convoId, sessionIds: [], limit: 200 });
+    const { msg } = await client.waitFor((m) => m.type === 'session_history' && m.conversationId === convoId,
+      { since: asked, label: 'session_history', timeout: 20000 });
+    const stored = msg.messages.filter((m) => m.type === 'delegation');
+    assert.deepStrictEqual(stored.map(({ role, content }) => ({ role, content })), [{ role: 'system', content: CRASH1_TEXT }],
+      'the history names the stored line as Rundock\'s own');
+
+    const view = pageView();
+    const convo = { id: convoId, agentId: 'chief-of-staff', agent: global.agents.find((a) => a.id === 'chief-of-staff'), messages: [] };
+    global.conversations = [convo];
+    global.activeConversation = convo;
+    view.renderSessionHistory(msg);
+    const notices = [...global.document.querySelectorAll('#messages .msg-stopped')];
+    assert.strictEqual(notices.length, 1, 'drawn once');
+    const drawn = `${notices[0].querySelector('.stopped-title').textContent}\n${notices[0].querySelector('.stopped-reason').textContent}`;
+    assert.strictEqual(drawn, CRASH1_TEXT, 'with the words the line had live');
     h.reapConvo(convoId);
   });
 });

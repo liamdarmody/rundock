@@ -76,5 +76,14 @@ test('a JSON tail in the delegate buffer at close is flushed, stamped with the d
     const entry = h.internal.chatProcesses.get(convoId);
     return entry && entry.agentId === 'chief-of-staff';
   });
+  // It stopped with no answer, so the window is told once that it stopped, by
+  // the time the delegate's close has finished.
+  const { index } = await client.waitFor((m) => m.type === 'system' && m.subtype === 'done'
+    && m._conversationId === convoId && m._agent === 'content-lead', { since, label: 'the delegate\'s close finished' });
+  const lines = client.messages.slice(since, index + 1)
+    .filter((m) => m.type === 'system' && m.subtype === 'delegate_stopped' && m._conversationId === convoId);
+  assert.strictEqual(lines.length, 1, `one line: ${JSON.stringify(lines)}`);
+  assert.ok(lines[0].content.includes('(exit code 0)'), lines[0].content);
+  assert.ok(lines[0].content.includes('Cos has the conversation again.'), lines[0].content);
   h.reapConvo(convoId);
 });

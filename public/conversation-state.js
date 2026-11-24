@@ -454,6 +454,16 @@
     return { state, effects: [{ type: 'insert-compaction-divider', key, agentId: message._agent || null }] };
   }
 
+  // A delegate stopped before finishing: the server's one line saying so.
+  // Everything a delegate prints reaches the page stamped with its process id,
+  // and the server's line has none, so a line carrying one, of any value, is a
+  // delegate's own and draws nothing.
+  function reduceDelegateStopped(state, message) {
+    if ('_processId' in message) return none(state);
+    if (typeof message.content !== 'string' || !message.content) return none(state);
+    return { state, effects: [{ type: 'show-delegate-stopped', content: message.content }] };
+  }
+
   function reduceSystem(state, message, ctx) {
     switch (message.subtype) {
       case 'process_started': return reduceProcessStarted(state, message);
@@ -474,6 +484,7 @@
       case 'keepalive': return reduceKeepalive(state, message, ctx);
       case 'status': return reduceStatus(state, message);
       case 'compact_boundary': return reduceCompactBoundary(state, message, ctx);
+      case 'delegate_stopped': return reduceDelegateStopped(state, message);
       default: return none(state);
     }
   }
