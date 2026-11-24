@@ -81,6 +81,21 @@ const PAGE_ANSWER = {
   src: path.join(ROOT, 'public', 'app.js'),
   suite: 'test/unit/incomplete-save-client.test.js',
 };
+// The attachments store: an agent can plant anything under
+// .rundock/attachments, so each guard that refuses what it planted is broken
+// here, with the exclusive create the store writes every file through.
+const ATTACHMENT_TYPES = {
+  src: path.join(ROOT, 'lib', 'attachments', 'detect.js'),
+  suite: 'test/unit/attachments-detect.test.js',
+};
+const ATTACHMENTS = {
+  src: path.join(ROOT, 'lib', 'attachments', 'store.js'),
+  suite: 'test/unit/attachments-store.test.js',
+};
+const EXCLUSIVE_CREATE = {
+  src: path.join(ROOT, 'lib', 'workspace', 'link-safe-write.js'),
+  suite: 'test/unit/write-file-exclusive.test.js',
+};
 
 // [target, label, the guard as it is written, what it becomes without it]
 const MUTATIONS = [
@@ -252,6 +267,51 @@ const MUTATIONS = [
     'if (!shape || running'],
   [APPENDED_LOG, 'a stub log line still being appended is left out, not parsed',
     '  lines.pop();\n',
+    ''],
+  [ATTACHMENTS, 'a conversation ID is matched whole, so a path around a valid run is refused',
+    '/^[A-Za-z0-9_-]{1,64}$/',
+    '/[A-Za-z0-9_-]{1,64}/'],
+  [ATTACHMENTS, 'a conversation ID must be a string, so an array holding one is refused',
+    "  if (typeof id !== 'string') throw refusal('bad-id');\n",
+    ''],
+  [EXCLUSIVE_CREATE, 'an exclusive create refuses a name that is already taken',
+    'fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0)',
+    '(fs.constants.O_NOFOLLOW || 0)'],
+  [EXCLUSIVE_CREATE, 'an exclusive create never opens through a link',
+    'fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0)',
+    'fs.constants.O_EXCL'],
+  [ATTACHMENTS, 'a write to a deleted conversation is refused',
+    "  if (deleted.includes(id)) throw refusal('deleted');\n",
+    ''],
+  [ATTACHMENTS, 'each stored file is walked for links just before it is created',
+    "        walk(root, target, 'save-failed');\n",
+    ''],
+  [ATTACHMENTS, 'the record is read before any file is written',
+    "  const previous = loadRecord(root, id, 'save-failed');\n",
+    '  const previous = { messages: [], sent: {} };\n'],
+  [ATTACHMENTS, 'a link at the conversation folder is removed as a link',
+    'found.isSymbolicLink()',
+    'false'],
+  [ATTACHMENTS, 'a delete walks for links again just before it removes anything',
+    "    walk(root, dir, 'delete-refused');\n    removeEntry(target);",
+    '    removeEntry(target);'],
+  [ATTACHMENTS, 'a stored name is NFC, so composed and decomposed names agree',
+    ".normalize('NFC')",
+    ''],
+  [ATTACHMENTS, 'a reserved device name is prefixed before it is stored',
+    'RESERVED_DEVICE.test(cut) ? `_${cut}` : cut',
+    'cut'],
+  [ATTACHMENTS, 'the record is written only after every file',
+    '    for (const [index, file] of files.entries()) {\n',
+    '    writeWholeFile(recordFile, JSON.stringify(previous));\n    for (const [index, file] of files.entries()) {\n'],
+  [ATTACHMENT_TYPES, 'a PDF at exactly the limit is accepted',
+    'if (size > LIMITS.pdfBytes)',
+    'if (size >= LIMITS.pdfBytes)'],
+  [ATTACHMENTS, 'every write runs under its conversation lock',
+    '  return withConversationLock(id, () => writeLocked(root, id, files, kinds, create));\n',
+    '  return writeLocked(root, id, files, kinds, create);\n'],
+  [ATTACHMENTS, 'a check joins only a name on the stored-name pattern to a path',
+    "  if (typeof file !== 'string' || !STORED_NAME.test(file)) return 'missing';\n",
     ''],
 ];
 
