@@ -276,3 +276,117 @@ describe('LIMITS', () => {
     assert.deepStrictEqual({ ...detect.LIMITS }, { imageBytes: 3500000, imagePixels: 8000, pdfBytes: 10000000, textBytes: 1000000, files: 5, messageBytes: 20000000 });
   });
 });
+
+describe('checkFiles: the limits, each at the limit and one past it', () => {
+  const checkFiles = (...args) => detect.checkFiles(...args);
+  const png = (size, width = 10, height = 10) => ({ name: 'shot.png', bytes: pngBytes(width, height, size) });
+  const pdf = (size, name = 'Incident-Report.pdf') => ({ name, bytes: pdfBytes(size) });
+  const text = (size, name = 'notes.txt') => ({ name, bytes: Buffer.alloc(size, 0x61) });
+
+  test('resolves each file to what detectFile found, in order', () => {
+    ready('checkFiles');
+    assert.deepStrictEqual(checkFiles([png(40, 3, 4), pdf(64), text(5, 'table.csv')]), [{ type: 'png', width: 3, height: 4 }, { type: 'pdf' }, { type: 'csv' }]);
+    assert.deepStrictEqual(checkFiles([]), []);
+  });
+
+  test('an image of 3,500,000 bytes is accepted', () => {
+    ready('checkFiles');
+    assert.strictEqual(checkFiles([png(3500000)]).length, 1);
+  });
+
+  test('an image of 3,500,001 bytes is refused image-bytes with its name, size and the limit', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([png(3500001)]), refused('image-bytes', { name: 'shot.png', bytes: 3500001, limit: 3500000 }));
+  });
+
+  test('an image 8,000 px wide or high is accepted', () => {
+    ready('checkFiles');
+    assert.strictEqual(checkFiles([png(40, 8000, 10), png(40, 10, 8000)]).length, 2);
+  });
+
+  test('an image 8,001 px wide is refused image-pixels with its width, height and the limit', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([png(40, 8001, 10)]), refused('image-pixels', { name: 'shot.png', width: 8001, height: 10, limit: 8000 }));
+  });
+
+  test('an image 8,001 px high is refused image-pixels', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([png(40, 10, 8001)]), refused('image-pixels', { name: 'shot.png', width: 10, height: 8001, limit: 8000 }));
+  });
+
+  test('a PDF of 10,000,000 bytes is accepted', () => {
+    ready('checkFiles');
+    assert.deepStrictEqual(checkFiles([pdf(10000000)]), [{ type: 'pdf' }]);
+  });
+
+  test('a PDF of 10,000,001 bytes is refused pdf-bytes with its name, size and the limit', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([pdf(10000001)]), refused('pdf-bytes', { name: 'Incident-Report.pdf', bytes: 10000001, limit: 10000000 }));
+  });
+
+  test('a text file of 1,000,000 bytes is accepted', () => {
+    ready('checkFiles');
+    assert.deepStrictEqual(checkFiles([text(1000000)]), [{ type: 'txt' }]);
+  });
+
+  test('a text file of 1,000,001 bytes is refused text-bytes with its name, size and the limit', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([text(1000001, 'README.md')]), refused('text-bytes', { name: 'README.md', bytes: 1000001, limit: 1000000 }));
+  });
+
+  test('5 files are accepted', () => {
+    ready('checkFiles');
+    assert.strictEqual(checkFiles(Array.from({ length: 5 }, () => text(1))).length, 5);
+  });
+
+  test('6 files are refused too-many-files with the count and the limit', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles(Array.from({ length: 6 }, () => text(1))), refused('too-many-files', { count: 6, limit: 5 }));
+  });
+
+  test('two PDFs of 10,000,000 bytes are accepted, 20,000,000 in all', () => {
+    ready('checkFiles');
+    assert.strictEqual(checkFiles([pdf(10000000), pdf(10000000)]).length, 2);
+  });
+
+  test('two PDFs of 10,000,000 bytes and a 1-byte text file are refused too-many-bytes with the total and the limit', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([pdf(10000000), pdf(10000000), text(1)]), refused('too-many-bytes', { bytes: 20000001, limit: 20000000 }));
+  });
+
+  test('the file count is checked before any file', () => {
+    ready('checkFiles');
+    const files = [{ name: 'IMG_0001.HEIC', bytes: ftyp('heic') }, ...Array.from({ length: 5 }, () => text(1))];
+    assert.throws(() => checkFiles(files), refused('too-many-files'));
+  });
+
+  test('files are checked in order, and each one\'s type before its size', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([pdf(10000001), { name: 'IMG_0001.HEIC', bytes: ftyp('heic') }]), refused('pdf-bytes'));
+    assert.throws(() => checkFiles([text(1), { name: 'IMG_0001.HEIC', bytes: ftyp('heic') }, pdf(10000001)]), refused('heic', { name: 'IMG_0001.HEIC' }));
+    const hugeText = { name: 'archive.zip', bytes: Buffer.alloc(1000001, 0x61) };
+    assert.throws(() => checkFiles([hugeText]), refused('unsupported', { name: 'archive.zip' }));
+  });
+
+  test('an image over both its size and its pixel limits is refused image-bytes first', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([png(3500001, 9000, 9000)]), refused('image-bytes'));
+  });
+
+  test('each file\'s own limit is checked before the message total', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([pdf(10000000), pdf(10000000), pdf(10000001)]), refused('pdf-bytes'));
+  });
+
+  test('a refusal names a file whose name is not text as empty', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([{ name: 7, bytes: pdfBytes(10000001) }]), refused('pdf-bytes', { name: '' }));
+  });
+
+  test('a file whose bytes are not a Buffer is a TypeError, and so is a list that is not an array', () => {
+    ready('checkFiles');
+    assert.throws(() => checkFiles([{ name: 'notes.txt', bytes: 'words' }]), TypeError);
+    assert.throws(() => checkFiles([null]), TypeError);
+    assert.throws(() => checkFiles('notes.txt'), TypeError);
+  });
+});
