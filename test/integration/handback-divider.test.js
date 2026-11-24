@@ -20,6 +20,7 @@ const h = require(path.join(ROOT, 'test', 'helpers', 'harness.js'));
 const { standardTeam } = require(path.join(ROOT, 'test', 'helpers', 'workspace.js'));
 const cs = require(path.join(ROOT, 'public', 'conversation-state.js'));
 const markup = require(path.join(ROOT, 'public', 'chat-markup.js'));
+const { JSDOM } = require('jsdom');
 
 // The two agents as the page knows them, named as standardTeam() names them.
 const TEAM = {
@@ -35,8 +36,9 @@ before(async () => {
 });
 after(async () => h.shutdown());
 
-// What the page draws for this switch, as a screen reader reads it: the
-// avatars are hidden from it, so they are taken out before the words are read.
+// What the page draws for this switch: the divider's own text, whitespace
+// collapsed, with nothing taken out. The avatars draw their glyphs from an
+// attribute, so the words are all the text there is.
 function drawnFor(sw) {
   const ctx = {
     isActive: true, convoAgentId: 'chief-of-staff',
@@ -46,9 +48,8 @@ function drawnFor(sw) {
   const state = { ...cs.createState(), activeAgentId: sw.fromAgent, delegationActive: true };
   return cs.reduce(state, sw, ctx).effects
     .filter((ef) => ef.type === 'show-delegation-divider')
-    .map((ef) => markup.delegationDividerHtml(TEAM[ef.fromAgentId], TEAM[ef.toAgentId], ef.isReturn)
-      .replace(/<span class="avatar xs"[^>]*aria-hidden="true"[^>]*>[^<]*<\/span>/g, ' ')
-      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    .map((ef) => JSDOM.fragment(markup.delegationDividerHtml(TEAM[ef.fromAgentId], TEAM[ef.toAgentId], ef.isReturn))
+      .textContent.replace(/\s+/g, ' '));
 }
 
 function waitForHandback(convoId, since) {

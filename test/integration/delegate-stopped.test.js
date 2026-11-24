@@ -500,6 +500,7 @@ describe('what Cos is told when Wren stopped', () => {
 // and finds no line sent or stored for the conversation; where control comes
 // back to Cos, the page draws the handback.
 const markup = require(path.join(ROOT, 'public', 'chat-markup.js'));
+const { JSDOM } = require('jsdom');
 
 // The two agents as the page knows them, named as standardTeam() names them.
 const TEAM = {
@@ -507,8 +508,9 @@ const TEAM = {
   'content-lead': { id: 'content-lead', displayName: 'Wren', icon: 'W', colour: '#4A90D9', type: 'specialist' },
 };
 
-// What the page draws for this switch, as a screen reader reads it: the
-// avatars are hidden from it, so they are taken out before the words are read.
+// What the page draws for this switch: the divider's own text, whitespace
+// collapsed, with nothing taken out. The avatars draw their glyphs from an
+// attribute, so the words are all the text there is.
 function drawnFor(sw) {
   const ctx = {
     isActive: true, convoAgentId: 'chief-of-staff',
@@ -518,9 +520,8 @@ function drawnFor(sw) {
   const state = { ...cs.createState(), activeAgentId: sw.fromAgent, delegationActive: true };
   return cs.reduce(state, sw, ctx).effects
     .filter((ef) => ef.type === 'show-delegation-divider')
-    .map((ef) => markup.delegationDividerHtml(TEAM[ef.fromAgentId], TEAM[ef.toAgentId], ef.isReturn)
-      .replace(/<span class="avatar xs"[^>]*aria-hidden="true"[^>]*>[^<]*<\/span>/g, ' ')
-      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+    .map((ef) => JSDOM.fragment(markup.delegationDividerHtml(TEAM[ef.fromAgentId], TEAM[ef.toAgentId], ef.isReturn))
+      .textContent.replace(/\s+/g, ' '));
 }
 
 /**

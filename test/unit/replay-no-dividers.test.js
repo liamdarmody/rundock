@@ -116,12 +116,10 @@ describe('who is announced, on the document, through the real executor', () => {
     const draw = executor('show-delegation-divider');
     const r = cs.reduce(cs.createState(), message, CTX);
     for (const ef of r.effects) if (ef.type === 'show-delegation-divider') draw('c1', ef);
-    // What a screen reader reads: the avatars are hidden from it.
-    return rows().filter((el) => el.className.includes('msg-delegation')).map((el) => {
-      const copy = el.cloneNode(true);
-      for (const hidden of copy.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
-      return (copy.textContent || '').replace(/\s+/g, ' ').trim();
-    });
+    // Each divider's own text, whitespace collapsed and nothing trimmed or
+    // taken out, so a glyph or a stray space shows here.
+    return rows().filter((el) => el.className.includes('msg-delegation'))
+      .map((el) => (el.textContent || '').replace(/\s+/g, ' '));
   }
 
   test('somebody arriving to take the work is announced with who handed it over', () => {

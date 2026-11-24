@@ -198,16 +198,26 @@ describe('an agent cannot write script into the chat thread through its own file
     const PLAIN = { id: 'example-agent', displayName: 'Cos', icon: 'C', colour: '#E87A5A' };
     // The markup a name alone can carry, with no other field hostile.
     const NAMED = { id: 'alpha', displayName: '<img src=x onerror=alert(1)>', icon: 'A', colour: '#4A90D9' };
+    // The icon is drawn from an attribute, so a quote in it is the way out.
+    const QUOTED = { id: 'beta', displayName: 'Wren', icon: '" onmouseover="x', colour: '#4A90D9' };
     for (const [from, to, label] of [
       [HOSTILE_AGENT, PLAIN, 'hostile agent handing over'],
       [PLAIN, HOSTILE_AGENT, 'hostile agent taking over'],
       [NAMED, PLAIN, 'hostile name handing over'],
       [PLAIN, NAMED, 'hostile name taking over'],
+      [QUOTED, PLAIN, 'quoted icon handing over'],
+      [PLAIN, QUOTED, 'quoted icon taking over'],
     ]) {
       const m = messages();
       m.appendChild(chat.buildDelegationDivider(from, to));
       assertInert(m, `buildDelegationDivider, ${label}`);
-      assertLegible(m, `buildDelegationDivider, ${label}`);
+      // Legible as its own characters: the divider draws each icon from its
+      // avatar's data-icon attribute rather than as text, so the icon is read
+      // back from there and each name from its own text.
+      assert.deepStrictEqual([...m.querySelectorAll('.delegation-badge > .avatar')].map((a) => a.getAttribute('data-icon')),
+        [from.icon, to.icon], `buildDelegationDivider, ${label}: each icon reads back as the characters it is`);
+      assert.deepStrictEqual([...m.querySelectorAll('.hv-name')].map((n) => n.textContent),
+        [from.displayName, to.displayName], `buildDelegationDivider, ${label}: each name reads back as the characters it is`);
       assert.ok(m.textContent.includes('handed over to'), 'sanity: the divider still says what it says');
     }
     const m = messages();

@@ -93,6 +93,14 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  // Escape for a double-quoted ATTRIBUTE value: escapeHtml's three plus both
+  // quotes, in the same order as escapeAttr in markdown-render.js.
+  /** @param {unknown} s */
+  function escapeAttr(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+      .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
   // What a colour is allowed to be. Four shapes, and everything Rundock itself
   // produces is one of the first two: the hex literals in the palette at
   // lib/agents/discovery.js, and the `var(--accent)` fallback the call sites
@@ -141,6 +149,8 @@
     return {
       colour: safeColour(agent?.colour),
       icon: escapeHtml(agent?.icon || '?'),
+      // The same icon for an attribute value, where CSS draws it from.
+      iconAttr: escapeAttr(agent?.icon || '?'),
       name: escapeHtml(agent?.displayName || 'Agent'),
     };
   }
@@ -206,13 +216,15 @@
   //
   // The words take the theme's text colours, never the agent's: an agent colour
   // as text fails contrast in the light theme. Each avatar carries its agent's
-  // colour instead, and is hidden from screen readers so the badge reads as one
-  // sentence: "Cos handed over to Wren".
+  // colour instead, is hidden from screen readers, and holds no text: its glyph
+  // sits in data-icon and is drawn by a CSS rule in chat.css. So the badge's own
+  // text is the sentence and nothing else: "Cos handed over to Wren". The gap
+  // between an avatar and its name is the badge's flex gap, never a space.
   /** @param {AgentLike} fromAgent @param {AgentLike} toAgent @param {boolean} [isReturn] */
   function delegationDividerHtml(fromAgent, toAgent, isReturn) {
     const party = (agent) => {
-      const { colour, icon, name } = identity(agent);
-      return `<span class="avatar xs" style="background:${colour}" aria-hidden="true">${icon}</span> <span class="hv-name">${name}</span>`;
+      const { colour, iconAttr, name } = identity(agent);
+      return `<span class="avatar xs" style="background:${colour}" aria-hidden="true" data-icon="${iconAttr}"></span><span class="hv-name">${name}</span>`;
     };
     const verb = isReturn ? 'handed back to' : 'handed over to';
     return `<div class="delegation-line"></div><div class="delegation-badge">${party(fromAgent)} ${verb} ${party(toAgent)}</div><div class="delegation-line"></div>`;

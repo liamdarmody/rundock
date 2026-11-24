@@ -168,27 +168,28 @@ test('module exports exactly its nine helpers and nothing else', () => {
 
 const FROM = { colour: '#f00', icon: 'C', displayName: 'Cos' };
 const TO = { colour: '#0a0', icon: 'W', displayName: 'Wren' };
-// What a screen reader announces: the avatars are hidden from it, so this is
-// the badge's text with them taken out and whitespace collapsed.
-function spokenText(html) {
-  return html.replace(/<span class="avatar xs"[^>]*>[^<]*<\/span>/g, ' ')
-    .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+// The divider's own text, as the page holds it, with whitespace collapsed and
+// nothing taken out: an avatar's glyph is drawn from its attribute by CSS, so
+// it adds no text, and nothing is trimmed, so a stray space would show.
+const { JSDOM } = require('jsdom');
+function drawnText(html) {
+  return JSDOM.fragment(html).textContent.replace(/\s+/g, ' ');
 }
 
 test('delegationDividerHtml names who handed the conversation to whom', () => {
   assert.strictEqual(
     delegationDividerHtml(FROM, TO, false),
     '<div class="delegation-line"></div><div class="delegation-badge">'
-    + '<span class="avatar xs" style="background:#f00" aria-hidden="true">C</span> <span class="hv-name">Cos</span>'
+    + '<span class="avatar xs" style="background:#f00" aria-hidden="true" data-icon="C"></span><span class="hv-name">Cos</span>'
     + ' handed over to '
-    + '<span class="avatar xs" style="background:#0a0" aria-hidden="true">W</span> <span class="hv-name">Wren</span>'
+    + '<span class="avatar xs" style="background:#0a0" aria-hidden="true" data-icon="W"></span><span class="hv-name">Wren</span>'
     + '</div><div class="delegation-line"></div>'
   );
-  assert.strictEqual(spokenText(delegationDividerHtml(FROM, TO, false)), 'Cos handed over to Wren');
+  assert.strictEqual(drawnText(delegationDividerHtml(FROM, TO, false)), 'Cos handed over to Wren');
 });
 
 test('a return reads as handed back, naming both agents', () => {
-  assert.strictEqual(spokenText(delegationDividerHtml(TO, FROM, true)), 'Wren handed back to Cos');
+  assert.strictEqual(drawnText(delegationDividerHtml(TO, FROM, true)), 'Wren handed back to Cos');
 });
 
 test('no divider says joined or resumed, whichever way it points', () => {
@@ -203,15 +204,22 @@ test('the badge names no colour; each avatar keeps its own and is hidden from sc
   assert.ok(!/color:/.test(html), 'no text colour anywhere in the divider');
   const count = (needle) => html.split(needle).length - 1;
   assert.strictEqual(count('<span class="hv-name">'), 2, 'each name in its own span');
-  assert.strictEqual(count('<span class="avatar xs" style="background:#f00" aria-hidden="true">')
-    + count('<span class="avatar xs" style="background:#0a0" aria-hidden="true">'), 2,
-  'each avatar keeps its own colour and is hidden from screen readers');
+  assert.strictEqual(count('<span class="avatar xs" style="background:#f00" aria-hidden="true" data-icon="C"></span>')
+    + count('<span class="avatar xs" style="background:#0a0" aria-hidden="true" data-icon="W"></span>'), 2,
+  'each avatar keeps its own colour, is hidden from screen readers and holds no text');
 });
 
 test('delegationDividerHtml falls back the same way the sender line does', () => {
   const html = delegationDividerHtml(null, undefined, false);
   assert.ok(html.includes('background:var(--accent)'));
-  assert.strictEqual(spokenText(html), 'Agent handed over to Agent');
+  assert.strictEqual(drawnText(html), 'Agent handed over to Agent');
+});
+
+test('an icon goes into its attribute with quotes and markup escaped', () => {
+  const html = delegationDividerHtml({ icon: '"\'<b>&' }, TO, false);
+  assert.ok(html.includes('data-icon="&quot;&#39;&lt;b&gt;&amp;"></span>'), html);
+  assert.strictEqual(JSDOM.fragment(html).querySelector('.avatar').getAttribute('data-icon'), '"\'<b>&',
+    'and reads back as the characters it is');
 });
 
 // ── permissionResolvedHtml ──────────────────────────────────────────────────

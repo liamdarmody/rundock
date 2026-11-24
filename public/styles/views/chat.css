@@ -274,6 +274,9 @@ body.light .permission-fields { background: var(--elevated); }
    fails contrast in the light theme; the avatars carry the agent colour. */
 .handover .delegation-badge { color: var(--text-2-strong); font-weight: 500; }
 .handover .hv-name { color: var(--text-1); font-weight: 600; }
+/* The divider's avatars hold no text, so the badge's text is only its
+   sentence; each glyph is drawn here from the avatar's data-icon. */
+.delegation-badge > .avatar::before { content: attr(data-icon); }
 /* A delegate that stopped before finishing. Theme text colors on the card;
    the icon is the card's danger text. The detail is the runtime's own words,
    wrapped and never cut, so the whole message can be read. */
