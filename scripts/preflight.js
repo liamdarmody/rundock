@@ -91,6 +91,8 @@ const REGISTRY_SUITES = [
   'test/unit/danger-token.test.js',
   'test/unit/attention-token.test.js',
   'test/unit/danger-text-card-contrast.test.js',
+  // The same arithmetic over the handover divider and the stopped-delegate line.
+  'test/unit/delegation-divider-contrast.test.js',
   // The same arithmetic over the colours links in a note are drawn in.
   'test/unit/editor-link-contrast.test.js',
   // The same arithmetic over the routine screens' text, badges and focus
