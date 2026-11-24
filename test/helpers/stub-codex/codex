@@ -56,7 +56,11 @@
 //                      "reason":"...", "grantRoot":null,
 //                      "afterDecision": {"accept":{"text":"..."}, "decline":{"text":"..."}}},
 //         "error": {"codexErrorInfo":"usageLimitExceeded", "message":"...", "willRetry":false},
-//         "delayMs": 0,                      // pause before the agent output
+//                                            // "thenContinue": true sends the error and
+//                                            // carries on with the rest of the rule
+//                                            // instead of failing the turn, so a test
+//                                            // decides how a turn with an error ends
+//         "delayMs": 0,                     // pause before the agent output
 //         "untilFile": "...",                // hold the turn before its output until
 //                                            // this file exists, so a test decides
 //                                            // when it ends
@@ -259,6 +263,8 @@ function runAppServer() {
 
     if (rule.error) {
       send(asfx.errorNotification(threadId, turnId, rule.error));
+    }
+    if (rule.error && !rule.error.thenContinue) {
       finishTurn(t, 'failed', {
         message: rule.error.message || 'stub turn error',
         codexErrorInfo: rule.error.codexErrorInfo || null,
