@@ -12,8 +12,12 @@
 // assertion, so a server that ignores attachments fails here on an assertion.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const h = require('../helpers/harness.js');
+const store = require('../../lib/attachments/store.js');
 
 // The receive is async and the handler ignores its promise, so a rejection it
 // failed to catch would surface only here.
@@ -23,6 +27,8 @@ process.on('unhandledRejection', (reason) => { rejections.push(reason); });
 let client;
 before(async () => { await h.boot(); client = await h.connect(); });
 after(async () => h.shutdown());
+
+const FALLBACK = 'Rundock couldn\'t save the files. Your message and files are still here.';
 
 // The first message after `since` on `on` that matches, once one arrives.
 async function arrived(pred, { since = 0, on = client, timeout = 8000 } = {}) {
@@ -36,6 +42,100 @@ function padded(type, bytes) {
   const frame = JSON.stringify({ type, pad: 'x'.repeat(bytes - base) });
   assert.strictEqual(Buffer.byteLength(frame), bytes);
   return frame;
+}
+
+const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+const file = (name, bytes) => ({ name, data: bytes.toString('base64') });
+const decoded = (sent) => Buffer.from(sent.data, 'base64');
+function png(width = 640, height = 480, size = 33) {
+  const b = Buffer.alloc(size);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+  b.writeUInt32BE(13, 8);
+  b.write('IHDR', 12, 'latin1');
+  b.writeUInt32BE(width, 16);
+  b.writeUInt32BE(height, 20);
+  return b;
+}
+function pdf(size = 40) {
+  const b = Buffer.alloc(size, 0x20);
+  b.write('%PDF-1.7\n', 0, 'latin1');
+  return b;
+}
+
+const attachmentsDir = () => path.join(h.workspaceDir, '.rundock', 'attachments');
+const folderOf = (id) => path.join(attachmentsDir(), id);
+const listing = (dir) => { try { return fs.readdirSync(dir).sort(); } catch (e) { return null; } };
+const rows = (id) => h.internal.convoTranscripts.get(id) || h.internal.loadTranscript(id) || [];
+const userRows = (id) => rows(id).filter((r) => r.role === 'user');
+const entriesOf = (id) => { try { return store.readRecord(h.workspaceDir, id).messages; } catch (e) { return null; } };
+const spawnsFor = (id) => h.readInvocations().filter((i) => i.env && i.env.RUNDOCK_CONVO_ID === id);
+const promptsWith = (tag) => h.readPrompts().map((p) => p.prompt).filter((p) => p.includes(tag));
+
+function scenario(rules, deadSessions = [], extra = {}) {
+  fs.writeFileSync(path.join(h.workspaceDir, 'stub-scenario.json'), JSON.stringify({ ...extra, rules, deadSessions }));
+}
+const answers = (...tags) => scenario(tags.map((tag) => ({ match: { promptIncludes: tag }, turn: [{ text: `DONE-${tag}` }] })));
+
+function seed(id, record) {
+  const all = h.internal.readConversations().filter((c) => c.id !== id);
+  h.internal.writeConversations([{ id, title: id, status: 'active', ...record }, ...all]);
+}
+
+function chat(id, content, attachments, extra = {}) {
+  const msg = { type: 'chat', conversationId: id, agent: 'chief-of-staff', content, ...extra };
+  if (attachments !== undefined) msg.attachments = attachments;
+  client.send(msg);
+}
+const storedFor = (id, since, timeout) => arrived((m) => m.type === 'chat_stored' && m.conversationId === id, { since, timeout });
+const resultFor = (id, text, since) => arrived((m) => m.type === 'result' && m._conversationId === id && String(m.result || '').includes(text), { since, timeout: 15000 });
+
+// The messages the server sends back into its own handler (strings, unlike a
+// page's frames), on every server socket, until `stop`.
+function recordReentries() {
+  const seen = [];
+  const sockets = [...h.internal.connectedClients];
+  for (const sock of sockets) {
+    const emit = sock.emit;
+    sock.emit = function (event, data, ...rest) {
+      if (event === 'message' && typeof data === 'string') seen.push(JSON.parse(data));
+      return emit.call(this, event, data, ...rest);
+    };
+  }
+  return { seen, stop: () => { for (const sock of sockets) delete sock.emit; } };
+}
+
+// One record entry, one stored copy of each file and one transcript row for
+// each message `stored` names (their chat_stored answers), in order.
+function writtenOnce(id, stored) {
+  assert.deepStrictEqual(entriesOf(id), stored.map((s) => s.entry), 'one record entry per message');
+  const names = stored.flatMap((s) => s.entry.files.map((f) => f.file));
+  assert.deepStrictEqual(listing(folderOf(id)), [...names, 'record.json'].sort(), 'one stored copy of each file');
+  assert.deepStrictEqual(userRows(id).map((r) => r.text), stored.map((s) => s.content), 'one transcript row per message');
+}
+
+// Sends `msg` and returns its chat_refused, once the message has had time to
+// do anything else; it must have written, appended and dispatched nothing.
+async function refusedWith(msg, { code, title, text }) {
+  const id = msg.conversationId;
+  const was = { spawns: h.readInvocations().length, prompts: h.readPrompts().length, rows: rows(id || 'default').length };
+  const folder = listing(folderOf(id || 'default'));
+  const record = id ? entriesOf(id) : null;
+  const since = client.messages.length;
+  client.send(msg);
+  const got = await arrived((m) => m.type === 'chat_refused', { since });
+  assert.ok(got, 'the message is answered with chat_refused');
+  await h.delay(300);
+  const answered = client.messages.slice(since);
+  assert.strictEqual(answered.filter((m) => m.type === 'chat_refused').length, 1, 'exactly one chat_refused');
+  assert.ok(!answered.some((m) => m.type === 'chat_stored'), 'and no chat_stored');
+  assert.deepStrictEqual({ code: got.code, title: got.title, text: got.text }, { code, title, text });
+  assert.strictEqual(got.conversationId, id);
+  assert.strictEqual(rows(id || 'default').length, was.rows, 'no transcript row');
+  assert.strictEqual(h.readInvocations().length, was.spawns, 'no process spawned');
+  assert.strictEqual(h.readPrompts().length, was.prompts, 'nothing written to a stdin');
+  assert.deepStrictEqual(listing(folderOf(id || 'default')), folder, 'the attachments folder as it was');
+  if (id) assert.deepStrictEqual(entriesOf(id), record, 'no record entry');
+  return got;
 }
 
 describe('the frame limit', () => {
@@ -66,6 +166,321 @@ describe('the frame limit', () => {
     client.send({ type: 'get_conversations' });
     assert.ok(await arrived((m) => m.type === 'conversations', { since }), 'and so is a socket that was already open');
     fresh.close();
+  });
+
+  test('two PDFs of 10,000,000 bytes, the most one message may hold, fit in one frame and are stored', async () => {
+    const id = h.freshConvoId('largest');
+    answers('ASK-LARGEST');
+    const since = client.messages.length;
+    chat(id, 'ASK-LARGEST', [file('alpha.pdf', pdf(10000000)), file('beta.pdf', pdf(10000000))]);
+    const stored = await storedFor(id, since, 20000);
+    assert.ok(stored, 'the message is answered with chat_stored');
+    assert.ok(await resultFor(id, 'DONE-ASK-LARGEST', since), 'and dispatched');
+    h.reapConvo(id);
+  });
+});
+
+describe('a refused message writes, records, appends and dispatches nothing', () => {
+  const notes = () => file('notes.txt', Buffer.from('hello'));
+
+  test('six files', async () => {
+    const id = h.freshConvoId('six');
+    const got = await refusedWith({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content: 'six', attachments: Array.from({ length: 6 }, notes) },
+      { code: 'too-many-files', title: '6 files not added', text: 'That would make 6 files; the limit is 5 per message' });
+    assert.ok(!('name' in got), 'a refusal of the whole message names no file');
+    assert.strictEqual(listing(folderOf(id)), null);
+  });
+
+  test('three files of 20,000,001 bytes in all', async () => {
+    const id = h.freshConvoId('bytes');
+    const attachments = [file('alpha.pdf', pdf(10000000)), file('beta.pdf', pdf(10000000)), file('notes.txt', Buffer.from('x'))];
+    await refusedWith({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content: 'all', attachments },
+      { code: 'too-many-bytes', title: '3 files not added', text: 'That would make 21 MB; the limit is 20 MB per message' });
+    assert.strictEqual(listing(folderOf(id)), null);
+  });
+
+  for (const [label, attachments] of [['data that is not base64', [{ name: 'notes.txt', data: '!!!!' }]], ['attachments of null', null]]) {
+    test(label, async () => {
+      const id = h.freshConvoId('shape');
+      await refusedWith({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content: 'shape', attachments },
+        { code: 'bad-payload', title: 'Message not sent', text: FALLBACK });
+      assert.strictEqual(listing(folderOf(id)), null);
+    });
+  }
+
+  test('files with no conversation ID, and nothing under default', async () => {
+    await refusedWith({ type: 'chat', agent: 'chief-of-staff', content: 'no id', attachments: [notes()] },
+      { code: 'bad-id', title: 'Message not sent', text: FALLBACK });
+    assert.strictEqual(listing(folderOf('default')), null);
+  });
+
+  test('a conversation listed as deleted', async () => {
+    const id = h.freshConvoId('gone');
+    const list = path.join(attachmentsDir(), 'deleted.json');
+    fs.mkdirSync(attachmentsDir(), { recursive: true });
+    const was = fs.existsSync(list) ? JSON.parse(fs.readFileSync(list, 'utf-8')) : [];
+    fs.writeFileSync(list, JSON.stringify([...was, id]));
+    await refusedWith({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content: 'gone', attachments: [notes()] },
+      { code: 'deleted', title: 'Message not sent', text: 'This conversation was deleted in another window.' });
+    assert.strictEqual(listing(folderOf(id)), null);
+  });
+
+  test('a deleted list that does not parse', async () => {
+    const id = h.freshConvoId('junk');
+    const list = path.join(attachmentsDir(), 'deleted.json');
+    fs.mkdirSync(attachmentsDir(), { recursive: true });
+    const was = fs.existsSync(list) ? fs.readFileSync(list) : null;
+    fs.writeFileSync(list, 'not json');
+    try {
+      await refusedWith({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content: 'junk', attachments: [notes()] },
+        { code: 'save-failed', title: 'Message not sent', text: FALLBACK });
+      assert.strictEqual(listing(folderOf(id)), null);
+    } finally {
+      if (was) fs.writeFileSync(list, was); else fs.rmSync(list, { force: true });
+    }
+  });
+});
+
+describe('a stored message carries the stored text into every copy a reload reads', () => {
+  test('chat_stored, the record, the files sent and the lines in the transcript, the prompt and the history', async () => {
+    const id = h.freshConvoId('stored');
+    answers('ASK-STORED');
+    assert.ok(!h.internal.readConversations().some((c) => c.id === id), 'a first message, to a conversation not in the list');
+    const sent = [file('Screen Shot.png', png(640, 480, 1200000)), file('Incident-Report-22-Nov.pdf', pdf())];
+    const since = client.messages.length;
+    chat(id, 'ASK-STORED see these', sent);
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is answered with chat_stored');
+    assert.deepStrictEqual(Object.keys(stored).sort(), ['content', 'conversationId', 'entry', 'type']);
+    const lines = [
+      `[Attached: .rundock/attachments/${id}/1-Screen_Shot.png (PNG image, 1.2 MB)]`,
+      `[Attached: .rundock/attachments/${id}/2-Incident-Report-22-Nov.pdf (PDF document, 1 KB)]`,
+    ];
+    assert.strictEqual(stored.content, ['ASK-STORED see these', ...lines].join('\n'));
+    assert.ok(await resultFor(id, 'DONE-ASK-STORED', since), 'and dispatched');
+    writtenOnce(id, [stored]);
+
+    // Each line names a file of the entry, holding exactly the bytes sent.
+    for (const [i, line] of lines.entries()) {
+      const name = /\/([^/ ]+) \(/.exec(line)[1];
+      const described = stored.entry.files[i];
+      assert.strictEqual(described.file, name);
+      const bytes = fs.readFileSync(path.join(folderOf(id), name));
+      assert.ok(bytes.equals(decoded(sent[i])), `${name} holds the bytes sent`);
+      assert.strictEqual(described.sha256, sha256(bytes));
+      assert.strictEqual(store.checkRecordedFile(h.workspaceDir, id, name), 'present');
+    }
+
+    assert.deepStrictEqual(promptsWith('ASK-STORED'), [stored.content], 'the prompt carries every line, once');
+    const hs = client.messages.length;
+    client.send({ type: 'get_session_history', conversationId: id, sessionIds: [], limit: 200 });
+    const history = await arrived((m) => m.type === 'session_history' && m.conversationId === id, { since: hs });
+    assert.ok(history, 'the history is answered');
+    const user = history.messages.filter((m) => m.role === 'user');
+    assert.strictEqual(user.length, 1);
+    for (const line of lines) assert.ok(user[0].content.includes(line), `the history's user message holds ${line}`);
+    const list = JSON.stringify(h.internal.readConversations());
+    assert.ok(!list.includes('ASK-STORED') && !list.includes('[Attached:'), 'the conversation list holds no message text');
+    h.reapConvo(id);
+  });
+
+  test('the record entry outlives the transcript row the cap drops', async () => {
+    const id = h.freshConvoId('capped');
+    answers('ASK-PLAIN', 'ASK-CAPPED');
+    const since = client.messages.length;
+    chat(id, 'ASK-PLAIN first', undefined);
+    assert.ok(await resultFor(id, 'DONE-ASK-PLAIN', since));
+    chat(id, 'ASK-CAPPED see these', [file('Screen Shot.png', png())]);
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is answered with chat_stored');
+    assert.ok(await resultFor(id, 'DONE-ASK-CAPPED', since));
+    for (let i = 0; i < 1000; i++) h.internal.appendTranscript(id, 'user', 'user', `filler ${i}`);
+    assert.strictEqual(rows(id)[0].text, 'ASK-PLAIN first');
+    assert.ok(!rows(id).some((r) => r.text.includes('[Attached:')), 'the row with the lines is dropped');
+    assert.deepStrictEqual(entriesOf(id), [stored.entry], 'the record still holds the entry unchanged');
+    for (const f of stored.entry.files) assert.strictEqual(store.checkRecordedFile(h.workspaceDir, id, f.file), 'present');
+    h.reapConvo(id);
+  });
+
+  for (const [label, attachments] of [['without attachments', undefined], ['with an empty list', []]]) {
+    test(`a text-only message ${label} is dispatched as typed and writes nothing`, async () => {
+      const id = h.freshConvoId('plain');
+      answers('ASK-TEXT');
+      const before = listing(attachmentsDir());
+      const rec = recordReentries();
+      const since = client.messages.length;
+      try {
+        chat(id, 'ASK-TEXT just words', attachments);
+        assert.ok(await resultFor(id, 'DONE-ASK-TEXT', since), 'the message is dispatched');
+      } finally {
+        rec.stop();
+      }
+      assert.deepStrictEqual(listing(attachmentsDir()), before, 'nothing written under .rundock/attachments');
+      const [row, ...more] = userRows(id);
+      assert.deepStrictEqual([row.text, more.length], ['ASK-TEXT just words', 0]);
+      assert.ok(!('attachments' in row) && !('attachmentEntry' in row));
+      assert.deepStrictEqual(promptsWith('ASK-TEXT just words').slice(-1), ['ASK-TEXT just words']);
+      for (const m of rec.seen.filter((s) => s.conversationId === id)) {
+        assert.ok(!('attachments' in m) && !('attachmentEntry' in m), 'what reaches the handler carries no attachment fields');
+      }
+      h.reapConvo(id);
+    });
+  }
+});
+
+describe('every path back into the handler writes once and records once', () => {
+  test('the transition buffer queues the stored message, and its replay writes nothing more', async () => {
+    const id = h.freshConvoId('buffered');
+    answers('ASK-BUF');
+    const sent = [file('Screen Shot.png', png()), file('Incident-Report-22-Nov.pdf', pdf())];
+    const t = { state: 'killing', owner: {}, queued: [], failsafe: setTimeout(() => {}, 30000) };
+    h.internal.convoTransitions.set(id, t);
+    try {
+      const since = client.messages.length;
+      chat(id, 'ASK-BUF see these', sent);
+      assert.ok(await h.waitUntil(() => t.queued.length > 0), 'the message is queued');
+      const record = entriesOf(id) || [];
+      assert.strictEqual(record.length, 1, 'the record holds the entry before the message is queued');
+      assert.strictEqual(record[0].id, t.queued[0].attachmentEntry);
+      assert.deepStrictEqual(record[0].files.map((f) => f.sha256), sent.map((f) => sha256(decoded(f))));
+      const queue = JSON.stringify(t.queued);
+      assert.ok(!queue.includes('"attachments"'), 'the queue holds no attachments');
+      for (const f of sent) assert.ok(!queue.includes(f.data), 'and none of the data sent');
+      const stored = await storedFor(id, since);
+      h.internal.wsHandlerContext.transitions.endConvoTransition(id);
+      assert.ok(await resultFor(id, 'DONE-ASK-BUF', since), 'the replay is dispatched');
+      assert.deepStrictEqual(promptsWith('ASK-BUF'), [stored.content], 'once, with the stored text');
+      writtenOnce(id, [stored]);
+    } finally {
+      if (h.internal.convoTransitions.get(id) === t) h.internal.wsHandlerContext.transitions.endConvoTransition(id);
+      h.reapConvo(id);
+    }
+  });
+
+  for (const legacy of [false, true]) {
+    test(`the ${legacy ? 'legacy' : 'interactive'} resume retry carries the stored text and writes nothing again`, async () => {
+      const id = h.freshConvoId(legacy ? 'retry-legacy' : 'retry');
+      const dead = legacy ? 'dead-orch-ff' : 'dead-orch-ee';
+      seed(id, { agentId: 'chief-of-staff', sessionId: dead, sessionIds: [{ agentId: 'chief-of-staff', sessionId: dead }] });
+      scenario([{ match: { promptIncludes: 'ASK-RETRY' }, turn: [{ text: 'FRESH-RETRY' }] }], [dead], { refusalAfterInit: true });
+      h.clearInvocations();
+      if (legacy) process.env.RUNDOCK_LEGACY_SPAWN = '1';
+      const rec = recordReentries();
+      const since = client.messages.length;
+      let stored;
+      try {
+        chat(id, 'ASK-RETRY see this', [file('Screen Shot.png', png())], { sessionId: dead });
+        stored = await storedFor(id, since);
+        assert.ok(stored, 'the message is answered with chat_stored');
+        assert.ok(await resultFor(id, 'FRESH-RETRY', since), 'the fresh start answers');
+      } finally {
+        rec.stop();
+        delete process.env.RUNDOCK_LEGACY_SPAWN;
+      }
+      assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), [dead, null], 'refused once, then started fresh');
+      const entered = rec.seen.filter((m) => m.conversationId === id);
+      assert.deepStrictEqual(entered.map((m) => [m.content, m.attachmentEntry, 'attachments' in m, !!m._resumeRetry]),
+        [[stored.content, stored.entry.id, false, false], [stored.content, stored.entry.id, false, true]],
+        'both dispatches carry the same stored text and reference, and no files');
+      assert.deepStrictEqual(promptsWith('ASK-RETRY'), [stored.content]);
+      writtenOnce(id, [stored]);
+      h.reapConvo(id);
+    });
+  }
+
+  test('a second message with files, sent while the refused resume is still starting, is stored once and follows the first', async () => {
+    const id = h.freshConvoId('carried');
+    seed(id, { agentId: 'chief-of-staff', sessionId: 'dead-orch-s', sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-s' }] });
+    scenario([
+      { match: { promptIncludes: 'FIRST-S' }, turn: [{ text: 'DONE-FIRST-S' }] },
+      { match: { promptIncludes: 'SECOND-S' }, turn: [{ text: 'DONE-SECOND-S' }] },
+    ], ['dead-orch-s'], { refusalExitMs: 1200 });
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'FIRST-S hello', [file('Screen Shot.png', png())], { sessionId: 'dead-orch-s' });
+    const first = await storedFor(id, since);
+    assert.ok(first, 'the first is answered with chat_stored');
+    assert.ok(await arrived((m) => m.subtype === 'session_expired' && m._conversationId === id, { since, timeout: 15000 }),
+      'the resume is refused and still lingering');
+    const mid = client.messages.length;
+    chat(id, 'SECOND-S and this', [file('notes.txt', Buffer.from('hello'))]);
+    const second = await storedFor(id, mid);
+    assert.ok(second, 'the second is answered with chat_stored');
+    assert.ok(await resultFor(id, 'DONE-SECOND-S', since), 'the second is answered');
+    assert.deepStrictEqual(promptsWith('-S '), [first.content, second.content], 'each text reaches the fresh process once, in order');
+    writtenOnce(id, [first, second]);
+    h.reapConvo(id);
+  });
+
+  describe('a reference to a record entry, without files', () => {
+    const own = h.freshConvoId('ref-own');
+    const other = h.freshConvoId('ref-other');
+    const broken = h.freshConvoId('ref-broken');
+    let ownStored;
+    let otherStored;
+
+    before(async () => {
+      answers('ASK-REF', 'REF-OK');
+      for (const id of [own, other]) {
+        const since = client.messages.length;
+        chat(id, 'ASK-REF see this', [file('Screen Shot.png', png())]);
+        const stored = await storedFor(id, since);
+        assert.ok(stored && await resultFor(id, 'DONE-ASK-REF', since), 'each conversation holds an entry');
+        if (id === own) ownStored = stored; else otherStored = stored;
+      }
+      fs.mkdirSync(folderOf(broken), { recursive: true });
+      fs.writeFileSync(path.join(folderOf(broken), 'record.json'), 'not json');
+    });
+    after(() => { h.reapConvo(own); h.reapConvo(other); });
+
+    test('naming an entry of its own conversation is dispatched and writes nothing', async () => {
+      const since = client.messages.length;
+      chat(own, 'REF-OK again', undefined, { attachmentEntry: ownStored.entry.id });
+      assert.ok(await resultFor(own, 'DONE-REF-OK', since), 'the message is dispatched');
+      assert.deepStrictEqual(entriesOf(own), [ownStored.entry]);
+      assert.deepStrictEqual(listing(folderOf(own)), [...ownStored.entry.files.map((f) => f.file), 'record.json'].sort());
+    });
+
+    const cases = [
+      ['an unknown entry', () => [own, 'no-such-entry']],
+      ['a number', () => [own, 42]],
+      ['another conversation\'s entry', () => [own, otherStored.entry.id]],
+      ['an entry of an unreadable record', () => [broken, 'any-entry']],
+    ];
+    for (const [label, pick] of cases) {
+      test(`naming ${label} is refused`, async () => {
+        const [id, attachmentEntry] = pick();
+        await refusedWith({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content: 'ASK-REF forged', attachmentEntry },
+          { code: 'bad-entry', title: 'Message not sent', text: FALLBACK });
+      });
+    }
+  });
+
+  test('a later chat waits for the files before it, and another conversation does not', async () => {
+    const id = h.freshConvoId('held');
+    const elsewhere = h.freshConvoId('not-held');
+    answers('HELD-A', 'HELD-B', 'HELD-C');
+    let release;
+    const held = store.withConversationLock(id, () => new Promise((resolve) => { release = resolve; }));
+    const since = client.messages.length;
+    chat(id, 'HELD-A see this', [file('Screen Shot.png', png())]);
+    chat(id, 'HELD-B and then', undefined);
+    chat(elsewhere, 'HELD-C meanwhile', undefined);
+    try {
+      assert.ok(await resultFor(elsewhere, 'DONE-HELD-C', since), 'another conversation is not held');
+      assert.deepStrictEqual([spawnsFor(id).length, promptsWith('HELD-A').length, promptsWith('HELD-B').length], [0, 0, 0],
+        'neither message reaches a process while the files wait');
+    } finally {
+      release();
+      await held;
+    }
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the files are stored once released');
+    assert.ok(await resultFor(id, 'DONE-HELD-B', since), 'and the text after them is answered');
+    assert.deepStrictEqual(h.readPrompts().map((p) => p.prompt).filter((p) => /HELD-[AB]/.test(p)), [stored.content, 'HELD-B and then'],
+      'in the order sent');
+    h.reapConvo(id);
+    h.reapConvo(elsewhere);
   });
 });
 

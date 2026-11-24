@@ -22,7 +22,7 @@ const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES, stripRundockMarkers } 
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const config = require('./lib/config.js');
-const { MAX_PAYLOAD } = require('./lib/attachments/receive.js');
+const { MAX_PAYLOAD, createReceiver } = require('./lib/attachments/receive.js');
 const agentsDiscovery = require('./lib/agents/discovery.js');
 const {
   discoverAgents, readNormalisedFile, extractFrontmatterText, titleCase,
@@ -1077,6 +1077,8 @@ function resetAutoResume(convoId) {
   agentAutoResumeCount.set(convoId, 0);
 }
 const connectedClients = new Set(); // All active WebSocket connections
+// A chat's attachments are stored before anything else reads the message.
+const attachmentReceiver = createReceiver({ clients: connectedClients });
 const disconnectBuffer = []; // Messages queued while no clients are connected
 
 // Transcript primitives (convoTranscripts cache, load/save/salvage,
@@ -1591,6 +1593,12 @@ wss.on('connection', (ws) => {
       if (msg.type === 'chat') {
         const convoId = msg.conversationId || 'default';
         const useLegacy = process.env.RUNDOCK_LEGACY_SPAWN === '1';
+
+        // ATTACHMENTS: stored and recorded once, before the buffer below can
+        // queue the message, so every path back into this handler carries the
+        // stored text and the entry's ID, never the files. A page frame is a
+        // Buffer; the server's own re-entries are strings.
+        if (attachmentReceiver.takes(msg, ws, typeof data !== 'string')) return;
 
         // KILL-WINDOW GUARD: if this conversation is mid-transition (a
         // handoff kill has fired, or a delegate's parent restoration is in
