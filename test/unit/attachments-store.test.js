@@ -909,6 +909,44 @@ describe('deleteAttachments', () => {
     assert.strictEqual(fs.existsSync(path.join(outside, 'deleted.json')), false);
   });
 
+  // The attachments folder swapped for a link to a folder outside that holds a
+  // folder of the conversation's name, once deleted.json is in place and
+  // before the removal: the walks before that write saw no link, so only the
+  // walk just before the removal stands between the delete and the outside
+  // folder.
+  test('a link swapped in at .rundock/attachments after deleted.json is written refuses the removal, and nothing is removed through it', LINKS, async (t) => {
+    ready('deleteAttachments');
+    const ws = workspace();
+    const outside = outsideFolder();
+    fs.mkdirSync(path.join(outside, 'alpha'));
+    fs.writeFileSync(path.join(outside, 'alpha', 'notes.txt'), 'kept outside the workspace\n');
+    fs.writeFileSync(path.join(outside, 'alpha', 'record.json'), JSON.stringify({ messages: [], sent: {} }));
+    const entry = await store.writeMessageFiles(ws, 'alpha', MESSAGE());
+    const before = snapshot(outside);
+    const moved = path.join(ws, 'moved');
+    const deletedFile = path.join(attachmentsOf(ws), 'deleted.json');
+    let swapped = false;
+    const realRenameSync = fs.renameSync;
+    t.mock.method(fs, 'renameSync', function renameSync(from, to) {
+      const result = realRenameSync.call(fs, from, to);
+      if (to === deletedFile && !swapped) {
+        swapped = true;
+        realRenameSync.call(fs, attachmentsOf(ws), moved);
+        fs.symlinkSync(outside, attachmentsOf(ws));
+      }
+      return result;
+    });
+    try {
+      await assert.rejects(store.deleteAttachments(ws, 'alpha'), refused('delete-refused'));
+    } finally {
+      t.mock.restoreAll();
+    }
+    assert.ok(swapped, 'the swap ran once deleted.json was written');
+    assert.deepStrictEqual(snapshot(outside), before);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(moved, 'deleted.json'), 'utf8')), ['alpha']);
+    assert.deepStrictEqual(fs.readdirSync(path.join(moved, 'alpha')).sort(), [...entry.files.map((f) => f.file), 'record.json'].sort());
+  });
+
   test('a link at the conversation folder to a folder outside removes only the link', LINKS, async () => {
     ready('deleteAttachments');
     const ws = workspace();
