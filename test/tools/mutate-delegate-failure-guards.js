@@ -46,6 +46,8 @@ const REDUCER_SRC = path.join(ROOT, 'public', 'conversation-state.js');
 const SWITCH = { src: REDUCER_SRC, suite: 'test/unit/conversation-state.test.js' };
 const LINE_VIEW = { src: REDUCER_SRC, suite: 'test/unit/delegate-stopped-view.test.js' };
 const NOTICE = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/delegate-stopped-view.test.js' };
+// The page's own dispatch of the line, cut from app.js and run.
+const DISPATCH = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/delegate-stopped-view.test.js' };
 // The stored line: handed back in the history, left out of the catch-up.
 const STORE = 'test/unit/delegate-stopped-store.test.js';
 const HISTORY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'history.js'), suite: STORE };
@@ -116,6 +118,15 @@ const MUTATIONS = [
   [NOTICE, 'the notice writes its words as markup',
     'el.className = cls; el.textContent = text;',
     'el.className = cls; el.innerHTML = text;'],
+  // Reduced and never run, the line reaches the page and draws nothing.
+  [DISPATCH, 'the live stopped line is reduced but its effects are never run',
+    "      if(d.subtype==='delegate_stopped' && convoId) {\n"
+      + '        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});\n'
+      + '        convoState[convoId] = r.state;\n'
+      + '        executeEffects(convoId, r.effects);\n',
+    "      if(d.subtype==='delegate_stopped' && convoId) {\n"
+      + '        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});\n'
+      + '        convoState[convoId] = r.state;\n'],
   // ===== THE STORED LINE =====
   [HISTORY, 'the history drops the delegation branch',
     "          if (t.type === 'delegation') {\n"

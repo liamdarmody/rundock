@@ -65,6 +65,38 @@ function routingHelper() {
   return new Function(`${APP.slice(at, APP.indexOf('\n}', at) + 2)}; return addDelegateStoppedToConvo;`)();
 }
 
+// The page's own dispatch, cut from app.js and run as it ships: the whole
+// handle(), getConvoState, the effect runner and the full executor table, with
+// the routing helper above, the real reducer and the view's notice. Each
+// function and the table is cut from the start of its declaration to the first
+// brace that closes at column zero (the reply set to its own close), and fails
+// here by name when it is renamed or gone.
+function pageDispatch() {
+  const cut = (start, end, label) => {
+    const at = APP.indexOf(start);
+    assert.ok(at > -1, `app.js no longer carries ${label}`);
+    const stop = APP.indexOf(end, at);
+    assert.ok(stop > -1, `${label} has no end in app.js`);
+    return APP.slice(at, stop + end.length);
+  };
+  const replies = cut('const EXTENSIONS_PAGE_REPLIES = new Set(', ']);', 'EXTENSIONS_PAGE_REPLIES');
+  const handleSrc = cut('function handle(d) {', '\n}', 'handle()');
+  assert.ok(handleSrc.includes("if(d.subtype==='delegate_stopped' && convoId) {"), 'handle() no longer dispatches delegate_stopped');
+  const stateSrc = cut('function getConvoState(convoId) {', '\n}', 'getConvoState()');
+  const tableSrc = cut('const EFFECT_EXECUTORS = {', '\n};', 'EFFECT_EXECUTORS');
+  const runSrc = cut('function executeEffects(convoId, effects) {', '\n}', 'executeEffects()');
+  /* eslint-disable no-new-func */
+  const table = new Function('addDelegateStoppedToConvo', `${tableSrc} return EFFECT_EXECUTORS;`)(routingHelper());
+  assert.strictEqual(typeof table['show-delegate-stopped'], 'function', 'the executor table runs show-delegate-stopped');
+  const executeEffects = new Function('EFFECT_EXECUTORS', `${runSrc} return executeEffects;`)(table);
+  const convoState = {};
+  const getConvoState = new Function('convoState', 'RundockConversationState', `${stateSrc} return getConvoState;`)(convoState, cs);
+  const handle = new Function('EXTENSIONS_PAGE_REPLIES', 'RundockConversationState', 'convoState', 'getConvoState', 'executeEffects',
+    `${handleSrc} return handle;`)(new Function(`${replies} return EXTENSIONS_PAGE_REPLIES;`)(), cs, convoState, getConvoState, executeEffects);
+  /* eslint-enable no-new-func */
+  return handle;
+}
+
 describe('only the server\'s own line draws a notice', () => {
   const line = (extra) => ({ type: 'system', subtype: 'delegate_stopped', _conversationId: 'c1', content: LINE, ...extra });
 
@@ -85,13 +117,6 @@ describe('only the server\'s own line draws a notice', () => {
 
   test('the server\'s line draws exactly one notice, with its words', () => {
     assert.deepStrictEqual(cs.reduce(cs.createState(), line(), {}).effects, [{ type: 'show-delegate-stopped', content: LINE }]);
-  });
-
-  test('the page sends the line to the reducer and draws it through the helper', () => {
-    assert.match(APP, /d\.subtype\s*===\s*'delegate_stopped'/, 'the line is dispatched');
-    const at = APP.indexOf("'show-delegate-stopped':");
-    assert.ok(at > -1, 'the effect has an executor');
-    assert.match(APP.slice(at, APP.indexOf('\n', at)), /addDelegateStoppedToConvo\(ef\.content,\s*convoId\)/);
   });
 });
 
@@ -165,6 +190,38 @@ describe('a line that arrives while the page is open', () => {
     global.conversations.push(unloaded);
     routingHelper()(LINE, 'convo-c');
     assert.deepStrictEqual(unloaded.messages, []);
+  });
+});
+
+describe('the line handed to the page\'s own dispatch', () => {
+  let a;
+  let b;
+  const line = (extra) => ({ type: 'system', subtype: 'delegate_stopped', _conversationId: 'convo-a', content: LINE, ...extra });
+  beforeEach(() => {
+    messagesEl().innerHTML = '';
+    a = { id: 'convo-a', agentId: 'chief-of-staff', messages: [{ role: 'user', content: 'write the post' }] };
+    b = { id: 'convo-b', agentId: 'chief-of-staff', messages: [{ role: 'user', content: 'something else' }] };
+    global.conversations = [a, b];
+    global.activeConversation = a;
+  });
+
+  test('the server\'s line draws one notice in the conversation on screen and keeps one row with it', () => {
+    pageDispatch()(line());
+    const drawn = notices();
+    assert.strictEqual(drawn.length, 1, 'exactly one notice is drawn');
+    assert.strictEqual(drawn[0].querySelector('.stopped-title').textContent, LINE.split('\n')[0], 'with the line\'s words');
+    assert.deepStrictEqual(a.messages.slice(1), [{ role: 'system', type: 'delegation', content: LINE }],
+      'one row is kept with that conversation');
+    assert.strictEqual(b.messages.length, 1, 'and nothing with another');
+  });
+
+  test('the same line with a process id draws nothing and keeps nothing', () => {
+    const handle = pageDispatch();
+    for (const pid of ['p1', null]) {
+      handle(line({ _processId: pid }));
+      assert.strictEqual(notices().length, 0, `nothing drawn for process id ${JSON.stringify(pid)}`);
+      assert.deepStrictEqual(a.messages, [{ role: 'user', content: 'write the post' }], `nothing kept for process id ${JSON.stringify(pid)}`);
+    }
   });
 });
 
