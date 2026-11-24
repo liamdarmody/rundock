@@ -722,6 +722,25 @@ function isWorkspaceTeamFolderEdit(toolName, toolInput, workspaceRoot, foldsCase
   });
 }
 
+// A FILE-TOOL WRITE TO RUNDOCK'S OWN TWO FILES IS REFUSED, in every run.
+// .rundock/permissions.json and .rundock/state.json hold the person's answers:
+// the standing allows, the granted folders, the Working folders and the mode.
+// Rundock writes them in-process and no agent needs to, while an Allow on a
+// card for an agent's write here kept whatever the agent wrote as the person's
+// answer. Matched by matchesAnswerFileSet, the classifier's own comparison,
+// against the open workspace only, in every string path field, as
+// isWorkspaceTeamFolderEdit reads them. Nothing here catches a throw; the seam
+// is for a test to make the check throw (rundock-files-refused.test.js).
+const rundockAnswerFileSeam = { beforeChecking() {} };
+function isRundockAnswerFileEdit(toolName, toolInput, workspaceRoot, foldsCase = hostFoldsCase()) {
+  if (!CLAUDE_EDIT_TOOLS.has(toolName) || !toolInput) return false;
+  const named = [toolInput.file_path, toolInput.notebook_path, toolInput.path].filter((field) => typeof field === 'string' && field !== '');
+  return named.some((spelled) => {
+    rundockAnswerFileSeam.beforeChecking(spelled);
+    return matchesAnswerFileSet(RUNDOCK_ANSWER_FILES, path.resolve(workspaceRoot, spelled), workspaceRoot, foldsCase);
+  });
+}
+
 // Workspace file-access boundary (the rule: anything outside the workspace
 // requires a permission card unless a standing per-workspace folder grant
 // covers it; the server owns the grants). This function only CLASSIFIES:
@@ -4582,6 +4601,7 @@ module.exports = {
   INSTRUCTION_SURFACES, isInstructionSurface, hiddenHomeRootOf, alwaysAsksCrossing, SHELL_TOOLS, keychainPlatform,
   joinedPieceSeam,
   isWorkspaceTeamFolderEdit, teamFolderSeam,
+  isRundockAnswerFileEdit, rundockAnswerFileSeam, hostFoldsCase,
 };
 
 if (require.main === module) main();
