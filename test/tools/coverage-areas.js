@@ -124,7 +124,7 @@ const AREA_DEFS = [
 const OVERALL_FILES = [
   'server.js', 'codex.js', 'codex-appserver.js', 'search.js',
   'lib/delegation/markers.js', 'lib/delegation/handback.js', 'lib/delegation/state.js',
-  'lib/delegation/engine.js',
+  'lib/delegation/engine.js', 'lib/delegation/stopped-line.js',
   'lib/runtime/claude.js',
   'lib/config.js', 'lib/store/persistence.js', 'lib/store/transcripts.js',
   'lib/agents/discovery.js', 'lib/agents/prompt.js',

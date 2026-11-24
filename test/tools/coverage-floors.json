@@ -11,6 +11,7 @@
     "OVERALL lib/delegation/handback.js": 100,
     "OVERALL lib/delegation/state.js": 100,
     "OVERALL lib/delegation/engine.js": 97.2,
+    "OVERALL lib/delegation/stopped-line.js": 100,
     "OVERALL lib/config.js": 100,
     "OVERALL lib/store/persistence.js": 100,
     "OVERALL lib/store/transcripts.js": 100,

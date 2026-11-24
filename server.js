@@ -1672,6 +1672,7 @@ wss.on('connection', (ws) => {
             // a crash) closed without the done that ends the turn, and the
             // window was left waiting.
             existing.resultSent = false;
+            existing.lastTurnOutcome = null;
             existing.idle = false; existing.idleSince = null;
             existing.toolCalls = [];
             existing.turnStartTime = Date.now();
@@ -2624,7 +2625,7 @@ function handleChatSpawnError(err, convoId) {
       chatProcesses.set(convoId, parent);
       safeSend(JSON.stringify({
         type: 'system', subtype: 'agent_switch', _conversationId: convoId,
-        fromAgent: entry.agentId, toAgent: parent.agentId,
+        fromAgent: entry.agentId, toAgent: parent.agentId, returning: true,
       }));
       console.log(`[SpawnError] convo=${convoId} delegate spawn failed, restored parked parent ${parent.agentId}`);
       return;

@@ -119,12 +119,11 @@ const SEQUENCE_TABLE = [
       // Specialist result carries RETURN only: normal finalisation.
       '16:finalize-agent-message', '16:remove-thinking-indicator', '16:finalize-stream-bubble',
       '16:finish-processing', '16:render-convo-list',
-      // Switch back to the orchestrator: a return, so no start-processing here
-      // and no divider either. The return is not announced: the bubble that
-      // follows carries the orchestrator's avatar and name, and the specialist
-      // has already said in its own words that it is handing back.
+      // Switch back to the orchestrator: a return, so no start-processing here.
+      // The return is drawn as a handback, so the person sees who has the
+      // conversation again.
       '17:clear-outgoing-working', '17:clear-streaming-bubble', '17:remove-thinking-indicator', '17:render-convo-list',
-      '17:update-chat-header',
+      '17:show-delegation-divider', '17:update-chat-header',
       // Orchestrator resumes via autoContinue.
       '18:remove-permission-cards', '18:start-processing',
       '20:start-streaming-bubble', '20:render-stream-text',
@@ -224,13 +223,14 @@ test('delegation round trip: session chain tracks both agents, primary stays wit
 test('delegation round trip: divider directions and delegate handoff text', () => {
   const { effects } = replay(seq.delegationRoundTrip);
   const dividers = effects.filter(e => e.type === 'show-delegation-divider');
-  // One divider, not two: the delegation out is announced, the return is not.
-  assert.deepStrictEqual(dividers.map(d => [d.toAgentId, d.isReturn]), [['dev', false]]);
+  // Two dividers: the handover out and the handback, each naming both agents.
+  assert.deepStrictEqual(dividers.map(d => [d.fromAgentId, d.toAgentId, d.isReturn]),
+    [['cos', 'dev', false], ['dev', 'cos', true]]);
   // And the back leg is a return because the server said so, not because of
   // what kind of agent it went to.
   const back = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p9', { returning: true }),
-    { ...SWITCH_CTX, toAgentType: 'orchestrator' });
-  assert.ok(!back.effects.some(e => e.type === 'show-delegation-divider'));
+    { ...SWITCH_CTX, toAgentType: 'specialist' });
+  assert.ok(back.effects.some(e => e.type === 'show-delegation-divider' && e.isReturn === true));
   const finals = effects.filter(e => e.type === 'finalize-agent-message');
   // DELEGATE strips the marker AND everything after it; RETURN strips cleanly.
   assert.deepStrictEqual(finals.map(f => f.text), [
@@ -700,8 +700,9 @@ test('agent_switch to an unknown agent: no divider, no header, no processing sta
   assert.strictEqual(r.state.activeAgentId, 'ghost');
 });
 
-test('a silent agent_switch draws no divider but still clears the outgoing agent and moves control', () => {
-  // THE REGRESSION THIS PINS. A pipeline-complete handback spawns the
+test('a forward silent agent_switch draws no divider but still clears the outgoing agent and moves control', () => {
+  // A forward switch with no returning flag: a silent RETURN draws the
+  // handback (below). THE REGRESSION THIS PINS. A pipeline-complete handback spawns the
   // orchestrator only to park, and drawing its arrival showed an agent joining
   // and then doing nothing, which reads as a hang. That was first fixed by not
   // sending the switch at all, on the stated reasoning that nothing downstream
@@ -730,27 +731,52 @@ test('a silent agent_switch draws no divider but still clears the outgoing agent
 test('a switch that is not silent still draws the divider', () => {
   // The other direction, so the flag is proven to be what decides rather than
   // the divider having quietly stopped being emitted at all. A FORWARD
-  // delegation, because a return no longer draws whatever the flag says.
+  // delegation, because a return draws whatever the flag says.
   const ctx = { ...SWITCH_CTX, toAgentType: 'specialist' };
   const r = reduce(createState(), seq.agentSwitch('cos', 'dev', 'p3'), ctx);
-  assert.ok(r.effects.some(e => e.type === 'show-delegation-divider'),
-    'somebody arriving to take the work is still announced');
+  assert.deepStrictEqual(r.effects.filter(e => e.type === 'show-delegation-divider')
+    .map(e => [e.fromAgentId, e.toAgentId, e.isReturn]), [['cos', 'dev', false]],
+  'somebody arriving to take the work is announced, with who handed it over');
 });
 
-test('a return draws nothing, because the bubble beneath already says who is speaking', () => {
-  // THE RULE, stated where the old one was. Announcing an arrival is worth a
-  // line: it changes who owns the work and who the person is addressing.
-  // Announcing that somebody already in the conversation is speaking again is
-  // the third telling of the same fact, after the departing agent's own
-  // handoff sentence and the avatar and name on the next bubble.
+test('a return without silent draws the handback, naming both agents', () => {
+  // A person needs to see who has the conversation at each handover, and a
+  // return is a handover too: without it, a teammate that stopped and one
+  // that finished looked the same.
   const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
   const r = reduce(createState(), seq.agentSwitch('dev', 'cos', 'p3', { returning: true }), ctx);
-  assert.ok(!r.effects.some(e => e.type === 'show-delegation-divider'),
-    'a return is not an arrival');
-  // Everything else about the switch is unchanged: only the drawing goes.
+  assert.deepStrictEqual(r.effects.filter(e => e.type === 'show-delegation-divider')
+    .map(e => [e.fromAgentId, e.toAgentId, e.isReturn]), [['dev', 'cos', true]]);
   assert.strictEqual(r.state.activeAgentId, 'cos', 'control still moved');
   assert.ok(r.effects.some(e => e.type === 'update-chat-header' && e.toAgentId === 'cos'),
     'and the header still names who holds the conversation');
+});
+
+test('a silent return still draws the handback', () => {
+  // A parent that parks says nothing after the return, which is exactly when
+  // the line matters most: it is the only sign the work came back.
+  const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
+  const msg = { ...seq.agentSwitch('dev', 'cos', 'p3', { returning: true }), silent: true };
+  const r = reduce({ ...createState(), activeAgentId: 'dev', delegationActive: true }, msg, ctx);
+  assert.deepStrictEqual(r.effects.filter(e => e.type === 'show-delegation-divider')
+    .map(e => [e.fromAgentId, e.toAgentId, e.isReturn]), [['dev', 'cos', true]]);
+  assert.ok(!r.effects.some(e => e.type === 'start-processing'), 'a silent return starts no processing');
+});
+
+test('a switch that carries a failure draws no divider, whichever way it points', () => {
+  // The failure line takes the handback's place, so a stopped teammate never
+  // reads as one that handed back.
+  const failed = { code: 1, signal: null, reason: 'exit code 1' };
+  const ctx = { ...SWITCH_CTX, toAgentType: 'orchestrator' };
+  for (const msg of [
+    { ...seq.agentSwitch('dev', 'cos', 'p3', { returning: true }), failed },
+    { ...seq.agentSwitch('dev', 'cos', 'p3', { returning: true }), failed, silent: true },
+    { ...seq.agentSwitch('cos', 'dev', 'p3'), failed },
+  ]) {
+    const r = reduce({ ...createState(), activeAgentId: 'dev', delegationActive: true }, msg, ctx);
+    assert.ok(!r.effects.some(e => e.type === 'show-delegation-divider'), JSON.stringify(msg));
+    assert.ok(r.effects.some(e => e.type === 'update-chat-header'), 'control still moves');
+  }
 });
 
 test('agent_switch on an inactive conversation updates state but skips the view effects', () => {

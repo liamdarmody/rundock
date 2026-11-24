@@ -27,10 +27,12 @@ const VIEWS = path.join(PUBLIC, 'views');
 const MANIFEST = {
   "chat.js": [
     "addAgentMsg",
+    "addDelegateStoppedMsg",
     "addSystemMsg",
     "addUserMsg",
     "agentDisplayName",
     "buildActivitySummary",
+    "buildDelegateStoppedNotice",
     "buildDelegationDivider",
     "cancelProcessing",
     "classifyRisk",

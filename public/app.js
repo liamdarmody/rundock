@@ -663,6 +663,13 @@ function handle(d) {
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
       }
+      // A delegate stopped before finishing: the reducer decides whether this
+      // is the server's own line (lib/delegation/stopped-line.js).
+      if(d.subtype==='delegate_stopped' && convoId) {
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+      }
       // A session Claude Code no longer has: forget it, draw nothing.
       if(d.subtype==='session_expired' && convoId) {
         const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
@@ -993,6 +1000,7 @@ const EFFECT_EXECUTORS = {
     if (convo && RundockConversationState.forgetSession(convo, ef.sessionId)) persistConversation(convo);
   },
   'notice': (convoId, ef) => addSystemMsgToConvo(ef.content, convoId, false),
+  'show-delegate-stopped': (convoId, ef) => addDelegateStoppedToConvo(ef.content, convoId),
   'add-cancelled-badge': (convoId, ef) => {
     // Add a cancelled badge to the current streaming message if there is one
     const streamEl = getConvoState(convoId).currentStreamingMsg;
@@ -1050,18 +1058,19 @@ const EFFECT_EXECUTORS = {
   },
   'render-convo-list': () => renderConvoList(),
   'show-delegation-divider': (convoId, ef) => {
-    // DRAWN, AND NOT KEPT. An arrival is a notification: it tells the person,
-    // at the moment it happens, that somebody new has taken the work. It used
+    // DRAWN, AND NOT KEPT. A handover is a notification: it tells the person,
+    // at the moment it happens, who handed the conversation to whom. It used
     // to be recorded into the conversation so it survived navigating away and
     // back, which made re-reading a conversation behave one way after a
     // navigation and another after a reload, for no reason a person could
     // predict. Both are the same intent, re-reading, and neither is the moment
-    // the arrival happened. What carries it afterwards is the avatar and name
+    // the handover happened. What carries it afterwards is the avatar and name
     // on every bubble, and the departing agent's own sentence saying where the
     // work went.
+    const fromAgent = agents.find(a => a.id === ef.fromAgentId);
     const toAgent = agents.find(a => a.id === ef.toAgentId);
     const m = document.getElementById('messages');
-    m.appendChild(buildDelegationDivider(toAgent));
+    m.appendChild(buildDelegationDivider(fromAgent, toAgent, { isReturn: ef.isReturn === true }));
     scrollBottom();
   },
   'update-chat-header': (convoId, ef) => {
@@ -1303,6 +1312,15 @@ function addSystemMsgToConvo(text, convoId, isError = true, keep = false) {
   const c = keep && convoId ? conversations.find(x => x.id === convoId) : null;
   if (c && c.messages.length) c.messages.push({ role: 'system', content: text });
   if(!convoId || activeConversation?.id === convoId) addSystemMsg((isError ? 'Error: ' : '') + text);
+}
+
+// The line saying a delegate stopped, which the server also stores. Kept with
+// its own conversation when that one's messages are loaded, so coming back
+// draws it again; one not loaded yet brings it with its history.
+function addDelegateStoppedToConvo(content, convoId) {
+  const c = conversations.find(x => x.id === convoId);
+  if (c && c.messages.length) c.messages.push({ role: 'system', type: 'delegation', content });
+  if (activeConversation?.id === convoId) addDelegateStoppedMsg(content);
 }
 
 // ===== 5. AGENT LIST & SIDEBAR =====

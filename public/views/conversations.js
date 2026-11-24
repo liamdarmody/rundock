@@ -834,6 +834,7 @@ function replayConversationInto(el, c) {
     if (m.role === 'user') addUserMsg(m.content, false);
     else if (m.role === 'agent') addAgentMsg(m.content, m.agentId, false, m.timestamp || null);
     else if (m.type === 'compaction') { if (typeof m.key === 'string' && m.key) el.appendChild(createSummarisedDivider({ key: m.key })); }
+    else if (m.type === 'delegation') { const n = buildDelegateStoppedNotice(m.content || ''); n.style.animation = 'none'; el.appendChild(n); }
     else if (m.role === 'system') addSystemMsg(m.content);
     if (m.isHistory && m.type !== 'compaction') {
       const last = el.lastElementChild;

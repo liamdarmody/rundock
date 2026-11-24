@@ -94,3 +94,49 @@ test('a retry within 30s is deduped: done arrives, the guidance does not stack',
       && INSTALL_GUIDANCE.test(m.content || ''));
   assert.strictEqual(guidance.length, 1, 'the second failure inside the window sends done only');
 });
+
+// A delegate whose start failed on a missing binary has already been told so
+// by the guidance above. Its close is not a stop: no line, sent or stored,
+// and no card beside the guidance. The parent was parked for it and is not
+// restored here, as before.
+test('a codex delegate that could not be started sends no line, and the guidance is its only notice', async () => {
+  const convoId = h.freshConvoId('cdelegate-nobin');
+  h.writeScenario([
+    { match: { agent: 'chief-of-staff', promptIncludes: 'cdelegate-nobin open' }, turn: [{ text: 'ready' }] },
+  ]);
+  client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'cdelegate-nobin open' });
+  await client.waitForEvent('system', 'done', convoId);
+
+  const since = client.messages.length;
+  client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'researcher', context: 'cdelegate-nobin task' });
+  await client.waitFor(
+    m => m.type === 'system' && m.subtype === 'done' && m._conversationId === convoId && m._agent === 'researcher' && m.code === -1,
+    { since, label: 'Ida\'s failed start is done' });
+  // Her close leaves her entry marked exited, or, had it gone on to decide,
+  // would have handed the conversation back to Cos.
+  assert.ok(await h.waitUntil(() => {
+    const e = h.internal.chatProcesses.get(convoId) || {};
+    return e.exited === true || e.agentId === 'chief-of-staff';
+  }), 'Ida\'s close has run');
+
+  // The history reply goes out after anything the close sent.
+  const asked = client.messages.length;
+  client.send({ type: 'get_session_history', conversationId: convoId, sessionIds: [], limit: 200 });
+  await client.waitFor(m => m.type === 'session_history' && m.conversationId === convoId,
+    { since: asked, label: 'the history request was answered' });
+  const seen = client.messages.slice(since);
+
+  const guidance = seen.filter(m => m.type === 'system' && m.subtype === 'info' && m._conversationId === convoId
+    && INSTALL_GUIDANCE.test(m.content || ''));
+  assert.strictEqual(guidance.length, 1, 'sanity: the guidance said Ida could not be started');
+  assert.deepStrictEqual(seen.filter(m => m.type === 'system' && m.subtype === 'delegate_stopped'
+    && m._conversationId === convoId).map(m => m.content), [], 'no line is sent');
+  assert.deepStrictEqual((h.internal.loadTranscript(convoId) || []).filter(t => t.type === 'delegation').map(t => t.text), [],
+    'and none is stored');
+  assert.deepStrictEqual(seen.filter(m => m.type === 'system' && m._conversationId === convoId
+    && ['codex_error', 'codex_quota', 'codex_guidance', 'notice'].includes(m.subtype)).map(m => m.subtype), [],
+  'the guidance is the only notice');
+  assert.deepStrictEqual(seen.filter(m => m.type === 'system' && m.subtype === 'agent_switch'
+    && m._conversationId === convoId && m.failed), [], 'no switch says Ida stopped');
+  h.reapConvo(convoId);
+});

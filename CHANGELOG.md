@@ -6,6 +6,10 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
+### Changed
+
+- **Handovers you can follow:** when one agent hands the conversation to another, a line now says who handed over to whom and who handed it back. If a teammate stops before finishing, Rundock says so in the conversation, with the reason, instead of carrying on as if the work were done. On Codex this replaces the separate error card, so you see one notice.
+
 ### Fixed
 
 - **Agents can no longer change your permission answers or workspace settings:** before, when an agent edited the files that hold them, Rundock showed a card, and allowing it saved whatever the agent had written, "Always allow" answers included. Now the edit is refused with no card, and the agent tells you what it wanted to change, so you can make the change yourself in Rundock. A shell command that writes those files still asks.

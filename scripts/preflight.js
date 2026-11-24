@@ -91,6 +91,8 @@ const REGISTRY_SUITES = [
   'test/unit/danger-token.test.js',
   'test/unit/attention-token.test.js',
   'test/unit/danger-text-card-contrast.test.js',
+  // The same arithmetic over the handover divider and the stopped-delegate line.
+  'test/unit/delegation-divider-contrast.test.js',
   // The same arithmetic over the colours links in a note are drawn in.
   'test/unit/editor-link-contrast.test.js',
   // The same arithmetic over the routine screens' text, badges and focus
@@ -220,6 +222,7 @@ const NOT_CHEAP = {
   'test/unit/open-card-switch.test.js': 'behavior: boots a document and drives permission cards through conversation switches, presses them and asserts what was sent. It cuts the stop and request-end handling out of app.js and discardIfEmpty out of conversations.js, which is why the inventory names it, but each cut serves a driven check rather than a bookkeeping one',
   'test/unit/sign-in-reason-wiring.test.js': 'behavior: runs the desktop\'s sign-in check and the wizard\'s runtime answer together with the real reason module, and asserts a failed check\'s reason reaches the answer. It cuts those pieces out of electron/main.js and counts the reason holder, which is why the inventory names it, but the cuts serve a driven check rather than a bookkeeping one',
   'test/unit/claude-console.test.js': 'behavior: opens each Claude Code console through a fake spawn, writes the macOS scripts into made-up homes, and drives the setup screen\'s Sign in to Claude from a click in a booted document through the desktop to the opener. It cuts that path\'s pieces out of electron/main.js and electron/preload.js, which is why the inventory names it, but the cuts serve a driven check rather than a bookkeeping one',
+  'test/unit/delegate-stopped-view.test.js': 'behavior: boots a document and draws the line saying a delegate stopped through the real view functions, live, on reopening and from the history. It cuts the routing helper out of app.js, which is why the inventory names it, but the cut serves a rendered check rather than a bookkeeping one',
 };
 
 /**
