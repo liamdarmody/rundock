@@ -13,6 +13,7 @@ const ROOT = path.join(__dirname, '..', '..');
 // Each page limit: the file that holds it and the constant's name.
 const PAGE_LIMITS = [
   ['public/views/files.js', 'EDITOR_FRAME_LIMIT'],
+  ['public/views/composer.js', 'COMPOSER_FRAME_LIMIT'],
 ];
 
 // The value a constant is declared with, read from the shipped source.

@@ -72,7 +72,7 @@ function sendMessage() {
   const input=document.getElementById('msg-input'),text=input.value.trim();
   if(!activeConversation||!ws) return;
   const state = getConvoState(activeConversation.id);
-  if(!text||state.isProcessing) return;
+  if(!sendReady(text)||state.isProcessing) return;
   // If the user is continuing a conversation that was marked Done, treat the
   // new message as an implicit reactivation: flip the status back to active so
   // the conversation moves out of the Done section, the badge updates in the
@@ -96,7 +96,9 @@ function sendMessage() {
   // value on save_conversation; the local bump just keeps the client in sync.
   activeConversation.lastActiveAt = new Date().toISOString();
   const promptsEl=document.getElementById('chat-prompts'); if(promptsEl) promptsEl.remove();
-  if(activeConversation.messages.filter(m=>m.role==='user').length===0 && !activeConversation.isSetup) { activeConversation.title=text.substring(0,50)+(text.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
+  const titleText = text || firstAttachedName(activeConversation.id);
+  if(activeConversation.messages.filter(m=>m.role==='user').length===0 && !activeConversation.isSetup) { activeConversation.title=titleText.substring(0,50)+(titleText.length>50?'...':''); document.getElementById('chat-title-input').value=activeConversation.title; renderConvoList(); }
+  if (sendWithFiles(activeConversation, text)) return;
   input.value=''; input.style.height='44px'; document.getElementById('send-btn').classList.remove('active');
   dispatchMessage(activeConversation, text);
 }
@@ -201,7 +203,7 @@ function finishProcessing(convoId) {
     draftInput.disabled = false;
     // A message drafted while the agent was responding is now ready to send, so
     // reflect its presence on the Send button.
-    sendBtn.classList.toggle('active', !!draftInput.value.trim());
+    sendBtn.classList.toggle('active', sendReady(draftInput.value));
     draftInput.focus();
   }
   if(convo) {

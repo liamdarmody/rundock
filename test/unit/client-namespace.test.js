@@ -412,9 +412,15 @@ const MANIFEST = {
     "renderOrgChart",
   ],
   "composer.js": [
+    "attachmentsConnectionLost",
+    "fileSendAnswered",
+    "firstAttachedName",
     "openAttachPicker",
     "pickFiles",
     "refreshAttachButton",
+    "sendReady",
+    "sendWaiting",
+    "sendWithFiles",
     "showComposerFor",
   ],};
 

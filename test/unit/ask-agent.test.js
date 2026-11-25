@@ -22,7 +22,8 @@ function scope() {
   const dom = new JSDOM('<div id="messages"></div><textarea id="msg-input"></textarea><button id="send-btn"></button>');
   const created = [];
   const askFromView = new Function('agents', 'document', 'window', 'Event', 'startConversation', 'createConversation',
-    `${cut(/function askFromView\(\{ agentId, message, extension, path \}\) \{[\s\S]*?\n\}/, 'askFromView')}; return askFromView;`)(
+    `const sendReady = (t) => !!String(t).trim();
+     ${cut(/function askFromView\(\{ agentId, message, extension, path \}\) \{[\s\S]*?\n\}/, 'askFromView')}; return askFromView;`)(
     AGENTS, dom.window.document, dom.window, dom.window.Event,
     (id) => { created.push(id); dom.window.document.getElementById('messages').innerHTML = ''; },
     () => { throw new Error('createConversation was reached directly'); });
@@ -71,6 +72,7 @@ describe('each conversation keeps its own unsent text', () => {
        const getConvoState = () => ({ isProcessing: false }); const renderConvoList = () => {}; const switchNav = () => {}; const showView = () => {};
        const sendMessage = () => {}; const cancelProcessing = () => {}; const renderPendingPermissionCards = () => {};
        const showComposerFor = () => {};
+       const sendReady = (t) => !!String(t).trim(); const sendWaiting = () => false;
        ${draftsSrc}
        ${setupChatSrc}
        ${createSrc}
