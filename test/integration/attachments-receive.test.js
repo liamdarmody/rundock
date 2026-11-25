@@ -20,6 +20,7 @@ const h = require('../helpers/harness.js');
 const store = require('../../lib/attachments/store.js');
 const { handleDeleteConversation } = require('../../lib/protocol/handlers/conversations.js');
 const { makeTempDir } = require('../helpers/workspace.js');
+const tfx = require('../fixtures/session-transcript.js');
 
 // The receive is async and the handler ignores its promise, so a rejection it
 // failed to catch would surface only here.
@@ -335,6 +336,36 @@ describe('a stored message carries the stored text into every copy a reload read
     for (const line of lines) assert.ok(user[0].content.includes(line), `the history's user message holds ${line}`);
     const list = JSON.stringify(h.internal.readConversations());
     assert.ok(!list.includes('ASK-STORED') && !list.includes('[Attached:'), 'the conversation list holds no message text');
+    h.reapConvo(id);
+  });
+
+  // The stub keeps a session file only for a spawn given --session-id, which a
+  // chat's spawn is not given, so the file is written here as the runtime
+  // writes it: its user line is the prompt the stub read, byte for byte.
+  test('the runtime reads the stored text, and with no transcript the history takes every line from the runtime\'s session file', async () => {
+    const id = h.freshConvoId('runtime');
+    answers('ASK-RUNTIME');
+    const since = client.messages.length;
+    chat(id, 'ASK-RUNTIME see these', [file('Screen Shot.png', png())]);
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is answered with chat_stored');
+    assert.ok(await resultFor(id, 'DONE-ASK-RUNTIME', since), 'and dispatched');
+    const read = h.readPrompts().filter((p) => p.prompt.includes('ASK-RUNTIME'));
+    assert.deepStrictEqual(read.map((p) => p.prompt), [stored.content], 'the runtime reads the stored text, once');
+
+    const { sessionId, prompt } = read[0];
+    const dir = path.join(process.env.HOME, '.claude', 'projects', 'stub-project');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), tfx.prompt(sessionId, prompt, new Date().toISOString()));
+    // With the transcript gone, the session file is the whole history.
+    h.internal.convoTranscripts.get(id).splice(0);
+    assert.deepStrictEqual(rows(id), [], 'no transcript to supply the row');
+    const hs = client.messages.length;
+    client.send({ type: 'get_session_history', conversationId: id, sessionIds: [{ sessionId }], limit: 200 });
+    const history = await arrived((m) => m.type === 'session_history' && m.conversationId === id, { since: hs });
+    assert.ok(history, 'the history is answered');
+    assert.deepStrictEqual(history.messages.filter((m) => m.role === 'user').map((m) => m.content), [stored.content],
+      'the history\'s user message is the stored text, every line included');
     h.reapConvo(id);
   });
 
