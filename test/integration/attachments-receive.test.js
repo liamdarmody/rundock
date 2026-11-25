@@ -22,6 +22,7 @@ const path = require('node:path');
 const h = require('../helpers/harness.js');
 const store = require('../../lib/attachments/store.js');
 const { agentFile, standardTeam, makeTempDir } = require('../helpers/workspace.js');
+const { makeWorkspace } = require('../helpers/workspace.js');
 const { handleDeleteConversation } = require('../../lib/protocol/handlers/conversations.js');
 
 // The receive is async and the handler ignores its promise, so a rejection it
@@ -1000,6 +1001,100 @@ describe('deleting a conversation deletes its attachments, and says when it coul
     }
     assert.ok(logged.some((line) => line.includes('socket gone')), 'the failure is logged');
     assert.ok(!inList(id), 'the conversation is gone from the list');
+  });
+});
+
+// A switch of workspace arriving while a message's files are being written
+// waits for that message, as a text chat already in the handler is finished
+// where it arrived: stored, recorded and dispatched in the workspace that
+// received it, and only then does the switch go ahead. One message is never
+// answered chat_stored and then chat_refused.
+describe('a workspace switch while files are on their way', () => {
+  const transcriptIn = (dir, id) => {
+    try { return JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'transcripts', `${id}.json`), 'utf-8')); } catch (e) { return null; }
+  };
+  const recordIn = (dir, id) => { try { return store.readRecord(dir, id).messages; } catch (e) { return null; } };
+  // Back to the suite's own workspace, as the window chooses one.
+  async function back() {
+    const since = client.messages.length;
+    client.send({ type: 'set_workspace', path: h.workspaceDir });
+    const { msg } = await client.waitFor((m) => m.type === 'workspace_set' || m.type === 'workspace_error', { since, label: 'the switch back' });
+    assert.strictEqual(msg.type, 'workspace_set', `the switch back failed: ${msg.message}`);
+  }
+  // Sends `request` while the first of `id`'s messages with files is held,
+  // with a text chat behind it, and answers the messages that came back.
+  async function switchWhileHeld(id, tag, request) {
+    answers([tag]);
+    let release;
+    const held = store.withConversationLock(id, () => new Promise((resolve) => { release = resolve; }));
+    const since = client.messages.length;
+    try {
+      chat(id, `${tag} see this`, [file('Screen Shot.png', png())]);
+      chat(id, `${tag} and then`, undefined);
+      await h.delay(100);
+      client.send(request);
+      await h.delay(200);
+      assert.ok(!client.messages.slice(since).some((m) => m.type === 'workspace_set'), 'the switch waits for the files');
+    } finally {
+      release();
+      await held;
+    }
+    const stored = await storedFor(id, since);
+    const set = await arrived((m) => m.type === 'workspace_set' || m.type === 'workspace_error', { since });
+    return { since, stored, set };
+  }
+  function finishedWhereReceived(id, tag, { since, stored, set }) {
+    assert.ok(stored, 'the message is answered with chat_stored');
+    assert.ok(set && set.type === 'workspace_set', 'the switch goes ahead');
+    const answered = client.messages.slice(since);
+    assert.ok(answered.indexOf(stored) < answered.indexOf(set), 'chat_stored comes before workspace_set');
+    assert.ok(!answered.some((m) => m.type === 'chat_refused' && m.conversationId === id), 'and no chat_refused');
+    assert.deepStrictEqual(recordIn(h.workspaceDir, id), [stored.entry], 'the record entry is in the workspace that received it');
+    assert.deepStrictEqual((transcriptIn(h.workspaceDir, id) || []).filter((r) => r.role === 'user').map((r) => r.text),
+      [stored.content, `${tag} and then`], 'its transcript there has the message, then the chat behind it');
+    assert.strictEqual(listing(path.join(set.path, '.rundock', 'attachments', id)), null, 'the next workspace holds none of its files');
+    assert.strictEqual(transcriptIn(set.path, id), null, 'nor its transcript');
+  }
+
+  test('set_workspace waits for the files, which are stored, recorded and dispatched in the first workspace; the next message goes to the second', async () => {
+    const id = h.freshConvoId('switch-flight');
+    const other = makeWorkspace({ claudeMd: '# Second fixture\n', agents: standardTeam() });
+    try {
+      const answered = await switchWhileHeld(id, 'ASK-SWITCH', { type: 'set_workspace', path: other });
+      finishedWhereReceived(id, 'ASK-SWITCH', answered);
+      assert.strictEqual(answered.set.path, other);
+      const since = client.messages.length;
+      chat(id, 'ASK-NEXT see this', [file('notes.txt', Buffer.from('hello'))]);
+      const next = await storedFor(id, since);
+      assert.ok(next, 'a message with files after the switch is stored');
+      assert.deepStrictEqual(recordIn(other, id), [next.entry], 'in the second workspace');
+      assert.deepStrictEqual(recordIn(h.workspaceDir, id), [answered.stored.entry], 'and the first keeps only its own');
+    } finally {
+      await back();
+      h.reapConvo(id);
+    }
+  });
+
+  test('create_workspace waits for the files the same way', async () => {
+    const id = h.freshConvoId('create-flight');
+    try {
+      finishedWhereReceived(id, 'ASK-CREATE', await switchWhileHeld(id, 'ASK-CREATE', { type: 'create_workspace', name: `alpha ${id}` }));
+    } finally {
+      await back();
+      h.reapConvo(id);
+    }
+  });
+
+  test('with no files on their way, a switch answers at once', async () => {
+    const other = makeWorkspace({ claudeMd: '# Third fixture\n', agents: standardTeam() });
+    try {
+      const since = client.messages.length;
+      client.send({ type: 'set_workspace', path: other });
+      const set = await arrived((m) => m.type === 'workspace_set' || m.type === 'workspace_error', { since, timeout: 2000 });
+      assert.ok(set && set.type === 'workspace_set' && set.path === other);
+    } finally {
+      await back();
+    }
   });
 });
 
