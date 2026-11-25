@@ -111,6 +111,9 @@ const OTHER_CLAUDE_LAUNCHES = [
   { at: 'electron/main.js | isClaudeAuthenticated | execSync(\'claude --print "test" --output-format text\')',
     why: 'the desktop\'s sign-in check, run in its main process with no --settings and the desktop\'s own environment, so the hook decides nothing for it; it cannot be started from a test without the desktop',
     testedBy: [ENVIRONMENTS, 'the hook decides nothing for a process started with the app\'s own environment'] },
+  { at: 'electron/setup-check.js | runChild | spawn(program)',
+    why: 'the desktop\'s setup check, the one funnel for each child it starts: the lookup, the version run and the sign-in check of the copy found, and PowerShell\'s User PATH read and write on Windows; each with no shell, no --settings and a copy of the app\'s own environment, with only ELECTRON_RUN_AS_NODE added to a start through Node inside the Electron app',
+    testedBy: ['test/unit/setup-check.test.js', 'every child is given the app\'s own environment, with nothing of Rundock\'s added'] },
 ];
 
 // Everything else the app starts, none of it the Claude CLI.
@@ -140,7 +143,7 @@ const NOT_CLAUDE = [
 // The files that load child_process at all. A new one fails here, so a launch
 // through a name this scan does not know cannot arrive unseen with it.
 const LOADS_CHILD_PROCESS = [
-  'codex-appserver.js', 'codex.js', 'electron/main.js', 'electron/shell-config-dir.js', 'lib/delegation/engine.js', 'lib/packages/extension-source.js',
+  'codex-appserver.js', 'codex.js', 'electron/main.js', 'electron/setup-check.js', 'electron/shell-config-dir.js', 'lib/delegation/engine.js', 'lib/packages/extension-source.js',
   'lib/protocol/handlers/files.js', 'lib/protocol/handlers/workspace.js', 'lib/runtime/claude-console.js', 'lib/runtime/claude.js',
   'scripts/code-mode-git.js', 'server.js',
 ];
