@@ -3633,6 +3633,78 @@ const MUTATIONS = [
     + "      ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
     + '      return;\n'
     + '    }\n'],
+  // An entry holding a key the card shows in a shape it cannot show exactly is
+  // refused before any card and before the file is read: each key's shape
+  // broken alone, then the order the first bad key is named in, then where the
+  // check runs.
+  [CONNECTOR_ASK, 'Connector: a command that is not a string passes beside a URL',
+    "  ['command', isString],\n",
+    "  ['command', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: args holding something other than strings pass',
+    "  ['args', (v) => Array.isArray(v) && v.every(isString)],\n",
+    "  ['args', (v) => Array.isArray(v)],\n"],
+  [CONNECTOR_ASK, 'Connector: args that are not a list pass',
+    "  ['args', (v) => Array.isArray(v) && v.every(isString)],\n",
+    "  ['args', (v) => !Array.isArray(v) || v.every(isString)],\n"],
+  [CONNECTOR_ASK, 'Connector: a URL that is not a string passes beside a command',
+    "  ['url', isString],\n",
+    "  ['url', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: a type that is not a string passes',
+    "  ['type', isString],\n",
+    "  ['type', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: a headersHelper that is not a string passes',
+    "  ['headersHelper', isString],\n",
+    "  ['headersHelper', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: an env that is not a map passes',
+    "  ['env', isStringMap],\n",
+    "  ['env', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: headers that are not a map pass',
+    "  ['headers', isStringMap],\n",
+    "  ['headers', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: a list passes as an env or headers map',
+    " && !Array.isArray(v) && Object.values(v).every(isString);",
+    ' && Object.values(v).every(isString);'],
+  [CONNECTOR_ASK, 'Connector: env or headers values that are not strings pass',
+    " && !Array.isArray(v) && Object.values(v).every(isString);",
+    ' && !Array.isArray(v);'],
+  [CONNECTOR_ASK, 'Connector: with several bad keys, the last in the order is named',
+    '  const bad = SHOWN_CONNECTOR_SHAPES.find(',
+    '  const bad = SHOWN_CONNECTOR_SHAPES.slice().reverse().find('],
+  [CONNECTOR_ASK, 'Connector: an entry the card cannot show is not checked at all',
+    '  const unshown = unshownConnectorKey(entry);\n',
+    '  const unshown = null;\n'],
+  [CONNECTOR_ASK, 'Connector: an entry the card cannot show is checked only after the file is read',
+    '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n',
+    '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n'
+    + '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'],
+  [CONNECTOR_ASK_FLOW, 'Connector: through the real server, an entry the card cannot show is checked only once the card is allowed',
+    '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n'
+    + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n",
+    '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n'
+    + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n"
+    + '    const unshown = unshownConnectorKey(entry);\n'
+    + '    if (unshown) {\n'
+    + "      ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '      return;\n'
+    + '    }\n'],
   [CM_CLIENT, 'launchctl: the card gives no reason of its own',
     "    'launch-environment': () => 'This changes what macOS starts, or the settings every program started from now on is given, Rundock included, beyond anything Rundock can see or check.',\n",
     ''],
