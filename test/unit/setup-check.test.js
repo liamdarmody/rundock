@@ -717,3 +717,78 @@ describe('the setup log', () => {
     assert.strictEqual(f.timers.length, f.calls.length, 'and no timer beyond one for each child: nothing waits on the log');
   });
 });
+
+// The five sequences, each run end to end through the module. The fourth also
+// runs through the setup screen, in wizard-found-not-started.test.js.
+const stage = (c) => (isSignIn(c) ? 'sign-in' : step(c));
+const ALREADY_ON_PATH = stored('ExpandString', 'C:\\Windows;%USERPROFILE%\\.local\\bin');
+
+describe('the five sequences', () => {
+  test('1, the inverse, on Windows: installed, quick to start and signed in reads ready, and a folder already on the User PATH is not written', async (t) => {
+    const f = fakes(t, (c) => (isSignIn(c) ? {} : onWindows({ read: ALREADY_ON_PATH })(c)));
+    assert.deepStrictEqual(await f.mod.createSetupCheck({ platform: 'win32', env: { ...WIN_ENV }, shellConfigDir: runsOnce }).check(), { status: 'ready' });
+    assert.deepStrictEqual(f.calls.map(stage), ['lookup', 'path read', 'version', 'sign-in']);
+  });
+
+  test('1, the inverse, on macOS: ready as on main, with nothing read or written', async (t) => {
+    const f = fakes(t, signedIn());
+    assert.deepStrictEqual(await checker(f.mod, 'darwin', { shellConfigDir: runsOnce }).check(), { status: 'ready' });
+    assert.deepStrictEqual(f.calls.map(stage), ['lookup', 'version', 'sign-in']);
+  });
+
+  test('2, the undo: with the screen closed mid-check, each child is stopped at its own timeout, and the one write is guarded', async (t) => {
+    const f = fakes(t, (c) => (isPathWrite(c) || isVersion(c) ? { hold: true } : onWindows()(c)));
+    const unread = onWin(f.mod).check({ signIn: false });
+    await until('the write', () => f.calls.some(isPathWrite));
+    const write = f.calls.find(isPathWrite);
+    timerOf(f, write).fn();
+    assert.strictEqual(write.child.kills, 1, 'the write is stopped at its timeout');
+    await until('the version run', () => f.calls.some(isVersion));
+    const version = f.calls.find(isVersion);
+    timerOf(f, version).fn();
+    assert.strictEqual(version.child.kills, 1, 'and the version run at its own');
+    assert.deepStrictEqual(await unread, { status: 'found-not-started' });
+    assert.deepStrictEqual(f.calls.map(step), ['lookup', 'path read', 'path write', 'version'], 'nothing more starts');
+    assert.strictEqual(write.options.env.SETUP_CHECK_PATH_OLD, 'C:\\Windows', 'the write carries the value it read');
+    const script = f.mod.WRITE_SCRIPT;
+    assert.ok(script.indexOf("Write('stale')") < script.indexOf('$k.SetValue('), 'and writes nothing when the value changed under it');
+  });
+
+  test('3, the retry: Check again joins a running check, a fresh check after found-not-started starts it, and a failed write is tried again', async (t) => {
+    let versions = 0;
+    let writes = 0;
+    const win = onWindows({ write: () => (++writes === 1 ? { status: 1 } : { stdout: 'written' }) });
+    const f = fakes(t, (c) => (isVersion(c) && ++versions === 1 ? { hold: true } : win(c)));
+    const check = onWin(f.mod);
+    const first = check.check({ signIn: false });
+    await until('the version run', () => f.calls.some(isVersion));
+    const again = check.check({ signIn: false });
+    timerOf(f, f.calls.find(isVersion)).fn();
+    assert.deepStrictEqual(await Promise.all([first, again]), [{ status: 'found-not-started' }, { status: 'found-not-started' }]);
+    assert.deepStrictEqual(f.calls.map(step), ['lookup', 'path read', 'path write', 'version'], 'Check again started nothing of its own');
+    assert.deepStrictEqual(await check.check({ signIn: false }), { status: 'started' });
+    assert.deepStrictEqual(f.calls.map(step), [
+      'lookup', 'path read', 'path write', 'version',
+      'lookup', 'path read', 'path write', 'version']);
+  });
+
+  test('5, the control failing: nothing found writes nothing, a refused launch plan reads as found, a stale read writes nothing, and a broken log changes nothing', async (t) => {
+    let round = 0;
+    const win = onWindows({ write: () => (round === 1 ? { stdout: 'stale' } : { stdout: 'written' }) });
+    const f = fakes(t, (c) => (isLookup(c) && round === 0 ? { status: 1 } : win(c)));
+    const plan = f.mod.deps.launchPlan;
+    const check = f.mod.createSetupCheck({ platform: 'win32', env: { ...WIN_ENV }, appData: makeTempDir('setup-check-log-') });
+    assert.deepStrictEqual(await check.check({ signIn: false }), { status: 'not-installed' });
+    assert.deepStrictEqual(f.calls.map(step), ['lookup']);
+    round = 1;
+    f.mod.deps.launchPlan = () => ({ refusal: new Error('unreadable package') });
+    assert.deepStrictEqual(await check.check({ signIn: false }), { status: 'found-not-started' });
+    assert.deepStrictEqual(f.calls.map(step).slice(1), ['lookup', 'path read', 'path write'], 'the stale write wrote nothing, so it runs again next time');
+    round = 2;
+    f.mod.deps.launchPlan = plan;
+    const broken = () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+    f.mod.deps.fs = { readFileSync: broken, writeFileSync: broken, appendFileSync: broken };
+    assert.deepStrictEqual(await check.check({ signIn: false }), { status: 'started' });
+    assert.deepStrictEqual(f.calls.map(step).slice(4), ['lookup', 'path read', 'path write', 'version']);
+  });
+});
