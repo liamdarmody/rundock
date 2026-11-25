@@ -73,6 +73,10 @@ before(async () => {
   global.stripRundockMarkers = (t) => require(path.join(ROOT, 'public', 'markers.js')).stripMarkers(String(t || ''));
   chat = require(path.join(ROOT, 'public', 'views', 'chat.js'));
   Object.assign(global, chat);
+  // Guarded: a tree without the composer has a setupChat that never calls it.
+  try { Object.assign(global, require(path.join(ROOT, 'public', 'views', 'composer.js'))); } catch (e) {
+    if (!(e && e.code === 'MODULE_NOT_FOUND' && /composer\.js/.test(String(e.message)))) throw e;
+  }
   // Approval cards are not what this is about, and need the permissions module.
   global.renderPendingPermissionCards = () => {};
   view = require(path.join(ROOT, 'public', 'views', 'conversations.js'));

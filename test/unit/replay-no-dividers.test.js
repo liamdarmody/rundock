@@ -63,6 +63,10 @@ before(() => {
   global.restoredActiveAgentId = require(path.join(ROOT, 'public', 'delegation-restore.js')).restoredActiveAgentId;
   chat = require(path.join(ROOT, 'public', 'views', 'chat.js'));
   Object.assign(global, chat);
+  // Guarded: a tree without the composer has a setupChat that never calls it.
+  try { Object.assign(global, require(path.join(ROOT, 'public', 'views', 'composer.js'))); } catch (e) {
+    if (!(e && e.code === 'MODULE_NOT_FOUND' && /composer\.js/.test(String(e.message)))) throw e;
+  }
 });
 
 // The chain from the reported conversation, shortened: the work goes down two

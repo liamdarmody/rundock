@@ -170,7 +170,7 @@ describe('the roster is requested with the rest of the workspace', () => {
     // *WorkspaceChanged stubs already in this list.
     for (const name of ['setServingWorkspace', 'setWorkspaceChrome', 'packagesWorkspaceChanged',
       'connectorsWorkspaceChanged', 'renderListPills', 'updateUnreadBadge', 'updateWorkingBadge',
-      'resetSidebarForWorkspace', 'requestPins', 'workingFoldersWorkspaceChanged']) {
+      'resetSidebarForWorkspace', 'requestPins', 'workingFoldersWorkspaceChanged', 'composersWorkspaceChanged']) {
       w[name] = () => calls.push(name);
     }
     w.closeOpenFile = () => calls.push('closeOpenFile');
@@ -199,6 +199,14 @@ describe('the roster is requested with the rest of the workspace', () => {
       'the file is closed before the shell is redrawn for the new workspace');
     const same = openWorkspace({ current: '/ws/a', next: '/ws/a' });
     assert.ok(!same.calls.includes('closeOpenFile'), 'a reconnect to the same workspace keeps the reader\'s place');
+  });
+
+  test('a different workspace empties every composer; the same workspace keeps them', () => {
+    const switched = openWorkspace({ current: '/ws/a', next: '/ws/b' });
+    assert.ok(switched.calls.includes('composersWorkspaceChanged'),
+      'the files picked in one workspace never reach a conversation of the same ID in the next');
+    const same = openWorkspace({ current: '/ws/a', next: '/ws/a' });
+    assert.ok(!same.calls.includes('composersWorkspaceChanged'), 'a reconnect to the same workspace keeps its composers');
   });
 });
 

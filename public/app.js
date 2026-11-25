@@ -261,7 +261,7 @@ function connect() {
   ws = new WebSocket(`${p}//${location.host}`, RundockSignIn.socketProtocols(RundockSignIn.readToken(pageStorage)));
   ws.onopen = () => { everConnected = true; const so = document.getElementById('signed-out'); if (so) so.hidden = true; setConn('connected'); ws.send(JSON.stringify({type:'get_workspaces'})); };
   ws.onmessage = e => handle(JSON.parse(e.data));
-  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); extensionFetchesConnectionLost(); linkCreatesConnectionLost(); showIfSignedOut(); setTimeout(connect, 2000); };
+  ws.onclose = () => { setConn('disconnected'); packagesConnectionLost(); extensionFetchesConnectionLost(); linkCreatesConnectionLost(); attachmentsConnectionLost(); showIfSignedOut(); setTimeout(connect, 2000); };
   ws.onerror = () => {}; // Prevent unhandled error; onclose fires next
 }
 function setConn(s) { const b=document.getElementById('connection-bar'); b.className=`connection-bar ${s}`; b.textContent=s==='connected'?'Connected':s==='disconnected'?'Disconnected. Reconnecting...':'Connecting...'; if(s==='connected')setTimeout(()=>b.style.display='none',2000); else b.style.display='block'; }
@@ -957,6 +957,11 @@ function handle(d) {
       handlePaletteResults(d);
       break;
     case 'error': if(!d.content?.includes('no stdin')) addSystemMsgToConvo(d.content, convoId); break;
+    // A deleted conversation whose attached files couldn't be removed: said
+    // where the person is, as a line that isn't an error.
+    case 'conversation_files_kept': addSystemMsgToConvo(d.text, null, false); break;
+    // The answer to a message sent with files, for the composer that waits.
+    case 'chat_stored': case 'chat_refused': fileSendAnswered(d); break;
   }
 }
 function getConvoState(convoId) {
@@ -1081,6 +1086,7 @@ const EFFECT_EXECUTORS = {
     if (headerLabel) headerLabel.textContent = toAgent.displayName;
     if (headerAvatar) { headerAvatar.style.background = toAgent.colour; headerAvatar.textContent = toAgent.icon; }
     document.getElementById('msg-input').placeholder = 'Message ' + toAgent.displayName + '...';
+    refreshAttachButton(activeConversation);
   },
   'start-streaming-bubble': (convoId, ef) => {
     const state = getConvoState(convoId);
@@ -2018,7 +2024,7 @@ function onWorkspaceReady(dir, analysis, isEmpty, mode, scaffoldError, isSetupCo
   currentSkillId = null;
   // A package plan describes one workspace's collision facts and defaults;
   // a different workspace returns the install flow to idle.
-  if (!isSameWorkspace) { packagesWorkspaceChanged(); connectorsWorkspaceChanged(); workingFoldersWorkspaceChanged(); }
+  if (!isSameWorkspace) { packagesWorkspaceChanged(); connectorsWorkspaceChanged(); workingFoldersWorkspaceChanged(); composersWorkspaceChanged(); }
 
   if (isSameWorkspace && currentView !== 'workspace') {
     // Reconnect to same workspace: keep in-memory conversations and active view intact.
@@ -2093,7 +2099,7 @@ msgInput.addEventListener('input',()=>{
   msgInput.style.height='auto'; msgInput.style.height=Math.min(msgInput.scrollHeight, 200)+'px';
   const btn=document.getElementById('send-btn');
   if(!btn.classList.contains('cancel')) {
-    if(msgInput.value.trim()) btn.classList.add('active'); else btn.classList.remove('active');
+    btn.classList.toggle('active', sendReady(msgInput.value));
   }
 });
 

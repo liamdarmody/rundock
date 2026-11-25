@@ -413,6 +413,19 @@ const MANIFEST = {
     "renderAgentList",
     "renderConvoEmptyAgents",
     "renderOrgChart",
+  ],
+  "composer.js": [
+    "attachmentsConnectionLost",
+    "composersWorkspaceChanged",
+    "fileSendAnswered",
+    "firstAttachedName",
+    "openAttachPicker",
+    "pickFiles",
+    "refreshAttachButton",
+    "sendReady",
+    "sendWaiting",
+    "sendWithFiles",
+    "showComposerFor",
   ],};
 
 function viewModules() {

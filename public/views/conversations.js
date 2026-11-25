@@ -228,7 +228,7 @@ function askFromView({ agentId, message, extension, path }) {
   input.value = String(message);
   input.dispatchEvent(new Event('input', { bubbles: true }));
   const sendBtn = document.getElementById('send-btn');
-  if (sendBtn) sendBtn.classList.toggle('active', !!input.value.trim());
+  if (sendBtn) sendBtn.classList.toggle('active', sendReady(input.value));
   const note = document.createElement('div');
   note.className = 'msg-system ask-provenance';
   note.textContent = `Drafted by the ${extension} extension from ${path}. Nothing has been sent.`;
@@ -376,6 +376,7 @@ function setupChat(convo) {
   document.getElementById('chat-agent-avatar').textContent=agent.icon;
   const msgInput = document.getElementById('msg-input');
   switchComposerTo(convo.id, msgInput);
+  showComposerFor(convo);
   msgInput.placeholder=`Message ${agent.displayName}...`;
   msgInput.style.height = 'auto';
   msgInput.style.height = '44px';
@@ -397,10 +398,10 @@ function setupChat(convo) {
     sendBtn.title = 'Stop agent';
     sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
   } else {
-    sendBtn.disabled = false;
+    sendBtn.disabled = sendWaiting(convo.id);
     sendBtn.classList.remove('cancel');
     // Reflect any draft already in the field so Send reads as ready.
-    sendBtn.classList.toggle('active', !!msgInput.value.trim());
+    sendBtn.classList.toggle('active', sendReady(msgInput.value));
     sendBtn.onclick = sendMessage;
     sendBtn.title = 'Send message';
     sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
