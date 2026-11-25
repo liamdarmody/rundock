@@ -931,8 +931,42 @@ function unarmCardsIn(host, except) {
 function cardPlaced(card) {
   unarmCard(card);
   unarmCardsIn(card.parentNode, card);
+  cardTops.set(card, cardTop(card));
+  watchCardMoves(card.parentNode);
 }
 const cardArmed = (btn) => btn.getAttribute('aria-disabled') !== 'true';
+
+// A CARD WAITS AGAIN WHENEVER IT MOVES. Other cards are not the only thing that
+// moves one: another agent's reply streaming in above it, a status line or a
+// divider, the thread following the bottom as a reply streams in below it, a
+// scroll, a window resize. So each host is watched, once, for a scroll of it,
+// for any change inside it and for a resize of the window, and after each one
+// every card in it is measured. A card whose top is not where it was last seen
+// waits again from that moment, and where it is now is what the next
+// measurement is compared with. A card that stays put keeps taking clicks: a
+// reply written below a card the person has scrolled up to leaves it armed. A
+// settled card has no buttons, so it never waits.
+const cardTops = new WeakMap();
+const cardTop = (card) => card.getBoundingClientRect().top;
+function unarmMovedCards(host) {
+  for (const n of host.children) {
+    if (!n.classList.contains('msg-permission')) continue;
+    const top = cardTop(n);
+    const moved = top !== cardTops.get(n);
+    cardTops.set(n, top);
+    if (moved) unarmCard(n);
+  }
+}
+const cardMoveHosts = new WeakSet();
+function watchCardMoves(host) {
+  const view = host.ownerDocument.defaultView;
+  if (!view || cardMoveHosts.has(host)) return;
+  cardMoveHosts.add(host);
+  const measure = () => unarmMovedCards(host);
+  host.addEventListener('scroll', measure);
+  new view.MutationObserver(measure).observe(host, { childList: true, subtree: true, characterData: true, attributes: true });
+  view.addEventListener('resize', measure);
+}
 
 // THE FIELDS OF A CONNECTOR REQUEST, built as elements with every value set as
 // text. Each value is an agent's: an address or a subject can carry markup, a

@@ -18,6 +18,9 @@
 //     again whenever another card in the same place arrives, settles or
 //     leaves; while it waits it is aria-disabled, never disabled, and a
 //     pointer or keyboard click on it sends nothing
+//   - a pending card also waits again whenever anything else moves it on
+//     screen (a streamed reply, the thread following the bottom, a scroll, a
+//     window resize), and one that stays where it was keeps taking clicks
 //   - the waiting look is one opacity rule, with nothing that moves or resizes
 const { test, describe, before, after, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert');
@@ -475,6 +478,226 @@ describe('a card waits again when another card in the same place moves it', () =
     mock.timers.tick(500);
     button(ids[2], 'allow').click();
     assert.deepStrictEqual(answered(), [ids[2]]);
+  });
+});
+
+describe('a card waits again whenever it moves on screen, whatever moved it', () => {
+  // jsdom lays nothing out: every element reports a top of 0 and nothing
+  // scrolls by itself. So each test says where a card sits, before and after
+  // it moves, and fires the scroll or the resize itself. A MutationObserver
+  // calls back in a microtask, which the mocked clock does not run, so a test
+  // lets one pass after a write and before it clicks.
+  const tops = new Map();
+  let layout;
+  beforeEach(() => {
+    tops.clear();
+    layout = dom.window.Element.prototype.getBoundingClientRect;
+    dom.window.Element.prototype.getBoundingClientRect = function () {
+      const top = tops.get(this.id) || 0;
+      return { top, bottom: top + 120, left: 0, right: 640, width: 640, height: 120, x: 0, y: top };
+    };
+  });
+  afterEach(() => { dom.window.Element.prototype.getBoundingClientRect = layout; });
+  const sitAt = (id, top) => tops.set('perm-' + id, top);
+  const thread = () => document.getElementById('messages');
+  const scrolled = (el) => el.dispatchEvent(new dom.window.Event('scroll'));
+  const writesSeen = () => Promise.resolve();
+  // Another agent's reply as the page streams one: a bubble appended to the
+  // thread, whose .streaming-text is rewritten with each chunk.
+  function streamingText(agent) {
+    const el = document.createElement('div');
+    el.className = 'msg msg-agent';
+    el.innerHTML = RundockChatMarkup.agentStreamingMessageHtml(agent, '', '');
+    thread().appendChild(el);
+    return el.querySelector('.streaming-text');
+  }
+  // The person scrolled up, so the thread stops following the bottom.
+  function scrolledUp(fn) {
+    global.userScrolledUp = true;
+    return Promise.resolve().then(fn).finally(() => { global.userScrolledUp = false; });
+  }
+  // From the moment it moved: a click at 0 ms and at 499 ms sends nothing, and
+  // one at 500 ms answers.
+  function waitsFromNow(id) {
+    const before = answered();
+    button(id, 'allow').click();
+    assert.deepStrictEqual(answered(), before, 'nothing at 0 ms after the move');
+    mock.timers.tick(499);
+    button(id, 'allow').click();
+    assert.deepStrictEqual(answered(), before, 'nothing at 499 ms after the move');
+    mock.timers.tick(1);
+    button(id, 'allow').click();
+    assert.deepStrictEqual(answered(), [...before, id], 'one answer at 500 ms');
+  }
+
+  test('two agents in one conversation: the other agent\'s streamed reply moves a card pending past 500 ms, and it takes no click until 500 ms after the move', async () => {
+    waitExists();
+    const id = nextId();
+    sitAt(id, 420);
+    chat.handlePermissionRequest(request(id), 'c-open');
+    assert.strictEqual(collapse(originLine(id).textContent), 'Asked by Wren');
+    mock.timers.tick(800);
+    assert.ok(!button(id, 'allow').hasAttribute('aria-disabled'), 'pending past 500 ms, it takes a click');
+    // Ash's reply streams in below it, written as the page writes each chunk,
+    // and the thread follows the bottom, so the card slides up.
+    streamingText(ASH).innerHTML = 'Running the report now.<br>Three files changed.';
+    chat.scrollBottom();
+    sitAt(id, 356);
+    scrolled(thread());
+    await writesSeen();
+    waitsFromNow(id);
+  });
+
+  for (const [where, draw] of HOSTS) {
+    test(`${where}, a scroll alone that changes a card's top makes it wait again`, () => {
+      waitExists();
+      const id = nextId();
+      sitAt(id, 500);
+      draw(request(id));
+      mock.timers.tick(500);
+      sitAt(id, 380);
+      scrolled(card(id).parentNode);
+      waitsFromNow(id);
+    });
+  }
+
+  for (const [kind, write, movedTo] of [
+    ['a reply rewritten longer', (text) => { text.innerHTML = 'The plan, in three steps:<br>one<br>two<br>three'; }, 260],
+    ['a status line\'s characters changed', (text) => { text.firstChild.data = 'Reading tools/report.py and two more files'; }, 230],
+    ['a line above it folded away', (text) => { text.closest('.msg').hidden = true; }, 140],
+  ]) {
+    test(`a change above a card, with no scroll, that moves it makes it wait again: ${kind}`, async () => {
+      waitExists();
+      const above = streamingText(ASH);
+      above.textContent = 'Reading';
+      const id = nextId();
+      sitAt(id, 200);
+      chat.handlePermissionRequest(request(id), 'c-open');
+      mock.timers.tick(500);
+      write(above);
+      sitAt(id, movedTo);
+      await writesSeen();
+      waitsFromNow(id);
+    });
+  }
+
+  test('a stream write and a scroll that leave a card where it was leave it armed, and a click answers at once', () => scrolledUp(async () => {
+    waitExists();
+    const id = nextId();
+    sitAt(id, 240);
+    chat.handlePermissionRequest(request(id), 'c-open');
+    mock.timers.tick(500);
+    streamingText(ASH).innerHTML = 'More of the reply, written below the card.';
+    chat.scrollBottom();
+    scrolled(thread());
+    await writesSeen();
+    assert.ok(!button(id, 'allow').hasAttribute('aria-disabled'), 'still armed');
+    button(id, 'allow').click();
+    assert.deepStrictEqual(answered(), [id], 'answered at once');
+  }));
+
+  test('a second move during the wait starts it again: moved at t and at t+300 ms, it sends nothing at t+799 ms and answers at t+800 ms', () => {
+    waitExists();
+    const id = nextId();
+    sitAt(id, 600);
+    chat.handlePermissionRequest(request(id), 'c-open');
+    mock.timers.tick(500);
+    sitAt(id, 540);
+    scrolled(thread());
+    mock.timers.tick(300);
+    button(id, 'allow').click();
+    assert.deepStrictEqual(responses(), [], 'nothing at t+300 ms');
+    sitAt(id, 480);
+    scrolled(thread());
+    mock.timers.tick(499);
+    button(id, 'allow').click();
+    assert.deepStrictEqual(responses(), [], 'nothing at t+799 ms');
+    mock.timers.tick(1);
+    button(id, 'allow').click();
+    assert.deepStrictEqual(answered(), [id], 'answered at t+800 ms');
+  });
+
+  test('only the card that moved waits: a reply growing between two cards moves the lower one, and the upper one still answers at once', () => scrolledUp(async () => {
+    waitExists();
+    const upper = nextId();
+    sitAt(upper, 120);
+    chat.handlePermissionRequest(request(upper), 'c-open');
+    const between = streamingText(ASH);
+    const lower = nextId();
+    sitAt(lower, 400);
+    chat.handlePermissionRequest(request(lower, { _agent: 'ash' }, 'python3 tools/report.py'), 'c-open');
+    mock.timers.tick(500);
+    between.innerHTML = 'A longer reply<br>that pushes what is under it down';
+    sitAt(lower, 470);
+    await writesSeen();
+    button(lower, 'allow').click();
+    assert.deepStrictEqual(responses(), [], 'the card that moved sends nothing');
+    button(upper, 'allow').click();
+    assert.deepStrictEqual(answered(), [upper], 'the card that stayed answers at once');
+    mock.timers.tick(499);
+    button(lower, 'allow').click();
+    assert.deepStrictEqual(answered(), [upper], 'nothing from the moved card at 499 ms');
+    mock.timers.tick(1);
+    button(lower, 'allow').click();
+    assert.deepStrictEqual(answered(), [upper, lower], 'it answers at 500 ms');
+  }));
+
+  test('after a move, the new place is the reference: a card that moved and waited it out stays armed through a change that leaves it there', () => scrolledUp(async () => {
+    waitExists();
+    const id = nextId();
+    sitAt(id, 300);
+    chat.handlePermissionRequest(request(id), 'c-open');
+    mock.timers.tick(500);
+    sitAt(id, 240);
+    scrolled(thread());
+    button(id, 'allow').click();
+    assert.deepStrictEqual(responses(), [], 'the move makes it wait');
+    mock.timers.tick(500);
+    assert.ok(!button(id, 'allow').hasAttribute('aria-disabled'), 'it has waited it out');
+    streamingText(ASH).innerHTML = 'A reply written below it.';
+    scrolled(thread());
+    await writesSeen();
+    assert.ok(!button(id, 'allow').hasAttribute('aria-disabled'), 'it stays armed where it moved to');
+    button(id, 'allow').click();
+    assert.deepStrictEqual(answered(), [id], 'and a click answers at once');
+  }));
+
+  for (const [where, draw] of HOSTS) {
+    test(`${where}, a window resize that changes a card's top makes it wait again`, () => {
+      waitExists();
+      const id = nextId();
+      sitAt(id, 520);
+      draw(request(id));
+      mock.timers.tick(500);
+      sitAt(id, 470);
+      dom.window.dispatchEvent(new dom.window.Event('resize'));
+      waitsFromNow(id);
+    });
+  }
+
+  test('a settled card is left alone: a change that moves it beside a pending card marks nothing on it and sends nothing, while the pending card waits', async () => {
+    waitExists();
+    const above = streamingText(ASH);
+    const settled = nextId();
+    const pending = nextId();
+    sitAt(settled, 200);
+    sitAt(pending, 420);
+    chat.handlePermissionRequest(request(settled), 'c-open');
+    chat.handlePermissionRequest(request(pending, { _agent: 'ash' }, 'python3 tools/report.py'), 'c-open');
+    mock.timers.tick(500);
+    button(settled, 'allow').click();
+    assert.deepStrictEqual(answered(), [settled]);
+    assert.ok(!card(settled).querySelector('.btn-perm'), 'it has settled');
+    mock.timers.tick(500);
+    above.innerHTML = 'A reply above both cards<br>that grows';
+    sitAt(settled, 260);
+    sitAt(pending, 480);
+    await writesSeen();
+    assert.strictEqual(card(settled).querySelector('[aria-disabled]'), null, 'nothing on the settled card is marked');
+    assert.ok(!card(settled).hasAttribute('aria-disabled'));
+    for (const el of card(settled).querySelectorAll('*')) el.click();
+    assert.deepStrictEqual(answered(), [settled], 'a click on it sends nothing');
+    waitsFromNow(pending);
   });
 });
 
