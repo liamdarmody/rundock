@@ -503,6 +503,16 @@ describe('dispatch table', () => {
     refusedUnread(shapes(entries), connectorShapeRefused('args'));
   });
 
+  // The card shows args only beside a command string. Beside a URL alone they
+  // would be left off the card and still written on Allow, even an empty list.
+  test('a connector entry with args beside a URL and no command is refused before the file is read, naming args', () => {
+    refusedUnread(shapes([{ url: ALPHA_URL, args: ['--token-file', 'x'] }]), connectorShapeRefused('args'));
+  });
+
+  test('a connector entry with empty args beside a URL and no command is refused before the file is read, naming args', () => {
+    refusedUnread(shapes([{ url: ALPHA_URL, args: [] }]), connectorShapeRefused('args'));
+  });
+
   test('a connector entry with a URL and a command that is not a string is refused before the file is read, naming command', () => {
     const entries = [5, ['node'], null, {}].map((command) => ({ url: ALPHA_URL, command }));
     refusedUnread(shapes(entries), connectorShapeRefused('command'));
@@ -609,6 +619,10 @@ describe('dispatch table', () => {
 
   test('a connector entry whose args are all strings gets one card showing them, and is written as sent on Allow', () => {
     allowedAsShown('{"command":"node","args":["--port","8080"]}', { command: 'node', args: ['--port', '8080'] });
+  });
+
+  test('a connector entry with args beside a command and a URL gets one card showing all three, and is written as sent on Allow', () => {
+    allowedAsShown(`{"command":"node","url":"${ALPHA_URL}","args":["x"]}`, { command: 'node', args: ['x'], url: ALPHA_URL });
   });
 
   test('a connector at a URL with a string type and string headers gets one card, and is written as sent on Allow', () => {
