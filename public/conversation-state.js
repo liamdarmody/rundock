@@ -145,11 +145,11 @@
   function reduceInit(state, message, ctx) {
     if (!message._sessionId || !ctx.convoExists) return none(state);
     const agentId = message._agent || ctx.convoAgentId;
-    // Only the orchestrator's session becomes the primary sessionId (used
-    // for --resume on reload); delegate sessions join the chain without
-    // replacing it, unless no primary exists yet.
-    const isOrchestrator = agentId === ctx.convoAgentId;
-    const setPrimary = isOrchestrator || !ctx.hasPrimarySession;
+    // Only the conversation's own agent's session becomes the primary
+    // sessionId (used for --resume on reload). Another agent's session joins
+    // the chain and never the primary, even when there is none: taking it then
+    // had the conversation's agent resume a teammate's session.
+    const setPrimary = agentId === ctx.convoAgentId;
     const addToChain = !(ctx.knownSessionIds || []).includes(message._sessionId);
     return {
       state,
@@ -702,10 +702,20 @@
   // to the primary there resumed the orchestrator's session under the
   // specialist's name. That fallback is kept only for a record with no chain at
   // all, which predates the chain and keeps every session as its primary.
+  //
+  // A primary the chain lists only under other agents is theirs, not the
+  // conversation's agent's (a page that took any init as the primary after a
+  // forget saved records like that), so that agent starts fresh. Where the
+  // chain can't tell, the session unlisted or an entry naming no agent, the
+  // primary is resumed as before.
   function resumeSessionFor(convo, agentId) {
     if (!convo) return null;
-    if (agentId === convo.agentId) return convo.sessionId || null;
     const chain = Array.isArray(convo.sessionIds) ? convo.sessionIds : [];
+    if (agentId === convo.agentId) {
+      const listing = chain.filter(s => s && s.sessionId === convo.sessionId);
+      const theirs = listing.length > 0 && listing.every(s => s.agentId) && !listing.some(s => s.agentId === agentId);
+      return theirs ? null : (convo.sessionId || null);
+    }
     const own = chain.filter(s => s && s.agentId === agentId).pop();
     if (own && own.sessionId) return own.sessionId;
     return chain.length ? null : (convo.sessionId || null);
