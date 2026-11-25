@@ -518,4 +518,36 @@ describe('a text-only send', () => {
     assert.strictEqual(p.$('msg-input').value, '');
     assert.strictEqual(p.w.getConvoState('c1').isProcessing, true);
   });
+
+  // The inline message goes on a send, a send of text alone included.
+  const sixFiles = (p) => Array.from({ length: 6 }, (_, i) => p.file(`f${i}.txt`, bytesOf(3, i)));
+
+  test('takes away the inline message a refused pick left, and it stays gone', () => {
+    const p = page();
+    pick(p, ...sixFiles(p));
+    assert.ok(p.notice(), 'the refused pick says why');
+    assert.deepStrictEqual(p.chips(), []);
+    type(p, 'hello');
+    p.$('send-btn').click();
+    assert.strictEqual(p.chatFrames().length, 1);
+    assert.ok(!('attachments' in p.chatFrames()[0]));
+    assert.strictEqual(p.notice(), null);
+    p.open('c2');
+    p.open('c1');
+    assert.strictEqual(p.notice(), null, 'the conversation shown again has no inline message');
+  });
+
+  test('takes away only the sending conversation\'s inline message', () => {
+    const p = page();
+    p.open('c2');
+    pick(p, ...sixFiles(p));
+    const c2Notice = p.notice();
+    assert.ok(c2Notice, 'c2\'s refused pick says why');
+    p.open('c1');
+    type(p, 'hello');
+    p.$('send-btn').click();
+    assert.strictEqual(p.notice(), null);
+    p.open('c2');
+    assert.deepStrictEqual(p.notice(), c2Notice);
+  });
 });

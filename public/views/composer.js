@@ -229,10 +229,15 @@ function base64Of(file) {
 }
 
 // Takes the send when the conversation has chips, and answers false
-// otherwise so the text goes the usual way.
+// otherwise so the text goes the usual way. Either way the send takes the
+// conversation's inline message away.
 function sendWithFiles(convo, text) {
   const composer = composerFor(convo.id);
-  if (!composer.files.length) return false;
+  if (!composer.files.length) {
+    composer.notice = null;
+    renderComposerNotice(composer);
+    return false;
+  }
   const token = {};
   const files = composer.files.slice();
   composer.waiting = token;
