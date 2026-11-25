@@ -3572,6 +3572,11 @@ const MUTATIONS = [
     + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
     + '    return;\n'
     + '  }\n'
+    + '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
     + '  const found = connectorFile(ctx, ws);\n'
     + '  if (!found) return;\n',
     'function handleSaveConnector(ctx, ws, msg) {\n'
@@ -3584,6 +3589,11 @@ const MUTATIONS = [
     + '  }\n'
     + '  if (!validConnectorEntry(entry)) {\n'
     + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
     + '    return;\n'
     + '  }\n'
     + '  const found = connectorFile(ctx, ws);\n'
@@ -3603,10 +3613,20 @@ const MUTATIONS = [
     + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
     + '    return;\n'
     + '  }\n'
+    + '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
     + '  const found = connectorFile(ctx, ws);\n'
     + '  if (!found) return;\n'
     + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n",
-    '  const found = connectorFile(ctx, ws);\n'
+    '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws);\n'
     + '  if (!found) return;\n'
     + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n"
     + '    if (!validConnectorEntry(entry)) {\n'

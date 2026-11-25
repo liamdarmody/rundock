@@ -193,6 +193,11 @@ describe('an agent\'s connector change asks first', () => {
     await refusedBeforeAnyCard(HOLDS_ALPHA, { type: 'save_connector', name: 'example-alpha', content: '{}', conversationId: 'convo-connectors' }, ENTRY_REFUSED);
   });
 
+  test('saving a connector entry whose args hold null is refused before any card, naming args', async () => {
+    const message = 'The connector entry\'s "args" isn\'t in a form the approval card can show exactly, so nothing was changed.';
+    await refusedBeforeAnyCard(HOLDS_ALPHA, { type: 'save_connector', name: 'local-tools', content: '{"command":"node","args":[null]}', conversationId: 'convo-connectors' }, message);
+  });
+
   test('a refusal goes to the window that asked and no other, and the usual next save asks and writes once allowed', async () => {
     fs.writeFileSync(mcp(), JSON.stringify({ mcpServers: {} }));
     const other = await h.connect();

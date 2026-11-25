@@ -136,6 +136,7 @@ const approving = { requestServerPermission: ({ onDecision }) => onDecision(true
 const CONNECTOR_NAME_REFUSED = 'That connector name can\'t be used, so nothing was changed. A name uses letters, numbers, dots, dashes and underscores, and starts with a letter, number or underscore.';
 const CONNECTOR_ENTRY_REFUSED = 'A connector needs a command to run or a URL to reach, so nothing was changed.';
 const CONNECTOR_NOT_JSON = 'The connector entry is not valid JSON, so nothing was changed.';
+const connectorShapeRefused = (key) => `The connector entry's "${key}" isn't in a form the approval card can show exactly, so nothing was changed.`;
 
 describe('dispatch table', () => {
   test('a connector write refuses every way the file can be untrustworthy, and destroys nothing', () => {
@@ -464,6 +465,162 @@ describe('dispatch table', () => {
         assert.deepStrictEqual(card.asked[0].toolInput, { name: 'example-alpha', action: 'add', ...shown });
       });
     }
+  });
+
+  // AN ALLOW WRITES EXACTLY WHAT THE CARD SHOWED. The card shows a key it knows
+  // only when the value has a shape it can display (a string, a list of
+  // strings, a map of names to strings), while an Allow writes the entry as
+  // sent. So an entry holding one of those keys in any other shape is refused
+  // before the file is read, naming the key.
+  const ALPHA_URL = 'https://mcp.example.com/mcp';
+  const shapes = (entries) => entries.map((entry) => saving('example-alpha', JSON.stringify(entry)));
+
+  test('a connector entry whose args hold null is refused before the file is read, naming args', () => {
+    refusedUnread(shapes([{ command: 'node', args: [null] }]), connectorShapeRefused('args'));
+  });
+
+  test('a connector entry whose args hold null writes nothing and reports nothing saved, even where Allow comes at once', () => {
+    const { dir, file, ctx } = connectorWorkspace('proto-connector-null-arg-');
+    let asked = 0;
+    ctx.runtime = { requestServerPermission: ({ onDecision }) => { asked++; onDecision(true, 'user', { card: true }); } };
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, '{"mcpServers":{}}');
+      const w = captureWs();
+      saving('local-tools', '{"command":"node","args":[null]}')(buildDispatch(), ctx, w);
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: connectorShapeRefused('args') }], 'refused, and nothing says it was saved');
+      assert.strictEqual(asked, 0, 'because no card is raised');
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), '{"mcpServers":{}}', 'and the file is untouched');
+    });
+  });
+
+  test('a connector entry whose args hold a number, a list or an object is refused before the file is read, naming args', () => {
+    const entries = [[1], [['x']], ['--port', 8080], [true], [{}]].map((args) => ({ command: 'node', args }));
+    refusedUnread(shapes(entries), connectorShapeRefused('args'));
+  });
+
+  test('a connector entry whose args is not a list is refused before the file is read, naming args', () => {
+    const entries = ['x', {}, null, 5].map((args) => ({ command: 'node', args }));
+    refusedUnread(shapes(entries), connectorShapeRefused('args'));
+  });
+
+  test('a connector entry with a URL and a command that is not a string is refused before the file is read, naming command', () => {
+    const entries = [5, ['node'], null, {}].map((command) => ({ url: ALPHA_URL, command }));
+    refusedUnread(shapes(entries), connectorShapeRefused('command'));
+  });
+
+  test('a connector entry with a command and a URL that is not a string is refused before the file is read, naming url', () => {
+    const entries = [5, null, [ALPHA_URL], {}].map((url) => ({ command: 'node', url }));
+    refusedUnread(shapes(entries), connectorShapeRefused('url'));
+  });
+
+  test('a connector entry whose type is not a string is refused before the file is read, naming type', () => {
+    const entries = [5, null, ['http'], {}].map((type) => ({ url: ALPHA_URL, type }));
+    refusedUnread(shapes(entries), connectorShapeRefused('type'));
+  });
+
+  test('a connector entry whose headersHelper is not a string is refused before the file is read, naming headersHelper', () => {
+    const entries = [5, null, ['helper'], {}].map((headersHelper) => ({ url: ALPHA_URL, headersHelper }));
+    refusedUnread(shapes(entries), connectorShapeRefused('headersHelper'));
+  });
+
+  test('a connector entry whose env is not a map is refused before the file is read, naming env', () => {
+    const entries = [['API_KEY'], null, 'API_KEY=x', 5].map((env) => ({ command: 'node', env }));
+    refusedUnread(shapes(entries), connectorShapeRefused('env'));
+  });
+
+  test('a connector entry whose env holds a value that is not a string is refused before the file is read, naming env', () => {
+    const entries = [{ API_KEY: 5 }, { API_KEY: null }, { API_KEY: { value: 'x' } }, { API_KEY: 'x', PORT: 8080 }].map((env) => ({ command: 'node', env }));
+    refusedUnread(shapes(entries), connectorShapeRefused('env'));
+  });
+
+  test('a connector entry whose headers is not a map is refused before the file is read, naming headers', () => {
+    const entries = [['Authorization'], null, 'Authorization: x', 5].map((headers) => ({ url: ALPHA_URL, headers }));
+    refusedUnread(shapes(entries), connectorShapeRefused('headers'));
+  });
+
+  test('a connector entry whose headers hold a value that is not a string is refused before the file is read, naming headers', () => {
+    const entries = [{ Authorization: 5 }, { Authorization: null }, { Authorization: ['x'] }, { Authorization: 'x', 'X-Retry': 3 }].map((headers) => ({ url: ALPHA_URL, headers }));
+    refusedUnread(shapes(entries), connectorShapeRefused('headers'));
+  });
+
+  test('a connector entry with several keys the card cannot show is refused once, naming the first in a fixed order', () => {
+    const rest = { type: 5, headersHelper: 5, env: [], headers: [] };
+    for (const [entry, key] of [
+      [{ url: ALPHA_URL, command: 5, args: [1], ...rest }, 'command'],
+      [{ command: 'node', args: [1], url: 5, ...rest }, 'args'],
+      [{ headers: [], env: [], headersHelper: 5, type: 5, url: 5, args: [1], command: 'node' }, 'args'],
+      [{ command: 'node', url: 5, ...rest }, 'url'],
+      [{ command: 'node', ...rest }, 'type'],
+      [{ command: 'node', headersHelper: 5, env: [], headers: [] }, 'headersHelper'],
+      [{ command: 'node', env: [], headers: [] }, 'env'],
+    ]) {
+      refusedUnread(shapes([entry]), connectorShapeRefused(key));
+    }
+  });
+
+  test('a connector entry the entry rule refuses keeps that rule\'s message, whatever else it holds', () => {
+    refusedUnread(shapes([{ command: 5, args: [null] }, { url: null, headers: [] }, { args: [null], env: [] }]), CONNECTOR_ENTRY_REFUSED);
+  });
+
+  test('a connector change with a bad name and an entry the card cannot show fails closed: refused once, for the name', () => {
+    refusedUnread([saving('-tools', '{"command":"node","args":[null]}')], CONNECTOR_NAME_REFUSED);
+  });
+
+  test('a connector entry the card cannot show, sent twice, is refused twice the same way and asks nobody', () => {
+    const [first, second] = refusedUnread(shapes([{ command: 'node', args: [null] }, { command: 'node', args: [null] }]), connectorShapeRefused('args'));
+    assert.deepStrictEqual(second, first, 'the second refusal is the first one again');
+  });
+
+  test('after a connector entry the card cannot show is refused, the corrected entry gets the card and is written on Allow', () => {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-shape-retry-');
+    const opened = countingOpens(ctx);
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, BROKEN);
+      const table = buildDispatch();
+      let w = captureWs();
+      table.save_connector(ctx, w, { name: 'example-alpha', content: '{"command":"node","args":[null]}' });
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: connectorShapeRefused('args') }]);
+      assert.strictEqual(card.asked.length, 0, 'the refusal asked nobody');
+      assert.deepStrictEqual(opened, [], 'or opened the file');
+      fs.writeFileSync(file, '{"mcpServers":{}}');
+      table.save_connector(ctx, (w = captureWs()), { name: 'example-alpha', content: '{"command":"node","args":["null"]}' });
+      assert.strictEqual(card.asked.length, 1, 'the corrected entry gets its card');
+      assert.deepStrictEqual(card.asked[0].toolInput, { name: 'example-alpha', action: 'add', command: 'node', args: ['null'] });
+      card.answer(0, true);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, { 'example-alpha': { command: 'node', args: ['null'] } }, 'and is written once allowed');
+    });
+  });
+
+  // An entry in shapes the card can show still gets its card, showing them,
+  // and is written as sent on Allow.
+  function allowedAsShown(content, shown) {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-shown-');
+    inWorkspace(dir, () => {
+      const w = captureWs();
+      buildDispatch().save_connector(ctx, w, { name: 'example-alpha', content, conversationId: 'convo-shown' });
+      assert.strictEqual(card.asked.length, 1, 'one card');
+      assert.deepStrictEqual(card.asked[0].toolInput, { name: 'example-alpha', action: 'add', ...shown });
+      assert.ok(!fs.existsSync(file), 'nothing is written while the card waits');
+      card.answer(0, true);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers['example-alpha'], JSON.parse(content), 'written as sent once allowed');
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_saved', name: 'example-alpha', action: 'saved', takesEffect: 'next agent start' }]);
+    });
+  }
+
+  test('a connector entry whose args are all strings gets one card showing them, and is written as sent on Allow', () => {
+    allowedAsShown('{"command":"node","args":["--port","8080"]}', { command: 'node', args: ['--port', '8080'] });
+  });
+
+  test('a connector at a URL with a string type and string headers gets one card, and is written as sent on Allow', () => {
+    allowedAsShown(`{"url":"${ALPHA_URL}","type":"http","headers":{"Authorization":"Bearer x"}}`, { url: ALPHA_URL, transport: 'http', headers: ['Authorization'] });
+  });
+
+  test('a connector entry whose env values are all strings gets one card naming them, and is written as sent on Allow', () => {
+    allowedAsShown('{"command":"node","env":{"API_KEY":"x"}}', { command: 'node', args: [], env: ['API_KEY'] });
+  });
+
+  test('a connector entry with a key the card does not know still gets its card listing that key, and is written as sent on Allow', () => {
+    allowedAsShown('{"command":"node","timeout":[1,2]}', { command: 'node', args: [], others: ['timeout'] });
   });
 
   test('the same refused connector save sent twice is refused twice, the same way, and asks nobody', () => {
