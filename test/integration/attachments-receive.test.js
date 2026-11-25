@@ -67,6 +67,8 @@ function pdf(size = 40) {
 const attachmentsDir = () => path.join(h.workspaceDir, '.rundock', 'attachments');
 const folderOf = (id) => path.join(attachmentsDir(), id);
 const listing = (dir) => { try { return fs.readdirSync(dir).sort(); } catch (e) { return null; } };
+// Each file in `dir` by name, with its bytes; null when there is no folder.
+const bytesIn = (dir) => { const names = listing(dir); return names && Object.fromEntries(names.map((n) => [n, fs.readFileSync(path.join(dir, n))])); };
 const rows = (id) => h.internal.convoTranscripts.get(id) || h.internal.loadTranscript(id) || [];
 const userRows = (id) => rows(id).filter((r) => r.role === 'user');
 const entriesOf = (id) => { try { return store.readRecord(h.workspaceDir, id).messages; } catch (e) { return null; } };
@@ -121,6 +123,7 @@ async function refusedWith(msg, { code, title, text }) {
   const id = msg.conversationId;
   const was = { spawns: h.readInvocations().length, prompts: h.readPrompts().length, rows: rows(id || 'default').length };
   const folder = listing(folderOf(id || 'default'));
+  const bytes = bytesIn(folderOf(id || 'default'));
   const record = id ? entriesOf(id) : null;
   const since = client.messages.length;
   client.send(msg);
@@ -136,6 +139,7 @@ async function refusedWith(msg, { code, title, text }) {
   assert.strictEqual(h.readInvocations().length, was.spawns, 'no process spawned');
   assert.strictEqual(h.readPrompts().length, was.prompts, 'nothing written to a stdin');
   assert.deepStrictEqual(listing(folderOf(id || 'default')), folder, 'the attachments folder as it was');
+  assert.deepStrictEqual(bytesIn(folderOf(id || 'default')), bytes, 'every file already there holds the bytes it held');
   if (id) assert.deepStrictEqual(entriesOf(id), record, 'no record entry');
   return got;
 }
@@ -256,6 +260,39 @@ describe('a refused message writes, records, appends and dispatches nothing', ()
       if (was) fs.writeFileSync(list, was); else fs.rmSync(list, { force: true });
     }
   });
+
+  const refusals = [
+    ['a forged reference', { attachmentEntry: 'no-such-entry' }, 'bad-entry'],
+    ['files whose data is not base64', { attachments: [{ name: 'notes.txt', data: '!!!!' }] }, 'bad-payload'],
+  ];
+  for (const [label, extra, code] of refusals) {
+    test(`${label}, to a conversation holding a stored file: its bytes, hash, record and folder as they were`, async () => {
+      const id = h.freshConvoId('keep');
+      answers('ASK-KEEP');
+      const sent = file('Screen Shot.png', png());
+      const since = client.messages.length;
+      chat(id, 'ASK-KEEP see this', [sent]);
+      const stored = await storedFor(id, since);
+      assert.ok(stored, 'the conversation holds a stored file');
+      assert.ok(await resultFor(id, 'DONE-ASK-KEEP', since), 'and its message is answered');
+      const [described] = stored.entry.files;
+      const at = path.join(folderOf(id), described.file);
+      const before = fs.readFileSync(at);
+      assert.ok(before.equals(decoded(sent)), 'the stored file holds the bytes sent');
+      const record = entriesOf(id);
+      const folder = listing(folderOf(id));
+      await refusedWith({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content: 'ASK-KEEP again', ...extra },
+        { code, title: 'Message not sent', text: FALLBACK });
+      const after = fs.readFileSync(at);
+      assert.ok(after.equals(before), 'the stored file holds the bytes it held');
+      assert.strictEqual(sha256(after), sha256(before), 'and the same hash');
+      assert.strictEqual(sha256(after), described.sha256, 'which is the hash its record gives');
+      assert.deepStrictEqual(entriesOf(id), record, 'the record as it was');
+      assert.deepStrictEqual(listing(folderOf(id)), folder, 'the folder listing as it was');
+      assert.strictEqual(store.checkRecordedFile(h.workspaceDir, id, described.file), 'present');
+      h.reapConvo(id);
+    });
+  }
 });
 
 describe('a stored message carries the stored text into every copy a reload reads', () => {
