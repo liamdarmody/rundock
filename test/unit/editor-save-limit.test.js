@@ -13,7 +13,15 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
-const { MAX_PAYLOAD } = require('../../lib/attachments/receive.js');
+// The server's limit, loaded so that a tree without it fails on the
+// assertion in page(), never on the require.
+const receive = (() => {
+  try { return require('../../lib/attachments/receive.js'); } catch (e) {
+    if (e && e.code === 'MODULE_NOT_FOUND' && /attachments[\\/]receive/.test(String(e.message))) return null;
+    throw e;
+  }
+})();
+const MAX_PAYLOAD = receive ? receive.MAX_PAYLOAD : undefined;
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
@@ -44,6 +52,7 @@ const SAID = 'Not saved: this file is too large to save from the editor (the lim
 // A window holding the cut pieces, the open file loaded as `old` and the
 // source's baseline `old a`, with the frames the page sent kept as sent.
 function page() {
+  assert.strictEqual(typeof MAX_PAYLOAD, 'number', 'the server declares the largest frame it reads');
   const dom = new JSDOM('<!doctype html><html><body><div id="editor-header"></div><div id="editor-status"></div></body></html>', { runScripts: 'dangerously' });
   const w = dom.window;
   w.eval(read('public', 'external-refresh-model.js'));

@@ -6,7 +6,15 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { MAX_PAYLOAD } = require('../../lib/attachments/receive.js');
+// Loaded so that a tree without the server's limit fails on an assertion,
+// never on the require.
+const receive = (() => {
+  try { return require('../../lib/attachments/receive.js'); } catch (e) {
+    if (e && e.code === 'MODULE_NOT_FOUND' && /attachments[\\/]receive/.test(String(e.message))) return null;
+    throw e;
+  }
+})();
+const MAX_PAYLOAD = receive ? receive.MAX_PAYLOAD : undefined;
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -18,6 +26,7 @@ const PAGE_LIMITS = [
 
 // The value a constant is declared with, read from the shipped source.
 function declared(file, name) {
+  assert.ok(fs.existsSync(path.join(ROOT, file)), `the page no longer carries ${file}`);
   const src = fs.readFileSync(path.join(ROOT, file), 'utf-8');
   const opening = `const ${name} = `;
   const start = src.indexOf(opening);
@@ -31,5 +40,6 @@ test('the server reads frames up to 28,000,000 bytes', () => {
 });
 
 test('every page limit on a frame equals the server\'s', () => {
+  assert.strictEqual(typeof MAX_PAYLOAD, 'number', 'the server declares the largest frame it reads');
   for (const [file, name] of PAGE_LIMITS) assert.strictEqual(declared(file, name), MAX_PAYLOAD, `${name} in ${file}`);
 });

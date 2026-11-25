@@ -62,7 +62,10 @@ before(() => {
   convos = load('views', 'conversations.js');
   // The views reach each other, and the sidebar, through the global scope.
   Object.assign(global, chat, convos);
-  Object.assign(global, require(path.join(ROOT, 'public', 'views', 'composer.js')));
+  // Guarded: a tree without the composer has a setupChat that never calls it.
+  try { Object.assign(global, require(path.join(ROOT, 'public', 'views', 'composer.js'))); } catch (e) {
+    if (!(e && e.code === 'MODULE_NOT_FOUND' && /composer\.js/.test(String(e.message)))) throw e;
+  }
 });
 after(() => { if (dom) dom.window.close(); });
 

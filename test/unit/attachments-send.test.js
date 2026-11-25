@@ -13,7 +13,18 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
-const { refusalWording } = require('../../public/attachment-wording.js');
+// Loaded so that a tree without the wording fails on an assertion, never on
+// the require.
+const wording = (() => {
+  try { return require('../../public/attachment-wording.js'); } catch (e) {
+    if (e && e.code === 'MODULE_NOT_FOUND' && /attachment-wording/.test(String(e.message))) return null;
+    throw e;
+  }
+})();
+function refusalWording(...args) {
+  assert.strictEqual(typeof (wording && wording.refusalWording), 'function', 'the wording exports refusalWording');
+  return wording.refusalWording(...args);
+}
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
@@ -45,6 +56,11 @@ afterEach(() => { while (opened.length) opened.pop().w.close(); });
 
 // A window holding the conversation view, with conversation `c1` on screen.
 function page({ listeners = true } = {}) {
+  // The new files are checked before they are read, so a tree without them
+  // fails here on an assertion.
+  for (const file of ['attachment-wording.js', 'views/composer.js']) {
+    assert.ok(fs.existsSync(path.join(ROOT, 'public', file)), `the page no longer carries public/${file}`);
+  }
   const markup = between(INDEX, '<div class="chat-input">', '\n      </div>', 'the composer markup');
   const dom = new JSDOM(`<!doctype html><html><body><div id="convo-list"></div>
     <input id="chat-title-input"><span id="chat-agent-label"></span><span id="chat-agent-avatar"></span>
@@ -63,6 +79,10 @@ function page({ listeners = true } = {}) {
     ${between(APP, 'function esc(t){', '\nfunction stripRundockMarkers', 'the escaping helpers')}`);
   for (const lib of ['markers.js', 'chat-markup.js', 'conversation-state.js', 'conversation-list.js', 'attachment-wording.js']) w.eval(read('public', lib));
   for (const view of ['chat.js', 'conversations.js', 'composer.js']) w.eval(read('public', 'views', view));
+  for (const fn of ['showComposerFor', 'pickFiles', 'sendWithFiles', 'fileSendAnswered', 'attachmentsConnectionLost']) {
+    assert.strictEqual(typeof w[fn], 'function', `the composer has ${fn}`);
+  }
+  assert.ok(w.document.getElementById('attach-input'), 'the composer markup has the file picker');
   // Permission cards are not part of this page.
   w.renderPendingPermissionCards = () => {};
   if (listeners) w.eval(between(APP, "const msgInput = document.getElementById('msg-input');", '\n// Enter submits', 'the message field\'s listeners'));
@@ -391,10 +411,12 @@ describe('when the message is stored', () => {
 });
 
 describe('when the message is refused', () => {
-  const refusal = { type: 'chat_refused', conversationId: 'c1', code: 'disk-full', ...refusalWording({ code: 'disk-full' }, 2) };
+  // Built in each test, after page() has checked the wording is there.
+  const refused = () => ({ type: 'chat_refused', conversationId: 'c1', code: 'disk-full', ...refusalWording({ code: 'disk-full' }, 2) });
 
   test('a disk-full refusal shows the server\'s title and text, brings Send back, and keeps the text and files', async () => {
     const p = page();
+    const refusal = refused();
     await sendTwo(p);
     p.answer(refusal);
     assert.deepStrictEqual(p.notice(), { title: refusal.title, text: refusal.text });
@@ -408,6 +430,7 @@ describe('when the message is refused', () => {
 
   test('sending again after a refusal is one press of Send', async () => {
     const p = page();
+    const refusal = refused();
     const first = await sendTwo(p);
     p.answer(refusal);
     p.$('send-btn').click();
