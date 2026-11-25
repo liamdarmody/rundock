@@ -486,7 +486,9 @@ describe('a card waits again whenever it moves on screen, whatever moved it', ()
   // scrolls by itself. So each test says where a card sits, before and after
   // it moves, and fires the scroll or the resize itself. A MutationObserver
   // calls back in a microtask, which the mocked clock does not run, so a test
-  // lets one pass after a write and before it clicks.
+  // lets one pass after a write and before it clicks. A test that checks a
+  // write with no scroll lets the callbacks already queued (the card's own
+  // drawing, its wait ending) pass first, so only that write can move it.
   const tops = new Map();
   let layout;
   beforeEach(() => {
@@ -574,6 +576,7 @@ describe('a card waits again whenever it moves on screen, whatever moved it', ()
       sitAt(id, 200);
       chat.handlePermissionRequest(request(id), 'c-open');
       mock.timers.tick(500);
+      await writesSeen();
       write(above);
       sitAt(id, movedTo);
       await writesSeen();
@@ -627,6 +630,7 @@ describe('a card waits again whenever it moves on screen, whatever moved it', ()
     sitAt(lower, 400);
     chat.handlePermissionRequest(request(lower, { _agent: 'ash' }, 'python3 tools/report.py'), 'c-open');
     mock.timers.tick(500);
+    await writesSeen();
     between.innerHTML = 'A longer reply<br>that pushes what is under it down';
     sitAt(lower, 470);
     await writesSeen();
@@ -689,6 +693,7 @@ describe('a card waits again whenever it moves on screen, whatever moved it', ()
     assert.deepStrictEqual(answered(), [settled]);
     assert.ok(!card(settled).querySelector('.btn-perm'), 'it has settled');
     mock.timers.tick(500);
+    await writesSeen();
     above.innerHTML = 'A reply above both cards<br>that grows';
     sitAt(settled, 260);
     sitAt(pending, 480);
