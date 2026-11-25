@@ -274,6 +274,46 @@ describe('ARCHITECTURE.md: the oldest Claude Code Rundock starts', () => {
   });
 });
 
+describe('ARCHITECTURE.md: the connector secrets file is kept out of git but copied by a synced folder', () => {
+  // Contributors read that .rundock/ is not shared, which holds for git only:
+  // setup adds it to .gitignore, but a synced folder copies the workspace
+  // whole. Both places that made the claim now say which sharing they mean.
+  test('the MCP credentials section says git leaves .rundock/ out and a synced folder copies both files', () => {
+    assert.ok(architecture.includes('`.mcp.json` is shared through git and `.rundock/` is not, because setup adds `.rundock/` to the workspace\'s `.gitignore`: that difference is the whole of this.'
+      + ' A synced folder such as OneDrive, iCloud or Dropbox copies both, so a key in either goes wherever the workspace goes.'),
+    'the section says git leaves .rundock/ out because setup ignores it, and a synced folder copies both files');
+    assert.ok(!architecture.includes('`.mcp.json` is shared and `.rundock/` is not'),
+      'the claim that .rundock/ is not shared, with no kind of sharing named, is gone');
+  });
+
+  test('the file layout row says git leaves the secrets file out but a synced folder copies it', () => {
+    assert.ok(architecture.includes('so credentials belong in `.rundock/mcp-secrets.json` instead, which git leaves out but a synced folder copies: see MCP credentials, above.'),
+      'the .mcp.json row says which sharing leaves the secrets file out and which copies it');
+    assert.ok(!architecture.includes('`.rundock/mcp-secrets.json` instead: see MCP credentials'),
+      'the row no longer reads as though the secrets file is not shared at all');
+  });
+});
+
+describe('the changelog names the change to where agents say a connector key goes', () => {
+  // Located by the entries it follows, not by the section's name: the release
+  // script renames "## Unreleased" to a version, and other entries may land
+  // between, so it is checked for coming after both rather than straight after.
+  const KEY_GOES = '- **Agents tell you where a connector key goes:** before, agents said `.rundock/mcp-secrets.json`, the file connector keys go in, does not travel with the workspace.'
+    + ' Now they say it is kept out of git because setup adds `.rundock/` to `.gitignore`, but a synced folder such as OneDrive, iCloud or Dropbox copies it to every device the folder syncs to, so a key put there goes wherever the workspace goes.';
+  test('one entry, worded exactly, under Fixed and after the permission-answers and setup-screen entries', () => {
+    const lines = changelog.split(/\r?\n/);
+    const at = lines.indexOf(KEY_GOES);
+    assert.ok(at >= 0, 'the changelog has the entry, worded exactly');
+    assert.strictEqual(lines.lastIndexOf(KEY_GOES), at, 'and has it once');
+    for (const before of ['- **Agents can no longer change your permission answers or workspace settings:**', '- **The setup screen no longer freezes while it checks for Claude Code:**']) {
+      const earlier = lines.findIndex((l) => l.startsWith(before));
+      assert.ok(earlier >= 0 && earlier < at, `it comes after the entry starting ${before}`);
+    }
+    const heading = lines.slice(0, at).reverse().find((l) => l.startsWith('### ') || l.startsWith('## '));
+    assert.strictEqual(heading, '### Fixed', 'under the Fixed heading');
+  });
+});
+
 describe('SKILLS.md: only slugs are injected into the prompt', () => {
   // The claim: "Rundock injects a bare list of slugs into the agent's prompt
   // (`Skills: alpha, beta`) and nothing else: no description, no summary."
@@ -1062,6 +1102,28 @@ describe('ROUTINES.md: where a routine actually runs', () => {
     const gitignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf-8');
     assert.match(gitignore, /^\.rundock\/$/m,
       'the scaffold must ignore the state folder, which is what makes the git aside true');
+  });
+
+  // THE GIT HALF OF WHAT EVERY AGENT SAYS. Agents tell the person the
+  // connector secrets file is kept out of git because setup adds .rundock/ to
+  // .gitignore. Checked against setup itself, on a workspace that had no
+  // .gitignore, and against the prompt the default agent gets there.
+  test('setup keeps the connector secrets file out of git, as every agent is told it does', () => {
+    // The default agent is made from CLAUDE.md, so the workspace has one. It
+    // has no .gitignore until setup writes it.
+    const dir = makeWorkspace({ claudeMd: '# Alpha\n' });
+    const gitignorePath = path.join(dir, '.gitignore');
+    assert.strictEqual(fs.existsSync(gitignorePath), false, 'sanity: the workspace starts with no .gitignore');
+    scaffoldWorkspace(dir);
+    assert.ok(fs.existsSync(gitignorePath), 'setup writes a .gitignore');
+    const gitignore = fs.readFileSync(gitignorePath, 'utf-8');
+    assert.ok(gitignore.split(/\r?\n/).includes('.rundock/'), 'setup writes a .gitignore line that is exactly .rundock/');
+    srv.setWorkspace(dir);
+    srv.invalidateAgentCache();
+    const agent = srv.discoverAgents().find(a => a.id === 'default');
+    assert.ok(agent, 'the default agent is on the roster');
+    assert.ok(srv.buildSystemPrompt(agent).includes('It is kept out of git because setup adds .rundock/ to .gitignore'),
+      'the default agent is told the secrets file is kept out of git, by the step that just ran');
   });
 
   // ONE SCHEDULER, ONE WORKSPACE. The tick re-discovers agents each pass, and
