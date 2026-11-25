@@ -289,10 +289,12 @@ function createSetupCheck({
     }
   }
 
+  // `found` changes only as a check ends, so Sign in during a check has the
+  // last one's copy and version: kept when this one started its copy, and
+  // cleared when it found none or could not start it.
   async function run(withSignIn) {
-    found = { bin: null, version: null };
     const bin = await lookup();
-    if (!bin) return { status: 'not-installed' };
+    if (!bin) { found = { bin: null, version: null }; return { status: 'not-installed' }; }
     // Before the first start, which on Windows can be slow.
     if (platform === 'win32') {
       const start = deps.now();
@@ -300,18 +302,20 @@ function createSetupCheck({
     }
     const start = deps.now();
     const plan = deps.launchPlan(bin, CLAUDE_CODE, { platform, execPath: deps.execPath() });
-    if (!plan || plan.refusal) { log('version', 'refused', start); return { status: 'found-not-started' }; }
+    if (!plan || plan.refusal) { log('version', 'refused', start); found = { bin: null, version: null }; return { status: 'found-not-started' }; }
     let version;
     try {
       const { stdout } = await runChild(plan.program, [...plan.args, '--version'], startEnv(plan), deps.timeouts.version);
       version = stdout.toString('utf8');
     } catch (err) {
+      found = { bin: null, version: null };
       log('version', startOutcome(err), start);
       return { status: 'found-not-started' };
     }
     log('version', 'started', start);
+    const result = withSignIn ? await signIn(plan) : { status: 'started' };
     found = { bin, version };
-    return withSignIn ? signIn(plan) : { status: 'started' };
+    return result;
   }
 
   return {

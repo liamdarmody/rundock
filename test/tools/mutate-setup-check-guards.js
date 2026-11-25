@@ -101,6 +101,12 @@ const MUTATIONS = [
   [CHECK, 'no path reaches the setup log',
     "      log('lookup', bin ? 'found' : 'none', start);",
     "      log('lookup', bin || 'none', start);"],
+  // ===== SIGN IN HAS THE LAST CHECK THAT ENDED =====
+  // Clear the copy as a check starts and Sign in during a Check again is not
+  // found, for a copy the last check started.
+  [CHECK, 'the copy found is kept until the next check ends',
+    '    const bin = await lookup();\n',
+    '    found = { bin: null, version: null };\n    const bin = await lookup();\n'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

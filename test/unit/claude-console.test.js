@@ -381,7 +381,7 @@ describe('what each console runs, as opened', () => {
     assert.ok(found, `electron/${file} no longer carries ${what}`);
     return found;
   };
-  const { answerChildren, claudeAt, VERSION } = require('../helpers/setup-check-children.js');
+  const { loadSetupCheck, answerChildren, claudeAt, VERSION } = require('../helpers/setup-check-children.js');
   function setupScreen(t, { platform, env, home, claude: answers = {} }) {
     const asked = [];
     const answered = [];
@@ -447,9 +447,32 @@ describe('what each console runs, as opened', () => {
       },
     });
     return {
-      w: dom.window, doc: dom.window.document, state, claude, asked, answered, ran, f,
+      w: dom.window, doc: dom.window.document, state, claude, asked, answered, ran, f, gate,
       settle: () => new Promise((resolve) => setTimeout(resolve, 20)),
     };
+  }
+  // Holds each child the setup check starts that `pick` picks until the test
+  // calls its release(reply), with reply as answerChildren's. Every start is
+  // still recorded in `ran`, and answerChildren puts the check's own spawn
+  // back when the test ends, this wrapper with it.
+  function holdChildren(pick) {
+    const mod = loadSetupCheck();
+    const inner = mod.deps.spawn;
+    const held = [];
+    mod.deps.spawn = (program, args, options) => {
+      const child = inner(program, args, options);
+      if (!pick(program, args)) return child;
+      const stand = new EventEmitter();
+      stand.stdout = new EventEmitter();
+      stand.stderr = new EventEmitter();
+      stand.kill = () => true;
+      held.push({ release: (reply = {}) => {
+        if (reply.stdout) stand.stdout.emit('data', Buffer.from(reply.stdout));
+        stand.emit('close', reply.status || 0, null);
+      } });
+      return stand;
+    };
+    return held;
   }
   const CHECKED = ['which claude', `${BIN} --version`, `${BIN} --print test --output-format text`];
   test('the setup screen\'s Sign in to Claude goes through preload, the desktop\'s channel and launchClaudeSignIn to the wizard\'s console, with no purpose and the copy and version the last setup check found, and runs claude auth login; once signed in, the next automatic check moves the wizard on', async (t) => {
@@ -496,6 +519,61 @@ describe('what each console runs, as opened', () => {
       s.w.close();
     }
   });
+  // A Check again holds its recheck where `held` says, and Sign in is clicked
+  // there: it opens the copy and version the last completed check found, and
+  // starts nothing. Once the recheck ends, Sign in has what that one found.
+  const NEW_BIN = '/opt/example/bin/claude';
+  const NEW_VERSION = '2.2.0 (Claude Code)\n';
+  const isWhich = (program) => program === 'which';
+  const isVersionRun = (program, args) => args.includes('--version');
+  async function signInDuringRecheck(t, held, outcome) {
+    const s = setupScreen(t, { platform: 'linux', env: terminalOnPath() });
+    await s.settle();
+    assert.deepStrictEqual(s.ran, CHECKED, 'sanity: the load\'s check found Claude Code and started it');
+    const hold = holdChildren((program, args) => isWhich(program) || isVersionRun(program, args));
+    const recheck = s.w.electronAPI.checkRuntimes();
+    await s.settle();
+    if (held === 'version run') {
+      hold[0].release({ stdout: `${NEW_BIN}\n` });
+      await s.settle();
+    }
+    assert.strictEqual(hold.length, held === 'version run' ? 2 : 1, `sanity: the recheck is held in its ${held}`);
+    const ran = [...s.ran];
+    assert.deepStrictEqual(await s.w.electronAPI.signInClaude(), { ok: true }, `Sign in during the held ${held} opens`);
+    assert.strictEqual(s.asked[0].findBin(), BIN, `held in its ${held}: the copy the last completed check found`);
+    assert.strictEqual(s.asked[0].findVersion(), VERSION, `held in its ${held}: and the version it read`);
+    assert.deepStrictEqual({ command: s.f.calls[0].command, args: s.f.calls[0].args },
+      { command: 'x-terminal-emulator', args: ['-e', BIN, 'auth', 'login'] });
+    assert.deepStrictEqual(s.ran, ran, `held in its ${held}: signing in starts no lookup and no version run`);
+    if (held === 'lookup') {
+      hold[0].release(outcome === 'a new copy' ? { stdout: `${NEW_BIN}\n` } : { status: 1 });
+      await s.settle();
+    }
+    if (outcome === 'a new copy') hold[1].release({ stdout: NEW_VERSION });
+    else if (held === 'version run') hold[1].release({ status: 1 });
+    await recheck;
+    s.gate.openedAt = null;
+    const after = [...s.ran];
+    const answer = await s.w.electronAPI.signInClaude();
+    assert.deepStrictEqual(s.ran, after, 'after the recheck, signing in starts no lookup and no version run');
+    s.w.close();
+    return { s, answer };
+  }
+  for (const held of ['lookup', 'version run']) {
+    test(`Sign in during a Check again held in its ${held} opens the copy and version the last completed check found and starts nothing; once the recheck finds another copy and starts it, Sign in opens that one`, async (t) => {
+      const { s, answer } = await signInDuringRecheck(t, held, 'a new copy');
+      assert.deepStrictEqual(answer, { ok: true });
+      assert.strictEqual(s.asked[1].findBin(), NEW_BIN, 'the recheck\'s copy');
+      assert.strictEqual(s.asked[1].findVersion(), NEW_VERSION, 'and the version it read');
+      assert.deepStrictEqual({ command: s.f.calls[1].command, args: s.f.calls[1].args },
+        { command: 'x-terminal-emulator', args: ['-e', NEW_BIN, 'auth', 'login'] });
+    });
+    test(`Sign in during a Check again held in its ${held} opens the copy and version the last completed check found and starts nothing; once the recheck ends with no copy started, Sign in is not found`, async (t) => {
+      const { s, answer } = await signInDuringRecheck(t, held, 'nothing');
+      assert.deepStrictEqual(answer, { ok: false, reason: 'not-found' });
+      assert.strictEqual(s.f.calls.length, 1, 'nothing more opens');
+    });
+  }
   test('the wizard\'s script that cannot be written, its folder a link or another account\'s, is a failure and nothing opens', { skip: POSIX_ONLY }, async (t) => {
     const f = fakeSpawn('spawn');
     const home = madeUpHome();

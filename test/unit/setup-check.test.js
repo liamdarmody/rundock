@@ -272,6 +272,69 @@ describe('found but not started is never not installed', () => {
   });
 });
 
+// Sign in reads found() at any moment, with a check running or not, so it is
+// the copy and version of the last check that completed, both from that one
+// check, and it changes only when the next check completes.
+describe('found() keeps the last completed check while the next one runs', () => {
+  const OTHER_BIN = '/opt/example/bin/claude';
+  const OTHER_VERSION = '2.2.0 (Claude Code)\n';
+  const FIRST = { bin: MAC_BIN, version: '2.1.0 (Claude Code)\n' };
+  const NONE = { bin: null, version: null };
+
+  // A first check finds MAC_BIN and starts it. The recheck finds OTHER_BIN and
+  // is held at the first child `at` picks, until released with `reply`.
+  async function recheck(t, { at, reply, signIn = false }) {
+    let first = true;
+    const f = fakes(t, (c) => {
+      if (first) return installed()(c);
+      if (at(c)) return { hold: true };
+      if (isLookup(c)) return { stdout: `${OTHER_BIN}\n` };
+      return isVersion(c) ? { stdout: OTHER_VERSION } : {};
+    });
+    const check = checker(f.mod);
+    assert.deepStrictEqual(check.found(), NONE, 'nothing before any check has completed');
+    await check.check({ signIn });
+    assert.deepStrictEqual(check.found(), FIRST, 'sanity: the first check found and started its copy');
+    first = false;
+    const starts = f.calls.length;
+    const result = check.check({ signIn });
+    await until('the recheck to reach its held child', () => f.calls.slice(starts).some(at));
+    assert.deepStrictEqual(check.found(), FIRST, 'while the recheck runs, found() is the last completed check, bin and version');
+    f.calls.slice(starts).find(at).release(reply);
+    return { result: await result, found: check.found() };
+  }
+
+  test('a recheck held in its lookup that then finds another copy and starts it replaces both bin and version', async (t) => {
+    const { result, found } = await recheck(t, { at: isLookup, reply: { stdout: `${OTHER_BIN}\n` } });
+    assert.deepStrictEqual(result, { status: 'started' });
+    assert.deepStrictEqual(found, { bin: OTHER_BIN, version: OTHER_VERSION });
+  });
+
+  test('a recheck held in its lookup that then finds nothing leaves found() empty', async (t) => {
+    const { result, found } = await recheck(t, { at: isLookup, reply: { status: 1 } });
+    assert.deepStrictEqual(result, { status: 'not-installed' });
+    assert.deepStrictEqual(found, NONE);
+  });
+
+  test('a recheck held in its version run that then starts replaces both bin and version', async (t) => {
+    const { result, found } = await recheck(t, { at: isVersion, reply: { stdout: OTHER_VERSION } });
+    assert.deepStrictEqual(result, { status: 'started' });
+    assert.deepStrictEqual(found, { bin: OTHER_BIN, version: OTHER_VERSION });
+  });
+
+  test('a recheck held in its version run that then does not start leaves found() empty', async (t) => {
+    const { result, found } = await recheck(t, { at: isVersion, reply: { status: 1 } });
+    assert.deepStrictEqual(result, { status: 'found-not-started' });
+    assert.deepStrictEqual(found, NONE);
+  });
+
+  test('a recheck held in its sign-in check changes found() only once it completes', async (t) => {
+    const { result, found } = await recheck(t, { at: isSignIn, reply: { status: 1 }, signIn: true });
+    assert.strictEqual(result.status, 'not-authenticated');
+    assert.deepStrictEqual(found, { bin: OTHER_BIN, version: OTHER_VERSION });
+  });
+});
+
 describe('not installed, as before', () => {
   const lookupFails = [
     ['exits non-zero', null, { status: 1 }],
