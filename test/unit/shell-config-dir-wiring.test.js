@@ -13,10 +13,14 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..', '..');
 const main = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
+const setupCheck = fs.readFileSync(path.join(root, 'electron', 'setup-check.js'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 
 const count = (src, text) => src.split(text).length - 1;
-const CHECK = 'shellConfigDir.checkAuthenticated(isClaudeAuthenticated)';
+// Every Claude Code check main.js runs goes through the one setup check it
+// makes (electron/setup-check.js), whose sign-in check runs inside this.
+const CHECK = 'setupCheck.check(';
+const ROUTED = 'shellConfigDir.checkAuthenticated(async () => {';
 
 describe('the desktop app', () => {
   test('makes one reader per launch, told whether this is the packaged app, the platform and its own environment', () => {
@@ -31,22 +35,27 @@ describe('the desktop app', () => {
     const atLaunch = main.indexOf('await shellConfigDir.atLaunch();', ready);
     assert.ok(atLaunch > ready, 'reads at start-up');
     assert.strictEqual(count(main, 'shellConfigDir.atLaunch()'), 1);
-    for (const later of ['findClaude()', CHECK, 'startServer(']) {
+    for (const later of [CHECK, 'startServer(']) {
       const at = main.indexOf(later, ready);
       assert.ok(at > atLaunch, `${later} comes after the read at start-up`);
     }
   });
 
   test('runs its sign-in check only through the reader: at the launch gate, after the wizard and in the wizard', () => {
-    const own = main.indexOf('function isClaudeAuthenticated() {');
-    assert.ok(own > 0);
-    assert.strictEqual(count(main, 'isClaudeAuthenticated()'), 1, 'no check is run around the reader');
+    assert.match(main, /^const setupCheck = createSetupCheck\(\{\n[^]*?[\s{,]shellConfigDir[,\s}][^]*?\n\}\);\n/m,
+      'the setup check is given the reader');
+    assert.ok(!/\bisClaudeAuthenticated\b|--print/.test(main), 'main.js runs no sign-in check of its own');
     assert.strictEqual(count(main, CHECK), 3);
-    assert.match(main, /const needsWizard = !isSmokeTest && \(!claudeBin \|\| \(!setupVerified && !\(await shellConfigDir\.checkAuthenticated\(isClaudeAuthenticated\)\)\)\);/);
-    assert.match(main, /if \(!findClaude\(\) \|\| !\(await shellConfigDir\.checkAuthenticated\(isClaudeAuthenticated\)\)\) \{/);
-    const wizard = main.indexOf("ipcMain.handle('wizard-check-runtimes', async () => {");
+    assert.match(main, /const launchCheck = await setupCheck\.check\(\{ signIn \}\);/);
+    assert.match(main, /if \(\(await setupCheck\.check\(\)\)\.status !== 'ready'\) \{/);
+    const wizard = main.indexOf("ipcMain.handle('wizard-check-runtimes', async () => ({ claude: await setupCheck.check(),");
     assert.ok(wizard > 0, 'the wizard handler waits for the check');
-    assert.ok(main.indexOf(CHECK, wizard) < main.indexOf("ipcMain.handle('wizard-signin-claude'", wizard));
+    assert.ok(wizard < main.indexOf("ipcMain.handle('wizard-signin-claude'", wizard));
+    // In the setup check, the sign-in run is started only inside the reader.
+    assert.strictEqual(count(setupCheck, ROUTED), 1);
+    const routed = setupCheck.slice(setupCheck.indexOf(ROUTED), setupCheck.indexOf('\n    });\n', setupCheck.indexOf(ROUTED)));
+    assert.match(routed, /runChild\(plan\.program, \[\.\.\.plan\.args, \.\.\.SIGN_IN_ARGS\]/);
+    assert.strictEqual(count(setupCheck, '...SIGN_IN_ARGS'), 1, 'no sign-in run is started around the reader');
   });
 
   test("hands the server the reader for the reconnect card's check", () => {

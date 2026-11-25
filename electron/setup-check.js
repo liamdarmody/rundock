@@ -171,16 +171,19 @@ const SIGN_IN_OUTCOMES = { timeout: 'timeout', 'not-started': 'not-started' };
 
 // `platform` and `env` are the app's own (process.platform, process.env): the
 // install folders are added to `env`'s PATH before each lookup, and every
-// child is given a copy of it at the moment it starts. `appData` is the
-// folder the log is kept in; with none, nothing is logged. `shellConfigDir`
-// routes the sign-in check (it may run it again with CLAUDE_CONFIG_DIR read
-// from the login shell), and `signInReason` keeps why it last failed.
+// child is given a copy of it at the moment it starts. `extendPath`, when
+// given, adds them in place of that: main.js passes the ensurePath it has
+// always run. `appData` is the folder the log is kept in; with none, nothing
+// is logged. `shellConfigDir` routes the sign-in check (it may run it again
+// with CLAUDE_CONFIG_DIR read from the login shell), and `signInReason` keeps
+// why it last failed.
 function createSetupCheck({
   platform = process.platform,
   env = process.env,
   appData = null,
   shellConfigDir = { checkAuthenticated: (run) => run() },
   signInReason = createSignInReason(),
+  extendPath = null,
 } = {}) {
   let found = { bin: null, version: null };
   // The check running for each kind of request, joined by the next like it.
@@ -217,7 +220,9 @@ function createSetupCheck({
 
   async function lookup() {
     const start = deps.now();
-    try { deps.extendPath(env, { platform }); } catch { /* the lookup searches PATH as it is */ }
+    try {
+      if (extendPath) extendPath(); else deps.extendPath(env, { platform });
+    } catch { /* the lookup searches PATH as it is */ }
     try {
       const { stdout } = await runChild(platform === 'win32' ? 'where.exe' : 'which', ['claude'], { ...env }, deps.timeouts.lookup);
       const bin = chooseCandidate(stdout, platform);
@@ -230,7 +235,8 @@ function createSetupCheck({
   }
 
   // The sign-in check on the copy that was started, through the routing that
-  // may run it again. Its reason, when it fails, is the one main gives.
+  // may run it again. Its reason, when it fails, is what the holder kept, as
+  // main reads it: null when nothing was kept.
   async function signIn(plan) {
     const start = deps.now();
     const passed = await shellConfigDir.checkAuthenticated(async () => {
@@ -243,8 +249,8 @@ function createSetupCheck({
         return false;
       }
     });
-    const reason = passed ? null : signInReason.last() || { kind: 'no-reason' };
-    log('sign-in', passed ? 'passed' : SIGN_IN_OUTCOMES[reason.kind] || 'failed', start);
+    const reason = passed ? null : signInReason.last();
+    log('sign-in', passed ? 'passed' : SIGN_IN_OUTCOMES[reason && reason.kind] || 'failed', start);
     return passed ? { status: 'ready' } : { status: 'not-authenticated', reason };
   }
 

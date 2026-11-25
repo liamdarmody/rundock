@@ -368,6 +368,9 @@ const RECONNECT_CARD = { src: path.join(ROOT, 'public', 'views', 'chat.js'), sui
 // Where the console is asked for: the desktop's channel and the server's route,
 // each read by the console suite, and the first-run wizard that reads its answer.
 const CONSOLE_DESKTOP = { src: path.join(ROOT, 'electron', 'main.js'), suite: 'test/unit/claude-console.test.js' };
+// What the desktop's setup check keeps of the copy it found and started, which
+// the desktop's channel hands the opener.
+const CONSOLE_SETUP_CHECK = { src: path.join(ROOT, 'electron', 'setup-check.js'), suite: 'test/unit/claude-console.test.js' };
 const CONSOLE_SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/unit/claude-console.test.js' };
 const CONSOLE_WIZARD = { src: path.join(ROOT, 'electron', 'wizard.html'), suite: 'test/unit/wizard-first-run.test.js' };
 
@@ -3788,8 +3791,8 @@ const MUTATIONS = [
     '  if (gate.opening) return gate.opening;\n',
     "  if (typeof findBin === 'function') findBin();\n  if (gate.opening) return gate.opening;\n"],
   [CONSOLE_DESKTOP, 'Reconnect: the desktop app looks for Claude Code before asking the opener',
-    'openClaudeConsole({ findBin: findClaude, findVersion: () => claudeFoundVersion, purpose })',
-    'openClaudeConsole({ bin: findClaude(), findVersion: () => claudeFoundVersion, purpose })'],
+    'openClaudeConsole({ findBin: () => setupCheck.found().bin, findVersion: () => setupCheck.found().version, purpose })',
+    'openClaudeConsole({ bin: setupCheck.found().bin, findVersion: () => setupCheck.found().version, purpose })'],
   // The window's title and Claude Code's words go onto a command line, so only
   // fixed words may.
   [CLAUDE_CONSOLE, 'Reconnect: the console takes its title and words from the caller',
@@ -3855,9 +3858,9 @@ const MUTATIONS = [
   [CONSOLE_SERVER, 'Reconnect: the server never tells the opener the version it probed',
     ', version: _claudeProbeCache && _claudeProbeCache.version',
     ''],
-  [CONSOLE_DESKTOP, 'Reconnect: the desktop app keeps no version from its lookup',
-    'claudeFoundVersion = String(execSync(',
-    'String(execSync('],
+  [CONSOLE_SETUP_CHECK, 'Reconnect: the desktop app keeps no version from its lookup',
+    'found = { bin, version };',
+    'found = { bin, version: null };'],
   // A path that ends its line starts a command of its own on the next.
   [CLAUDE_CONSOLE, 'Reconnect: a line break or NUL in the Claude Code path is written onto the command line',
     "  if (/[\\0\\r\\n]/.test(found)) return Promise.resolve({ ok: false, reason: 'unsupported' });\n",

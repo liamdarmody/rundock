@@ -203,6 +203,18 @@ describe('no shell, and only the copy that was found', () => {
     assert.strictEqual(env.PATH, '/usr/bin:/usr/local/bin', 'the environment main.js passed is extended, as ensurePath extended it');
     assert.strictEqual(f.calls[0].options.env.PATH, '/usr/bin:/usr/local/bin', 'and the lookup searches it');
   });
+
+  test('a PATH extender passed in runs before each lookup, in place of the default', async (t) => {
+    const order = [];
+    const env = { PATH: '/usr/bin' };
+    const f = fakes(t, (c) => { order.push(`start ${c.program}`); return installed()(c); },
+      { extendPath: () => { order.push('default'); } });
+    const check = f.mod.createSetupCheck({ platform: 'darwin', env, extendPath: () => { order.push('extend'); env.PATH += ':/opt/example/bin'; } });
+    await check.check({ signIn: false });
+    await check.check({ signIn: false });
+    assert.deepStrictEqual(order, ['extend', 'start which', `start ${MAC_BIN}`, 'extend', 'start which', `start ${MAC_BIN}`]);
+    assert.strictEqual(f.calls[0].options.env.PATH, '/usr/bin:/opt/example/bin', 'the lookup searches the PATH it extended');
+  });
 });
 
 describe('found but not started is never not installed', () => {
@@ -593,6 +605,17 @@ describe('a failed sign-in check gives the reason main gives', () => {
     assert.strictEqual((await check.check()).status, 'not-authenticated');
     assert.deepStrictEqual(await check.check(), { status: 'ready' });
     assert.strictEqual(holder.last(), null);
+  });
+
+  test('a routing that fails without running the check gives what the holder kept, as main read it', async (t) => {
+    const f = fakes(t, installed());
+    const holder = createSignInReason();
+    const failsWithoutRunning = { checkAuthenticated: async () => false };
+    const check = checker(f.mod, 'darwin', { shellConfigDir: failsWithoutRunning, signInReason: holder });
+    assert.deepStrictEqual(await check.check(), { status: 'not-authenticated', reason: null }, 'nothing kept yet');
+    holder.failed(Object.assign(new Error('failed'), { status: 1, stderr: Buffer.from('boom\n') }));
+    assert.deepStrictEqual(await check.check(), { status: 'not-authenticated', reason: holder.last() });
+    assert.ok(!f.calls.some(isSignIn));
   });
 });
 
