@@ -526,16 +526,22 @@ describe('what each console runs, as opened', () => {
   const NEW_VERSION = '2.2.0 (Claude Code)\n';
   const isWhich = (program) => program === 'which';
   const isVersionRun = (program, args) => args.includes('--version');
+  // Waits turn by turn of the event loop, never for a fixed time, so a slow
+  // machine cannot run the test ahead of the check it waits for.
+  async function until(what, cond) {
+    for (let i = 0; i < 500 && !cond(); i++) await new Promise((r) => setImmediate(r));
+    assert.ok(cond(), `waited for ${what}`);
+  }
   async function signInDuringRecheck(t, held, outcome) {
     const s = setupScreen(t, { platform: 'linux', env: terminalOnPath() });
-    await s.settle();
+    await until('the load\'s check to reach the screen', () => s.state.intervals.length === 1);
     assert.deepStrictEqual(s.ran, CHECKED, 'sanity: the load\'s check found Claude Code and started it');
     const hold = holdChildren((program, args) => isWhich(program) || isVersionRun(program, args));
     const recheck = s.w.electronAPI.checkRuntimes();
-    await s.settle();
+    await until('the recheck\'s lookup', () => hold.length === 1);
     if (held === 'version run') {
       hold[0].release({ stdout: `${NEW_BIN}\n` });
-      await s.settle();
+      await until('the recheck\'s version run', () => hold.length === 2);
     }
     assert.strictEqual(hold.length, held === 'version run' ? 2 : 1, `sanity: the recheck is held in its ${held}`);
     const ran = [...s.ran];
@@ -545,12 +551,11 @@ describe('what each console runs, as opened', () => {
     assert.deepStrictEqual({ command: s.f.calls[0].command, args: s.f.calls[0].args },
       { command: 'x-terminal-emulator', args: ['-e', BIN, 'auth', 'login'] });
     assert.deepStrictEqual(s.ran, ran, `held in its ${held}: signing in starts no lookup and no version run`);
-    if (held === 'lookup') {
-      hold[0].release(outcome === 'a new copy' ? { stdout: `${NEW_BIN}\n` } : { status: 1 });
-      await s.settle();
-    }
-    if (outcome === 'a new copy') hold[1].release({ stdout: NEW_VERSION });
-    else if (held === 'version run') hold[1].release({ status: 1 });
+    if (held === 'lookup') hold[0].release(outcome === 'a new copy' ? { stdout: `${NEW_BIN}\n` } : { status: 1 });
+    if (outcome === 'a new copy') {
+      await until('the recheck\'s version run', () => hold.length === 2);
+      hold[1].release({ stdout: NEW_VERSION });
+    } else if (held === 'version run') hold[1].release({ status: 1 });
     await recheck;
     s.gate.openedAt = null;
     const after = [...s.ran];
