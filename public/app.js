@@ -1084,6 +1084,7 @@ const EFFECT_EXECUTORS = {
     if (headerLabel) headerLabel.textContent = toAgent.displayName;
     if (headerAvatar) { headerAvatar.style.background = toAgent.colour; headerAvatar.textContent = toAgent.icon; }
     document.getElementById('msg-input').placeholder = 'Message ' + toAgent.displayName + '...';
+    refreshAttachButton(activeConversation);
   },
   'start-streaming-bubble': (convoId, ef) => {
     const state = getConvoState(convoId);

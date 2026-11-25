@@ -669,6 +669,7 @@ function renderSessionHistory(d) {
     state.activeAgentId = restoredActiveAgentId(convo);
   }
   if (onScreen) {
+    refreshAttachButton(convo);
     const displayId = state.activeAgentId || convo.agentId;
     const agent = agents.find(a => a.id === displayId) || convo.agent;
     if (agent) {

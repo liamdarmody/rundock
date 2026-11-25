@@ -62,6 +62,7 @@ before(() => {
   convos = load('views', 'conversations.js');
   // The views reach each other, and the sidebar, through the global scope.
   Object.assign(global, chat, convos);
+  Object.assign(global, require(path.join(ROOT, 'public', 'views', 'composer.js')));
 });
 after(() => { if (dom) dom.window.close(); });
 

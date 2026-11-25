@@ -45,6 +45,7 @@ before(() => {
   global.restoredActiveAgentId = require(path.join(ROOT, 'public', 'delegation-restore.js')).restoredActiveAgentId;
   chat = require(path.join(ROOT, 'public', 'views', 'chat.js'));
   Object.assign(global, chat);
+  Object.assign(global, require(path.join(ROOT, 'public', 'views', 'composer.js')));
   convos = require(path.join(ROOT, 'public', 'views', 'conversations.js'));
 });
 

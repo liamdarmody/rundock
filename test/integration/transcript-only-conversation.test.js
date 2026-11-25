@@ -73,6 +73,7 @@ before(async () => {
   global.stripRundockMarkers = (t) => require(path.join(ROOT, 'public', 'markers.js')).stripMarkers(String(t || ''));
   chat = require(path.join(ROOT, 'public', 'views', 'chat.js'));
   Object.assign(global, chat);
+  Object.assign(global, require(path.join(ROOT, 'public', 'views', 'composer.js')));
   // Approval cards are not what this is about, and need the permissions module.
   global.renderPendingPermissionCards = () => {};
   view = require(path.join(ROOT, 'public', 'views', 'conversations.js'));

@@ -295,6 +295,7 @@ function pageView() {
   });
   page = require(path.join(ROOT, 'public', 'views', 'chat.js'));
   Object.assign(global, page);
+  Object.assign(global, require(path.join(ROOT, 'public', 'views', 'composer.js')));
   return page;
 }
 

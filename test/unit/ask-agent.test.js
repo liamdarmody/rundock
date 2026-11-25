@@ -70,6 +70,7 @@ describe('each conversation keeps its own unsent text', () => {
        const state = { isProcessing: false };
        const getConvoState = () => ({ isProcessing: false }); const renderConvoList = () => {}; const switchNav = () => {}; const showView = () => {};
        const sendMessage = () => {}; const cancelProcessing = () => {}; const renderPendingPermissionCards = () => {};
+       const showComposerFor = () => {};
        ${draftsSrc}
        ${setupChatSrc}
        ${createSrc}

@@ -410,6 +410,12 @@ const MANIFEST = {
     "renderAgentList",
     "renderConvoEmptyAgents",
     "renderOrgChart",
+  ],
+  "composer.js": [
+    "openAttachPicker",
+    "pickFiles",
+    "refreshAttachButton",
+    "showComposerFor",
   ],};
 
 function viewModules() {

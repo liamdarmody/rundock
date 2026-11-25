@@ -306,3 +306,27 @@ body.light .stopped-detail { background: var(--elevated); }
 /* The rest of a reply a summary cut, kept out of sight until it has words. */
 .msg-agent.summarised-continuation:has(.streaming-text:empty):not(:has(.activity-summary)) { display: none; }
 
+
+/* The composer's attached files. The chip row and the inline message each
+   take a whole line of the composer, the row above the field and the message
+   under it, so the composer wraps; an empty one takes no room. The row is at
+   most two chip lines high (two 44px chips and the 6px between) and scrolls
+   beyond that. */
+.chat-input { flex-wrap: wrap; row-gap: 0; }
+.composer-chips { flex-basis: 100%; display: flex; flex-wrap: wrap; row-gap: 6px; column-gap: 6px; max-height: 94px; overflow-y: auto; }
+.composer-chips:not(:empty) { margin-bottom: 8px; }
+.composer-chip { height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; max-width: 240px; padding: 4px 4px 4px 12px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.composer-chip-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.composer-chip-name { font-size: var(--caption); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-chip-meta { font-size: var(--label); color: var(--text-2); white-space: nowrap; }
+.composer-chip-remove, .composer-notice-dismiss { width: 24px; height: 24px; flex-shrink: 0; border-radius: var(--radius-sm); color: var(--text-2); display: flex; align-items: center; justify-content: center; font-size: 16px; line-height: 1; }
+.composer-chip-remove:hover, .composer-notice-dismiss:hover { color: var(--text-1); background: var(--elevated); }
+.composer-chip-remove:focus-visible, .composer-notice-dismiss:focus-visible, .attach-btn:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+.attach-btn { width: 42px; height: 42px; flex-shrink: 0; background: var(--card); color: var(--text-2); border-radius: var(--radius-circle); display: flex; align-items: center; justify-content: center; }
+.attach-btn:hover { color: var(--text-1); }
+.attach-btn[hidden] { display: none; }
+.attach-btn svg { width: 18px; height: 18px; }
+.composer-notice { flex-basis: 100%; }
+.composer-notice:not(:empty) { margin-top: 8px; display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--attention) 40%, transparent); border-radius: var(--radius-lg); font-size: var(--caption); color: var(--text-2); line-height: 1.55; }
+.composer-notice-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.composer-notice-title { display: block; color: var(--text-1); font-weight: 600; }

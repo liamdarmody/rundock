@@ -393,8 +393,12 @@
       </div>
       <div class="messages" id="messages"></div>
       <div class="chat-input">
+        <div class="composer-chips" id="composer-chips"></div>
+        <button class="attach-btn" id="attach-btn" type="button" onclick="openAttachPicker()" aria-label="Attach files" title="Attach files"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+        <input type="file" id="attach-input" multiple accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.txt,.md,.csv" hidden onchange="pickFiles(this)">
         <textarea id="msg-input" placeholder="Message..." rows="1"></textarea>
         <button class="send-btn" id="send-btn" onclick="sendMessage()" title="Send message"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
+        <div class="composer-notice" id="composer-notice" aria-live="polite"></div>
       </div>
     </div>
     <!-- Skills -->
@@ -515,6 +519,7 @@
 <script src="/views/routines.js"></script>
 <script src="/views/routines-panel.js"></script>
 <script src="/views/graph.js"></script>
+<script src="/views/composer.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

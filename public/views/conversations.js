@@ -376,6 +376,7 @@ function setupChat(convo) {
   document.getElementById('chat-agent-avatar').textContent=agent.icon;
   const msgInput = document.getElementById('msg-input');
   switchComposerTo(convo.id, msgInput);
+  showComposerFor(convo);
   msgInput.placeholder=`Message ${agent.displayName}...`;
   msgInput.style.height = 'auto';
   msgInput.style.height = '44px';
