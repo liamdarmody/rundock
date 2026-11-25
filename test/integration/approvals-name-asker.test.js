@@ -114,6 +114,7 @@ const tokensOf = (agent, convo) => h.readInvocations()
   .filter((i) => i.agent === agent && i.env.RUNDOCK_CONVO_ID === convo).map((i) => i.env.RUNDOCK_HOOK_TOKEN);
 
 test('server.js, the chat message (interactive): the token is for the id discovery resolved, never the slug the message named', async () => {
+  pairTokens();
   const convoId = open(h.freshConvoId('ask-chat'));
   scenario([{ match: { agent: 'example-lead', promptIncludes: 'asker chat' }, hooks: [readOutside()], turn: [{ text: 'Asked.' }] }]);
   const since = client.messages.length;
@@ -124,6 +125,7 @@ test('server.js, the chat message (interactive): the token is for the id discove
 });
 
 test('server.js, the chat message (legacy): the token is for the id discovery resolved too', async () => {
+  pairTokens();
   const convoId = open(h.freshConvoId('ask-legacy'));
   process.env.RUNDOCK_LEGACY_SPAWN = '1';
   try {
@@ -145,6 +147,7 @@ async function conversationWithOrchestrator(prefix) {
 }
 
 test('lib/delegation/engine.js handleDelegation: the delegate asks as the agent delegated to, with a token of its own', async () => {
+  pairTokens();
   const convoId = await conversationWithOrchestrator('ask-delegate');
   scenario([{ match: { agent: 'content-lead', promptIncludes: 'asker delegate brief' }, hooks: [readOutside()], turn: [{ text: 'Asked.' }] }]);
   const since = client.messages.length;
@@ -155,6 +158,7 @@ test('lib/delegation/engine.js handleDelegation: the delegate asks as the agent 
 });
 
 test('lib/delegation/engine.js finishDelegateClose: the parent restarted after its delegate closes asks as the parent, with the token it had', async () => {
+  pairTokens();
   const convoId = open(h.freshConvoId('ask-parent'));
   scenario([
     { match: { agent: 'chief-of-staff', promptIncludes: 'asker parent please' }, turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'asker parent brief' } }] },
@@ -228,6 +232,7 @@ test('lib/delegation/engine.js handleDelegation: an intercepted delegation namin
 });
 
 test('lib/delegation/engine.js handleScopeReturn: the orchestrator started for a handback asks as the orchestrator', async () => {
+  pairTokens();
   const convoId = open(h.freshConvoId('ask-return'));
   scenario([
     { match: { agent: 'content-lead', promptIncludes: 'asker return please' }, turn: [{ text: `Outside my lane. ${MARKERS.RETURN}` }] },
@@ -240,6 +245,7 @@ test('lib/delegation/engine.js handleScopeReturn: the orchestrator started for a
 });
 
 test('lib/delegation/engine.js spawnResumedProcess: the caller resumed after a blocked handoff asks as itself, with the token it had', async () => {
+  pairTokens();
   const convoId = open(h.freshConvoId('ask-blocked'));
   scenario([
     { match: { agent: 'content-lead', promptIncludes: 'asker blocked please' }, turn: [{ agentTool: { subagent_type: 'lead-designer', prompt: 'asker off-roster brief' } }] },
@@ -255,6 +261,7 @@ test('lib/delegation/engine.js spawnResumedProcess: the caller resumed after a b
 });
 
 test('lib/delegation/engine.js startWithoutSession: a delegate started fresh, its stored session gone, asks as that delegate', async () => {
+  pairTokens();
   const convoId = await conversationWithOrchestrator('ask-stale');
   const others = h.internal.readConversations().filter((c) => c.id !== convoId);
   h.internal.writeConversations([{ id: convoId, title: convoId, status: 'active', agentId: 'chief-of-staff',
@@ -291,6 +298,23 @@ const answer = (card, allow, extra = {}) => client.send({
 });
 const permissionEvents = (convo) => events().filter((e) => e.e === 'permission' && e.conv === convo);
 
+// A card a conversation agent's token raises in this run names that agent.
+// A test that a card names no asker checks this first, so the name missing
+// from its own card shows the server leaving it out, never a server that names
+// nobody. Waited for without a throw, so it fails on what the card says.
+async function aConversationCardNamesItsAgent(prefix) {
+  const convo = h.freshConvoId(prefix);
+  const command = cardCommand();
+  const since = client.messages.length;
+  const asked = ask(bash(command, convo), { headers: h.hookHeaders(convo, 'content-lead') });
+  const find = () => client.messages.slice(since).find((m) => m.type === 'control_request' && commandOf(m) === command);
+  assert.ok(await h.waitUntil(find, { timeout: 10000, interval: 20 }), 'a conversation agent\'s request raised a card');
+  const card = find();
+  assert.strictEqual(card._agent, 'content-lead', 'and that card names the agent its token was issued to');
+  answer(card, false);
+  assert.deepStrictEqual((await asked.reply).body, { allow: false });
+}
+
 test('a conversation card names the agent its token was issued to, and the server files it under that agent', async () => {
   pairTokens();
   const convo = h.freshConvoId('ask-route');
@@ -325,6 +349,7 @@ for (const field of ['agent', '_agent', 'agentId']) {
 
 test('a routine\'s card names no agent of a conversation, keeps its run, and its decision is recorded with no agent', async () => {
   pairTokens();
+  await aConversationCardNamesItsAgent('ask-before-run');
   const command = cardCommand();
   const since = client.messages.length;
   const run = startRoutine('content-analyst', { hooks: [{ tool: 'Bash', input: { command } }] }, 'asker-routine');
@@ -543,6 +568,7 @@ for (const [kind, approval, tool] of [
 
 test('a connector card names no asker', async () => {
   pairTokens();
+  await aConversationCardNamesItsAgent('ask-before-connector');
   const since = client.messages.length;
   client.send({ type: 'save_connector', name: 'asker-tools', content: JSON.stringify({ command: 'node', args: ['tools/server.js', '--stdio'] }), conversationId: 'ask-connector' });
   const { msg: card } = await client.waitFor((m) => m.type === 'control_request' && m.request && m.request.tool_name === 'SaveConnector', { since, label: 'connector card' });
