@@ -1098,6 +1098,206 @@ describe('a workspace switch while files are on their way', () => {
   });
 });
 
+// A workspace switch arriving while a hand-over holds a conversation's chat
+// waits for the hand-over to end and replay it, so the chat is recorded and
+// dispatched in the workspace it was sent to; only then does the switch stop
+// that workspace's processes and move the root. A hand-over holding nothing
+// holds no switch, and none holds one past its failsafe.
+describe('a workspace switch while a hand-over holds a message', () => {
+  const transcriptIn = (dir, id) => {
+    try { return JSON.parse(fs.readFileSync(path.join(dir, '.rundock', 'transcripts', `${id}.json`), 'utf-8')); } catch (e) { return null; }
+  };
+  const recordIn = (dir, id) => { try { return store.readRecord(dir, id).messages; } catch (e) { return null; } };
+  const userRowsIn = (dir, id) => (transcriptIn(dir, id) || []).filter((r) => r.role === 'user').map((r) => r.text);
+  const promptsIn = (dir, tag) => h.readAppendedLog(path.join(dir, 'stub-prompts.jsonl')).map((p) => p.prompt).filter((p) => p.includes(tag));
+  const isAnswer = (m) => m.type === 'workspace_set' || m.type === 'workspace_error';
+  const refusedFor = (id, since) => client.messages.slice(since).filter((m) => m.type === 'chat_refused' && m.conversationId === id);
+  const second = (label) => makeWorkspace({ claudeMd: `# ${label} fixture\n`, agents: standardTeam() });
+
+  // The switch's answer after `since`, with whether `id` was still in a
+  // hand-over when it arrived; null when none arrives in time.
+  async function answerAfter(id, since, timeout = 8000) {
+    let held;
+    const got = await client.waitFor((m) => {
+      if (!isAnswer(m)) return false;
+      held = h.internal.convoTransitions.has(id);
+      return true;
+    }, { since, timeout }).catch(() => null);
+    return got && { set: got.msg, held };
+  }
+  // Back to the suite's own workspace, ending a hand-over the test left open
+  // so a switch it still holds answers first.
+  async function leave(id) {
+    if (h.internal.convoTransitions.has(id)) endTransition(id);
+    const since = client.messages.length;
+    client.send({ type: 'set_workspace', path: h.workspaceDir });
+    const { msg } = await client.waitFor((m) => (m.type === 'workspace_set' && m.path === h.workspaceDir) || m.type === 'workspace_error',
+      { since, label: 'the switch back' });
+    assert.strictEqual(msg.type, 'workspace_set', `the switch back failed: ${msg.message}`);
+    h.reapConvo(id);
+  }
+  // Sends a chat with one file while `id` is in a hand-over, then `request`
+  // once the message is stored and queued, and ends the hand-over.
+  async function storedThenSwitched(id, tag, request) {
+    answers([tag]);
+    const t = transition(id);
+    const since = client.messages.length;
+    chat(id, `${tag} see this`, [file('Screen Shot.png', png())]);
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is answered with chat_stored');
+    assert.ok(await h.waitUntil(() => t.queued.length === 1), 'and queued by the hand-over');
+    const asked = client.messages.length;
+    client.send(request);
+    await h.delay(200);
+    assert.ok(!client.messages.slice(asked).some(isAnswer), 'no workspace_set while the hand-over holds the message');
+    endTransition(id);
+    const answered = await answerAfter(id, asked);
+    assert.ok(answered && answered.set.type === 'workspace_set', 'the switch goes ahead once the hand-over ends');
+    await h.delay(500);
+    return { since, stored, set: answered.set };
+  }
+  function finishedInFirst(id, tag, { since, stored, set }) {
+    const answered = client.messages.slice(since);
+    assert.ok(answered.indexOf(stored) < answered.indexOf(set), 'chat_stored comes before workspace_set');
+    assert.deepStrictEqual(refusedFor(id, since), [], 'and no chat_refused');
+    assert.deepStrictEqual(recordIn(h.workspaceDir, id), [stored.entry], 'the record entry is in the first workspace');
+    assert.deepStrictEqual(userRowsIn(h.workspaceDir, id), [stored.content], 'its transcript there has the message once');
+    assert.strictEqual(listing(path.join(set.path, '.rundock', 'attachments', id)), null, 'the second workspace holds none of its files');
+    assert.strictEqual(transcriptIn(set.path, id), null, 'nor its transcript');
+    assert.deepStrictEqual(promptsIn(set.path, tag), [], 'nor a prompt with it');
+  }
+
+  test('set_workspace waits while a hand-over holds a stored message, which is recorded and dispatched in the first workspace', async () => {
+    const id = h.freshConvoId('handover-set');
+    const other = second('Fourth');
+    try {
+      const answered = await storedThenSwitched(id, 'ASK-HOSET', { type: 'set_workspace', path: other });
+      assert.strictEqual(answered.set.path, other);
+      finishedInFirst(id, 'ASK-HOSET', answered);
+    } finally {
+      await leave(id);
+    }
+  });
+
+  test('create_workspace waits while a hand-over holds a stored message the same way', async () => {
+    const id = h.freshConvoId('handover-create');
+    try {
+      finishedInFirst(id, 'ASK-HOCREATE', await storedThenSwitched(id, 'ASK-HOCREATE', { type: 'create_workspace', name: `alpha ${id}` }));
+    } finally {
+      await leave(id);
+    }
+  });
+
+  test('set_workspace waits while a hand-over holds a text chat, whose row and prompt stay in the first workspace', async () => {
+    const id = h.freshConvoId('handover-text');
+    const other = second('Fifth');
+    const text = 'ASK-HOTEXT just words';
+    answers(['ASK-HOTEXT']);
+    const t = transition(id);
+    try {
+      chat(id, text, undefined);
+      assert.ok(await h.waitUntil(() => t.queued.length === 1), 'the chat is queued by the hand-over');
+      const asked = client.messages.length;
+      client.send({ type: 'set_workspace', path: other });
+      await h.delay(200);
+      assert.ok(!client.messages.slice(asked).some(isAnswer), 'no workspace_set while the hand-over holds the chat');
+      endTransition(id);
+      const answered = await answerAfter(id, asked);
+      assert.ok(answered && answered.set.type === 'workspace_set' && answered.set.path === other, 'the switch goes ahead once the hand-over ends');
+      assert.deepStrictEqual(userRowsIn(h.workspaceDir, id), [text], 'the first workspace\'s transcript has the chat once');
+      assert.strictEqual(transcriptIn(other, id), null, 'the second has no transcript for the conversation');
+      assert.deepStrictEqual(promptsIn(other, text), [], 'and no prompt with the chat');
+    } finally {
+      await leave(id);
+    }
+  });
+
+  test('a switch that waited for files waits again while the hand-over holds them, with the chat behind them', async () => {
+    const id = h.freshConvoId('handover-held');
+    const other = second('Sixth');
+    const tag = 'ASK-HOHELD';
+    answers([tag]);
+    const t = transition(id);
+    try {
+      let release;
+      const held = store.withConversationLock(id, () => new Promise((resolve) => { release = resolve; }));
+      const since = client.messages.length;
+      try {
+        chat(id, `${tag} see this`, [file('Screen Shot.png', png())]);
+        chat(id, `${tag} and then`, undefined);
+        await h.delay(100);
+        client.send({ type: 'set_workspace', path: other });
+        await h.delay(200);
+        assert.ok(!client.messages.slice(since).some(isAnswer), 'the switch waits for the files');
+      } finally {
+        release();
+        await held;
+      }
+      const stored = await storedFor(id, since);
+      assert.ok(stored, 'the message is answered with chat_stored');
+      assert.ok(await h.waitUntil(() => t.queued.length === 2), 'both messages are queued by the hand-over');
+      await h.delay(200);
+      assert.ok(!client.messages.slice(since).some(isAnswer), 'no workspace_set within 200 ms of chat_stored');
+      endTransition(id);
+      const answered = await answerAfter(id, since);
+      assert.ok(answered && answered.set.type === 'workspace_set' && answered.set.path === other, 'the switch goes ahead once the hand-over ends');
+      await h.delay(500);
+      assert.deepStrictEqual(refusedFor(id, since), [], 'no chat_refused');
+      assert.deepStrictEqual(userRowsIn(h.workspaceDir, id), [stored.content, `${tag} and then`],
+        'the first workspace\'s transcript has the message, then the chat behind it');
+      assert.strictEqual(listing(path.join(other, '.rundock', 'attachments', id)), null, 'the second workspace holds none of its files');
+      assert.strictEqual(transcriptIn(other, id), null, 'nor its transcript');
+      assert.deepStrictEqual(promptsIn(other, tag), [], 'nor a prompt with either');
+    } finally {
+      await leave(id);
+    }
+  });
+
+  test('a hand-over holding nothing does not hold a switch', async () => {
+    const id = h.freshConvoId('handover-empty');
+    const other = second('Seventh');
+    const t = transition(id);
+    try {
+      const asked = client.messages.length;
+      client.send({ type: 'set_workspace', path: other });
+      const answered = await answerAfter(id, asked, 2000);
+      assert.ok(answered && answered.set.type === 'workspace_set' && answered.set.path === other, 'the switch answers within 2 s');
+      assert.strictEqual(answered.held, true, 'while the hand-over is still open');
+      assert.strictEqual(t.queued.length, 0, 'holding nothing');
+    } finally {
+      await leave(id);
+    }
+  });
+
+  test('a hand-over nothing else ends holds the switch until its failsafe flushes it, and no longer', async () => {
+    const id = h.freshConvoId('handover-failsafe');
+    const other = second('Eighth');
+    const tag = 'ASK-HOSAFE';
+    answers([tag]);
+    const t = h.internal.wsHandlerContext.transitions.beginConvoTransition(id, 'killing', {});
+    try {
+      const since = client.messages.length;
+      chat(id, `${tag} see this`, [file('Screen Shot.png', png())]);
+      const stored = await storedFor(id, since);
+      assert.ok(stored, 'the message is answered with chat_stored');
+      assert.ok(await h.waitUntil(() => t.queued.length === 1), 'and queued by the hand-over');
+      const asked = client.messages.length;
+      const waiting = answerAfter(id, asked, 15000);
+      client.send({ type: 'set_workspace', path: other });
+      const answered = await waiting;
+      assert.ok(answered && answered.set.type === 'workspace_set' && answered.set.path === other, 'the switch goes ahead within 15 s');
+      assert.strictEqual(answered.held, false, 'once the failsafe has ended the hand-over, not before');
+      await h.delay(500);
+      assert.deepStrictEqual(refusedFor(id, since), [], 'no chat_refused');
+      assert.deepStrictEqual(recordIn(h.workspaceDir, id), [stored.entry], 'the message is recorded in the first workspace');
+      assert.deepStrictEqual(userRowsIn(h.workspaceDir, id), [stored.content], 'with its transcript row');
+      assert.strictEqual(transcriptIn(other, id), null, 'and the second has no transcript for it');
+    } finally {
+      await leave(id);
+    }
+  });
+});
+
 describe('after every test above', () => {
   test('no receive ended in an unhandled rejection', () => {
     const answered = new Set(client.messages.map((m) => m.type));
