@@ -90,9 +90,17 @@ const promptsWith = (tag) => h.readPrompts().map((p) => p.prompt).filter((p) => 
 // The stored name a line gives: what follows its last slash, up to its label.
 const nameIn = (line) => line.slice(line.lastIndexOf('/') + 1, line.indexOf(' ('));
 
-function scenario(rules) {
-  fs.writeFileSync(path.join(h.workspaceDir, 'stub-scenario.json'), JSON.stringify({ rules }));
+// The stub's script, with the sessions it refuses to resume.
+function scenario(rules, deadSessions = [], extra = {}) {
+  fs.writeFileSync(path.join(h.workspaceDir, 'stub-scenario.json'), JSON.stringify({ ...extra, rules, deadSessions }));
 }
+// A listed conversation whose stored session `sessionId` the stub refuses.
+function seed(id, sessionId) {
+  const all = h.internal.readConversations().filter((c) => c.id !== id);
+  h.internal.writeConversations([{ id, title: id, status: 'active', agentId: 'chief-of-staff', sessionId,
+    sessionIds: [{ agentId: 'chief-of-staff', sessionId }] }, ...all]);
+}
+const spawnsFor = (id) => h.readInvocations().filter((i) => i.env && i.env.RUNDOCK_CONVO_ID === id);
 // Each tag answered `DONE-<tag>`; `keepSession` keeps each turn's session
 // file as a chat run keeps it.
 const answers = (tags, extra = {}) => scenario(tags.map((tag) => ({ match: { promptIncludes: tag }, turn: [{ text: `DONE-${tag}` }], ...extra })));
@@ -501,6 +509,311 @@ describe('a stored message carries the stored text into every copy a reload read
       h.reapConvo(id);
     });
   }
+});
+
+// A conversation mid-transition, its messages queued as the kill window
+// queues them.
+function transition(id) {
+  const t = { state: 'killing', owner: {}, queued: [], failsafe: setTimeout(() => {}, 30000) };
+  h.internal.convoTransitions.set(id, t);
+  return t;
+}
+const endTransition = (id) => h.internal.wsHandlerContext.transitions.endConvoTransition(id);
+// What endConvoTransition does, done by hand: the entry deleted, then each
+// queued message emitted on a connected server socket.
+function replayByHand(id) {
+  const t = h.internal.convoTransitions.get(id);
+  clearTimeout(t.failsafe);
+  h.internal.convoTransitions.delete(id);
+  const sock = [...h.internal.connectedClients].find((c) => c.readyState === 1);
+  for (const queued of t.queued) sock.emit('message', JSON.stringify(queued));
+}
+function leaveTransition(id, t) {
+  if (h.internal.convoTransitions.get(id) === t) endTransition(id);
+}
+const expired = (id, since) => arrived((m) => m.subtype === 'session_expired' && m._conversationId === id, { since, timeout: 15000 });
+
+// The record changed after the message was stored and before the server sent
+// it back into the handler: its entry taken out, or the record unreadable.
+const BROKEN = [['removed', 'gone from the record'], ['unreadable', 'in a record that cannot be read']];
+function breakRecord(id, entryId, how) {
+  const at = path.join(folderOf(id), 'record.json');
+  if (how === 'unreadable') { fs.writeFileSync(at, 'not json'); return; }
+  const record = JSON.parse(fs.readFileSync(at, 'utf-8'));
+  record.messages = record.messages.filter((m) => !m || m.id !== entryId);
+  fs.writeFileSync(at, JSON.stringify(record));
+}
+// Every chat_refused for `id` after `since`, once the first has arrived and
+// the re-entries have had time to do anything else.
+async function refusedOnReentry(id, since) {
+  const refused = (m) => m.type === 'chat_refused' && m.conversationId === id;
+  assert.ok(await arrived(refused, { since }), 'the re-entry is answered with chat_refused');
+  await h.delay(500);
+  return client.messages.slice(since).filter(refused).map((m) => [m.code, m.title, m.text]);
+}
+const BAD_ENTRY = ['bad-entry', NOT_SENT, FALLBACK];
+
+describe('every path back into the handler writes once and records once', () => {
+  for (const [how, replay, tag] of [['endConvoTransition', endTransition, 'ASK-BUFE'], ['hand', replayByHand, 'ASK-BUFH']]) {
+    test(`the transition buffer queues the stored message, and its replay by ${how} writes nothing more`, async () => {
+      const id = h.freshConvoId('buffered');
+      answers([tag]);
+      const sent = [file('Screen Shot.png', png()), file('Incident-Report-22-Nov.pdf', pdf())];
+      const t = transition(id);
+      try {
+        const since = client.messages.length;
+        chat(id, `${tag} see these`, sent);
+        assert.ok(await h.waitUntil(() => t.queued.length > 0), 'the message is queued');
+        const record = entriesOf(id) || [];
+        assert.strictEqual(record.length, 1, 'the record holds the entry before the message is queued');
+        assert.strictEqual(record[0].id, t.queued[0].attachmentEntry);
+        assert.deepStrictEqual(record[0].files.map((f) => f.sha256), sent.map((f) => sha256(decoded(f))));
+        const queue = JSON.stringify(t.queued);
+        assert.ok(!queue.includes('"attachments"'), 'the queue holds no attachments');
+        for (const f of sent) assert.ok(!queue.includes(f.data), 'and none of the data sent');
+        const stored = await storedFor(id, since);
+        assert.ok(stored, 'the message is answered with chat_stored');
+        replay(id);
+        assert.ok(await resultFor(id, `DONE-${tag}`, since), 'the replay is dispatched');
+        assert.deepStrictEqual(promptsWith(tag), [stored.content], 'once, with the stored text');
+        writtenOnce(id, [stored]);
+      } finally {
+        leaveTransition(id, t);
+        h.reapConvo(id);
+      }
+    });
+  }
+
+  for (const legacy of [false, true]) {
+    test(`the ${legacy ? 'legacy' : 'interactive'} resume retry carries the stored text and writes nothing again`, async () => {
+      const id = h.freshConvoId(legacy ? 'retry-legacy' : 'retry');
+      const dead = legacy ? 'dead-orch-ff' : 'dead-orch-ee';
+      seed(id, dead);
+      scenario([{ match: { promptIncludes: 'ASK-RETRY' }, turn: [{ text: 'FRESH-RETRY' }] }], [dead], { refusalAfterInit: true });
+      h.clearInvocations();
+      if (legacy) process.env.RUNDOCK_LEGACY_SPAWN = '1';
+      const rec = recordReentries();
+      const since = client.messages.length;
+      let stored;
+      try {
+        chat(id, 'ASK-RETRY see this', [file('Screen Shot.png', png())], { sessionId: dead });
+        stored = await storedFor(id, since);
+        assert.ok(stored, 'the message is answered with chat_stored');
+        assert.ok(await resultFor(id, 'FRESH-RETRY', since), 'the fresh start answers');
+      } finally {
+        rec.stop();
+        delete process.env.RUNDOCK_LEGACY_SPAWN;
+      }
+      assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), [dead, null], 'refused once, then started fresh');
+      const entered = rec.seen.filter((m) => m.conversationId === id);
+      assert.deepStrictEqual(entered.map((m) => [m.content, m.attachmentEntry, 'attachments' in m, !!m._resumeRetry]),
+        [[stored.content, stored.entry.id, false, false], [stored.content, stored.entry.id, false, true]],
+        'both dispatches carry the same stored text and reference, and no files');
+      const prompts = h.readPrompts().filter((p) => p.prompt.includes('ASK-RETRY'));
+      // The stub reads no stdin for a resume it refuses, so only the fresh
+      // start's prompt is logged.
+      assert.deepStrictEqual(prompts.map((p) => [p.resume || null, p.prompt]), [[null, stored.content]],
+        'the fresh start is sent the stored text once');
+      writtenOnce(id, [stored]);
+      h.reapConvo(id);
+    });
+  }
+
+  test('a second message with files, sent while the refused resume is still starting, is stored once and follows the first', async () => {
+    const id = h.freshConvoId('carried');
+    seed(id, 'dead-orch-s');
+    scenario([
+      { match: { promptIncludes: 'FIRST-S' }, turn: [{ text: 'DONE-FIRST-S' }] },
+      { match: { promptIncludes: 'SECOND-S' }, turn: [{ text: 'DONE-SECOND-S' }] },
+    ], ['dead-orch-s'], { refusalExitMs: 1200 });
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'FIRST-S hello', [file('Screen Shot.png', png())], { sessionId: 'dead-orch-s' });
+    const first = await storedFor(id, since);
+    assert.ok(first, 'the first is answered with chat_stored');
+    assert.ok(await expired(id, since), 'the resume is refused and still lingering');
+    const mid = client.messages.length;
+    chat(id, 'SECOND-S and this', [file('notes.txt', Buffer.from('hello'))]);
+    const second = await storedFor(id, mid);
+    assert.ok(second, 'the second is answered with chat_stored');
+    assert.ok(await resultFor(id, 'DONE-SECOND-S', since), 'the second is answered');
+    assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), ['dead-orch-s', null], 'one fresh start carries both');
+    const fresh = h.readPrompts().filter((p) => !p.resume && p.prompt.includes('-S '));
+    assert.deepStrictEqual(fresh.map((p) => p.prompt), [first.content, second.content], 'each text reaches the fresh process once, in order');
+    writtenOnce(id, [first, second]);
+    h.reapConvo(id);
+  });
+
+  for (const [how, label] of BROKEN) {
+    test(`the transition buffer's replay is refused when its entry is ${label}, and reaches no process`, async () => {
+      const id = h.freshConvoId('buffered-broken');
+      answers(['ASK-BUFBROKEN']);
+      const t = transition(id);
+      try {
+        const since = client.messages.length;
+        chat(id, 'ASK-BUFBROKEN see this', [file('Screen Shot.png', png())]);
+        const stored = await storedFor(id, since);
+        assert.ok(stored, 'the message is answered with chat_stored');
+        assert.ok(await h.waitUntil(() => t.queued.length > 0), 'and queued');
+        breakRecord(id, stored.entry.id, how);
+        const replay = client.messages.length;
+        endTransition(id);
+        assert.deepStrictEqual(await refusedOnReentry(id, replay), [BAD_ENTRY], 'one bad-entry refusal');
+        assert.deepStrictEqual(userRows(id), [], 'no transcript row');
+        assert.deepStrictEqual(spawnsFor(id), [], 'no process started');
+        assert.deepStrictEqual(promptsWith('ASK-BUFBROKEN'), [], 'nothing written to a stdin');
+      } finally {
+        leaveTransition(id, t);
+        h.reapConvo(id);
+      }
+    });
+  }
+
+  for (const legacy of [false, true]) {
+    for (const [how, label] of BROKEN) {
+      test(`the ${legacy ? 'legacy' : 'interactive'} resume retry is refused when its entry is ${label}, and reaches no process`, async () => {
+        const id = h.freshConvoId(legacy ? 'retry-legacy-broken' : 'retry-broken');
+        const dead = `dead-broken-${legacy ? 'legacy' : 'interactive'}-${how}`;
+        seed(id, dead);
+        scenario([{ match: { promptIncludes: 'ASK-RETRYBROKEN' }, turn: [{ text: 'FRESH-RETRYBROKEN' }] }], [dead], { refusalExitMs: 2000 });
+        h.clearInvocations();
+        if (legacy) process.env.RUNDOCK_LEGACY_SPAWN = '1';
+        const since = client.messages.length;
+        let stored;
+        let refusals;
+        try {
+          chat(id, 'ASK-RETRYBROKEN see this', [file('Screen Shot.png', png())], { sessionId: dead });
+          stored = await storedFor(id, since);
+          assert.ok(stored, 'the message is answered with chat_stored');
+          assert.ok(await expired(id, since), 'the resume is refused and still lingering');
+          assert.strictEqual(spawnsFor(id).length, 1, 'and not yet retried');
+          breakRecord(id, stored.entry.id, how);
+          refusals = await refusedOnReentry(id, since);
+        } finally {
+          delete process.env.RUNDOCK_LEGACY_SPAWN;
+        }
+        assert.deepStrictEqual(refusals, [BAD_ENTRY], 'one bad-entry refusal');
+        assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), [dead], 'the refused resume, and no fresh start');
+        assert.deepStrictEqual(h.readPrompts().filter((p) => !p.resume && p.prompt.includes('ASK-RETRYBROKEN')), [], 'nothing written to a fresh stdin');
+        assert.deepStrictEqual(userRows(id).map((r) => r.text), [stored.content], 'the first pass\'s row, and none for the retry');
+        h.reapConvo(id);
+      });
+    }
+  }
+
+  for (const [how, label] of BROKEN) {
+    test(`the carried loop is refused when the first message's entry is ${label}, and reaches no process`, async () => {
+      const id = h.freshConvoId('carried-broken');
+      const dead = `dead-broken-carried-${how}`;
+      seed(id, dead);
+      scenario([
+        { match: { promptIncludes: 'FIRST-CB' }, turn: [{ text: 'DONE-FIRST-CB' }] },
+        { match: { promptIncludes: 'SECOND-CB' }, turn: [{ text: 'DONE-SECOND-CB' }] },
+      ], [dead], { refusalExitMs: 2000 });
+      h.clearInvocations();
+      const since = client.messages.length;
+      chat(id, 'FIRST-CB hello', [file('Screen Shot.png', png())], { sessionId: dead });
+      const first = await storedFor(id, since);
+      assert.ok(first, 'the first is answered with chat_stored');
+      assert.ok(await expired(id, since), 'the resume is refused and still lingering');
+      const mid = client.messages.length;
+      chat(id, 'SECOND-CB and this', [file('notes.txt', Buffer.from('hello'))]);
+      const second = await storedFor(id, mid);
+      assert.ok(second, 'the second is answered with chat_stored');
+      assert.ok(await h.waitUntil(() => userRows(id).length === 2), 'and reaches the refused process');
+      assert.strictEqual(spawnsFor(id).length, 1, 'which is not yet retried');
+      breakRecord(id, first.entry.id, how);
+      // The retry and the message carried after it both carry the first
+      // message's reference, so each is refused.
+      assert.deepStrictEqual(await refusedOnReentry(id, mid), [BAD_ENTRY, BAD_ENTRY], 'one bad-entry refusal for each re-entry');
+      assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), [dead], 'the refused resume, and no fresh start');
+      assert.deepStrictEqual(h.readPrompts().filter((p) => !p.resume && p.prompt.includes('-CB ')), [], 'nothing written to a fresh stdin');
+      assert.deepStrictEqual(userRows(id).map((r) => r.text), [first.content, second.content], 'the first pass\'s rows, and none for the retry');
+      h.reapConvo(id);
+    });
+  }
+
+  describe('a reference to a record entry, without files', () => {
+    const mine = h.freshConvoId('ref-own');
+    const other = h.freshConvoId('ref-other');
+    const broken = h.freshConvoId('ref-broken');
+    const stored = {};
+
+    // Asserts nothing, so each test below checks what it was given itself.
+    before(async () => {
+      answers(['ASK-REF', 'REF-OK']);
+      for (const id of [mine, other]) {
+        const since = client.messages.length;
+        chat(id, 'ASK-REF see this', [file('Screen Shot.png', png())]);
+        stored[id] = await storedFor(id, since);
+        await resultFor(id, 'DONE-ASK-REF', since);
+      }
+      fs.mkdirSync(folderOf(broken), { recursive: true });
+      fs.writeFileSync(path.join(folderOf(broken), 'record.json'), 'not json');
+    });
+    after(() => { h.reapConvo(mine); h.reapConvo(other); });
+    const holds = (id) => {
+      assert.ok(stored[id], `${id}'s message with files is answered with chat_stored`);
+      assert.deepStrictEqual(entriesOf(id), [stored[id].entry], `${id} holds the entry its message stored`);
+    };
+
+    test('naming an entry of its own conversation is dispatched and writes nothing', async () => {
+      holds(mine);
+      const since = client.messages.length;
+      chat(mine, 'REF-OK again', undefined, { attachmentEntry: stored[mine].entry.id });
+      assert.ok(await resultFor(mine, 'DONE-REF-OK', since), 'the message is dispatched');
+      assert.deepStrictEqual(entriesOf(mine), [stored[mine].entry]);
+      assert.deepStrictEqual(listing(folderOf(mine)), [...stored[mine].entry.files.map((f) => f.file), 'record.json'].sort());
+      assert.ok(!client.messages.slice(since).some((m) => m.type === 'chat_refused' || m.type === 'chat_stored'), 'with no attachment answer');
+    });
+
+    const cases = [
+      ['an unknown entry', () => { holds(mine); return [mine, 'no-such-entry']; }],
+      ['a number', () => { holds(mine); return [mine, 42]; }],
+      ['another conversation\'s entry', () => { holds(mine); holds(other); return [mine, stored[other].entry.id]; }],
+      ['an entry of an unreadable record', () => {
+        assert.throws(() => store.readRecord(h.workspaceDir, broken), { code: 'record-unreadable' }, 'its record does not parse');
+        return [broken, 'any-entry'];
+      }],
+    ];
+    for (const [label, pick] of cases) {
+      test(`naming ${label} is refused`, async () => {
+        const [id, attachmentEntry] = pick();
+        await refusedWith({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content: 'ASK-REF forged', attachmentEntry },
+          { code: 'bad-entry', title: NOT_SENT, text: FALLBACK });
+      });
+    }
+  });
+
+  test('a later chat waits for the files before it, and another conversation does not', async () => {
+    const id = h.freshConvoId('held');
+    const elsewhere = h.freshConvoId('not-held');
+    answers(['HELD-A', 'HELD-B', 'HELD-C']);
+    let release;
+    const held = store.withConversationLock(id, () => new Promise((resolve) => { release = resolve; }));
+    const since = client.messages.length;
+    chat(id, 'HELD-A see this', [file('Screen Shot.png', png())]);
+    chat(id, 'HELD-B and then', undefined);
+    chat(id, 'HELD-X forged', undefined, { attachmentEntry: 'no-such-entry' });
+    chat(elsewhere, 'HELD-C meanwhile', undefined);
+    try {
+      assert.ok(await resultFor(elsewhere, 'DONE-HELD-C', since), 'another conversation is not held');
+      assert.deepStrictEqual([spawnsFor(id).length, promptsWith('HELD-A').length, promptsWith('HELD-B').length], [0, 0, 0],
+        'neither message reaches a process while the files wait');
+      assert.ok(client.messages.slice(since).some((m) => m.type === 'chat_refused' && m.conversationId === id && m.code === 'bad-entry'),
+        'a forged reference is refused on arrival, not let through behind the hold');
+    } finally {
+      release();
+      await held;
+    }
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the files are stored once released');
+    assert.ok(await resultFor(id, 'DONE-HELD-B', since), 'and the text after them is answered');
+    assert.deepStrictEqual(h.readPrompts().map((p) => p.prompt).filter((p) => /HELD-[ABX]/.test(p)), [stored.content, 'HELD-B and then'],
+      'in the order sent, and nothing forged');
+    h.reapConvo(id);
+    h.reapConvo(elsewhere);
+  });
 });
 
 describe('after every test above', () => {
