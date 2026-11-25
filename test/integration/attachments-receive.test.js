@@ -835,6 +835,9 @@ describe('at most four messages with files are taken in at a time, across socket
     try {
       chat(id, 'BEHIND-1 see this', [file('shot.png', png())]);
       for (let n = 2; n <= 4; n++) chat(id, `BEHIND-${n} not files`, 'not a list');
+      // Taken in, and so refused, before the next is sent: the place is kept
+      // past the refusal itself, until it is sent behind the files before it.
+      await allTaken(client);
       chat(elsewhere, 'BEHIND-5 see this', [file('shot.png', png())]);
       await arrived((m) => m.type === 'chat_refused' && m.conversationId === elsewhere, { since });
       await h.delay(300);

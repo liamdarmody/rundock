@@ -127,6 +127,11 @@ const MUTATIONS = [
   [only(RECEIVER, 'a place is free again after a refused payload and after a stored message'), 'a refused message gives its place back',
     '      hold(key, () => outcome.then((o) => settle(ws, msg, fileCount, o)).finally(() => { receiving -= 1; }));',
     '      hold(key, () => outcome.then((o) => { settle(ws, msg, fileCount, o); if (o.ok) receiving -= 1; }));'],
+  [only(RECEIVER, 'a payload refused behind its conversation\'s earlier files keeps its place until its refusal is sent'), 'a place is given back once the refusal is sent, not when the payload is refused',
+    '      const outcome = receiveAttachments(getWorkspace(), msg).then((ok) => ({ ok }), (err) => ({ err }));\n'
+      + '      hold(key, () => outcome.then((o) => settle(ws, msg, fileCount, o)).finally(() => { receiving -= 1; }));',
+    '      const outcome = receiveAttachments(getWorkspace(), msg).then((ok) => ({ ok }), (err) => ({ err })).finally(() => { receiving -= 1; });\n'
+      + '      hold(key, () => outcome.then((o) => settle(ws, msg, fileCount, o)));'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
