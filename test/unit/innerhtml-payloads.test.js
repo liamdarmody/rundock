@@ -229,6 +229,32 @@ describe('an agent cannot write script into the chat thread through its own file
     assert.ok(m.textContent.includes('handed back to'));
   });
 
+  test('a permission card names the agent that asked as text, whatever its file says', () => {
+    // The markup a name alone can carry, with no other field hostile, and the
+    // agent whose every field is.
+    const NAMED = { id: 'alpha', displayName: '<img src=x onerror=alert(1)>', icon: 'A', colour: '#4A90D9' };
+    global.agents = [HOSTILE_AGENT, NAMED];
+    try {
+      for (const [agent, label] of [[NAMED, 'hostile name'], [HOSTILE_AGENT, 'hostile agent']]) {
+        const m = messages();
+        chat.renderPermissionCard({
+          request_id: `asked-by-${agent.id}`,
+          request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'node tools/build.js' } },
+          _conversationId: 'c1', _agent: agent.id,
+        }, 'c1');
+        const line = m.querySelector('.permission-origin');
+        assert.ok(line, `asked-by line, ${label}: sanity: the line was drawn`);
+        assertInert(m, `asked-by line, ${label}`);
+        assert.strictEqual(line.textContent.replace(/\s+/g, ' ').trim(), `Asked by ${agent.displayName}`,
+          `asked-by line, ${label}: the name reads back as the characters it is`);
+        assert.strictEqual(line.querySelector('.avatar').getAttribute('data-icon'), agent.icon,
+          `asked-by line, ${label}: the icon reads back as the characters it is`);
+      }
+    } finally {
+      global.agents = [HOSTILE_AGENT];
+    }
+  });
+
   test('replayed history renders it as text, on every open of the conversation', () => {
     // The persisted path matters on its own: a payload that only fires live is
     // gone after a reload, and this one is not. It is re-rendered from the

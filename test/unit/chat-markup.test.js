@@ -24,6 +24,7 @@ const {
   thinkingIndicatorHtml,
   userBubbleHtml,
   delegationDividerHtml,
+  askedByHtml,
   permissionResolvedHtml,
 } = require('../../public/chat-markup.js');
 
@@ -146,13 +147,14 @@ test('userBubbleHtml renders a bare bubble with no sender line', () => {
 
 // ── module shape ────────────────────────────────────────────────────────────
 
-test('module exports exactly its nine helpers and nothing else', () => {
+test('module exports exactly its ten helpers and nothing else', () => {
   // The surface is enumerated so adding a public helper is a deliberate edit
   // to this test rather than a side effect.
   assert.deepStrictEqual(Object.keys(require('../../public/chat-markup.js')).sort(), [
     'agentMessageHtml',
     'agentSenderHtml',
     'agentStreamingMessageHtml',
+    'askedByHtml',
     'delegationDividerHtml',
     'msgTimeHtml',
     'permissionResolvedHtml',
@@ -220,6 +222,27 @@ test('an icon goes into its attribute with quotes and markup escaped', () => {
   assert.ok(html.includes('data-icon="&quot;&#39;&lt;b&gt;&amp;"></span>'), html);
   assert.strictEqual(JSDOM.fragment(html).querySelector('.avatar').getAttribute('data-icon'), '"\'<b>&',
     'and reads back as the characters it is');
+});
+
+// ── askedByHtml ─────────────────────────────────────────────────────────────
+
+test('askedByHtml names the agent after its avatar, which is hidden and holds no text', () => {
+  assert.strictEqual(typeof askedByHtml, 'function', 'chat-markup has a helper for the line that names the asker');
+  assert.strictEqual(
+    askedByHtml(TO),
+    '<div class="permission-origin"><span class="avatar xs" style="background:#0a0" aria-hidden="true" data-icon="W"></span><span>Asked by Wren</span></div>'
+  );
+  assert.strictEqual(drawnText(askedByHtml(TO)), 'Asked by Wren');
+});
+
+test('askedByHtml escapes the name into text and the icon into its attribute', () => {
+  assert.strictEqual(typeof askedByHtml, 'function', 'chat-markup has a helper for the line that names the asker');
+  const html = askedByHtml({ displayName: '<img src=x onerror=alert(1)>', icon: '"><b>', colour: 'red;}' });
+  const line = JSDOM.fragment(html).querySelector('.permission-origin');
+  assert.strictEqual(line.querySelectorAll('img, b').length, 0, html);
+  assert.strictEqual(line.textContent, 'Asked by <img src=x onerror=alert(1)>');
+  assert.strictEqual(line.querySelector('.avatar').getAttribute('data-icon'), '"><b>');
+  assert.ok(html.includes('background:var(--accent)'), 'a colour that is not one falls back');
 });
 
 // ── permissionResolvedHtml ──────────────────────────────────────────────────

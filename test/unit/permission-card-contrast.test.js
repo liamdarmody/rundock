@@ -38,10 +38,10 @@ function tokens() {
   return { dark, light: new Map([...dark, ...block('body.light')]) };
 }
 
-function chatRules() {
+function chatRules(file = path.join(ROOT, 'public', 'styles', 'views', 'chat.css')) {
   // A rule inside an @media block is read as if it stood alone, so the block's
   // braces never leak into the next selector.
-  const css = strip(fs.readFileSync(path.join(ROOT, 'public', 'styles', 'views', 'chat.css'), 'utf-8'))
+  const css = strip(fs.readFileSync(file, 'utf-8'))
     .replace(/@media[^{]*\{((?:[^{}]*\{[^{}]*\})*)\s*\}/g, '$1');
   const map = new Map();
   let i = 0;
@@ -239,6 +239,31 @@ for (const themeName of ['dark', 'light']) {
     }
   });
 }
+
+// THE ORIGIN LINE above the card's header: who asked ("Asked by Wren"), or the
+// routine that ran. Its rule is in approvals-dock.css and it sits on the same
+// card in the thread and in the dock. It was --text-2, below 4.5:1 on the card
+// in both themes; an unattributed line keeps its warning colour.
+const DOCK = chatRules(path.join(ROOT, 'public', 'styles', 'components', 'approvals-dock.css'));
+function dockDecl(selector, prop) {
+  const rule = DOCK.get(selector);
+  assert.ok(rule, `approvals-dock.css has no ${selector} rule`);
+  assert.ok(rule.has(prop), `${selector} declares no ${prop}`);
+  return rule.get(prop);
+}
+describe('the origin line above the header', () => {
+  test('is drawn in --text-2-strong, and an unattributed line keeps --attention', () => {
+    assert.strictEqual(dockDecl('.permission-origin', 'color'), 'var(--text-2-strong)');
+    assert.strictEqual(dockDecl('.permission-origin.unattributed', 'color'), 'var(--attention)');
+  });
+  for (const [themeName, want] of [['dark', 4.70], ['light', 4.59]]) {
+    test(`${themeName} theme: ${want}:1 on the card, at least 4.5:1`, () => {
+      const r = ratio(rgb(resolve(dockDecl('.permission-origin', 'color'), T[themeName], '.permission-origin'), '.permission-origin'), cardBackground(themeName));
+      assert.ok(r >= 4.5, `${round2(r)}:1`);
+      assert.strictEqual(round2(r), want);
+    });
+  }
+});
 
 // THE RECONNECT CARD, every state, on its own tint over the main pane
 // (--elevated, public/styles/base.css .main). Three of these were below the bar

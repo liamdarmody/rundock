@@ -194,6 +194,7 @@ const NOT_CHEAP = {
   'test/unit/engine-live-delivery.test.js': 'behaviour: drives a real stdout stream through the engine',
   'test/unit/delegation-target-match.test.js': 'behaviour: builds a workspace and resolves a roster through the real matcher',
   'test/unit/standing-allows-client.test.js': 'behaviour: boots a document and drives the permission decision path',
+  'test/unit/approvals-asked-by-card.test.js': 'behavior: boots a document, draws permission cards and clicks them on a mocked clock. It walks the stylesheets for the rule a waiting button is drawn with, which is why the inventory names it, but the walk serves a rendered check',
   'test/unit/package-import-apply.test.js': 'behaviour: writes agent files and reads them back',
   'test/unit/profile-boxes.test.js': 'behaviour: boots a document and renders panels',
   'test/unit/routine-schedule-edit.test.js': 'behaviour: edits a routine and asserts what was written',

@@ -21,6 +21,9 @@ before(() => {
   global.userScrolledUp = false;
   global.activeConversation = { id: 'c1' };
   chat = require('../../public/views/chat.js');
+  // These tests answer a card the moment it is drawn; the half-second wait
+  // before a card takes a click has its own suite (approvals-asked-by-card).
+  chat.cardArming.ms = 0;
 });
 after(() => { if (dom) dom.window.close(); });
 

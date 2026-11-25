@@ -63,6 +63,9 @@ before(async () => {
   global.renderConvoList = () => {};
   global.WebSocket = { OPEN: 1 };
   chat = require('../../public/views/chat.js');
+  // These tests answer a card the moment it is drawn; the half-second wait
+  // before a card takes a click has its own suite (approvals-asked-by-card).
+  chat.cardArming.ms = 0;
   chat.setStandingToolAllows(['Bash:ls']);
 
   // THE APP'S OWN DISPATCH, cut out of public/app.js and run as written: the

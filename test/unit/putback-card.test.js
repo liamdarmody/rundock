@@ -32,6 +32,9 @@ global.renderConvoList = () => {};
 const convoStates = {};
 global.getConvoState = (id) => (convoStates[id] = convoStates[id] || {});
 const chat = require('../../public/views/chat.js');
+// These tests answer a card the moment it is drawn; the half-second wait
+// before a card takes a click has its own suite (approvals-asked-by-card).
+chat.cardArming.ms = 0;
 
 const PATH = '/ws/.rundock/permissions.json';
 function request(putBack, id = 'pb1') {
