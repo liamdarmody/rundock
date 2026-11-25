@@ -71,6 +71,9 @@ function showComposerFor(convo) {
     const input = document.getElementById('msg-input');
     if (input) input.value = '';
   }
+  // While a send waits, the field holds the text sent and takes no edits.
+  const field = document.getElementById('msg-input');
+  if (field) field.readOnly = !!composer.waiting;
   renderComposer(composer);
   refreshAttachButton(convo);
 }
@@ -195,7 +198,8 @@ function sendReady(text) {
 //
 // A MESSAGE WITH FILES IS SHOWN ONLY ONCE IT IS STORED. Send puts one chat
 // frame on the socket carrying the files, and the composer keeps the text
-// and chips, with Send off, until the server answers for that conversation:
+// and chips, with Send off and the field taking no edits (so the text there
+// is the text sent), until the server answers for that conversation:
 // chat_stored (draw the stored text and start the turn, as dispatchMessage
 // does for text), chat_refused (say why, keep everything), or the socket
 // closing first (say the message wasn't confirmed, keep everything).
@@ -244,6 +248,7 @@ function sendWithFiles(convo, text) {
   composer.notice = null;
   renderComposer(composer);
   document.getElementById('send-btn').disabled = true;
+  document.getElementById('msg-input').readOnly = true;
   Promise.all(files.map(base64Of)).then((data) => {
     if (composer.waiting !== token) return;
     const agent = getConvoState(convo.id).activeAgentId || convo.agentId;
@@ -269,6 +274,7 @@ function endWait(convoId, notice) {
   if (!activeConversation || activeConversation.id !== convoId) return;
   renderComposer(composer);
   document.getElementById('send-btn').disabled = false;
+  document.getElementById('msg-input').readOnly = false;
 }
 
 // chat_stored and chat_refused, acted on only for a conversation with a send
@@ -286,6 +292,7 @@ function fileSendAnswered(d) {
   if (onScreen) {
     const input = document.getElementById('msg-input');
     input.value = ''; input.style.height = '44px';
+    input.readOnly = false;
     renderComposer(composer);
   } else composer.clearText = true;
   if (!convo) return;

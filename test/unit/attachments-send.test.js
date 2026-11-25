@@ -439,6 +439,76 @@ describe('when the message is refused', () => {
   });
 });
 
+// The text in the field while a send waits is the text sent, so nothing typed
+// then can be lost when the answer clears it: the field takes no edits until
+// the answer, and is the person's again after it.
+describe('the text of a send waiting for its answer', () => {
+  const stored = { type: 'chat_stored', conversationId: 'c1', entry: 'one', content: 'see these\n[Attached: a.png]' };
+
+  test('cannot be changed until the answer comes', async () => {
+    const p = page();
+    await sendTwo(p);
+    assert.strictEqual(p.$('msg-input').readOnly, true);
+    assert.strictEqual(p.$('msg-input').value, 'see these');
+  });
+
+  test('once stored, the field is empty and takes the next message, which sends', async () => {
+    const p = page();
+    await sendTwo(p);
+    p.answer(stored);
+    assert.strictEqual(p.$('msg-input').readOnly, false);
+    assert.strictEqual(p.$('msg-input').value, '');
+    p.w.finishProcessing('c1');
+    type(p, 'and one more');
+    p.$('send-btn').click();
+    assert.strictEqual(p.chatFrames().length, 2);
+    assert.strictEqual(p.chatFrames()[1].content, 'and one more');
+  });
+
+  test('once refused, the text is kept and can be changed before sending again', async () => {
+    const p = page();
+    await sendTwo(p);
+    p.answer({ type: 'chat_refused', conversationId: 'c1', code: 'disk-full', title: 'Not sent', text: 'The disk is full' });
+    assert.strictEqual(p.$('msg-input').readOnly, false);
+    assert.strictEqual(p.$('msg-input').value, 'see these');
+    type(p, 'see these again');
+    p.$('send-btn').click();
+    await until(() => p.chatFrames().length === 2, 'the second frame');
+    assert.strictEqual(p.chatFrames()[1].content, 'see these again');
+  });
+
+  test('when the socket closes first, the text is kept and can be changed', async () => {
+    const p = page();
+    await sendTwo(p);
+    p.closeSocket();
+    assert.strictEqual(p.$('msg-input').readOnly, false);
+    assert.strictEqual(p.$('msg-input').value, 'see these');
+  });
+
+  test('another conversation\'s field takes edits meanwhile, and coming back finds the sent text still fixed', async () => {
+    const p = page();
+    await sendTwo(p);
+    p.open('c2');
+    assert.strictEqual(p.$('msg-input').readOnly, false);
+    type(p, 'a draft for c2');
+    p.open('c1');
+    assert.strictEqual(p.$('msg-input').readOnly, true);
+    assert.strictEqual(p.$('msg-input').value, 'see these');
+    p.open('c2');
+    assert.strictEqual(p.$('msg-input').value, 'a draft for c2');
+  });
+
+  test('stored while another conversation is on screen, the field is empty and takes edits on coming back', async () => {
+    const p = page();
+    await sendTwo(p);
+    p.open('c2');
+    p.answer(stored);
+    p.open('c1');
+    assert.strictEqual(p.$('msg-input').readOnly, false);
+    assert.strictEqual(p.$('msg-input').value, '');
+  });
+});
+
 describe('when the socket closes first', () => {
   test('the text and files stay, Send comes back, and the message says it was not confirmed', async () => {
     const p = page();
