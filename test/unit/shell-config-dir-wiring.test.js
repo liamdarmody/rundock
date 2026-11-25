@@ -13,7 +13,13 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..', '..');
 const main = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
-const setupCheck = fs.readFileSync(path.join(root, 'electron', 'setup-check.js'), 'utf8');
+const SETUP_CHECK_PATH = path.join(root, 'electron', 'setup-check.js');
+// Read by the test that needs it, so without the file that test fails on its
+// assertion and the others still run.
+function readSetupCheck() {
+  assert.ok(fs.existsSync(SETUP_CHECK_PATH), 'electron/setup-check.js is there to read');
+  return fs.readFileSync(SETUP_CHECK_PATH, 'utf8');
+}
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 
 const count = (src, text) => src.split(text).length - 1;
@@ -52,6 +58,7 @@ describe('the desktop app', () => {
     assert.ok(wizard > 0, 'the wizard handler waits for the check');
     assert.ok(wizard < main.indexOf("ipcMain.handle('wizard-signin-claude'", wizard));
     // In the setup check, the sign-in run is started only inside the reader.
+    const setupCheck = readSetupCheck();
     assert.strictEqual(count(setupCheck, ROUTED), 1);
     const routed = setupCheck.slice(setupCheck.indexOf(ROUTED), setupCheck.indexOf('\n    });\n', setupCheck.indexOf(ROUTED)));
     assert.match(routed, /runChild\(plan\.program, \[\.\.\.plan\.args, \.\.\.SIGN_IN_ARGS\]/);

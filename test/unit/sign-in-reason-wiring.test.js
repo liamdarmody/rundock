@@ -149,6 +149,7 @@ describe('the reason holder in main.js, by name', () => {
   });
 
   test('the setup check only reads the holder it is given', () => {
+    assert.ok(fs.existsSync(CHECK_PATH), 'electron/setup-check.js is there to read');
     const src = fs.readFileSync(CHECK_PATH, 'utf8');
     const DEFAULT = 'signInReason = createSignInReason(),';
     const { made, reads, other } = mentions(src, (line) => line.trim() === DEFAULT);

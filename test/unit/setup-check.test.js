@@ -106,21 +106,27 @@ describe('the module stands alone', () => {
 });
 
 describe('the check never holds the main process', () => {
-  async function heldAt(t, held, platform = 'darwin') {
-    const f = fakes(t, (c) => (held(c) ? { hold: true } : installed()(c)));
+  // `answer` answers every child but the held one, which is released with
+  // `reply` once a timer set after it started has fired.
+  async function heldAt(t, held, { platform = 'darwin', answer = installed(), signIn = false, reply = {} } = {}) {
+    const f = fakes(t, (c) => (held(c) ? { hold: true } : answer(c)));
     const order = [];
-    const done = checker(f.mod, platform).check({ signIn: false }).then(() => order.push('check ended'));
+    const check = platform === 'win32' ? onWin(f.mod) : checker(f.mod, platform);
+    const done = check.check({ signIn }).then(() => order.push('check ended'));
     await until('the held child to start', () => f.calls.some(held));
     setTimeout(() => order.push('timer fired'), 0);
     await new Promise((r) => setTimeout(r, 20));
     assert.deepStrictEqual(order, ['timer fired'], 'a timer set after the check started fired while its child ran');
-    f.calls.find(held).release({ stdout: isLookup(f.calls.find(held)) ? `${MAC_BIN}\n` : '2.1.0\n' });
+    f.calls.find(held).release(reply);
     await done;
     assert.deepStrictEqual(order, ['timer fired', 'check ended']);
   }
 
-  test('a lookup still running holds nothing', (t) => heldAt(t, isLookup));
-  test('a version run still running holds nothing', (t) => heldAt(t, isVersion));
+  test('a lookup still running holds nothing', (t) => heldAt(t, isLookup, { reply: { stdout: `${MAC_BIN}\n` } }));
+  test('a User PATH write still running holds nothing', (t) => heldAt(t, (c) => isPathWrite(c),
+    { platform: 'win32', answer: onWindows(), reply: { stdout: 'written' } }));
+  test('a version run still running holds nothing', (t) => heldAt(t, isVersion, { reply: { stdout: '2.1.0\n' } }));
+  test('a sign-in check still running holds nothing', (t) => heldAt(t, (c) => isSignIn(c), { signIn: true }));
 });
 
 describe('no shell, and only the copy that was found', () => {
@@ -556,9 +562,12 @@ describe('the sign-in check, as on main', () => {
     const check = checker(f.mod, 'darwin', { shellConfigDir: runsOnce });
     const results = [check.check(), check.check(), check.check()];
     await until('the sign-in check', () => f.calls.some(isSignIn));
+    // Counted before any is released, so a second sign-in check fails here
+    // rather than leaving its request waiting for ever.
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(f.calls.filter(isSignIn).length, 1);
     f.calls.find(isSignIn).release({});
     for (const result of await Promise.all(results)) assert.deepStrictEqual(result, { status: 'ready' });
-    assert.strictEqual(f.calls.filter(isSignIn).length, 1);
   });
 
   test('a copy found and started is kept for Sign in even when it is not signed in', async (t) => {
@@ -646,7 +655,9 @@ describe('the setup log', () => {
       if (isPathRead(c)) return stored('ExpandString', 'C:\\Windows');
       if (isPathWrite(c)) return { stdout: 'stale' };
       if (isVersion(c)) return round === 1 ? { status: 1 } : { stdout: '2.1.0\n' };
-      return { hold: true };
+      // Only the sign-in check is held: a child this test does not expect
+      // answers at once, so the test fails on its log rather than waiting.
+      return isSignIn(c) ? { hold: true } : {};
     }, { now: ticking() });
     const check = f.mod.createSetupCheck({ platform: 'win32', env: { ...WIN_ENV }, appData, shellConfigDir: runsOnce });
     await check.check(); round = 1;
@@ -668,7 +679,10 @@ describe('the setup log', () => {
     const check = checker(f.mod, 'darwin', { appData });
     const results = [check.check({ signIn: false }), check.check({ signIn: false }), check.check({ signIn: false })];
     await until('the lookup', () => f.calls.length >= 1);
-    f.calls[0].release({ stdout: `${MAC_BIN}\n` });
+    // Every lookup held is released, so requests that did not join still end
+    // and the log below says what they did.
+    await new Promise((r) => setTimeout(r, 20));
+    for (const c of f.calls.filter(isLookup)) c.release({ stdout: `${MAC_BIN}\n` });
     await Promise.all(results);
     assert.deepStrictEqual(logLines(appData).map((l) => l.split(' ').slice(1, 3).join(' ')),
       ['request joined', 'request joined', 'lookup found', 'version started']);

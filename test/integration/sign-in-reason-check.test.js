@@ -25,7 +25,6 @@ const { makeTempDir } = require('../helpers/workspace.js');
 const { fakeShell } = require('../helpers/fake-login-shell.js');
 const scd = require('../../electron/shell-config-dir.js');
 const sr = require('../../electron/sign-in-reason.js');
-const sm = require('../../electron/setup-check.js');
 
 const SKIP = process.platform === 'win32'
   ? 'the check is started through /bin/sh here, and the stub claude is a POSIX script'
@@ -45,6 +44,13 @@ const ANT_KEY = fakeKey('ant', 'api03', 'EXAMPLE1234');
 const OTHER_KEY = fakeKey('proj', 'EXAMPLE1234');
 const SHORT_TOKEN = ['example', 'TOKEN', '1234'].join('');
 const LONG_RUN = 'EXAMPLE_token-'.repeat(3);
+
+// The setup check module, loaded when a test first needs it, so without it
+// each test fails on this assertion rather than the file failing to load.
+function sm() {
+  assert.ok(fs.existsSync(SETUP_PATH), 'electron/setup-check.js is there to load');
+  return require(SETUP_PATH);
+}
 
 function piece(pattern, what) {
   const found = pattern.exec(fs.readFileSync(MAIN_PATH, 'utf8'));
@@ -131,8 +137,9 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
   let saved;
   const savedDeps = { ...sr.deps };
   const savedScd = { ...scd.deps };
-  const savedSm = { ...sm.deps };
+  let savedSm = null;
   beforeEach(() => {
+    savedSm = savedSm || { ...sm().deps };
     saved = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
     passes();
     delete process.env.CLAUDE_CONFIG_DIR;
@@ -144,7 +151,7 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
     }
     Object.assign(sr.deps, savedDeps);
     Object.assign(scd.deps, savedScd);
-    Object.assign(sm.deps, savedSm);
+    if (savedSm) Object.assign(sm().deps, savedSm);
   });
 
   test("a failed check's own words reach the wizard's answer", async () => {
@@ -186,7 +193,7 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
       process.env.STUB_CLAUDE_CHECK_HANGS = '1';
       // The limit itself is pinned below; this run is cut short so the test
       // does not wait the full 15 seconds. The setup check's own timer ends it.
-      sm.deps.timeouts = { ...savedSm.timeouts, signIn: 1000 };
+      sm().deps.timeouts = { ...savedSm.timeouts, signIn: 1000 };
       const { answer } = desktop();
       assert.deepStrictEqual(await reasonFor(answer), { status: 'not-authenticated', reason: { kind: 'timeout' } });
     });
@@ -268,8 +275,8 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
   test('the check runs the same command on the copy found, in a copy of this environment, with the same 15-second limit and its output piped', async () => {
     const started = [];
     const timers = [];
-    sm.deps.spawn = (program, args, options) => { started.push({ program, args, options }); return savedSm.spawn(program, args, options); };
-    sm.deps.setTimeout = (fn, ms) => { timers.push(ms); return savedSm.setTimeout(fn, ms); };
+    sm().deps.spawn = (program, args, options) => { started.push({ program, args, options }); return savedSm.spawn(program, args, options); };
+    sm().deps.setTimeout = (fn, ms) => { timers.push(ms); return savedSm.setTimeout(fn, ms); };
     await desktop().answer();
     const stub = path.join(STUB_DIR, 'claude');
     assert.deepStrictEqual(started.map((s) => [s.program, ...s.args].join(' ')),

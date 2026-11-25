@@ -13,6 +13,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 ### Fixed
 
 - **Agents can no longer change your permission answers or workspace settings:** before, when an agent edited the files that hold them, Rundock showed a card, and allowing it saved whatever the agent had written, "Always allow" answers included. Now the edit is refused with no card, and the agent tells you what it wanted to change, so you can make the change yourself in Rundock. A shell command that writes those files still asks.
+- **The setup screen no longer freezes while it checks for Claude Code:** before, on Windows, the first start of a new Claude Code could hold the whole window for a minute, and a copy that was slow to start was reported as not installed. Now the window keeps answering, a copy that is installed but slow to start is shown as such, and Rundock adds its folder to your user PATH with every existing entry kept as it was, so a new PowerShell window recognises `claude`.
 
 ## 0.15.9: Sign-In That Says Why (2026-11-18)
 
