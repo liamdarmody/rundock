@@ -6,9 +6,14 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ## Unreleased
 
+### Added
+
+- **Attach files to a message:** the + button beside the message field attaches images (PNG, JPEG, GIF, WebP), PDFs and text, Markdown or CSV files, up to 5 files and 20 MB per message. Rundock keeps them with the conversation, says under the message field if it couldn't, and removes them when the conversation is deleted.
+
 ### Changed
 
 - **Handovers you can follow:** when one agent hands the conversation to another, a line now says who handed over to whom and who handed it back. If a teammate stops before finishing, Rundock says so in the conversation, with the reason, instead of carrying on as if the work were done. On Codex this replaces the separate error card, so you see one notice.
+- **The editor stops a save larger than 28 MB:** the file on disk is left as it was, and the editor says why it wasn't saved.
 
 ### Fixed
 
