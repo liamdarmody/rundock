@@ -172,6 +172,61 @@ test('lib/delegation/engine.js finishDelegateClose: the parent restarted after i
   assert.ok(delegate.length >= 1 && delegate.every((t) => t !== parent[0]), 'the delegate had a token of its own');
 });
 
+// An intercepted delegation that names no parent agent is handed back to the
+// agent whose process it found. The server's own re-entry always names one;
+// this one does not, and names no parent session either. A throw in the
+// handback would end a running server, so any exception raised while the test
+// runs is recorded, and there must be none. Every wait returns false rather
+// than throwing, so a missing restart fails on an assertion.
+test('lib/delegation/engine.js handleDelegation: an intercepted delegation naming no parent hands back to the agent it found, asking as that agent, and the server stays up', async () => {
+  pairTokens();
+  const convoId = await conversationWithOrchestrator('ask-unnamed');
+  scenario([
+    { match: { agent: 'content-lead', promptIncludes: 'asker unnamed brief' }, turn: [{ text: `Delivered. ${MARKERS.COMPLETE}` }] },
+    { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM: pipeline-complete]' }, hooks: [readOutside()], turn: [{ text: '<silent>' }] },
+  ]);
+  const thrown = [];
+  const record = (err) => thrown.push(err);
+  process.on('uncaughtException', record);
+  try {
+    const since = client.messages.length;
+    const hooksBefore = h.readHookAnswers().length;
+    client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'asker unnamed brief', _intercepted: true });
+    const cardOf = () => client.messages.slice(since).find((m) => m.type === 'control_request' && m._conversationId === convoId);
+    const raised = await h.waitUntil(cardOf, { timeout: 15000, interval: 20 });
+    assert.deepStrictEqual(thrown.map((e) => String(e && e.message)), [], 'the handback raised no exception');
+    assert.ok(raised, 'the parent was started again after its delegate closed, and asked');
+    const card = cardOf();
+    client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convoId, allow: false, card: true });
+    const told = () => h.readHookAnswers().slice(hooksBefore).find((a) => a.agent === 'chief-of-staff' && a.event === 'PreToolUse');
+    assert.ok(await h.waitUntil(told, { timeout: 15000, interval: 20 }), 'chief-of-staff was told');
+    const started = h.readInvocations().find((i) => i.pid === told().pid);
+    assert.ok(started, `the agent that was told is one the server started (pid ${told().pid})`);
+    assertAskedAs({ card, started }, convoId, 'chief-of-staff');
+    assert.strictEqual(started.resume, null, 'started without a session, as none was named');
+    const later = await h.connect();
+    try {
+      assert.ok(await h.waitUntil(() => later.messages.length > 0, { timeout: 5000, interval: 20 }), 'the server still takes a new window');
+    } finally { later.close(); }
+    assert.deepStrictEqual(thrown.map((e) => String(e && e.message)), [], 'and nothing was raised after');
+  } finally { process.removeListener('uncaughtException', record); }
+});
+
+// With no parent named and no process to find, there is nobody to hand back
+// to, so the delegate is never started and the conversation stays as it was.
+// Called directly, because the socket handler would contain a throw and hide it.
+test('lib/delegation/engine.js handleDelegation: an intercepted delegation naming no parent, with no process to find, starts nothing and says nothing', async () => {
+  pairTokens();
+  const convoId = open(h.freshConvoId('ask-noparent'));
+  const since = client.messages.length;
+  const delegate = { type: 'delegate', conversationId: convoId, targetAgent: 'content-lead', context: 'asker noparent brief', _intercepted: true };
+  assert.doesNotThrow(() => h.internal.handleDelegation(delegate, h.internal.chatProcesses), 'having no agent to hand back to is not an error');
+  assert.strictEqual(h.internal.chatProcesses.has(convoId), false, 'no process was put in the conversation');
+  await h.delay(300);
+  assert.deepStrictEqual(h.readInvocations().filter((i) => i.env.RUNDOCK_CONVO_ID === convoId), [], 'no agent was started');
+  assert.deepStrictEqual(client.messages.slice(since).filter((m) => m._conversationId === convoId), [], 'and the conversation was sent nothing');
+});
+
 test('lib/delegation/engine.js handleScopeReturn: the orchestrator started for a handback asks as the orchestrator', async () => {
   const convoId = open(h.freshConvoId('ask-return'));
   scenario([
