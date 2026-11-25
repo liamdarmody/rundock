@@ -1015,7 +1015,7 @@ const EFFECT_EXECUTORS = {
     badge.textContent = 'Cancelled';
     const bubble = streamEl.querySelector('.msg-bubble');
     if (bubble) bubble.appendChild(badge);
-    const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime);
+    const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime, ef.durationMs);
     if (actSummary) streamEl.appendChild(actSummary);
   },
   'clear-outgoing-working': (convoId, ef) => {
@@ -1165,13 +1165,13 @@ const EFFECT_EXECUTORS = {
     if (!state.currentStreamingMsg) return;
     const streamEl = state.currentStreamingMsg.querySelector('.streaming-text');
     if (streamEl && ef.text) streamEl.innerHTML = formatMd(streamTextAfterCut(state, ef.text));
-    const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime);
+    const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime, ef.durationMs, ef.usage, ef.runtime);
     if (actSummary) state.currentStreamingMsg.appendChild(actSummary);
   },
   'append-final-message': (convoId, ef) => {
     // No streaming happened (e.g. very short response). Render now.
     const msgEl = addAgentMsg(ef.text, ef.agentId);
-    const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime);
+    const actSummary = buildActivitySummary(ef.toolCalls, ef.turnStartTime, ef.durationMs, ef.usage, ef.runtime);
     if (actSummary && msgEl) msgEl.appendChild(actSummary);
   },
   // Kept where it fell, as the server keeps it: in a conversation whose
