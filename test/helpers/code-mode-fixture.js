@@ -298,7 +298,7 @@ function hookEnv(world, { port, codeMode = true, extraDirs, home } = {}) {
     // The token the server starts an agent with for this conversation, which
     // the hook sends on both of its routes (lib/auth). Issued in this process,
     // which is where the routes under test run.
-    RUNDOCK_HOOK_TOKEN: require('../../lib/auth/index.js').issueHookToken('code-mode-test'),
+    RUNDOCK_HOOK_TOKEN: require('../../lib/auth/index.js').issueHookToken('code-mode-test', 'default'),
     HOME: home || world.home,
     GIT_CONFIG_NOSYSTEM: '1',
   };

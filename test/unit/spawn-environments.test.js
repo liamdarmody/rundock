@@ -39,13 +39,43 @@ test('a routine is started with no conversation, even when the app was given one
   try {
     assert.strictEqual('RUNDOCK_CONVO_ID' in claudeRt.getSpawnEnv(null), false);
     assert.strictEqual(claudeRt.getSpawnEnv(null).RUNDOCK, '1');
-    assert.strictEqual(claudeRt.getSpawnEnv('c1').RUNDOCK_CONVO_ID, 'c1');
+    assert.strictEqual(claudeRt.getSpawnEnv('c1', 'alpha').RUNDOCK_CONVO_ID, 'c1');
     // An empty id is no conversation, which is why the chat message gives one
     // that names none the default conversation rather than its empty id.
     assert.strictEqual('RUNDOCK_CONVO_ID' in claudeRt.getSpawnEnv(''), false);
   } finally {
     claudeRt.wireClaudeRuntimeDeps(prev);
     if (before === undefined) delete process.env.RUNDOCK_CONVO_ID; else process.env.RUNDOCK_CONVO_ID = before;
+  }
+});
+
+test('a conversation spawn names the agent it starts, or nothing is started', () => {
+  // The token is the only thing that tells the server which agent asked, so a
+  // caller that forgot the agent fails here rather than starting a process
+  // whose cards nobody can name.
+  const auth = require('../../lib/auth/index.js');
+  const prev = claudeRt.wireClaudeRuntimeDeps({ getActualPort: () => 1 });
+  try {
+    for (const none of [undefined, null, '']) {
+      assert.throws(() => claudeRt.getSpawnEnv('c-agent', none), TypeError, `a conversation with no agent (${String(none)})`);
+    }
+    const env = claudeRt.getSpawnEnv('c-agent', 'alpha');
+    assert.deepStrictEqual(auth.hookTokenScope(env.RUNDOCK_HOOK_TOKEN), { conversationId: 'c-agent', agentId: 'alpha' },
+      'the token belongs to this conversation and this agent');
+    assert.strictEqual(claudeRt.getSpawnEnv('c-agent', 'alpha').RUNDOCK_HOOK_TOKEN, env.RUNDOCK_HOOK_TOKEN,
+      'the same agent started again in the same conversation keeps its token');
+    assert.notStrictEqual(claudeRt.getSpawnEnv('c-agent', 'beta').RUNDOCK_HOOK_TOKEN, env.RUNDOCK_HOOK_TOKEN,
+      'another agent in the conversation has its own');
+    // The routine call is the one production makes, unchanged: its token is
+    // the run's own, and still maps to the run.
+    const runToken = auth.issueRunHookToken('run-spawn-env');
+    const routine = claudeRt.getSpawnEnv(null, runToken);
+    assert.strictEqual(routine.RUNDOCK_HOOK_TOKEN, runToken);
+    assert.strictEqual(auth.hookTokenRun(routine.RUNDOCK_HOOK_TOKEN), 'run-spawn-env');
+    assert.strictEqual(auth.hookTokenScope(routine.RUNDOCK_HOOK_TOKEN), null, 'and to no conversation');
+    auth.retireRunHookToken(runToken);
+  } finally {
+    claudeRt.wireClaudeRuntimeDeps(prev);
   }
 });
 

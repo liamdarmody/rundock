@@ -132,6 +132,9 @@ before(async () => {
   global.renderConvoList = () => {};
   global.ws = { readyState: 1, send: (s) => { sent.push(JSON.parse(s)); client.ws.send(s); } };
   chat = require('../../public/views/chat.js');
+  // These tests answer a card the moment it is drawn; the half-second wait
+  // before a card takes a click has its own suite (approvals-asked-by-card).
+  chat.cardArming.ms = 0;
   global.setStandingToolAllows = chat.setStandingToolAllows;
   settings = require('../../public/views/settings.js');
 });

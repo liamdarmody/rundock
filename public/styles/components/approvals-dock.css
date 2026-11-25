@@ -12,7 +12,9 @@
 .approvals-dock-count { margin-left: auto; font-weight: 500; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .approvals-dock-list { display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow-y: auto; }
 .approvals-dock-list > .msg-permission { max-width: 100%; align-self: stretch; }
-/* Who is asking, above the card's own header. */
-.permission-origin { display: flex; align-items: center; gap: 8px; font-size: var(--label); font-weight: 600; letter-spacing: 0.02em; color: var(--text-2); padding-left: var(--permission-text-column); }
+/* Who is asking, above the card's own header. A conversation's card leads with
+   the asker's avatar, which holds no text: its glyph is drawn from data-icon. */
+.permission-origin { display: flex; align-items: center; gap: 8px; font-size: var(--label); font-weight: 600; letter-spacing: 0.02em; color: var(--text-2-strong); padding-left: var(--permission-text-column); }
 .permission-origin.unattributed { color: var(--attention); }
+.permission-origin > .avatar::before { content: attr(data-icon); }
 @media (prefers-reduced-motion: reduce) { .approvals-dock { animation: none; } }

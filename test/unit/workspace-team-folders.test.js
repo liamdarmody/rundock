@@ -106,7 +106,7 @@ let runs = 0;
 function envFor(ws, who) {
   const env = config.inWorkspace(ws, () => (who === 'routine'
     ? claudeRt.getSpawnEnv(null, auth.issueRunHookToken(`team-folders-run-${++runs}`))
-    : claudeRt.getSpawnEnv('team-folders-conversation')));
+    : claudeRt.getSpawnEnv('team-folders-conversation', 'default')));
   return { ...env, HOME: home, USERPROFILE: home, NODE_V8_COVERAGE: '' };
 }
 

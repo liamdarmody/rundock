@@ -38,47 +38,48 @@ const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/');
 
 // ── The inventory ──
 
-// `passes` is the argument the call gives getSpawnEnv; `conversation` is what
-// the agent is started with, as the driving tests assert it.
+// `passes` is the arguments the call gives getSpawnEnv (a conversation's spawn
+// also names the agent it starts); `conversation` is what the agent is started
+// with, as the driving tests assert it.
 const AGENT_SPAWNS = [
   { at: 'lib/scheduler.js | beginRun | spawnClaude(argsFor(asAgent))', passes: 'null, run.hookToken', notice: 'unattended',
     what: "a routine's run, started by the scheduler",
     conversation: 'none',
     drivenBy: ["lib/scheduler.js beginRun: a routine's run is started with no conversation, and told to carry on or say it failed"] },
-  { at: 'server.js | message chat | spawnClaude(args) #1', passes: 'convoId', notice: 'attended',
+  { at: 'server.js | message chat | spawnClaude(args) #1', passes: "convoId, agentData ? agentData.id : 'default'", notice: 'attended',
     what: "a conversation's turn, in the interactive spawn",
     conversation: "the message's conversation id, or 'default' when it names none",
     drivenBy: [
       "server.js, the chat message (interactive): a conversation's turn is started with its conversation, and told to stop and ask",
       'server.js, the chat message (interactive) with no conversation id: the default conversation, told to stop and ask',
     ] },
-  { at: 'server.js | message chat | spawnClaude(args) #2', passes: 'convoId', notice: 'attended',
+  { at: 'server.js | message chat | spawnClaude(args) #2', passes: "convoId, agentData ? agentData.id : 'default'", notice: 'attended',
     what: "a conversation's turn, in the legacy spawn (one process per message)",
     conversation: "the message's conversation id, or 'default' when it names none",
     drivenBy: [
       "server.js, the chat message (legacy): a conversation's turn is started with its conversation, and told to stop and ask",
       'server.js, the chat message (legacy) with no conversation id: the default conversation too',
     ] },
-  { at: 'lib/delegation/engine.js | startWithoutSession | spawnClaude(withoutResume(args))', passes: 'convoId', notice: 'attended',
+  { at: 'lib/delegation/engine.js | startWithoutSession | spawnClaude(withoutResume(args))', passes: 'convoId, entry.agentId', notice: 'attended',
     what: 'an agent started again fresh because its stored session is gone',
     conversation: 'the conversation of the agent whose session was refused',
     drivenBy: ['lib/delegation/engine.js startWithoutSession: a delegate started fresh, its stored session gone, keeps the conversation, and is told to stop and ask'] },
-  { at: 'lib/delegation/engine.js | handleScopeReturn | spawnClaude(args)', passes: 'convoId', notice: 'attended',
+  { at: 'lib/delegation/engine.js | handleScopeReturn | spawnClaude(args)', passes: 'convoId, orchestrator.id', notice: 'attended',
     what: "the orchestrator started for a specialist's handback",
     conversation: 'the conversation the specialist handed back in',
     drivenBy: ["lib/delegation/engine.js handleScopeReturn: the orchestrator started for a specialist's handback keeps the conversation, and is told to stop and ask"] },
-  { at: 'lib/delegation/engine.js | spawnResumedProcess | spawnClaude(args)', passes: 'convoId', notice: 'attended',
+  { at: 'lib/delegation/engine.js | spawnResumedProcess | spawnClaude(args)', passes: 'convoId, agentId', notice: 'attended',
     what: 'a caller resumed after Rundock blocked its handoff',
     conversation: 'the conversation of the caller',
     drivenBy: ['lib/delegation/engine.js spawnResumedProcess: the caller resumed after a blocked handoff keeps the conversation, and is told to stop and ask'] },
-  { at: 'lib/delegation/engine.js | handleDelegation | spawnClaude(delegateArgs)', passes: 'convoId', notice: 'attended',
+  { at: 'lib/delegation/engine.js | handleDelegation | spawnClaude(delegateArgs)', passes: 'convoId, targetAgent.id', notice: 'attended',
     what: 'the agent delegated to',
     conversation: "the delegate message's conversation, which must have an agent answering in it, so one with no id starts nobody",
     drivenBy: [
       'lib/delegation/engine.js handleDelegation, the delegate: started with the conversation it was delegated in, and told to stop and ask',
       'a delegation with no conversation id starts nobody',
     ] },
-  { at: 'lib/delegation/engine.js | handleDelegation | spawnClaude(resumeArgs)', passes: 'convoId', notice: 'attended',
+  { at: 'lib/delegation/engine.js | handleDelegation | spawnClaude(resumeArgs)', passes: 'convoId, parentAgentId', notice: 'attended',
     what: 'the parent resumed after its delegate finished',
     conversation: 'the conversation the delegate finished in',
     drivenBy: ['lib/delegation/engine.js handleDelegation, the parent resumed after its delegate finished: keeps the conversation, and is told to stop and ask'] },

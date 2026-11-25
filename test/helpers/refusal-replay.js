@@ -70,7 +70,7 @@ async function replay(hook, { failureHook = true } = {}) {
   const server = http.createServer(router.handleHttpRequest);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const convo = 'refusal-replay';
-  const env = { ...process.env, RUNDOCK: '1', RUNDOCK_PORT: String(server.address().port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: convo, RUNDOCK_HOOK_TOKEN: auth.issueHookToken(convo), RUNDOCK_EXTRA_DIRS: '', HOME: home };
+  const env = { ...process.env, RUNDOCK: '1', RUNDOCK_PORT: String(server.address().port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: convo, RUNDOCK_HOOK_TOKEN: auth.issueHookToken(convo, 'default'), RUNDOCK_EXTRA_DIRS: '', HOME: home };
   delete env.RUNDOCK_CODE_MODE;
   delete env.CLAUDE_CONFIG_DIR;
   env.NODE_V8_COVERAGE = '';

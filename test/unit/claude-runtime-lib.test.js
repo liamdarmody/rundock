@@ -42,7 +42,7 @@ function withTwoWorkspaces(fn) {
 test('unwired getActualPort throws the named wiring error at first use', () => {
   const rt = freshClaudeRuntime();
   assert.throws(
-    () => rt.getSpawnEnv('convo-1'),
+    () => rt.getSpawnEnv('convo-1', 'alpha'),
     /lib\/runtime\/claude: getActualPort not wired \(call wireClaudeRuntimeDeps at boot\)/,
   );
 });
@@ -94,7 +94,7 @@ test('getSpawnEnv carries the use-time workspace and the wired port together', (
   rt.wireClaudeRuntimeDeps({ getActualPort: () => 5151 });
   withTwoWorkspaces((config, wsA, wsB) => {
     config.setWorkspace(wsA);
-    const envA = rt.getSpawnEnv('convo-7');
+    const envA = rt.getSpawnEnv('convo-7', 'alpha');
     assert.strictEqual(envA.RUNDOCK_WORKSPACE, wsA);
     assert.strictEqual(envA.RUNDOCK_PORT, '5151');
     assert.strictEqual(envA.RUNDOCK_CONVO_ID, 'convo-7');
@@ -119,7 +119,7 @@ test('a spawned agent resolves the platform temp directory inside the workspace'
   rt.wireClaudeRuntimeDeps({ getActualPort: () => 4444 });
   withTwoWorkspaces((config, wsA) => {
     config.setWorkspace(wsA);
-    const env = rt.getSpawnEnv('convo-1');
+    const env = rt.getSpawnEnv('convo-1', 'alpha');
     // All three, because the platform reads a different one per operating
     // system: TMPDIR on macOS and Linux, TEMP and TMP on Windows. Setting only
     // the one this machine happens to use would leave the other platforms
@@ -346,7 +346,7 @@ test('a spawned agent never inherits the hook\'s test seam', () => {
   try {
     withTwoWorkspaces((config, wsA) => {
       config.setWorkspace(wsA);
-      for (const env of [rt.getSpawnEnv('convo-1'), rt.getSpawnEnv(null)]) {
+      for (const env of [rt.getSpawnEnv('convo-1', 'alpha'), rt.getSpawnEnv(null)]) {
         assert.ok(!('RUNDOCK_TEST_SEAMS' in env), 'no RUNDOCK_TEST_SEAMS');
         assert.ok(!('RUNDOCK_TEST_PLATFORM' in env), 'no RUNDOCK_TEST_PLATFORM');
       }

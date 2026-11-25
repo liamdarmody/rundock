@@ -79,7 +79,7 @@ function hookEnv(ws, port, { codeMode, extraDirs }, extra = {}) {
   const env = {
     ...process.env, HOME: home, RUNDOCK: '1', RUNDOCK_ELECTRON: '1', RUNDOCK_WORKSPACE: ws, RUNDOCK_PORT: String(port),
     RUNDOCK_EXTRA_DIRS: extraDirs.join(path.delimiter), RUNDOCK_CONVO_ID: 'startup-test',
-    RUNDOCK_HOOK_TOKEN: require('../../lib/auth/index.js').issueHookToken('startup-test'), ...extra,
+    RUNDOCK_HOOK_TOKEN: require('../../lib/auth/index.js').issueHookToken('startup-test', 'default'), ...extra,
   };
   for (const name of ['ZDOTDIR', 'XDG_CONFIG_HOME', 'RUNDOCK_CODE_MODE']) if (!(name in extra)) delete env[name];
   if (codeMode) env.RUNDOCK_CODE_MODE = '1';

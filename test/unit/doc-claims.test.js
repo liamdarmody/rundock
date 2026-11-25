@@ -2309,7 +2309,7 @@ function routerWithNoWindow() {
     pendingPermissionRequests: () => pending, safeSend: (s) => sent.push(JSON.parse(s)),
     getPermissionTimeoutMs: () => 60000, routineRun: () => null, noteRefusedCard: () => false,
   });
-  const token = auth.issueHookToken('doc-claims-read');
+  const token = auth.issueHookToken('doc-claims-read', 'default');
   const put = (body) => new Promise((resolve) => {
     const req = Object.assign(new EventEmitter(), { method: 'POST', url: '/api/permission-request', headers: { [auth.HOOK_HEADER]: token } });
     const res = Object.assign(new EventEmitter(), {
@@ -3044,5 +3044,20 @@ describe('ARCHITECTURE.md and SECURITY.md: the sandbox refuses reads of the sign
       assert.ok(evidence.includes(words), `the evidence cites ${words}`);
       assert.match(live[line - 1], re, `and line ${line} of the Claude Code test is what it cites`);
     }
+  });
+});
+
+describe('the changelog names the change to approval cards', () => {
+  // Located by the entry it follows, not by the section's name: the release
+  // script renames "## Unreleased" to a version, and the line must survive that.
+  const ASKED_BY = '- **Approvals say who asked:** each approval card in a conversation now names the agent that asked for it, with their avatar. A card\'s buttons wait half a second after it appears or moves, so a click meant for one card can\'t land on the next.';
+  test('one entry, worded exactly, under Changed and straight after the handovers entry', () => {
+    const lines = changelog.split(/\r?\n/);
+    const at = lines.indexOf(ASKED_BY);
+    assert.ok(at >= 0, 'the changelog has the entry, worded exactly');
+    assert.strictEqual(lines.lastIndexOf(ASKED_BY), at, 'and has it once');
+    assert.ok(lines[at - 1].startsWith('- **Handovers you can follow:**'), `it follows the handovers entry, not: ${lines[at - 1]}`);
+    const heading = lines.slice(0, at).reverse().find((l) => l.startsWith('### ') || l.startsWith('## '));
+    assert.strictEqual(heading, '### Changed', 'under the Changed heading');
   });
 });

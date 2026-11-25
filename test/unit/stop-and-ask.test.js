@@ -73,7 +73,7 @@ after(async () => {
 });
 
 const env = (convo, extra = {}) => {
-  const e = { ...process.env, RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: convo, RUNDOCK_HOOK_TOKEN: auth.issueHookToken(convo), RUNDOCK_EXTRA_DIRS: '', ...extra };
+  const e = { ...process.env, RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: convo, RUNDOCK_HOOK_TOKEN: auth.issueHookToken(convo, 'default'), RUNDOCK_EXTRA_DIRS: '', ...extra };
   delete e.RUNDOCK_CODE_MODE;
   e.NODE_V8_COVERAGE = '';
   return e;

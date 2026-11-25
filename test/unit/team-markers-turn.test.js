@@ -221,6 +221,18 @@ describe('a hand-off is the record on the entry, and nothing an agent wrote', ()
     assert.deepStrictEqual(saves, [], 'and nothing reached the save');
   });
 
+  test('a team change card is raised with no asker: it names who brought Doc in on the card itself', () => {
+    // The server can name an asker: the token Doc is started with in this
+    // conversation names Doc. A team change card is the card it leaves
+    // unnamed, since who brought Doc in is on the card itself.
+    const auth = require(path.join(ROOT, 'lib', 'auth', 'index.js'));
+    assert.deepStrictEqual(auth.hookTokenScope(auth.issueHookToken('c1', 'rundock-guide')), { conversationId: 'c1', agentId: 'rundock-guide' },
+      'Doc\'s token in this conversation names Doc');
+    docTurn({ delegation: { originalAgentId: 'chief-of-staff', originalProcessId: 'p0' } }, `Done.\n${SAVE}`);
+    assert.strictEqual(requests.length, 1, 'one card');
+    assert.ok(!('agentId' in requests[0]), `no asker is passed: ${JSON.stringify(Object.keys(requests[0]))}`);
+  });
+
   // A CARD'S OUTCOME THAT CANNOT BE KEPT IS NEVER LOST, AND NEVER TOLD AS A
   // STOP. The card was held on the record, when it was raised, with the
   // outcome a stop gives it; once decided, the outcome takes its place. With

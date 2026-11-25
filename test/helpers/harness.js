@@ -237,19 +237,20 @@ function authHeaders() {
   return auth ? { [auth.KEY_HEADER]: auth.launchKey() } : {};
 }
 /**
- * A permission hook's token for one conversation. With none, a routine run's
- * token, for a run that is not going: a real run's is issued by the scheduler
- * and handed only to that run's process.
+ * A permission hook's token for one agent in one conversation, the
+ * conversation's default agent unless another is named. With no conversation,
+ * a routine run's token, for a run that is not going: a real run's is issued
+ * by the scheduler and handed only to that run's process.
  */
-function hookToken(conversationId = null) {
+function hookToken(conversationId = null, agentId = 'default') {
   const auth = authModule();
   if (!auth) return '';
-  return conversationId ? auth.issueHookToken(conversationId) : auth.issueRunHookToken('no-run-going');
+  return conversationId ? auth.issueHookToken(conversationId, agentId) : auth.issueRunHookToken('no-run-going');
 }
-/** The header the permission hook sends its token in, with a token for `conversationId`. */
-function hookHeaders(conversationId = null) {
+/** The header the permission hook sends its token in, with a token for `conversationId` and `agentId`. */
+function hookHeaders(conversationId = null, agentId = 'default') {
   const auth = authModule();
-  return auth ? { [auth.HOOK_HEADER]: hookToken(conversationId) } : {};
+  return auth ? { [auth.HOOK_HEADER]: hookToken(conversationId, agentId) } : {};
 }
 
 // WebSocket test client that records every message. Signed in as Rundock's

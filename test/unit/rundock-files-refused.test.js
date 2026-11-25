@@ -317,7 +317,7 @@ let runs = 0;
 function envFor(ws, who) {
   const env = config.inWorkspace(ws, () => (who === 'routine'
     ? claudeRt.getSpawnEnv(null, auth.issueRunHookToken(`rundock-files-run-${++runs}`))
-    : claudeRt.getSpawnEnv('rundock-files-conversation')));
+    : claudeRt.getSpawnEnv('rundock-files-conversation', 'default')));
   return { ...env, HOME: home, USERPROFILE: home, NODE_V8_COVERAGE: '' };
 }
 const whoFor = (env) => (env.RUNDOCK_CONVO_ID ? 'conversation' : 'routine');

@@ -341,7 +341,9 @@ Codex cards, carrying a display name and the CLI's own failure message; an
 activity row carrying an MCP tool name, which is a third-party string; **the
 permission card**, where the tool name, the command text, every crossing path
 and up to 1500 characters of the content an agent wants to write all land in
-element content through `esc`; and the resolved card, which reads its summary
+element content through `esc`, and the name, icon and colour of the agent that
+asked go through `askedByHtml`, which makes each safe for its position as the
+other identity builders in `chat-markup.js` do; and the resolved card, which reads its summary
 back out of the DOM as `textContent` and re-escapes it.
 
 `views/conversations.js` ×2 (a conversation title and preview; a list name) ·
