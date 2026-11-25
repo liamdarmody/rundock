@@ -9,6 +9,10 @@
 // since that first start can be slow while Windows scans a newly downloaded
 // program, and a new PowerShell window should recognise `claude` either way.
 //
+// Each step is logged to setup-check.log in the app's user-data folder, as a
+// fixed word and a time: never a path, output or error text, so the file is
+// safe to hand over unread.
+//
 // Pure of Electron: electron/main.js passes in what it knows. Every effect
 // goes through `deps`, which tests replace in-process.
 
@@ -19,9 +23,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { launchPlan, CLAUDE_CODE } = require('../lib/runtime/npm-launcher.js');
 const { ensureClaudeFolders } = require('../lib/runtime/claude-folders.js');
+const { createSignInReason } = require('./sign-in-reason.js');
 
 // What one child may print on each stream before it is stopped.
 const OUTPUT_CAP_BYTES = 1024 * 1024;
+
+// The sign-in check, as the desktop has always run it.
+const SIGN_IN_ARGS = ['--print', 'test', '--output-format', 'text'];
+
+const LOG_FILE = 'setup-check.log';
+const LOG_LINES = 200;
 
 const deps = {
   spawn: childProcess.spawn,
@@ -33,7 +44,7 @@ const deps = {
   execPath: () => process.execPath,
   inElectron: () => Boolean(process.versions && process.versions.electron),
   extendPath: (env, { platform }) => ensureClaudeFolders(env, { platform }),
-  timeouts: { lookup: 5000, pathWrite: 15000, version: 30000 },
+  timeouts: { lookup: 5000, pathWrite: 15000, version: 30000, signIn: 15000 },
 };
 
 // One child, started as a program and its arguments with no shell. Resolves
@@ -151,12 +162,29 @@ const WRITE_SCRIPT = [
 // The kinds a PATH can be written back as. Any other is left alone.
 const WRITABLE_KINDS = new Set(['Missing', 'String', 'ExpandString']);
 
+// The outcome word a failed start of the found copy is logged as.
+const startOutcome = (err) => {
+  if (err.code === 'ETIMEDOUT') return 'timeout';
+  return err.status === undefined && err.code !== 'ENOBUFS' ? 'not-started' : 'failed';
+};
+const SIGN_IN_OUTCOMES = { timeout: 'timeout', 'not-started': 'not-started' };
+
 // `platform` and `env` are the app's own (process.platform, process.env): the
 // install folders are added to `env`'s PATH before each lookup, and every
-// child is given a copy of it at the moment it starts.
-function createSetupCheck({ platform = process.platform, env = process.env } = {}) {
+// child is given a copy of it at the moment it starts. `appData` is the
+// folder the log is kept in; with none, nothing is logged. `shellConfigDir`
+// routes the sign-in check (it may run it again with CLAUDE_CONFIG_DIR read
+// from the login shell), and `signInReason` keeps why it last failed.
+function createSetupCheck({
+  platform = process.platform,
+  env = process.env,
+  appData = null,
+  shellConfigDir = { checkAuthenticated: (run) => run() },
+  signInReason = createSignInReason(),
+} = {}) {
   let found = { bin: null, version: null };
-  let running = null;
+  // The check running for each kind of request, joined by the next like it.
+  const running = new Map();
   // Folders found on the User PATH or written to it in this run of the app,
   // which are not read or written again. A write that failed is not here, so
   // the next check tries it again.
@@ -172,14 +200,52 @@ function createSetupCheck({ platform = process.platform, env = process.env } = {
     return { ...env, ...(plan.env || {}), ...asNode };
   }
 
+  // One line per step: an ISO time, the step, a fixed word and the elapsed
+  // milliseconds. A log that cannot be written is let go: it never fails the
+  // check, and nothing waits on it.
+  function log(step, outcome, start) {
+    const end = deps.now();
+    if (!appData) return;
+    try {
+      const file = path.join(appData, LOG_FILE);
+      let lines = [];
+      try { lines = deps.fs.readFileSync(file, 'utf8').split('\n').filter(Boolean); } catch { /* a new log */ }
+      lines.push(`${new Date(end).toISOString()} ${step} ${outcome} ${Math.max(0, end - start)}ms`);
+      deps.fs.writeFileSync(file, lines.slice(-LOG_LINES).join('\n') + '\n');
+    } catch { /* the check goes on without its log */ }
+  }
+
   async function lookup() {
+    const start = deps.now();
     try { deps.extendPath(env, { platform }); } catch { /* the lookup searches PATH as it is */ }
     try {
       const { stdout } = await runChild(platform === 'win32' ? 'where.exe' : 'which', ['claude'], { ...env }, deps.timeouts.lookup);
-      return chooseCandidate(stdout, platform);
-    } catch {
+      const bin = chooseCandidate(stdout, platform);
+      log('lookup', bin ? 'found' : 'none', start);
+      return bin;
+    } catch (err) {
+      log('lookup', err.code === 'ETIMEDOUT' ? 'timeout' : err.status === undefined ? 'failed' : 'none', start);
       return null;
     }
+  }
+
+  // The sign-in check on the copy that was started, through the routing that
+  // may run it again. Its reason, when it fails, is the one main gives.
+  async function signIn(plan) {
+    const start = deps.now();
+    const passed = await shellConfigDir.checkAuthenticated(async () => {
+      try {
+        await runChild(plan.program, [...plan.args, ...SIGN_IN_ARGS], startEnv(plan), deps.timeouts.signIn);
+        signInReason.passed();
+        return true;
+      } catch (err) {
+        signInReason.failed(err);
+        return false;
+      }
+    });
+    const reason = passed ? null : signInReason.last() || { kind: 'no-reason' };
+    log('sign-in', passed ? 'passed' : SIGN_IN_OUTCOMES[reason.kind] || 'failed', start);
+    return passed ? { status: 'ready' } : { status: 'not-authenticated', reason };
   }
 
   // Adds `folder` to the User PATH. Never throws: it says what it did, and a
@@ -217,30 +283,42 @@ function createSetupCheck({ platform = process.platform, env = process.env } = {
     }
   }
 
-  async function run() {
+  async function run(withSignIn) {
     found = { bin: null, version: null };
     const bin = await lookup();
     if (!bin) return { status: 'not-installed' };
     // Before the first start, which on Windows can be slow.
-    if (platform === 'win32') await writeUserPath(path.win32.dirname(bin));
+    if (platform === 'win32') {
+      const start = deps.now();
+      log('path-write', await writeUserPath(path.win32.dirname(bin)), start);
+    }
+    const start = deps.now();
     const plan = deps.launchPlan(bin, CLAUDE_CODE, { platform, execPath: deps.execPath() });
-    if (!plan || plan.refusal) return { status: 'found-not-started' };
+    if (!plan || plan.refusal) { log('version', 'refused', start); return { status: 'found-not-started' }; }
     let version;
     try {
       const { stdout } = await runChild(plan.program, [...plan.args, '--version'], startEnv(plan), deps.timeouts.version);
       version = stdout.toString('utf8');
-    } catch {
+    } catch (err) {
+      log('version', startOutcome(err), start);
       return { status: 'found-not-started' };
     }
+    log('version', 'started', start);
     found = { bin, version };
-    return { status: 'started' };
+    return withSignIn ? signIn(plan) : { status: 'started' };
   }
 
   return {
-    // A request while a check runs joins it; one after it ends starts afresh.
-    check() {
-      if (!running) running = run().finally(() => { running = null; });
-      return running;
+    // { status }: not-installed, found-not-started, then started when asked
+    // not to sign in, else ready or not-authenticated with its reason. A
+    // request while a check of its kind runs joins it; one after it ends
+    // starts afresh.
+    check({ signIn: withSignIn = true } = {}) {
+      const kind = withSignIn ? 'sign-in' : 'start';
+      if (running.has(kind)) { log('request', 'joined', deps.now()); return running.get(kind); }
+      const check = run(withSignIn).finally(() => { running.delete(kind); });
+      running.set(kind, check);
+      return check;
     },
     // The copy the last check started, and the version it gave, for Sign in.
     found: () => ({ ...found }),

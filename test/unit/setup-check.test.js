@@ -476,3 +476,221 @@ describe('the User PATH is written as soon as Claude Code is found', () => {
     }
   });
 });
+
+// The sign-in check runs as on main, on the copy that was found, and still
+// through the routing that may read the login shell's CLAUDE_CONFIG_DIR.
+const { createSignInReason } = require('../../electron/sign-in-reason.js');
+const SIGN_IN_ARGS = ['--print', 'test', '--output-format', 'text'];
+const isSignIn = (c) => c.args.includes('--print');
+const runsOnce = { checkAuthenticated: (run) => run() };
+const signedIn = (more = {}) => (c) => (isSignIn(c) ? more.signIn || {} : installed()(c));
+
+describe('the sign-in check, as on main', () => {
+  test('it starts the found copy with --print test --output-format text, given 15 seconds, and exit 0 is ready', async (t) => {
+    const f = fakes(t, signedIn());
+    assert.deepStrictEqual(await checker(f.mod, 'darwin', { shellConfigDir: runsOnce }).check(), { status: 'ready' });
+    assert.deepStrictEqual(f.calls.map((c) => [c.program, c.args]), [['which', ['claude']], [MAC_BIN, ['--version']], [MAC_BIN, SIGN_IN_ARGS]]);
+    assert.strictEqual(timerOf(f, f.calls.find(isSignIn)).ms, 15000);
+  });
+
+  test('on Windows a found claude.cmd is signed in through Node, as the app run as Node', async (t) => {
+    const npm = makeTempDir('setup-check-npm-');
+    const pkg = path.join(npm, 'node_modules', '@anthropic-ai', 'claude-code');
+    fs.mkdirSync(pkg, { recursive: true });
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ bin: { claude: 'cli.js' } }));
+    fs.writeFileSync(path.join(pkg, 'cli.js'), '');
+    const cmd = path.join(npm, 'claude.cmd');
+    fs.writeFileSync(cmd, '');
+    const f = fakes(t, (c) => (isSignIn(c) ? {} : onWindows({ bin: cmd, read: stored('ExpandString', path.win32.dirname(cmd)) })(c)));
+    assert.deepStrictEqual(await f.mod.createSetupCheck({ platform: 'win32', env: { ...WIN_ENV }, shellConfigDir: runsOnce }).check(), { status: 'ready' });
+    const signIn = f.calls.find(isSignIn);
+    assert.strictEqual(signIn.program, APP);
+    assert.deepStrictEqual(signIn.args, [fs.realpathSync(path.join(pkg, 'cli.js')), ...SIGN_IN_ARGS]);
+    assert.strictEqual(signIn.options.env.ELECTRON_RUN_AS_NODE, '1');
+  });
+
+  test('it runs through checkAuthenticated, and a run again sees the value that routing took', async (t) => {
+    let signIns = 0;
+    const f = fakes(t, (c) => (isSignIn(c) ? (++signIns === 1 ? { status: 1 } : {}) : installed()(c)));
+    const env = { PATH: '/usr/bin' };
+    const routing = {
+      async checkAuthenticated(run) {
+        if (await run()) return true;
+        env.CLAUDE_CONFIG_DIR = '/home/example/.claude-work';
+        return run();
+      },
+    };
+    assert.deepStrictEqual(await f.mod.createSetupCheck({ platform: 'darwin', env, shellConfigDir: routing }).check(), { status: 'ready' });
+    const runs = f.calls.filter(isSignIn);
+    assert.strictEqual(runs.length, 2);
+    assert.strictEqual(runs[0].options.env.CLAUDE_CONFIG_DIR, undefined);
+    assert.strictEqual(runs[1].options.env.CLAUDE_CONFIG_DIR, '/home/example/.claude-work', 'each run is given the environment as it is when it starts');
+  });
+
+  test('a check that does not start the copy runs no sign-in', async (t) => {
+    const f = fakes(t, (c) => (isVersion(c) ? { status: 1 } : signedIn()(c)));
+    assert.deepStrictEqual(await checker(f.mod, 'darwin', { shellConfigDir: runsOnce }).check(), { status: 'found-not-started' });
+    assert.ok(!f.calls.some(isSignIn));
+  });
+
+  test('a check asked not to sign in stops at started', async (t) => {
+    const f = fakes(t, signedIn());
+    assert.deepStrictEqual(await checker(f.mod, 'darwin', { shellConfigDir: runsOnce }).check({ signIn: false }), { status: 'started' });
+    assert.ok(!f.calls.some(isSignIn));
+  });
+
+  test('three overlapping sign-in requests share one sign-in check', async (t) => {
+    const f = fakes(t, (c) => (isSignIn(c) ? { hold: true } : installed()(c)));
+    const check = checker(f.mod, 'darwin', { shellConfigDir: runsOnce });
+    const results = [check.check(), check.check(), check.check()];
+    await until('the sign-in check', () => f.calls.some(isSignIn));
+    f.calls.find(isSignIn).release({});
+    for (const result of await Promise.all(results)) assert.deepStrictEqual(result, { status: 'ready' });
+    assert.strictEqual(f.calls.filter(isSignIn).length, 1);
+  });
+
+  test('a copy found and started is kept for Sign in even when it is not signed in', async (t) => {
+    const f = fakes(t, signedIn({ signIn: { status: 1 } }));
+    const check = checker(f.mod, 'darwin', { shellConfigDir: runsOnce });
+    assert.strictEqual((await check.check()).status, 'not-authenticated');
+    assert.deepStrictEqual(check.found(), { bin: MAC_BIN, version: '2.1.0 (Claude Code)\n' });
+  });
+});
+
+describe('a failed sign-in check gives the reason main gives', () => {
+  async function reasonOf(t, reply, act) {
+    const f = fakes(t, signedIn({ signIn: reply }));
+    const holder = createSignInReason();
+    const result = checker(f.mod, 'darwin', { shellConfigDir: runsOnce, signInReason: holder }).check();
+    if (act) { await until('the sign-in check', () => f.calls.some(isSignIn)); act(f); }
+    const answer = await result;
+    assert.strictEqual(answer.status, 'not-authenticated');
+    assert.deepStrictEqual(answer.reason, holder.last(), "the reason is the one main's holder keeps");
+    return answer.reason;
+  }
+
+  test('a sign-in check still running at 15 seconds gives timeout, and is stopped', async (t) => {
+    let signIn = null;
+    const reason = await reasonOf(t, { hold: true }, (f) => { signIn = f.calls.find(isSignIn); timerOf(f, signIn).fn(); });
+    assert.deepStrictEqual(reason, { kind: 'timeout' });
+    assert.strictEqual(signIn.child.kills, 1);
+  });
+
+  test('a sign-in check that cannot start gives not-started', async (t) => {
+    assert.deepStrictEqual(await reasonOf(t, { error: Object.assign(new Error('spawn failed'), { code: 'ENOENT' }) }), { kind: 'not-started' });
+  });
+
+  test('a sign-in check that exits non-zero gives the first line it printed', async (t) => {
+    const reason = await reasonOf(t, { status: 1, stderr: '\nInvalid API key \u00b7 Please run /login\nsecond line\n' });
+    assert.deepStrictEqual(reason, { kind: 'said', text: 'Invalid API key \u00b7 Please run /login', signIn: true });
+  });
+
+  test('a check that passes after one that failed leaves no reason', async (t) => {
+    let signIns = 0;
+    const f = fakes(t, (c) => (isSignIn(c) ? (++signIns === 1 ? { status: 1, stderr: 'boom\n' } : {}) : installed()(c)));
+    const holder = createSignInReason();
+    const check = checker(f.mod, 'darwin', { shellConfigDir: runsOnce, signInReason: holder });
+    assert.strictEqual((await check.check()).status, 'not-authenticated');
+    assert.deepStrictEqual(await check.check(), { status: 'ready' });
+    assert.strictEqual(holder.last(), null);
+  });
+});
+
+// The setup log: one line per step in the app's user-data folder, safe to hand
+// over unread.
+const LINE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (lookup|path-write|version|sign-in|request) ([a-z-]+) (\d+)ms$/;
+const logOf = (dir) => fs.readFileSync(path.join(dir, 'setup-check.log'), 'utf8');
+const logLines = (dir) => logOf(dir).split('\n').filter(Boolean);
+const ticking = () => { let clock = Date.UTC(2026, 0, 2, 3, 4, 5); return () => (clock += 7); };
+
+describe('the setup log', () => {
+  test('each step is logged with an ISO time, the step, a fixed outcome and its milliseconds', async (t) => {
+    const appData = makeTempDir('setup-check-log-');
+    const f = fakes(t, (c) => (isSignIn(c) ? {} : onWindows()(c)), { now: ticking() });
+    await f.mod.createSetupCheck({ platform: 'win32', env: { ...WIN_ENV }, appData, shellConfigDir: runsOnce }).check();
+    const lines = logLines(appData);
+    for (const line of lines) assert.ok(LINE.test(line), `a log line in the fixed form: ${line}`);
+    assert.deepStrictEqual(lines.map((l) => l.split(' ').slice(1, 3).join(' ')),
+      ['lookup found', 'path-write written', 'version started', 'sign-in passed']);
+    assert.deepStrictEqual(lines.map((l) => l.split(' ')[3]), ['7ms', '7ms', '7ms', '7ms'], 'each step its own elapsed time');
+  });
+
+  test('each outcome is a fixed word', async (t) => {
+    const appData = makeTempDir('setup-check-log-');
+    let round = 0;
+    const f = fakes(t, (c) => {
+      if (isLookup(c)) return round === 0 ? { status: 1 } : { stdout: `${WIN_EXE}\r\n` };
+      if (isPathRead(c)) return stored('ExpandString', 'C:\\Windows');
+      if (isPathWrite(c)) return { stdout: 'stale' };
+      if (isVersion(c)) return round === 1 ? { status: 1 } : { stdout: '2.1.0\n' };
+      return { hold: true };
+    }, { now: ticking() });
+    const check = f.mod.createSetupCheck({ platform: 'win32', env: { ...WIN_ENV }, appData, shellConfigDir: runsOnce });
+    await check.check(); round = 1;
+    await check.check(); round = 2;
+    const third = check.check();
+    await until('the sign-in check', () => f.calls.some(isSignIn));
+    timerOf(f, f.calls.find(isSignIn)).fn();
+    await third;
+    assert.deepStrictEqual(logLines(appData).map((l) => l.split(' ').slice(1, 3).join(' ')), [
+      'lookup none',
+      'lookup found', 'path-write stale', 'version failed',
+      'lookup found', 'path-write stale', 'version started', 'sign-in timeout',
+    ]);
+  });
+
+  test('a joined request is logged', async (t) => {
+    const appData = makeTempDir('setup-check-log-');
+    const f = fakes(t, (c) => (isLookup(c) ? { hold: true } : installed()(c)));
+    const check = checker(f.mod, 'darwin', { appData });
+    const results = [check.check({ signIn: false }), check.check({ signIn: false }), check.check({ signIn: false })];
+    await until('the lookup', () => f.calls.length >= 1);
+    f.calls[0].release({ stdout: `${MAC_BIN}\n` });
+    await Promise.all(results);
+    assert.deepStrictEqual(logLines(appData).map((l) => l.split(' ').slice(1, 3).join(' ')),
+      ['request joined', 'request joined', 'lookup found', 'version started']);
+  });
+
+  test('the log keeps its last 200 lines', async (t) => {
+    const appData = makeTempDir('setup-check-log-');
+    fs.writeFileSync(path.join(appData, 'setup-check.log'), Array.from({ length: 250 }, (_, i) => `old ${i}`).join('\n') + '\n');
+    const f = fakes(t, installed());
+    await checker(f.mod, 'darwin', { appData }).check({ signIn: false });
+    const lines = logLines(appData);
+    assert.strictEqual(lines.length, 200);
+    assert.strictEqual(lines[0], 'old 52');
+    assert.ok(LINE.test(lines[199]) && lines[199].includes(' version started '), 'the newest line is last');
+  });
+
+  test('no path, output or error text ever reaches the log', async (t) => {
+    const appData = makeTempDir('setup-check-log-');
+    const S = 'SENTINEL';
+    const folder = `C:\\Users\\${S}\\.local\\bin`;
+    let round = 0;
+    const f = fakes(t, (c) => {
+      if (isLookup(c)) return round === 0 ? { status: 1, stderr: `${S} not found\n` } : { stdout: `${folder}\\claude.exe\r\n` };
+      if (isPathRead(c)) return round === 1 ? { status: 1, stderr: `${S} denied` } : stored('ExpandString', `C:\\${S}`);
+      if (isPathWrite(c)) return { stdout: `${S}`, stderr: `${S}` };
+      if (isVersion(c)) return round === 2 ? { error: Object.assign(new Error(`spawn ${folder} EACCES`), { code: 'EACCES', path: folder }) } : { stdout: `${S} 2.1.0\n` };
+      return { status: 1, stderr: `${S}: Invalid API key at ${folder}\n`, stdout: `/home/${S}/x` };
+    }, { now: ticking() });
+    const check = f.mod.createSetupCheck({ platform: 'win32', env: { ...WIN_ENV, HOME: `/home/${S}` }, appData, shellConfigDir: runsOnce });
+    for (round = 0; round < 4; round++) await check.check();
+    const log = logOf(appData);
+    assert.ok(logLines(appData).length >= 10, 'sanity: the rounds were logged');
+    assert.ok(!log.includes(S), 'the sentinel never reaches the log');
+    assert.ok(!log.includes('/') && !log.includes('\\'), 'no path separator reaches the log');
+  });
+
+  test('a log that cannot be written changes nothing', async (t) => {
+    const broken = () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+    const plain = fakes(t, installed());
+    const expected = await checker(plain.mod, 'darwin', { shellConfigDir: runsOnce }).check();
+    const starts = plain.calls.map((c) => [c.program, c.args]);
+    const f = fakes(t, installed(), { fs: { readFileSync: broken, writeFileSync: broken, appendFileSync: broken } });
+    const answer = await checker(f.mod, 'darwin', { shellConfigDir: runsOnce, appData: makeTempDir('setup-check-log-') }).check();
+    assert.deepStrictEqual(answer, expected);
+    assert.deepStrictEqual(f.calls.map((c) => [c.program, c.args]), starts, 'the same children, in the same order');
+    assert.strictEqual(f.timers.length, f.calls.length, 'and no timer beyond one for each child: nothing waits on the log');
+  });
+});
