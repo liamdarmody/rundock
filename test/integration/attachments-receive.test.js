@@ -654,6 +654,154 @@ describe('every path back into the handler writes once and records once', () => 
   });
 });
 
+describe('at most four messages with files are taken in at a time, across sockets and conversations', () => {
+  const BUSY = { code: 'busy', title: 'Message not sent', text: FALLBACK };
+  const answersOf = (on, id, since) => on.messages.slice(since)
+    .filter((m) => (m.type === 'chat_stored' || m.type === 'chat_refused') && m.conversationId === id);
+  const storedOf = (id, since, on = client) => answersOf(on, id, since).filter((m) => m.type === 'chat_stored');
+  const send = (on, id, content, attachments) => on.send({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content, attachments });
+
+  // Each conversation's lock held, as a long write would hold it, until the
+  // returned release is awaited.
+  function holdLocks(...ids) {
+    const releases = [];
+    const held = ids.map((id) => store.withConversationLock(id, () => new Promise((resolve) => { releases.push(resolve); })));
+    return async () => { for (const r of releases) r(); await Promise.all(held); };
+  }
+  // Answered once every message `on` sent before it has been taken in.
+  async function allTaken(on) {
+    const since = on.messages.length;
+    on.send({ type: 'get_conversations' });
+    assert.ok(await arrived((m) => m.type === 'conversations', { since, on }), 'the socket\'s earlier messages are taken in');
+  }
+
+  // Five messages with files for one held conversation, then the release:
+  // what was answered before it, and the four stored after it.
+  async function fiveWhileHeld(tag) {
+    const id = h.freshConvoId(tag.toLowerCase());
+    answers(`${tag}-`);
+    const release = holdLocks(id);
+    const since = client.messages.length;
+    let early;
+    try {
+      for (let n = 1; n <= 5; n++) chat(id, `${tag}-${n} see this`, [file(`shot-${n}.png`, png())]);
+      await arrived((m) => m.type === 'chat_refused' && m.conversationId === id, { since });
+      await h.delay(300);
+      early = { answers: answersOf(client, id, since), spawns: spawnsFor(id).length, prompts: promptsWith(`${tag}-`).length };
+    } finally {
+      await release();
+    }
+    assert.ok(await h.waitUntil(() => storedOf(id, since).length >= 4), 'four are stored once released');
+    assert.ok(await resultFor(id, `DONE-${tag}-`, since), 'and dispatched');
+    assert.ok(await h.waitUntil(() => promptsWith(`${tag}-`).length >= 4), 'all four reach the process');
+    await h.delay(300);
+    return { id, since, early, stored: storedOf(id, since) };
+  }
+
+  test('of five sent while held, four wait and the fifth is refused busy at once, with nothing written for it', async () => {
+    const { id, early, stored } = await fiveWhileHeld('FIVE');
+    assert.deepStrictEqual(early.answers.map((m) => ({ code: m.code, title: m.title, text: m.text })), [BUSY],
+      'before the release, only the fifth is answered, and it is refused busy');
+    assert.deepStrictEqual([early.spawns, early.prompts], [0, 0], 'and nothing reaches a process while the four wait');
+    writtenOnce(id, stored);
+    assert.deepStrictEqual(promptsWith('FIVE-5'), [], 'the fifth reaches no process');
+    h.reapConvo(id);
+  });
+
+  test('after the release, the four that waited are stored and dispatched in the order they arrived', async () => {
+    const { id, stored } = await fiveWhileHeld('ORDER');
+    assert.deepStrictEqual(stored.map((s) => s.content.split(' ')[0]), ['ORDER-1', 'ORDER-2', 'ORDER-3', 'ORDER-4'], 'stored in arrival order');
+    assert.deepStrictEqual(promptsWith('ORDER-'), stored.map((s) => s.content), 'and dispatched in it, with their stored text');
+    h.reapConvo(id);
+  });
+
+  test('the four are counted across two sockets and two conversations', async () => {
+    const x = h.freshConvoId('span-x');
+    const y = h.freshConvoId('span-y');
+    answers('SPAN-');
+    const other = await h.connect();
+    const release = holdLocks(x, y);
+    const since = client.messages.length;
+    let early;
+    try {
+      send(client, x, 'SPAN-1 see this', [file('shot.png', png())]);
+      send(client, y, 'SPAN-2 see this', [file('shot.png', png())]);
+      await allTaken(client);
+      send(other, y, 'SPAN-3 see this', [file('shot.png', png())]);
+      send(other, x, 'SPAN-4 see this', [file('shot.png', png())]);
+      await allTaken(other);
+      send(other, y, 'SPAN-5 see this', [file('shot.png', png())]);
+      await arrived((m) => m.type === 'chat_refused', { on: other });
+      await h.delay(300);
+      early = [answersOf(client, x, since), answersOf(client, y, since), answersOf(other, x, 0), answersOf(other, y, 0)]
+        .map((list) => list.map((m) => m.code || m.type));
+    } finally {
+      await release();
+    }
+    assert.deepStrictEqual(early, [[], [], [], ['busy']], 'the fifth, on the second socket, is refused busy while the four wait');
+    assert.ok(await h.waitUntil(() => storedOf(x, since).length + storedOf(y, since).length + storedOf(x, 0, other).length
+      + storedOf(y, 0, other).length === 4), 'the four are stored once released');
+    assert.deepStrictEqual([entriesOf(x).length, entriesOf(y).length], [2, 2], 'two entries in each conversation');
+    assert.deepStrictEqual(promptsWith('SPAN-5'), [], 'and the fifth is never dispatched');
+    other.close();
+    h.reapConvo(x);
+    h.reapConvo(y);
+  });
+
+  test('a place is free again after a refused payload and after a stored message', async () => {
+    const id = h.freshConvoId('cap-free');
+    answers('FREE-');
+    const first = client.messages.length;
+    for (let n = 0; n < 4; n++) chat(id, 'FREE-0 not files', 'not a list');
+    assert.ok(await h.waitUntil(() => answersOf(client, id, first).length === 4), 'four payloads are answered');
+    assert.deepStrictEqual(answersOf(client, id, first).map((m) => m.code), ['bad-payload', 'bad-payload', 'bad-payload', 'bad-payload']);
+    for (const after of ['refused payloads', 'stored messages']) {
+      const release = holdLocks(id);
+      const since = client.messages.length;
+      let early;
+      try {
+        for (let n = 1; n <= 5; n++) chat(id, `FREE-${n} see this`, [file('shot.png', png())]);
+        await arrived((m) => m.type === 'chat_refused' && m.conversationId === id, { since });
+        await h.delay(300);
+        early = answersOf(client, id, since).map((m) => m.code);
+      } finally {
+        await release();
+      }
+      assert.deepStrictEqual(early, ['busy'], `after four ${after}, four places are free and only the fifth is refused`);
+      assert.ok(await h.waitUntil(() => storedOf(id, since).length === 4), `after four ${after}, the four are stored`);
+    }
+    h.reapConvo(id);
+  });
+
+  test('a payload refused behind its conversation\'s earlier files keeps its place until its refusal is sent', async () => {
+    const id = h.freshConvoId('cap-behind');
+    const elsewhere = h.freshConvoId('cap-elsewhere');
+    answers('BEHIND-');
+    const release = holdLocks(id);
+    const since = client.messages.length;
+    let early;
+    try {
+      chat(id, 'BEHIND-1 see this', [file('shot.png', png())]);
+      for (let n = 2; n <= 4; n++) chat(id, `BEHIND-${n} not files`, 'not a list');
+      chat(elsewhere, 'BEHIND-5 see this', [file('shot.png', png())]);
+      await arrived((m) => m.type === 'chat_refused' && m.conversationId === elsewhere, { since });
+      await h.delay(300);
+      early = [answersOf(client, id, since), answersOf(client, elsewhere, since)].map((list) => list.map((m) => m.code || m.type));
+    } finally {
+      await release();
+    }
+    assert.deepStrictEqual(early, [[], ['busy']],
+      'the three refused payloads wait behind the files before them, still in hand, so another conversation\'s message is refused busy');
+    assert.ok(await h.waitUntil(() => answersOf(client, id, since).length === 4), 'once released, each is answered');
+    assert.deepStrictEqual(answersOf(client, id, since).map((m) => m.code || m.type), ['chat_stored', 'bad-payload', 'bad-payload', 'bad-payload'],
+      'in the order they arrived');
+    assert.deepStrictEqual([entriesOf(elsewhere), listing(folderOf(elsewhere))], [[], null], 'nothing is written for the busy one');
+    assert.ok(await resultFor(id, 'DONE-BEHIND-', since), 'and the stored one is dispatched');
+    h.reapConvo(id);
+    h.reapConvo(elsewhere);
+  });
+});
+
 describe('deleting a conversation deletes its attachments, and says when it could not', () => {
   const kept = (id) => [{ type: 'conversation_files_kept', id,
     text: `Rundock deleted the conversation but couldn't remove its attached files. They're still in .rundock/attachments/${id}/.` }];

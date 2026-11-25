@@ -75,7 +75,7 @@ describe('refusalWording: a refusal about the whole message', () => {
       { title: 'Message not sent', text: 'Rundock couldn\'t save Incident-Report-22-Nov.pdf because the disk is full. Your message and files are still here.' });
   });
 
-  for (const code of ['save-failed', 'image-pixels', 'bad-id', 'bad-payload', 'bad-entry', 'no-such-code']) {
+  for (const code of ['save-failed', 'image-pixels', 'bad-id', 'bad-payload', 'bad-entry', 'busy', 'no-such-code']) {
     test(`${code} gets the fallback`, () => {
       has('refusalWording');
       assert.deepStrictEqual(wording.refusalWording(refusal(code, { name: 'Screen Shot.png', width: 9000, height: 10, limit: 8000 }), 1), FALLBACK);

@@ -7,9 +7,10 @@
 // kept, and deleting the conversation takes them too or says they stayed.
 // That holds through a chain of small rules (the frame limit and the socket
 // that survives a frame past it, the receive before the transition buffer,
-// the payload's checks in their order, the reference check, the sizes the
-// page shows, the editor's own limit, the delete and its notice), and every
-// one of them can be deleted with most messages still looking fine. That is
+// the payload's checks in their order, the reference check, the count of
+// messages with files in hand, the sizes the page shows, the editor's own
+// limit, the delete and its notice), and every one of them can be deleted
+// with most messages still looking fine. That is
 // why each is broken on purpose here and a test must go red for it.
 //
 // A guard whose mutation turns nothing red is reported as a FAILURE rather
@@ -118,6 +119,14 @@ const MUTATIONS = [
   [only(RECEIVER, 'the transition buffer\'s replay is refused when its entry is gone from the record, and reaches no process'), 'a reference the server sends back into the handler is checked again',
     "    // Every reference is checked: the page's on arrival, before it can wait\n",
     "    if (!fromPage) return false;\n    // Every reference is checked: the page's on arrival, before it can wait\n"],
+
+  // ===== AT MOST FOUR MESSAGES WITH FILES IN HAND, EACH PLACE GIVEN BACK =====
+  [only(RECEIVER, 'of five sent while held, four wait and the fifth is refused busy at once, with nothing written for it'), 'a message past the limit is refused busy',
+    '      if (receiving >= module.exports.MAX_RECEIVING) {',
+    '      if (false) {'],
+  [only(RECEIVER, 'a place is free again after a refused payload and after a stored message'), 'a refused message gives its place back',
+    '      hold(key, () => outcome.then((o) => settle(ws, msg, fileCount, o)).finally(() => { receiving -= 1; }));',
+    '      hold(key, () => outcome.then((o) => { settle(ws, msg, fileCount, o); if (o.ok) receiving -= 1; }));'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

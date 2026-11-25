@@ -103,6 +103,28 @@ describe('MAX_PAYLOAD', () => {
   });
 });
 
+describe('MAX_RECEIVING', () => {
+  test('is 4 messages with files at a time', () => {
+    assert.strictEqual(receive && receive.MAX_RECEIVING, 4);
+  });
+
+  test('is read when a message arrives, and past it a message is refused busy before its payload is looked at', () => {
+    ready('createReceiver');
+    const was = receive.MAX_RECEIVING;
+    const sent = [];
+    const sock = { readyState: 1, send: (m) => sent.push(JSON.parse(m)) };
+    receive.MAX_RECEIVING = 0;
+    try {
+      const msg = { type: 'chat', conversationId: 'alpha', content: 'hello', attachments: 'not a list' };
+      assert.strictEqual(receive.createReceiver({ clients: new Set([sock]) }).takes(msg, sock, true), true, 'the message is taken');
+    } finally {
+      receive.MAX_RECEIVING = was;
+    }
+    assert.deepStrictEqual(sent, [{ type: 'chat_refused', conversationId: 'alpha', code: 'busy', title: 'Message not sent',
+      text: 'Rundock couldn\'t save the files. Your message and files are still here.' }], 'refused at once, and busy rather than bad-payload');
+  });
+});
+
 describe('receiveAttachments refuses the payload in a fixed order, before anything is written', () => {
   test('an attachmentEntry beside attachments is bad-payload, ahead of every other fault', async () => {
     await refusedBare(message({ attachmentEntry: 'x' }), 'bad-payload');
