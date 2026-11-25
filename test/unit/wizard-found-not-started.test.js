@@ -189,6 +189,11 @@ describe('found but not started, on the setup screen', () => {
   }
 
   test('an automatic answer leaves an asked answer as it is, as not-installed does', async () => {
+    const fresh = await loaded({ claude: failing });
+    await fresh.check(FOUND);
+    assert.ok(fresh.shows('found-hint') && !fresh.shows('install-hint'),
+      'sanity: with no asked line, an automatic found answer shows its own hint, not the install command');
+    fresh.close();
     for (const late of [FOUND, MISSING]) {
       const wiz = await askedLine();
       const asked = wiz.view();
@@ -233,6 +238,9 @@ describe('the install hint on each platform', () => {
 
   for (const platform of ['darwin', 'linux']) {
     test(`on ${platform} it is byte for byte as on main`, async () => {
+      const win = await loaded({ platform: 'win32', claude: MISSING });
+      assert.ok(win.installText().includes(WIN_LINE), 'sanity: the platform switch is live');
+      win.close();
       const wiz = await loaded({ platform, claude: MISSING });
       assert.strictEqual(wiz.el('install-hint').innerHTML, UNIX_HINT);
       wiz.close();
