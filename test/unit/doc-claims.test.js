@@ -294,6 +294,26 @@ describe('ARCHITECTURE.md: the connector secrets file is kept out of git but cop
   });
 });
 
+describe('the changelog names the change to where agents say a connector key goes', () => {
+  // Located by the entries it follows, not by the section's name: the release
+  // script renames "## Unreleased" to a version, and other entries may land
+  // between, so it is checked for coming after both rather than straight after.
+  const KEY_GOES = '- **Agents tell you where a connector key goes:** before, agents said `.rundock/mcp-secrets.json`, the file connector keys go in, does not travel with the workspace.'
+    + ' Now they say it is kept out of git because setup adds `.rundock/` to `.gitignore`, but a synced folder such as OneDrive, iCloud or Dropbox copies it to every device the folder syncs to, so a key put there goes wherever the workspace goes.';
+  test('one entry, worded exactly, under Fixed and after the permission-answers and setup-screen entries', () => {
+    const lines = changelog.split(/\r?\n/);
+    const at = lines.indexOf(KEY_GOES);
+    assert.ok(at >= 0, 'the changelog has the entry, worded exactly');
+    assert.strictEqual(lines.lastIndexOf(KEY_GOES), at, 'and has it once');
+    for (const before of ['- **Agents can no longer change your permission answers or workspace settings:**', '- **The setup screen no longer freezes while it checks for Claude Code:**']) {
+      const earlier = lines.findIndex((l) => l.startsWith(before));
+      assert.ok(earlier >= 0 && earlier < at, `it comes after the entry starting ${before}`);
+    }
+    const heading = lines.slice(0, at).reverse().find((l) => l.startsWith('### ') || l.startsWith('## '));
+    assert.strictEqual(heading, '### Fixed', 'under the Fixed heading');
+  });
+});
+
 describe('SKILLS.md: only slugs are injected into the prompt', () => {
   // The claim: "Rundock injects a bare list of slugs into the agent's prompt
   // (`Skills: alpha, beta`) and nothing else: no description, no summary."
