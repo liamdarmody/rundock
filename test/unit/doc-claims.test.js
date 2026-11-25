@@ -1064,6 +1064,26 @@ describe('ROUTINES.md: where a routine actually runs', () => {
       'the scaffold must ignore the state folder, which is what makes the git aside true');
   });
 
+  // THE GIT HALF OF WHAT EVERY AGENT SAYS. Agents tell the person the
+  // connector secrets file is kept out of git because setup adds .rundock/ to
+  // .gitignore. Checked against setup itself, on a workspace that had no
+  // .gitignore, and against the prompt the default agent gets there.
+  test('setup keeps the connector secrets file out of git, as every agent is told it does', () => {
+    // The default agent is made from CLAUDE.md, so the workspace has one. It
+    // has no .gitignore until setup writes it.
+    const dir = makeWorkspace({ claudeMd: '# Alpha\n' });
+    assert.strictEqual(fs.existsSync(path.join(dir, '.gitignore')), false, 'sanity: the workspace starts with no .gitignore');
+    scaffoldWorkspace(dir);
+    const gitignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf-8');
+    assert.ok(gitignore.split(/\r?\n/).includes('.rundock/'), 'setup writes a .gitignore line that is exactly .rundock/');
+    srv.setWorkspace(dir);
+    srv.invalidateAgentCache();
+    const agent = srv.discoverAgents().find(a => a.id === 'default');
+    assert.ok(agent, 'the default agent is on the roster');
+    assert.ok(srv.buildSystemPrompt(agent).includes('It is kept out of git because setup adds .rundock/ to .gitignore'),
+      'the default agent is told the secrets file is kept out of git, by the step that just ran');
+  });
+
   // ONE SCHEDULER, ONE WORKSPACE. The tick re-discovers agents each pass, and
   // discovery reads whichever workspace is open, so a routine in any other
   // workspace is never even considered.
