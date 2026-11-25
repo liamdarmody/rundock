@@ -105,6 +105,10 @@ const MUTATIONS = [
   [RECEIVER_UNIT, 'files for a Codex agent are held back until it can read them',
     '      if (forCodex(msg)) {',
     '      if (false) {'],
+  [only(RECEIVER, 'set_workspace waits for the files, which are stored, recorded and dispatched in the first workspace; the next message goes to the second'),
+    'a workspace switch waits for every message whose files are on their way',
+    '  return inFlight.size > 0;\n',
+    '  return false;\n'],
 
   // ===== DELETING A CONVERSATION DELETES ITS FILES, AND SAYS WHEN IT COULD NOT =====
   [only(DELETE, 'a chat with files on its way when the delete arrives is stored and dispatched once, then its folder goes, and no notice'),
@@ -153,6 +157,15 @@ const MUTATIONS = [
     '  name.innerHTML = file.name;'],
   [CHIPS, 'focus moves on from a removed chip',
     "  (buttons[index] || buttons[index - 1] || document.getElementById('msg-input')).focus();\n",
+    ''],
+  [SEND, 'a send of text alone takes the inline message away',
+    '  if (!composer.files.length) {\n    composer.notice = null;\n    renderComposerNotice(composer);\n    return false;\n  }',
+    '  if (!composer.files.length) return false;'],
+  [SEND, 'the message field is fixed while a send with files waits for its answer',
+    "  document.getElementById('msg-input').readOnly = true;\n",
+    ''],
+  [SEND, 'a different workspace empties every composer',
+    '  composers.clear();\n',
     ''],
 ];
 
