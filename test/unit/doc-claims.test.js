@@ -1112,9 +1112,11 @@ describe('ROUTINES.md: where a routine actually runs', () => {
     // The default agent is made from CLAUDE.md, so the workspace has one. It
     // has no .gitignore until setup writes it.
     const dir = makeWorkspace({ claudeMd: '# Alpha\n' });
-    assert.strictEqual(fs.existsSync(path.join(dir, '.gitignore')), false, 'sanity: the workspace starts with no .gitignore');
+    const gitignorePath = path.join(dir, '.gitignore');
+    assert.strictEqual(fs.existsSync(gitignorePath), false, 'sanity: the workspace starts with no .gitignore');
     scaffoldWorkspace(dir);
-    const gitignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf-8');
+    assert.ok(fs.existsSync(gitignorePath), 'setup writes a .gitignore');
+    const gitignore = fs.readFileSync(gitignorePath, 'utf-8');
     assert.ok(gitignore.split(/\r?\n/).includes('.rundock/'), 'setup writes a .gitignore line that is exactly .rundock/');
     srv.setWorkspace(dir);
     srv.invalidateAgentCache();
