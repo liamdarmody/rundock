@@ -9,10 +9,12 @@
 // server and one workspace. Deleting the conversation removes its stored
 // attachments too.
 const base = require('@playwright/test');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { appendRawCoverage, writeLcov, isClientEntry } = require('./coverage.js');
+const store = require('../../lib/attachments/store.js');
 
 const test = base.test.extend({
   page: async ({ page }, use) => {
@@ -29,6 +31,28 @@ test.afterAll(async () => { await writeLcov(); });
 // A one-pixel PNG.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 
+const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
+
+// Every chat_stored answer the page receives, oldest first. Registered before
+// the page loads so no frame is missed.
+function collectStored(page) {
+  const stored = [];
+  page.on('websocket', (socket) => {
+    socket.on('framereceived', (frame) => {
+      try {
+        const msg = JSON.parse(frame.payload);
+        if (msg && msg.type === 'chat_stored') stored.push(msg);
+      } catch (e) { /* binary or non-JSON frame */ }
+    });
+  });
+  return stored;
+}
+
+// The workspace the server is serving, as the page holds it.
+async function workspaceDir(page) {
+  return page.evaluate(() => currentWorkspacePath);
+}
+
 function fixtureFiles() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-attach-'));
   const write = (name, bytes) => { const file = path.join(dir, name); fs.writeFileSync(file, bytes); return file; };
@@ -44,6 +68,7 @@ test('files attached through the + button are sent with the message, drawn from 
   const files = fixtureFiles();
   let convoId = null;
   try {
+    const stored = collectStored(page);
     await page.goto('/');
     await expect(page.locator('.convo-item').first()).toBeVisible();
     convoId = await page.evaluate(() => createConversation('default', 'Attachments e2e').id);
@@ -70,6 +95,26 @@ test('files attached through the + button are sent with the message, drawn from 
     // Each line names the stored copy, in the order picked, with its kind and size.
     await expect(bubble).toContainText(/\[Attached: \.rundock\/attachments\/\d+\/1-pixel\.png \(PNG image, \d+ KB\)\]/);
     await expect(bubble).toContainText(/\[Attached: \.rundock\/attachments\/\d+\/2-notes\.txt \(text file, \d+ KB\)\]/);
+    // The entry the answer reports is the one on record, each line names one
+    // of its files, and each stored copy is the picked file, byte for byte.
+    await expect.poll(() => stored.filter((m) => m.conversationId === convoId).length).toBe(1);
+    const { entry } = stored.find((m) => m.conversationId === convoId);
+    const workspace = await workspaceDir(page);
+    expect(store.readRecord(workspace, convoId).messages).toEqual([entry]);
+    const picked = { 'pixel.png': fs.readFileSync(files.png), 'notes.txt': fs.readFileSync(files.txt) };
+    expect(entry.files.map((f) => f.name)).toEqual(['pixel.png', 'notes.txt']);
+    // The bubble's lines, in order, each the text after its '[Attached: '.
+    const lines = (await bubble.textContent()).split('[Attached: ').slice(1);
+    expect(lines).toHaveLength(entry.files.length);
+    for (const [i, f] of entry.files.entries()) {
+      const names = `.rundock/attachments/${convoId}/${f.file} (`;
+      expect(lines[i].slice(0, names.length)).toBe(names);
+      const copy = fs.readFileSync(path.join(workspace, '.rundock', 'attachments', convoId, f.file));
+      expect(copy.equals(picked[f.name])).toBe(true);
+      expect(f.bytes).toBe(picked[f.name].length);
+      expect(f.sha256).toBe(sha256(picked[f.name]));
+      expect(store.checkRecordedFile(workspace, convoId, f.file)).toBe('present');
+    }
     await expect(input).toHaveValue('');
     await expect(chips).toHaveCount(0);
     // The turn the send started runs to its end before the next pick.
