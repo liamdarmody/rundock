@@ -208,6 +208,7 @@
         <div class="step-text">
           <div>Install Claude Code</div>
           <div class="hint" id="install-hint"><a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank">Installation guide</a></div>
+          <div class="hint" id="found-hint" style="display:none">Claude Code is installed but didn't start in time. Its first start on Windows can take a minute. This screen keeps checking, or click Check again.</div>
         </div>
       </div>
       <div class="step" id="step-auth">
@@ -239,6 +240,9 @@
 
   <script>
     let polling = null;
+    // Claude Code was found but its first start did not answer in time. The
+    // install step waits with its own hint, never the install command.
+    let foundNotStarted = false;
 
     // Show the platform's install command for Claude Code on every OS, and make
     // clear it is the command-line tool, not the Claude desktop app. This is the
@@ -258,6 +262,10 @@
         'Claude Code is a command-line tool, different from the Claude desktop app. Install it and this screen continues automatically.'
         + '<br>' + where + ': <code style="' + code + '">' + cmd + '</code>'
         + (isWin ? '<br>Or WinGet: <code style="' + code + '">winget install Anthropic.ClaudeCode</code>' : '')
+        // A PowerShell window opened before the install does not see the new
+        // PATH; the check adds the folder it finds, so Check again fixes it.
+        + (isWin ? '<br>After installing, open a new PowerShell window. If it says <code style="' + code + '">claude</code> '
+          + "isn't recognised, click Check again: Rundock finds Claude Code and adds it to PATH." : '')
         + '<br><a href="https://code.claude.com/docs/en/overview" target="_blank">Installation guide</a>';
     })();
 
@@ -272,7 +280,9 @@
       // step ever returns to needing action.
       if (id === 'install') {
         const installHint = document.getElementById('install-hint');
-        if (installHint) installHint.style.display = state === 'done' ? 'none' : '';
+        const foundHint = document.getElementById('found-hint');
+        if (installHint) installHint.style.display = state === 'done' || foundNotStarted ? 'none' : '';
+        if (foundHint) foundHint.style.display = state !== 'done' && foundNotStarted ? '' : 'none';
       }
       if (state === 'done') {
         icon.innerHTML = '&#10003;';
@@ -430,13 +440,15 @@
       document.getElementById('subtitle').textContent =
         (codex.installed && result.status !== 'ready') ? CODEX_SUBTITLE : BASE_SUBTITLE;
 
-      if (result.status === 'not-installed') {
+      // Found but not started reads as not installed, with its own hint.
+      if (result.status === 'not-installed' || result.status === 'found-not-started') {
         // While an asked answer shows, an automatic answer leaves it, the step
         // and both sign-in buttons as they are. The Codex step updates as ever.
         if (asked !== true && reasonShown) {
           renderCodexStep(codex, false);
           return false;
         }
+        foundNotStarted = result.status === 'found-not-started';
         // Action needed, not in progress: numbered attention state, never the
         // spinner, so it does not read as "checking" forever before install.
         updateStep('install', 'attention');
@@ -577,9 +589,11 @@
         }
         if (++pollCount >= 20) {
           clearInterval(polling); polling = null;
-          const hint = document.getElementById('install-hint');
-          if (hint) hint.insertAdjacentHTML('beforeend',
-            '<br><span style="color:#E8A84C">Still not detecting Claude Code. Make sure you ran the install command in the terminal (not the desktop app), then click Check again.</span>');
+          // A copy that was found is never sent back to the install command.
+          const hint = document.getElementById(foundNotStarted ? 'found-hint' : 'install-hint');
+          if (hint) hint.insertAdjacentHTML('beforeend', foundNotStarted
+            ? '<br><span style="color:#E8A84C">Claude Code still hasn\'t started. Click Check again to try once more.</span>'
+            : '<br><span style="color:#E8A84C">Still not detecting Claude Code. Make sure you ran the install command in the terminal (not the desktop app), then click Check again.</span>');
         }
       }, 3000);
     }

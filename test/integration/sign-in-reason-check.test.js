@@ -1,22 +1,25 @@
 'use strict';
 // The desktop's sign-in check and the wizard's runtime answer, as
-// electron/main.js has them, run against the stub claude.
+// electron/main.js makes them, run against the stub claude.
 //
 // When the check fails, the answer to the wizard carries one cleaned line of
 // what Claude Code said, or a fixed kind, and nothing else crosses: no
-// credential, no raw output, nothing echoed to the app's own stderr, nothing
-// logged or written. The check itself still answers only true or false, with
-// the same command, environment and time limit, so the routing that reads the
-// login shell after a failure decides exactly as before.
+// credential, no raw output, nothing echoed to the app's own stderr, none of
+// it logged or written. The check itself still answers only true or false, with
+// the same command and time limit, so the routing that reads the login shell
+// after a failure decides exactly as before.
 //
-// main.js cannot be loaded outside Electron, so the check and the handler are
-// taken from its source. The stub claude is first on PATH for every test, so
-// no test runs the person's real Claude Code. Fake keys are built at run time.
+// main.js cannot be loaded outside Electron, so the lines that make its setup
+// check (electron/setup-check.js) and answer the wizard are taken from its
+// source and run with the real modules. Its PATH extender is a stand-in that
+// adds nothing, and the stub claude is first on PATH for every test, so no
+// test runs the person's real Claude Code. Fake keys are built at run time.
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createRequire } = require('node:module');
 
 const { makeTempDir } = require('../helpers/workspace.js');
 const { fakeShell } = require('../helpers/fake-login-shell.js');
@@ -29,16 +32,25 @@ const SKIP = process.platform === 'win32'
 
 const MAIN_PATH = path.join(__dirname, '../../electron/main.js');
 const MODULE_PATH = path.join(__dirname, '../../electron/sign-in-reason.js');
+const SETUP_PATH = path.join(__dirname, '../../electron/setup-check.js');
 const STUB_DIR = path.join(__dirname, '../helpers/stub-claude');
 const OAUTH = 'Failed to authenticate: OAuth session expired and could not be refreshed';
-const CHECK = /^function isClaudeAuthenticated\(\) \{\n[\s\S]*?\n\}\n/m;
-const HANDLER = /ipcMain\.handle\('wizard-check-runtimes', (async \(\) => \{\n[\s\S]*?\n {4}\})\);\n/;
+const SETUP_REQUIRE = /^const \{ createSetupCheck \} = require\('\.\/setup-check\.js'\);\n/m;
+const MAKES_THE_CHECK = /^const setupCheck = createSetupCheck\(\{\n[\s\S]*?\n\}\);\n/m;
+const HANDLER = /^ *ipcMain\.handle\('wizard-check-runtimes', ([^\n]*)\);\n/m;
 
 const fakeKey = (...parts) => ['sk', ...parts].join('-');
 const ANT_KEY = fakeKey('ant', 'api03', 'EXAMPLE1234');
 const OTHER_KEY = fakeKey('proj', 'EXAMPLE1234');
 const SHORT_TOKEN = ['example', 'TOKEN', '1234'].join('');
 const LONG_RUN = 'EXAMPLE_token-'.repeat(3);
+
+// The setup check module, loaded when a test first needs it, so without it
+// each test fails on this assertion rather than the file failing to load.
+function sm() {
+  assert.ok(fs.existsSync(SETUP_PATH), 'electron/setup-check.js is there to load');
+  return require(SETUP_PATH);
+}
 
 function piece(pattern, what) {
   const found = pattern.exec(fs.readFileSync(MAIN_PATH, 'utf8'));
@@ -49,17 +61,34 @@ function piece(pattern, what) {
 // A dev run's routing: the check runs once and its answer stands.
 const devRun = () => scd.createShellConfigDir({ isPackaged: false, platform: process.platform, env: process.env, appData: makeTempDir('sign-in-reason-data-') });
 
-// The check and the wizard's answer, sharing one reason holder as main.js does.
-function desktop({ execSync = childProcess.execSync, shellConfigDir = devRun() } = {}) {
+// The setup check and the wizard's answer, made by main.js's own lines with
+// one reason holder, as main.js makes them. `check()` runs the wizard's
+// answer once and gives what its one sign-in run answered the routing.
+function desktop({ shellConfigDir = devRun() } = {}) {
   const signInReason = sr.createSignInReason();
-  const check = piece(CHECK, 'electron/main.js has its sign-in check');
-  const isClaudeAuthenticated = new Function('execSync', 'signInReason', `${check[0]}\nreturn isClaudeAuthenticated;`)(execSync, signInReason);
-  const handler = piece(HANDLER, "electron/main.js answers the wizard's runtime check");
-  const answer = new Function('findClaude', 'ensureClaudeOnUserPath', 'path', 'shellConfigDir', 'isClaudeAuthenticated',
-    'signInReason', 'detectCodexForWizard', `return ${handler[1]};`)(
-    () => path.join(STUB_DIR, 'claude'), () => {}, path, shellConfigDir, isClaudeAuthenticated,
-    signInReason, () => ({ status: 'not-installed' }));
-  return { answer, isClaudeAuthenticated, signInReason };
+  const decided = [];
+  const routing = {
+    checkAuthenticated: (run) => shellConfigDir.checkAuthenticated(async () => {
+      const ok = await run();
+      decided.push(ok);
+      return ok;
+    }),
+  };
+  const body = [
+    piece(SETUP_REQUIRE, 'electron/main.js loads its setup check')[0],
+    piece(MAKES_THE_CHECK, 'electron/main.js makes its setup check')[0],
+    `return ${piece(HANDLER, "electron/main.js answers the wizard's runtime check")[1]};`,
+  ].join('\n');
+  const answer = new Function('require', 'process', 'app', 'shellConfigDir', 'signInReason', 'ensurePath', 'detectCodexForWizard', body)(
+    createRequire(MAIN_PATH), { platform: process.platform, env: process.env }, { getPath: () => makeTempDir('sign-in-reason-log-') },
+    routing, signInReason, () => {}, () => ({ status: 'not-installed' }));
+  const check = async () => {
+    const before = decided.length;
+    await answer();
+    assert.strictEqual(decided.length, before + 1, 'one sign-in run');
+    return decided[before];
+  };
+  return { answer, check, signInReason };
 }
 
 const KEYS = ['PATH', 'CLAUDE_CONFIG_DIR', 'STUB_CLAUDE_SIGNED_OUT', 'STUB_CLAUDE_SIGNED_IN_WITH', 'STUB_CLAUDE_CHECK_FAILS',
@@ -108,7 +137,9 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
   let saved;
   const savedDeps = { ...sr.deps };
   const savedScd = { ...scd.deps };
+  let savedSm = null;
   beforeEach(() => {
+    savedSm = savedSm || { ...sm().deps };
     saved = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
     passes();
     delete process.env.CLAUDE_CONFIG_DIR;
@@ -120,6 +151,7 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
     }
     Object.assign(sr.deps, savedDeps);
     Object.assign(scd.deps, savedScd);
+    if (savedSm) Object.assign(sm().deps, savedSm);
   });
 
   test("a failed check's own words reach the wizard's answer", async () => {
@@ -160,14 +192,20 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
     test('a check that runs past its time limit answers that Claude Code did not answer in time', async () => {
       process.env.STUB_CLAUDE_CHECK_HANGS = '1';
       // The limit itself is pinned below; this run is cut short so the test
-      // does not wait the full 15 seconds.
-      const { answer } = desktop({ execSync: (cmd, opts) => childProcess.execSync(cmd, { ...opts, timeout: 1000 }) });
+      // does not wait the full 15 seconds. The setup check's own timer ends it.
+      sm().deps.timeouts = { ...savedSm.timeouts, signIn: 1000 };
+      const { answer } = desktop();
       assert.deepStrictEqual(await reasonFor(answer), { status: 'not-authenticated', reason: { kind: 'timeout' } });
     });
 
-    test('a check whose claude cannot be found answers that it could not be started', async () => {
-      process.env.PATH = makeTempDir('sign-in-reason-empty-path-');
-      const { answer } = desktop();
+    test('a check whose claude cannot be started answers that it could not be started', async () => {
+      // Found and started for its version, then gone before the sign-in run.
+      const dir = makeTempDir('sign-in-reason-gone-');
+      fs.symlinkSync(path.join(STUB_DIR, 'claude'), path.join(dir, 'claude'));
+      process.env.PATH = `${dir}${path.delimiter}${process.env.PATH}`;
+      const dev = devRun();
+      const gone = { checkAuthenticated: (run) => { fs.rmSync(path.join(dir, 'claude')); return dev.checkAuthenticated(run); } };
+      const { answer } = desktop({ shellConfigDir: gone });
       assert.deepStrictEqual(await reasonFor(answer), { status: 'not-authenticated', reason: { kind: 'not-started' } });
     });
 
@@ -219,47 +257,54 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
   test('when the cleaner throws, the answer is the fixed no-reason one and pass or fail is unchanged', async () => {
     sr.deps.clean = () => { throw new Error('cleaner broke'); };
     says(`Failed to authenticate ${OTHER_KEY}\n`, { stdout: 'raw stdout\n' });
-    const { answer, isClaudeAuthenticated } = desktop();
+    const { answer, check } = desktop();
     assert.deepStrictEqual(await reasonFor(answer), { status: 'not-authenticated', reason: { kind: 'no-reason' } });
-    assert.strictEqual(isClaudeAuthenticated(), false);
+    assert.strictEqual(await check(), false);
     passes();
-    assert.strictEqual(isClaudeAuthenticated(), true);
+    assert.strictEqual(await check(), true);
     assert.deepStrictEqual(await reasonFor(answer), { status: 'ready' });
   });
 
-  test('the check still answers only true or false, which the routing reads as before', () => {
-    const { isClaudeAuthenticated } = desktop();
-    assert.strictEqual(isClaudeAuthenticated(), true);
+  test('the check still answers only true or false, which the routing reads as before', async () => {
+    const { check } = desktop();
+    assert.strictEqual(await check(), true);
     says(`${OAUTH}\n`);
-    assert.strictEqual(isClaudeAuthenticated(), false);
+    assert.strictEqual(await check(), false);
   });
 
-  test('the check runs the same command, in the same environment, with the same 15-second limit and every stream piped', () => {
-    const calls = [];
-    const { isClaudeAuthenticated } = desktop({ execSync: (cmd, opts) => { calls.push([cmd, opts]); return childProcess.execSync(cmd, opts); } });
-    isClaudeAuthenticated();
-    assert.deepStrictEqual(calls, [['claude --print "test" --output-format text', { timeout: 15000, stdio: 'pipe' }]]);
+  test('the check runs the same command on the copy found, in a copy of this environment, with the same 15-second limit and its output piped', async () => {
+    const started = [];
+    const timers = [];
+    sm().deps.spawn = (program, args, options) => { started.push({ program, args, options }); return savedSm.spawn(program, args, options); };
+    sm().deps.setTimeout = (fn, ms) => { timers.push(ms); return savedSm.setTimeout(fn, ms); };
+    await desktop().answer();
+    const stub = path.join(STUB_DIR, 'claude');
+    assert.deepStrictEqual(started.map((s) => [s.program, ...s.args].join(' ')),
+      ['which claude', `${stub} --version`, `${stub} --print test --output-format text`]);
+    assert.deepStrictEqual(started[2].options.env, { ...process.env });
+    assert.deepStrictEqual(started[2].options.stdio, ['ignore', 'pipe', 'pipe']);
+    assert.strictEqual(timers[2], 15000);
   });
 
   describe('pass and fail are decided as before, through the real execSync', () => {
-    test("a passing check's large stderr is decided as before", () => {
+    test("a passing check's large stderr is decided as before", async () => {
       says(`${LONG_LINE}\n`, { stdout: 'ok\n', exit: 0, times: LARGE_TIMES });
-      const { isClaudeAuthenticated, signInReason } = desktop();
+      const { check, signInReason } = desktop();
       const before = checkBeforeTheReason();
       assert.ok(before.echoed.length >= MAX_BUFFER, `sanity: the stub wrote more than maxBuffer, ${before.echoed.length} bytes came back`);
-      assert.strictEqual(isClaudeAuthenticated(), before.passed);
-      // Failed in both: stderr is held under execSync's maxBuffer whether or
-      // not stdio is given, so a check that writes more than that is ended and
-      // fails, however it would have exited.
+      assert.strictEqual(await check(), before.passed);
+      // Failed in both: stderr is held under execSync's maxBuffer, and the
+      // setup check holds each stream under the same cap, so a check that
+      // writes more than that is ended and fails, however it would have exited.
       assert.strictEqual(before.passed, false);
       assert.deepStrictEqual(signInReason.last(), { kind: 'said', text: `${LONG_LINE.slice(0, sr.MAX_CHARS - 1)}\u2026`, signIn: false });
     });
 
     test("a failing check's large stderr is decided as before, and its reason is one bounded line", async () => {
       says(`${LONG_LINE}\n`, { exit: 1, times: LARGE_TIMES });
-      const { answer, isClaudeAuthenticated } = desktop();
+      const { answer, check } = desktop();
       const before = checkBeforeTheReason();
-      assert.strictEqual(isClaudeAuthenticated(), before.passed);
+      assert.strictEqual(await check(), before.passed);
       assert.strictEqual(before.passed, false);
       const res = await reasonFor(answer);
       assert.deepStrictEqual(res,
@@ -269,10 +314,10 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
 
     test("a passing check's little stderr is decided as before, with no reason", async () => {
       says(`${WARNING}\n`, { stdout: 'ok\n', exit: 0 });
-      const { answer, isClaudeAuthenticated, signInReason } = desktop();
+      const { answer, check, signInReason } = desktop();
       const before = checkBeforeTheReason();
       assert.ok(before.echoed.includes(WARNING), 'sanity: the check before the reason ran against the stub and echoed its stderr');
-      assert.strictEqual(isClaudeAuthenticated(), before.passed);
+      assert.strictEqual(await check(), before.passed);
       assert.strictEqual(before.passed, true);
       assert.strictEqual(signInReason.last(), null);
       assert.deepStrictEqual(await reasonFor(answer), { status: 'ready' });
@@ -282,14 +327,11 @@ describe("the wizard's answer when the sign-in check fails", { skip: SKIP }, () 
   test("the check's output never reaches the app's own stderr", () => {
     says(`${OAUTH}\n`, { stdout: 'stdout words\n' });
     const script = [
-      `const src = require('node:fs').readFileSync(${JSON.stringify(MAIN_PATH)}, 'utf8');`,
-      `const fn = ${CHECK}.exec(src);`,
-      `const { createSignInReason } = require(${JSON.stringify(MODULE_PATH)});`,
-      "const check = new Function('execSync', 'signInReason', `${fn[0]}\\nreturn isClaudeAuthenticated;`)(require('node:child_process').execSync, createSignInReason());",
-      'process.stdout.write(String(check()));',
+      `const { createSetupCheck } = require(${JSON.stringify(SETUP_PATH)});`,
+      "createSetupCheck({ platform: process.platform, env: process.env, extendPath: () => {} }).check().then((r) => process.stdout.write(r.status));",
     ].join('\n');
     const run = childProcess.spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', env: { ...process.env, NODE_V8_COVERAGE: '' } });
-    assert.strictEqual(run.stdout, 'false', run.stderr);
+    assert.strictEqual(run.stdout, 'not-authenticated', run.stderr);
     assert.ok(!run.stderr.includes('authenticate') && !run.stderr.includes('stdout words'), `nothing echoed: ${JSON.stringify(run.stderr)}`);
   });
 

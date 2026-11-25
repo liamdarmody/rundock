@@ -3,7 +3,6 @@ const { installExtensionFrameGuards } = require('./extension-frame-guards');
 const { installExternalLinkGuards } = require('./external-links');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
 const buildContextMenuTemplate = require('./context-menu-template.js');
 const { resolveUpdateFeed } = require('./update-feed.js');
 const { resolveUserData } = require('./user-data.js');
@@ -13,6 +12,7 @@ const { wizardSize } = require('./wizard-size.js');
 const { installWindowKey, debugSwitchIn } = require('./window-key.js');
 const { createShellConfigDir } = require('./shell-config-dir.js');
 const { createSignInReason } = require('./sign-in-reason.js');
+const { createSetupCheck } = require('./setup-check.js');
 
 // A shipped build never starts with a debugging port open: whatever connected
 // to it could drive this process and read the key its window is given
@@ -95,81 +95,17 @@ function ensurePath() {
   require('../lib/runtime/claude-folders.js').ensureClaudeFolders(process.env);
 }
 
-// What `claude --version` said the last time findClaude found Claude Code:
-// both consoles run Claude Code's login command only on a version that has
-// it (lib/runtime/claude-console.js, hasAuthLogin).
-let claudeFoundVersion = null;
-function findClaude() {
-  ensurePath();
-  const isWindows = process.platform === 'win32';
-  try {
-    // Windows: where.exe returns one absolute path per line, possibly multiple
-    // candidates when both .exe and .cmd shims are present. Prefer .exe so the
-    // recommended PowerShell-installer path wins over an npm .cmd shim.
-    // Unix: which returns a single absolute path.
-    const lookupCmd = isWindows ? 'where.exe claude' : 'which claude';
-    const output = execSync(lookupCmd, { timeout: 5000, encoding: 'utf-8' }).trim();
-    if (!output) return null;
-    let bin;
-    if (isWindows) {
-      const candidates = output.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      const exe = candidates.find(c => c.toLowerCase().endsWith('.exe'));
-      const cmd = candidates.find(c => c.toLowerCase().endsWith('.cmd'));
-      bin = exe || cmd || candidates[0];
-      if (!bin) return null;
-    } else {
-      bin = output;
-    }
-    // Sanity-check the resolved binary, keeping the version it reports. Quote
-    // the path so a directory with spaces (common on Windows) does not split
-    // the command.
-    claudeFoundVersion = String(execSync(`"${bin}" --version`, { timeout: 10000 }));
-    return bin;
-  } catch {
-    return null;
-  }
-}
-
-// Anthropic's Windows installer drops claude.exe in ~/.local/bin but does NOT
-// add that directory to the user's PATH, so `claude` is unrecognised in the
-// terminal even though it's installed. Rundock detects claude regardless (see
-// ensurePath), but the user still needs `claude` on PATH to run the one-time
-// sign-in. Since we know where claude lives, persist its directory onto the
-// user's PATH so a freshly opened terminal recognises `claude`. Idempotent,
-// Windows-only, best-effort (never throws). Takes effect in new terminals.
-function ensureClaudeOnUserPath(binDir) {
-  if (process.platform !== 'win32' || !binDir) return;
-  const d = binDir.replace(/'/g, "''"); // escape for PowerShell single-quoted string
-  const psCmd = [
-    `$d='${d}';`,
-    `$p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not $p){$p=''};`,
-    `if(($p -split ';') -notcontains $d){`,
-    `  if($p){$p=$p.TrimEnd(';')+';'+$d}else{$p=$d};`,
-    `  [Environment]::SetEnvironmentVariable('Path',$p,'User')`,
-    `}`,
-  ].join(' ');
-  try {
-    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${psCmd}"`, { timeout: 8000 });
-  } catch {
-    // Best-effort: if PATH can't be written, the user can still sign in via the
-    // full path; we never block first-run on this.
-  }
-}
-
-// Every stream is piped, so the check's output reaches only signInReason and
-// never this process's own stderr. stdio: 'pipe' changes where stderr goes,
-// not how much is held: with no stdio option execSync pipes stderr too, holds
-// it under the same maxBuffer, and only then writes it to this stderr.
-function isClaudeAuthenticated() {
-  try {
-    execSync('claude --print "test" --output-format text', { timeout: 15000, stdio: 'pipe' });
-    signInReason.passed();
-    return true;
-  } catch (err) {
-    signInReason.failed(err);
-    return false;
-  }
-}
+// The setup check (electron/setup-check.js): looks for Claude Code, starts the
+// copy it finds for its version and, unless asked not to, runs its sign-in
+// check through the routing above, every child started asynchronously so the
+// main process never waits on one. On Windows it adds the found copy's folder
+// to the User PATH, so a new terminal recognises `claude`. Made once, so the
+// setup screen's answer, the launch gate and Sign in share what it found and a
+// check already running. Each lookup searches the folders ensurePath adds.
+const setupCheck = createSetupCheck({
+  platform: process.platform, env: process.env, appData: app.getPath('userData'),
+  shellConfigDir, signInReason, extendPath: ensurePath,
+});
 
 // Codex detection for the wizard. Reuses the server-side detector in codex.js
 // (packaged with the app) rather than porting it: binary resolution is
@@ -225,13 +161,12 @@ function launchCodexSignIn() {
 // Each runs Claude Code's own login command, `claude auth login` (on macOS
 // through a script of its own the opener writes first), on a Claude Code
 // whose version has it, and `claude` bare on one that does not or whose
-// version is not known. The opener is handed the lookup rather than its
-// answer, so it runs findClaude (a command, on this process) only once its
-// gate has let the ask through, never for an ask while a console opens or
-// just after; it then asks for the version that lookup just read. Resolves
-// { ok, reason? }; never throws.
+// version is not known. The opener is given the copy, and its version, that
+// the last setup check found and started, read only once its gate has let the
+// ask through: it starts no lookup and no version run of its own, and with no
+// copy found it answers not-found. Resolves { ok, reason? }; never throws.
 function launchClaudeSignIn(purpose) {
-  return require('../lib/runtime/claude-console.js').openClaudeConsole({ findBin: findClaude, findVersion: () => claudeFoundVersion, purpose });
+  return require('../lib/runtime/claude-console.js').openClaudeConsole({ findBin: () => setupCheck.found().bin, findVersion: () => setupCheck.found().version, purpose });
 }
 
 // ===== FIRST-RUN WIZARD =====
@@ -266,26 +201,13 @@ function showWizard() {
 
     wizard.loadFile(path.join(__dirname, 'wizard.html'));
 
-    // Wizard polls for both runtimes via IPC. The Claude checks are unchanged;
-    // Codex detection rides alongside so the wizard can adapt honestly to what
-    // the user has (a Codex user is told why Claude Code is still needed, and
-    // can sign in to Codex as an optional final step).
-    ipcMain.handle('wizard-check-runtimes', async () => {
-      const claude = await (async () => {
-        const bin = findClaude();
-        if (!bin) return { status: 'not-installed' };
-        // Claude is installed: make sure its directory is on the user's PATH so
-        // they can simply type `claude` in a new terminal to sign in.
-        ensureClaudeOnUserPath(path.dirname(bin));
-        // Nothing runs between the check's last run and this read, so the
-        // reason is that run's own.
-        if (!(await shellConfigDir.checkAuthenticated(isClaudeAuthenticated))) {
-          return { status: 'not-authenticated', reason: signInReason.last() };
-        }
-        return { status: 'ready' };
-      })();
-      return { claude, codex: detectCodexForWizard() };
-    });
+    // Wizard polls for both runtimes via IPC. Claude Code's answer is the setup
+    // check's: not-installed, found-not-started, not-authenticated with the
+    // reason, or ready. A poll that comes while a check runs joins it. Codex
+    // detection rides alongside so the wizard can adapt honestly to what the
+    // user has (a Codex user is told why Claude Code is still needed, and can
+    // sign in to Codex as an optional final step).
+    ipcMain.handle('wizard-check-runtimes', async () => ({ claude: await setupCheck.check(), codex: detectCodexForWizard() }));
 
     // Launch Claude's browser sign-in for the user (no terminal needed).
     ipcMain.handle('wizard-signin-claude', () => launchClaudeSignIn());
@@ -833,9 +755,6 @@ app.whenReady().then(async () => {
   // Once a value read from the login shell has signed Claude Code in, later
   // launches read it here, before anything starts Claude Code.
   await shellConfigDir.atLaunch();
-  console.log('[Electron] Checking for Claude Code...');
-  const claudeBin = findClaude();
-  console.log('[Electron] Claude binary:', claudeBin || 'not found');
 
   const setupMarker = path.join(app.getPath('userData'), '.claude-setup-verified');
   const setupVerified = fs.existsSync(setupMarker);
@@ -845,13 +764,20 @@ app.whenReady().then(async () => {
   // (module loading, embedded server, window creation) runs for real, which
   // is the point: a packaging mistake that breaks any of it must fail here.
   const isSmokeTest = process.env.RUNDOCK_SMOKE_TEST === '1';
-  const needsWizard = !isSmokeTest && (!claudeBin || (!setupVerified && !(await shellConfigDir.checkAuthenticated(isClaudeAuthenticated))));
+  // The setup check, awaited: its children never hold this process. Until
+  // setup is verified it checks sign-in too; after that, and in a smoke test,
+  // it only looks for Claude Code and starts the copy it finds.
+  const signIn = !setupVerified && !isSmokeTest;
+  console.log('[Electron] Checking for Claude Code...');
+  const launchCheck = await setupCheck.check({ signIn });
+  console.log('[Electron] Claude Code:', launchCheck.status);
+  const needsWizard = !isSmokeTest && launchCheck.status !== (signIn ? 'ready' : 'started');
 
   if (needsWizard) {
-    console.log('[Electron] Showing first-run wizard (Claude missing or not signed in)');
+    console.log('[Electron] Showing first-run wizard (Claude Code missing, not started or not signed in)');
     await showWizard();
-    // Only proceed if setup is genuinely complete: installed AND authenticated.
-    if (!findClaude() || !(await shellConfigDir.checkAuthenticated(isClaudeAuthenticated))) {
+    // Only proceed if setup is genuinely complete: installed, started and signed in.
+    if ((await setupCheck.check()).status !== 'ready') {
       app.quit();
       return;
     }

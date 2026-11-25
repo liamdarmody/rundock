@@ -17,6 +17,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const { createRequire } = require('node:module');
 
 const h = require('../helpers/harness.js');
 const { makeTempDir } = require('../helpers/workspace.js');
@@ -40,16 +41,21 @@ function post(url, headers = {}) {
   });
 }
 
-// The desktop's own sign-in check, as electron/main.js has it. main.js cannot
-// be loaded outside Electron, so the function is taken from its source, with
-// the reason holder main.js gives it.
-function desktopSignInCheck() {
-  const src = fs.readFileSync(path.join(__dirname, '../../electron/main.js'), 'utf8');
-  const fn = /^function isClaudeAuthenticated\(\) \{\n[\s\S]*?\n\}\n/m.exec(src);
-  assert.ok(fn, 'electron/main.js has its sign-in check');
-  return new Function('execSync', 'signInReason', `${fn[0]}\nreturn isClaudeAuthenticated;`)(
-    require('node:child_process').execSync, createSignInReason());
+// The desktop's own setup check (electron/setup-check.js), made by the lines
+// in electron/main.js that make it, with the routing given and the reason
+// holder main.js gives it. main.js cannot be loaded outside Electron, so the
+// lines are taken from its source. Its PATH extender is a stand-in that adds
+// nothing: the stub claude is first on PATH.
+function desktopSetupCheck(shellConfigDir) {
+  const mainPath = path.join(__dirname, '../../electron/main.js');
+  const src = fs.readFileSync(mainPath, 'utf8');
+  const load = /^const \{ createSetupCheck \} = require\('\.\/setup-check\.js'\);\n/m.exec(src);
+  const make = /^const setupCheck = createSetupCheck\(\{\n[\s\S]*?\n\}\);\n/m.exec(src);
+  assert.ok(load && make, 'electron/main.js makes its setup check');
+  return new Function('require', 'process', 'app', 'shellConfigDir', 'signInReason', 'ensurePath', `${load[0]}${make[0]}return setupCheck;`)(
+    createRequire(mainPath), process, { getPath: () => appDataFor() }, shellConfigDir, createSignInReason(), () => {});
 }
+const appDataFor = () => makeTempDir('shell-config-setup-log-');
 
 describe('signing in with CLAUDE_CONFIG_DIR from the login shell', { skip: SKIP }, () => {
   const savedDeps = { ...scd.deps };
@@ -128,9 +134,10 @@ describe('signing in with CLAUDE_CONFIG_DIR from the login shell', { skip: SKIP 
     delete process.env.CLAUDE_CONFIG_DIR;
     fs.rmSync(marker(), { force: true });
     controller = launch();
-    const isClaudeAuthenticated = desktopSignInCheck();
-    assert.strictEqual(isClaudeAuthenticated(), false, 'signed out without the value');
-    assert.strictEqual(await controller.checkAuthenticated(isClaudeAuthenticated), true);
+    const runsOnce = { checkAuthenticated: (check) => check() };
+    assert.strictEqual((await desktopSetupCheck(runsOnce).check()).status, 'not-authenticated', 'signed out without the value');
+    assert.strictEqual(reads, 2, 'a check run once reads nothing');
+    assert.deepStrictEqual(await desktopSetupCheck(controller).check(), { status: 'ready' });
     assert.strictEqual(reads, 3);
     assert.strictEqual(process.env.CLAUDE_CONFIG_DIR, claudeDir);
   });

@@ -215,12 +215,14 @@ describe('a Claude Code without its login command', () => {
     await C.openClaudeConsole({ bin: null, platform: 'linux', env: terminalOnPath(), spawn: f.spawn, purpose: 'reconnect', gate: C.consoleGate(), findVersion });
     assert.strictEqual(asked, 1);
   });
-  test('the server passes the version it already probed, and the desktop the one its lookup read', () => {
+  test('the server passes the version it already probed, and the desktop the one its last setup check read', () => {
     const src = (file) => fs.readFileSync(path.join(__dirname, '..', '..', file), 'utf8');
     assert.ok(src('server.js').includes("openClaudeConsole({ bin: resolveClaudeBin(), version: _claudeProbeCache && _claudeProbeCache.version, purpose: 'reconnect' })"));
     const main = src('electron/main.js');
-    assert.ok(main.includes('openClaudeConsole({ findBin: findClaude, findVersion: () => claudeFoundVersion, purpose })'));
-    assert.ok(main.includes('claudeFoundVersion = String(execSync(`"${bin}" --version`, { timeout: 10000 }));'));
+    assert.ok(main.includes('openClaudeConsole({ findBin: () => setupCheck.found().bin, findVersion: () => setupCheck.found().version, purpose })'));
+    const check = src('electron/setup-check.js');
+    assert.ok(check.includes("version = stdout.toString('utf8');"));
+    assert.ok(check.includes('found = { bin, version };'));
   });
 });
 
@@ -363,31 +365,33 @@ describe('what each console runs, as opened', () => {
     assert.strictEqual(fs.readFileSync(second, 'utf8'), 'an older script\n', 'the old file was replaced, not written through');
   });
   // The setup screen's Sign in to Claude, end to end on the desktop:
-  // wizard.html in JSDOM, preload.js's signInClaude, main.js's channel for it,
-  // launchClaudeSignIn and findClaude, then the real opener. main.js and
-  // preload.js cannot be loaded outside Electron, so those lines are cut from
-  // their source by name, failing loudly when one is renamed or lost, and run
-  // together with stand-ins only for what they reach outside: the commands
-  // findClaude runs, and the IPC between the two processes. The require
-  // main.js's lines are given returns the real opener with this test's seams
-  // added, and records what it was asked and what it answered. Nothing real is
-  // ever spawned.
+  // wizard.html in JSDOM, preload.js's checkRuntimes and signInClaude,
+  // main.js's channels for them, its setup check and launchClaudeSignIn, then
+  // the real opener. main.js and preload.js cannot be loaded outside Electron,
+  // so those lines are cut from their source by name, failing loudly when one
+  // is renamed or lost, and run together with the real setup check and
+  // stand-ins only for what they reach outside: the children the check
+  // starts, and the IPC between the two processes. The require main.js's
+  // lines are given returns the real opener with this test's seams added, and
+  // records what it was asked and what it answered. Nothing real is ever
+  // spawned.
   const ELECTRON = path.join(__dirname, '..', '..', 'electron');
   const piece = (file, pattern, what) => {
     const found = pattern.exec(fs.readFileSync(path.join(ELECTRON, file), 'utf8'));
     assert.ok(found, `electron/${file} no longer carries ${what}`);
     return found;
   };
-  const LOOKED_UP_VERSION = '2.1.309 (Claude Code)\n';
-  function setupScreen({ platform, env, home }) {
+  const { loadSetupCheck, answerChildren, claudeAt, VERSION } = require('../helpers/setup-check-children.js');
+  function setupScreen(t, { platform, env, home, claude: answers = {} }) {
     const asked = [];
     const answered = [];
-    const ran = [];
     const f = fakeSpawn('spawn');
     const gate = C.consoleGate();
     const mainRequire = createRequire(path.join(ELECTRON, 'main.js'));
     const opener = require.resolve('../../lib/runtime/claude-console.js');
+    const setupCheck = path.join(ELECTRON, 'setup-check.js');
     const requireForMain = (id) => {
+      if (mainRequire.resolve(id) === setupCheck) return mainRequire(id);
       assert.strictEqual(mainRequire.resolve(id), opener, `main.js's lines asked for ${id}`);
       return {
         ...C,
@@ -398,20 +402,22 @@ describe('what each console runs, as opened', () => {
         },
       };
     };
-    const execSync = (command) => {
-      ran.push(command);
-      if (command === 'which claude' || command === 'where.exe claude') return `${BIN}\n`;
-      if (command === `"${BIN}" --version`) return Buffer.from(LOOKED_UP_VERSION);
-      throw new Error(`no stand-in for ${command}`);
-    };
+    // How the stand-in Claude Code answers each child the setup check starts,
+    // read when each starts. It is found, starts and is not signed in, unless
+    // `answers` says otherwise for the check the page runs when it loads.
+    const claude = { ...answers };
+    const ran = answerChildren(t, claudeAt(BIN, claude));
     const handlers = new Map();
     const ipcMain = { handle: (channel, handler) => { handlers.set(channel, handler); } };
-    new Function('require', 'execSync', 'ensurePath', 'ipcMain', [
-      piece('main.js', /^let claudeFoundVersion = null;\n/m, 'the version its lookup read, let claudeFoundVersion = null;')[0],
-      piece('main.js', /^function findClaude\(\) \{\n[\s\S]*?\n\}\n/m, 'its lookup, findClaude')[0],
+    const { createSignInReason } = require('../../electron/sign-in-reason.js');
+    new Function('require', 'process', 'app', 'shellConfigDir', 'signInReason', 'ensurePath', 'detectCodexForWizard', 'ipcMain', [
+      piece('main.js', /^const \{ createSetupCheck \} = require\('\.\/setup-check\.js'\);\n/m, "the line that loads its setup check, const { createSetupCheck } = require('./setup-check.js');")[0],
+      piece('main.js', /^const setupCheck = createSetupCheck\(\{\n[\s\S]*?\n\}\);\n/m, 'the line that makes its setup check, const setupCheck = createSetupCheck({ ... });')[0],
       piece('main.js', /^function launchClaudeSignIn\(purpose\) \{\n[\s\S]*?\n\}\n/m, 'launchClaudeSignIn')[0],
+      piece('main.js', /^ *ipcMain\.handle\('wizard-check-runtimes', [^\n]*\);\n/m, "the setup screen's runtime check, wizard-check-runtimes")[0],
       piece('main.js', /^ *ipcMain\.handle\('wizard-signin-claude', [^\n]*\);\n/m, "the setup screen's sign-in channel, wizard-signin-claude")[0],
-    ].join('\n'))(requireForMain, execSync, () => {}, ipcMain);
+    ].join('\n'))(requireForMain, { platform, env: { PATH: '/usr/bin' } }, { getPath: () => null },
+      { checkAuthenticated: (run) => run() }, createSignInReason(), () => {}, () => ({ installed: false, authenticated: false }), ipcMain);
     // As Electron's invoke: the handler main.js registered gets the call and
     // its answer comes back as a copy; a channel nothing handles is refused.
     const ipcRenderer = {
@@ -421,18 +427,18 @@ describe('what each console runs, as opened', () => {
         return structuredClone(await handler({}, ...args));
       },
     };
-    const signInClaude = new Function('ipcRenderer',
-      `return ${piece('preload.js', /^ *signInClaude: ([^\n]*),\n/m, 'signInClaude')[1]};`)(ipcRenderer);
+    const preload = (name) => new Function('ipcRenderer',
+      `return ${piece('preload.js', new RegExp(`^ *${name}: ([^\\n]*),\\n`, 'm'), name)[1]};`)(ipcRenderer);
     // The wizard as its own suites load it: intervals are recorded and never
     // fire, and the test runs each automatic check itself.
-    const state = { claude: { status: 'not-authenticated', reason: null }, intervals: [], cleared: [] };
+    const state = { intervals: [], cleared: [] };
     const dom = new JSDOM(fs.readFileSync(path.join(ELECTRON, 'wizard.html'), 'utf8'), {
       runScripts: 'dangerously',
       beforeParse(window) {
         window.electronAPI = {
           platform,
-          checkRuntimes: async () => ({ claude: state.claude, codex: { installed: false, authenticated: false } }),
-          signInClaude,
+          checkRuntimes: preload('checkRuntimes'),
+          signInClaude: preload('signInClaude'),
           signInCodex: async () => ({ ok: true }),
           wizardDone: () => {},
         };
@@ -441,23 +447,48 @@ describe('what each console runs, as opened', () => {
       },
     });
     return {
-      w: dom.window, doc: dom.window.document, state, asked, answered, ran, f,
+      w: dom.window, doc: dom.window.document, state, claude, asked, answered, ran, f, gate,
       settle: () => new Promise((resolve) => setTimeout(resolve, 20)),
     };
   }
-  test('the setup screen\'s Sign in to Claude goes through preload, the desktop\'s channel and launchClaudeSignIn to the wizard\'s console, with no purpose and the version the lookup read, and runs claude auth login; once signed in, the next automatic check moves the wizard on', async () => {
-    const s = setupScreen({ platform: 'linux', env: terminalOnPath() });
+  // Holds each child the setup check starts that `pick` picks until the test
+  // calls its release(reply), with reply as answerChildren's. Every start is
+  // still recorded in `ran`, and answerChildren puts the check's own spawn
+  // back when the test ends, this wrapper with it.
+  function holdChildren(pick) {
+    const mod = loadSetupCheck();
+    const inner = mod.deps.spawn;
+    const held = [];
+    mod.deps.spawn = (program, args, options) => {
+      const child = inner(program, args, options);
+      if (!pick(program, args)) return child;
+      const stand = new EventEmitter();
+      stand.stdout = new EventEmitter();
+      stand.stderr = new EventEmitter();
+      stand.kill = () => true;
+      held.push({ release: (reply = {}) => {
+        if (reply.stdout) stand.stdout.emit('data', Buffer.from(reply.stdout));
+        stand.emit('close', reply.status || 0, null);
+      } });
+      return stand;
+    };
+    return held;
+  }
+  const CHECKED = ['which claude', `${BIN} --version`, `${BIN} --print test --output-format text`];
+  test('the setup screen\'s Sign in to Claude goes through preload, the desktop\'s channel and launchClaudeSignIn to the wizard\'s console, with no purpose and the copy and version the last setup check found, and runs claude auth login; once signed in, the next automatic check moves the wizard on', async (t) => {
+    const s = setupScreen(t, { platform: 'linux', env: terminalOnPath() });
     await s.settle();
     // The first load's install poll stops itself once Claude Code is found,
     // so the sign-in starts its own automatic check.
     await s.state.intervals[0].fn();
+    assert.deepStrictEqual(s.ran, [...CHECKED, ...CHECKED], 'each check found Claude Code, started it and checked its sign-in');
     s.doc.getElementById('btn-signin').click();
     await s.settle();
     assert.strictEqual(s.asked.length, 1, 'the click reaches the opener, once');
     assert.strictEqual(s.asked[0].purpose, undefined, 'no purpose: the wizard\'s console');
-    assert.deepStrictEqual(s.ran, [process.platform === 'win32' ? 'where.exe claude' : 'which claude', `"${BIN}" --version`],
-      'the lookup found Claude Code and read its version');
-    assert.strictEqual(s.asked[0].findVersion(), LOOKED_UP_VERSION, 'the opener is given the version the lookup read');
+    assert.deepStrictEqual(s.ran, [...CHECKED, ...CHECKED], 'signing in starts no lookup and no version run');
+    assert.strictEqual(s.asked[0].findBin(), BIN, 'the opener is given the copy the last check found');
+    assert.strictEqual(s.asked[0].findVersion(), VERSION, 'and the version it read');
     assert.deepStrictEqual(s.answered, [{ ok: true }]);
     assert.strictEqual(s.f.calls.length, 1);
     assert.deepStrictEqual({ command: s.f.calls[0].command, args: s.f.calls[0].args },
@@ -467,12 +498,87 @@ describe('what each console runs, as opened', () => {
     assert.strictEqual(poll.fn, s.w.checkStatus, 'signing in schedules the automatic check');
     assert.strictEqual(poll.ms, 3000);
     assert.ok(!s.doc.getElementById('step-auth').className.includes('done'), 'not past sign-in before it is done');
-    s.state.claude = { status: 'ready' };
+    s.claude.signedIn = true;
     await poll.fn();
     assert.ok(s.doc.getElementById('step-auth').className.includes('done'), 'the wizard is past sign-in');
     assert.strictEqual(s.doc.getElementById('btn-check').textContent, 'Continue');
     s.w.close();
   });
+  test('Sign in to Claude with no copy found by the last check, or one that did not start, is not found: nothing is looked up, started or opened', async (t) => {
+    for (const [what, claude, checked] of [
+      ['nothing found', { found: false }, ['which claude']],
+      ['a copy that did not start', { starts: false }, ['which claude', `${BIN} --version`]],
+    ]) {
+      const s = setupScreen(t, { platform: 'linux', env: terminalOnPath(), claude });
+      await s.settle();
+      assert.deepStrictEqual(s.ran, checked, `sanity: the load's check, with ${what}`);
+      assert.deepStrictEqual(await s.w.electronAPI.signInClaude(), { ok: false, reason: 'not-found' }, what);
+      assert.strictEqual(s.asked.length, 1, 'the ask reaches the opener');
+      assert.deepStrictEqual(s.ran, checked, `${what}: signing in starts no lookup and no version run`);
+      assert.strictEqual(s.f.calls.length, 0, `${what}: nothing opens`);
+      s.w.close();
+    }
+  });
+  // A Check again holds its recheck where `held` says, and Sign in is clicked
+  // there: it opens the copy and version the last completed check found, and
+  // starts nothing. Once the recheck ends, Sign in has what that one found.
+  const NEW_BIN = '/opt/example/bin/claude';
+  const NEW_VERSION = '2.2.0 (Claude Code)\n';
+  const isWhich = (program) => program === 'which';
+  const isVersionRun = (program, args) => args.includes('--version');
+  // Waits turn by turn of the event loop, never for a fixed time, so a slow
+  // machine cannot run the test ahead of the check it waits for.
+  async function until(what, cond) {
+    for (let i = 0; i < 500 && !cond(); i++) await new Promise((r) => setImmediate(r));
+    assert.ok(cond(), `waited for ${what}`);
+  }
+  async function signInDuringRecheck(t, held, outcome) {
+    const s = setupScreen(t, { platform: 'linux', env: terminalOnPath() });
+    await until('the load\'s check to reach the screen', () => s.state.intervals.length === 1);
+    assert.deepStrictEqual(s.ran, CHECKED, 'sanity: the load\'s check found Claude Code and started it');
+    const hold = holdChildren((program, args) => isWhich(program) || isVersionRun(program, args));
+    const recheck = s.w.electronAPI.checkRuntimes();
+    await until('the recheck\'s lookup', () => hold.length === 1);
+    if (held === 'version run') {
+      hold[0].release({ stdout: `${NEW_BIN}\n` });
+      await until('the recheck\'s version run', () => hold.length === 2);
+    }
+    assert.strictEqual(hold.length, held === 'version run' ? 2 : 1, `sanity: the recheck is held in its ${held}`);
+    const ran = [...s.ran];
+    assert.deepStrictEqual(await s.w.electronAPI.signInClaude(), { ok: true }, `Sign in during the held ${held} opens`);
+    assert.strictEqual(s.asked[0].findBin(), BIN, `held in its ${held}: the copy the last completed check found`);
+    assert.strictEqual(s.asked[0].findVersion(), VERSION, `held in its ${held}: and the version it read`);
+    assert.deepStrictEqual({ command: s.f.calls[0].command, args: s.f.calls[0].args },
+      { command: 'x-terminal-emulator', args: ['-e', BIN, 'auth', 'login'] });
+    assert.deepStrictEqual(s.ran, ran, `held in its ${held}: signing in starts no lookup and no version run`);
+    if (held === 'lookup') hold[0].release(outcome === 'a new copy' ? { stdout: `${NEW_BIN}\n` } : { status: 1 });
+    if (outcome === 'a new copy') {
+      await until('the recheck\'s version run', () => hold.length === 2);
+      hold[1].release({ stdout: NEW_VERSION });
+    } else if (held === 'version run') hold[1].release({ status: 1 });
+    await recheck;
+    s.gate.openedAt = null;
+    const after = [...s.ran];
+    const answer = await s.w.electronAPI.signInClaude();
+    assert.deepStrictEqual(s.ran, after, 'after the recheck, signing in starts no lookup and no version run');
+    s.w.close();
+    return { s, answer };
+  }
+  for (const held of ['lookup', 'version run']) {
+    test(`Sign in during a Check again held in its ${held} opens the copy and version the last completed check found and starts nothing; once the recheck finds another copy and starts it, Sign in opens that one`, async (t) => {
+      const { s, answer } = await signInDuringRecheck(t, held, 'a new copy');
+      assert.deepStrictEqual(answer, { ok: true });
+      assert.strictEqual(s.asked[1].findBin(), NEW_BIN, 'the recheck\'s copy');
+      assert.strictEqual(s.asked[1].findVersion(), NEW_VERSION, 'and the version it read');
+      assert.deepStrictEqual({ command: s.f.calls[1].command, args: s.f.calls[1].args },
+        { command: 'x-terminal-emulator', args: ['-e', NEW_BIN, 'auth', 'login'] });
+    });
+    test(`Sign in during a Check again held in its ${held} opens the copy and version the last completed check found and starts nothing; once the recheck ends with no copy started, Sign in is not found`, async (t) => {
+      const { s, answer } = await signInDuringRecheck(t, held, 'nothing');
+      assert.deepStrictEqual(answer, { ok: false, reason: 'not-found' });
+      assert.strictEqual(s.f.calls.length, 1, 'nothing more opens');
+    });
+  }
   test('the wizard\'s script that cannot be written, its folder a link or another account\'s, is a failure and nothing opens', { skip: POSIX_ONLY }, async (t) => {
     const f = fakeSpawn('spawn');
     const home = madeUpHome();
@@ -491,11 +597,11 @@ describe('what each console runs, as opened', () => {
     assert.deepStrictEqual(fs.readdirSync(path.join(owned, '.rundock-console')), []);
     assert.strictEqual(f.calls.length, 0);
   });
-  test('macOS: when the wizard\'s script cannot be written because its folder is a link, the setup screen\'s Sign in to Claude opens nothing and the screen says it could not start', { skip: POSIX_ONLY }, async () => {
+  test('macOS: when the wizard\'s script cannot be written because its folder is a link, the setup screen\'s Sign in to Claude opens nothing and the screen says it could not start', { skip: POSIX_ONLY }, async (t) => {
     const home = madeUpHome();
     const elsewhere = madeUpHome();
     fs.symlinkSync(elsewhere, path.join(home, '.rundock-console'));
-    const s = setupScreen({ platform: 'darwin', home });
+    const s = setupScreen(t, { platform: 'darwin', home });
     await s.settle();
     await s.state.intervals[0].fn();
     const before = s.state.intervals.length;
@@ -503,7 +609,7 @@ describe('what each console runs, as opened', () => {
     await s.settle();
     assert.strictEqual(s.asked.length, 1, 'the click reaches the opener, once');
     assert.strictEqual(s.asked[0].purpose, undefined);
-    assert.strictEqual(s.asked[0].findVersion(), LOOKED_UP_VERSION, 'a version that writes a script first');
+    assert.strictEqual(s.asked[0].findVersion(), VERSION, 'a version that writes a script first');
     assert.deepStrictEqual(s.answered, [{ ok: false, reason: 'failed' }]);
     assert.strictEqual(s.f.calls.length, 0, 'nothing opens');
     assert.deepStrictEqual(fs.readdirSync(elsewhere), [], 'nothing is written where the link points');
@@ -839,10 +945,13 @@ describe('how many consoles open', () => {
     }
   });
 
-  test('the desktop app hands the opener its lookup rather than its answer', () => {
+  test('the desktop app hands the opener what its last setup check found, and runs no check of its own', () => {
     const main = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', '..', 'electron', 'main.js'), 'utf8');
-    assert.match(main, /openClaudeConsole\(\{ findBin: findClaude, findVersion: \(\) => claudeFoundVersion, purpose \}\)/);
-    assert.doesNotMatch(main, /openClaudeConsole\(\{ bin: findClaude\(\)/);
+    const signIn = /^function launchClaudeSignIn\(purpose\) \{\n[\s\S]*?\n\}\n/m.exec(main);
+    assert.ok(signIn, 'electron/main.js no longer carries launchClaudeSignIn');
+    assert.match(signIn[0], /openClaudeConsole\(\{ findBin: \(\) => setupCheck\.found\(\)\.bin, findVersion: \(\) => setupCheck\.found\(\)\.version, purpose \}\)/);
+    assert.doesNotMatch(signIn[0], /setupCheck\.check\(|findClaude/);
+    assert.doesNotMatch(main, /openClaudeConsole\(\{ bin: /);
   });
 
   test('a console that failed to open does not hold back the next try', async () => {
