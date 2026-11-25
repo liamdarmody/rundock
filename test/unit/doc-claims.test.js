@@ -274,6 +274,26 @@ describe('ARCHITECTURE.md: the oldest Claude Code Rundock starts', () => {
   });
 });
 
+describe('ARCHITECTURE.md: the connector secrets file is kept out of git but copied by a synced folder', () => {
+  // Contributors read that .rundock/ is not shared, which holds for git only:
+  // setup adds it to .gitignore, but a synced folder copies the workspace
+  // whole. Both places that made the claim now say which sharing they mean.
+  test('the MCP credentials section says git leaves .rundock/ out and a synced folder copies both files', () => {
+    assert.ok(architecture.includes('`.mcp.json` is shared through git and `.rundock/` is not, because setup adds `.rundock/` to the workspace\'s `.gitignore`: that difference is the whole of this.'
+      + ' A synced folder such as OneDrive, iCloud or Dropbox copies both, so a key in either goes wherever the workspace goes.'),
+    'the section says git leaves .rundock/ out because setup ignores it, and a synced folder copies both files');
+    assert.ok(!architecture.includes('`.mcp.json` is shared and `.rundock/` is not'),
+      'the claim that .rundock/ is not shared, with no kind of sharing named, is gone');
+  });
+
+  test('the file layout row says git leaves the secrets file out but a synced folder copies it', () => {
+    assert.ok(architecture.includes('so credentials belong in `.rundock/mcp-secrets.json` instead, which git leaves out but a synced folder copies: see MCP credentials, above.'),
+      'the .mcp.json row says which sharing leaves the secrets file out and which copies it');
+    assert.ok(!architecture.includes('`.rundock/mcp-secrets.json` instead: see MCP credentials'),
+      'the row no longer reads as though the secrets file is not shared at all');
+  });
+});
+
 describe('SKILLS.md: only slugs are injected into the prompt', () => {
   // The claim: "Rundock injects a bare list of slugs into the agent's prompt
   // (`Skills: alpha, beta`) and nothing else: no description, no summary."
