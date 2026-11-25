@@ -3705,6 +3705,11 @@ const MUTATIONS = [
     + "      ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
     + '      return;\n'
     + '    }\n'],
+  // The card shows args only beside a command string: drop that condition and
+  // args beside a URL alone reach a card that leaves them off.
+  [CONNECTOR_ASK, 'Connector: args pass beside a URL with no command',
+    "  ['args', (v, e) => isString(e.command) && Array.isArray(v) && v.every(isString)],\n",
+    "  ['args', (v, e) => Array.isArray(v) && v.every(isString)],\n"],
   [CM_CLIENT, 'launchctl: the card gives no reason of its own',
     "    'launch-environment': () => 'This changes what macOS starts, or the settings every program started from now on is given, Rundock included, beyond anything Rundock can see or check.',\n",
     ''],
