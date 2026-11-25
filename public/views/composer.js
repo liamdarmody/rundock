@@ -312,8 +312,19 @@ function attachmentsConnectionLost() {
   for (const [convoId, composer] of composers) if (composer.waiting) endWait(convoId, CONNECTION_LOST);
 }
 
+// The workspace changed. Its conversations are different conversations, even
+// under the same id, so every composer goes: the files picked, the inline
+// messages and the sends still waiting, whose file reads then send nothing.
+function composersWorkspaceChanged() {
+  for (const composer of composers.values()) composer.waiting = null;
+  composers.clear();
+  const field = document.getElementById('msg-input');
+  if (field) field.readOnly = false;
+}
+
 return {
   showComposerFor, refreshAttachButton, openAttachPicker, pickFiles,
   sendReady, sendWaiting, firstAttachedName, sendWithFiles, fileSendAnswered, attachmentsConnectionLost,
+  composersWorkspaceChanged,
 };
 }));

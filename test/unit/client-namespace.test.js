@@ -416,6 +416,7 @@ const MANIFEST = {
   ],
   "composer.js": [
     "attachmentsConnectionLost",
+    "composersWorkspaceChanged",
     "fileSendAnswered",
     "firstAttachedName",
     "openAttachPicker",

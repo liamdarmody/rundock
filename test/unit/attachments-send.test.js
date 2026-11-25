@@ -509,6 +509,68 @@ describe('the text of a send waiting for its answer', () => {
   });
 });
 
+// The workspace changing under the page, as onWorkspaceReady takes a different
+// workspace: its line of resets run as written (the other views' resets
+// standing in), the conversation list emptied, and the conversation `c1` of
+// the new workspace opened under the same ID.
+function switchWorkspace(p) {
+  const line = between(APP, 'if (!isSameWorkspace) {', '\n', 'the resets for a different workspace');
+  p.w.eval(`(function () { const isSameWorkspace = false;
+    function packagesWorkspaceChanged() {} function connectorsWorkspaceChanged() {} function workingFoldersWorkspaceChanged() {}
+    ${line} conversations = []; activeConversation = null; })`)();
+  p.open('c1');
+}
+
+// Files belong to the workspace and conversation they were picked in, so none
+// reach a conversation of the same ID in another workspace.
+describe('the composer when the workspace changes', () => {
+  test('files picked and not sent are gone from the same conversation ID in the next workspace, and a send there carries none', async () => {
+    const p = page();
+    pick(p, p.file('a.txt', bytesOf(12, 3)));
+    assert.deepStrictEqual(p.chips(), ['a.txt']);
+    switchWorkspace(p);
+    assert.deepStrictEqual(p.chips(), []);
+    type(p, 'hello');
+    p.$('send-btn').click();
+    assert.strictEqual(p.chatFrames().length, 1);
+    assert.ok(!('attachments' in p.chatFrames()[0]), 'the frame carries no files');
+  });
+
+  test('a send whose files are still being read when the workspace changes puts nothing on the socket', async () => {
+    const p = page();
+    pick(p, p.file('a.txt', bytesOf(12, 3)));
+    type(p, 'see this');
+    p.$('send-btn').click();
+    switchWorkspace(p);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.strictEqual(p.chatFrames().length, 0, 'no frame is sent');
+  });
+
+  test('a send waiting for its answer when the workspace changes leaves the next workspace\'s composer free, and its late answer changes nothing', async () => {
+    const p = page();
+    await sendTwo(p);
+    switchWorkspace(p);
+    assert.deepStrictEqual(p.chips(), []);
+    assert.strictEqual(p.$('send-btn').disabled, false);
+    assert.strictEqual(p.$('msg-input').readOnly, false);
+    p.answer({ type: 'chat_stored', conversationId: 'c1', entry: 'one', content: 'see these\n[Attached: a.png]' });
+    assert.deepStrictEqual(p.bubbles(), []);
+    assert.strictEqual(p.w.activeConversation.messages.length, 0, 'the conversation holds no message');
+  });
+
+  test('the next workspace\'s composer takes its own files and sends only those', async () => {
+    const p = page();
+    pick(p, p.file('a.txt', bytesOf(12, 3)));
+    switchWorkspace(p);
+    pick(p, p.file('b.txt', bytesOf(5, 4)));
+    assert.deepStrictEqual(p.chips(), ['b.txt']);
+    type(p, 'see this');
+    p.$('send-btn').click();
+    await until(() => p.chatFrames().length === 1, 'the frame');
+    assert.deepStrictEqual(p.chatFrames()[0].attachments.map((f) => f.name), ['b.txt']);
+  });
+});
+
 describe('when the socket closes first', () => {
   test('the text and files stay, Send comes back, and the message says it was not confirmed', async () => {
     const p = page();
