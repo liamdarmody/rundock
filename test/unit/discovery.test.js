@@ -702,6 +702,78 @@ describe('rosters and system prompt', () => {
     assert.ok(prompt.includes('Never invent Rundock settings'), 'inventing panels is still forbidden');
   });
 
+  // WHERE A CONNECTOR KEY ENDS UP. Every agent was told the secrets file "is
+  // per-user and does not travel". Only the git half was true: setup adds
+  // .rundock/ to .gitignore, but a workspace in a synced folder is copied
+  // whole to every device the folder syncs to, so a person told the key stays
+  // on one computer put it where every device gets it. The line sits in the
+  // rules every agent gets, so every kind of agent is checked, in both modes.
+  const CONNECTOR_CREDENTIAL_LINE = 'Ask for what the server actually needs before writing one: a command and its arguments, or a URL, and whatever credentials it requires.'
+    + ' CREDENTIAL VALUES DO NOT GO IN .mcp.json: that file travels with the workspace folder, git included, so a key written there reaches every clone and stays in the history.'
+    + ' Their values belong in .rundock/mcp-secrets.json, keyed by server name.'
+    + ' It is kept out of git because setup adds .rundock/ to .gitignore, but a synced folder such as OneDrive, iCloud or Dropbox copies it to every device the folder syncs to, so a key put there goes wherever the workspace goes.'
+    + ' That file is the person\'s: name the key in the connector entry, and ask the person to add the value to .rundock/mcp-secrets.json themselves.'
+    + ' If you write it instead, Rundock shows them a card first, every time, and nothing is changed unless they allow it.'
+    + ' A connector is read when an agent starts, so it takes effect on the next one rather than in the conversation you are having, and say so instead of implying it is already live.'
+    + ' Say plainly what is still missing if something is.';
+  function connectorPromptsInBothModes() {
+    const dir = useWorkspace({ agents: standardTeam(), claudeMd: '# Test Workspace\n' });
+    const agents = srv.discoverAgents();
+    const prompts = [];
+    for (const mode of ['Notes', 'Code']) {
+      if (mode === 'Code') {
+        fs.mkdirSync(path.join(dir, '.rundock'), { recursive: true });
+        fs.writeFileSync(path.join(dir, '.rundock', 'state.json'), JSON.stringify({ workspaceMode: 'code' }));
+      }
+      for (const [id, label] of ROUTINE_AUDIENCES) {
+        const agent = agents.find(a => a.id === id);
+        assert.ok(agent, `${id} is on the roster`);
+        const prompt = srv.buildSystemPrompt(agent);
+        assert.strictEqual(prompt.includes('Rundock is running in Code mode.'), mode === 'Code', `${label}: the prompt was built in ${mode} mode`);
+        prompts.push({ label: `${label} in ${mode} mode`, prompt });
+      }
+    }
+    return prompts;
+  }
+
+  test('buildSystemPrompt: every agent, in either mode, is told git leaves the secrets file out but a synced folder copies it', () => {
+    for (const { label, prompt } of connectorPromptsInBothModes()) {
+      const lines = prompt.split('\n');
+      const line = lines.find(l => l.startsWith('Ask for what the server actually needs before writing one'));
+      assert.strictEqual(line, CONNECTOR_CREDENTIAL_LINE, `${label}: the credential line says where a key goes, character for character`);
+      assert.strictEqual(lines.filter(l => l === CONNECTOR_CREDENTIAL_LINE).length, 1, `${label}: the credential line is there exactly once`);
+    }
+  });
+
+  test('buildSystemPrompt: the connectors section drops the claim that the secrets file stays put and keeps its five lines', () => {
+    // The section's other lines are byte for byte what they were before the
+    // credential line was corrected: the tab line, the marker line and the
+    // account-connector line, second, third and fifth.
+    const crypto = require('node:crypto');
+    const hashOf = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+    const UNCHANGED = [
+      [1, '9f4d5588b3ec58cffb40e2e0c32301c73641bc391036c822f98e0f64fb942463'],
+      [2, '5eff0a656d7d63b4ff5ae6e4e71050e86135ab5d85f411cf844e519c1786dfb4'],
+      [4, '8f16c3d91b73f9303ca3f5c1f645a534ee30a8645b9e48f117d37e9c9db021d2'],
+    ];
+    for (const { label, prompt } of connectorPromptsInBothModes()) {
+      const lines = prompt.split('\n');
+      const start = lines.indexOf('CONNECTORS (MCP tools):');
+      assert.ok(start > -1, `${label}: the connectors heading is there`);
+      const timezone = lines.indexOf('TIMEZONE:', start);
+      assert.ok(timezone > start, `${label}: the timezone heading follows it`);
+      assert.strictEqual(lines[timezone - 1], '', `${label}: a blank line closes the connectors section`);
+      const section = lines.slice(start, timezone - 1);
+      const text = section.join('\n');
+      assert.ok(!text.includes('does not travel'), `${label}: the section no longer says the secrets file does not travel`);
+      assert.ok(!text.includes('per-user'), `${label}: the section no longer calls the secrets file per-user`);
+      assert.strictEqual(section.length, 5, `${label}: the section is five lines, as it was, with no line joined to it`);
+      for (const [index, hash] of UNCHANGED) {
+        assert.strictEqual(hashOf(section[index]), hash, `${label}: line ${index + 1} of the section is byte for byte what it was`);
+      }
+    }
+  });
+
   test('buildSystemPrompt: a lead with direct reports gets the sequential-delegation rule, same as the orchestrator', () => {
     // The rule was first written into the orchestrator's branch of the prompt
     // only. An agent with direct reports takes the hasDirectReports branch
