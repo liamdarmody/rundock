@@ -641,6 +641,104 @@ describe('the sign-in check, as on main', () => {
   });
 });
 
+// The launch asks only to start, and the setup screen asks to sign in, so the
+// two overlap. Still one check runs, and each request gets its own kind of
+// answer from it: one only to start never gets ready or not-authenticated,
+// and one to sign in never gets started.
+describe('one check at a time, whatever each request asks', () => {
+  const READY = { status: 'ready' };
+  const STARTED = { status: 'started' };
+  const replies = { lookup: { stdout: `${MAC_BIN}\n` }, version: { stdout: '2.1.0 (Claude Code)\n' }, signIn: {} };
+
+  // The first of `asks` (true to sign in, false only to start) is made, held
+  // at its first child `at` picks, and the rest are made while it is held.
+  // Every child `at` picks is then released with `reply`, so a second check
+  // started in error still ends and is counted.
+  async function overlapping(t, asks, { at = isLookup, reply = replies.lookup, answer = signedIn(), appData } = {}) {
+    const f = fakes(t, (c) => (at(c) ? { hold: true } : answer(c)));
+    const check = checker(f.mod, 'darwin', { shellConfigDir: runsOnce, appData });
+    const results = [check.check({ signIn: asks[0] })];
+    await until('the held child', () => f.calls.some(at));
+    for (const signIn of asks.slice(1)) results.push(check.check({ signIn }));
+    await new Promise((r) => setTimeout(r, 20));
+    for (const c of f.calls.filter(at)) c.release(reply);
+    const answers = await Promise.all(results);
+    const starts = { lookups: f.calls.filter(isLookup).length, versions: f.calls.filter(isVersion).length, signIns: f.calls.filter(isSignIn).length };
+    return { answers, starts, check };
+  }
+  const ONE_SET = { lookups: 1, versions: 1, signIns: 1 };
+
+  test('one only to start, made while a sign-in check is in its lookup, joins it and gets started; the sign-in request gets ready', async (t) => {
+    const { answers, starts } = await overlapping(t, [true, false]);
+    assert.deepStrictEqual(answers, [READY, STARTED]);
+    assert.deepStrictEqual(starts, ONE_SET, 'one lookup, one version run and one sign-in check');
+  });
+
+  test('one only to start, made while a sign-in check runs its sign-in check, joins it and gets started, the copy having started', async (t) => {
+    const { answers, starts } = await overlapping(t, [true, false], { at: isSignIn, reply: { status: 1 } });
+    assert.strictEqual(answers[0].status, 'not-authenticated');
+    assert.deepStrictEqual(answers[1], STARTED);
+    assert.deepStrictEqual(starts, ONE_SET);
+  });
+
+  test('one to sign in, made while a check only to start is in its lookup, joins it, which goes on to one sign-in check: started for the first, ready for the second', async (t) => {
+    const { answers, starts } = await overlapping(t, [false, true]);
+    assert.deepStrictEqual(answers, [STARTED, READY]);
+    assert.deepStrictEqual(starts, ONE_SET, 'no second lookup or version run, and one sign-in check');
+  });
+
+  test('one to sign in, made while a check only to start is in its version run, joins it, which goes on to one sign-in check', async (t) => {
+    const { answers, starts } = await overlapping(t, [false, true], { at: isVersion, reply: replies.version });
+    assert.deepStrictEqual(answers, [STARTED, READY]);
+    assert.deepStrictEqual(starts, ONE_SET);
+  });
+
+  test('one to sign in that joins a check only to start gets not-authenticated when not signed in, and the first still gets started', async (t) => {
+    const { answers, starts } = await overlapping(t, [false, true], { answer: signedIn({ signIn: { status: 1 } }) });
+    assert.deepStrictEqual(answers[0], STARTED);
+    assert.strictEqual(answers[1].status, 'not-authenticated');
+    assert.deepStrictEqual(starts, ONE_SET);
+  });
+
+  for (const asks of [[true, false], [false, true]]) {
+    const order = asks[0] ? 'a sign-in check joined by one only to start' : 'a check only to start joined by one to sign in';
+    test(`${order}: nothing found is not-installed for both, from one lookup`, async (t) => {
+      const { answers, starts } = await overlapping(t, asks, { reply: { status: 1 } });
+      assert.deepStrictEqual(answers, [{ status: 'not-installed' }, { status: 'not-installed' }]);
+      assert.deepStrictEqual(starts, { lookups: 1, versions: 0, signIns: 0 });
+    });
+    test(`${order}: a copy that does not start is found-not-started for both, from one version run`, async (t) => {
+      const { answers, starts } = await overlapping(t, asks, { at: isVersion, reply: { status: 1 } });
+      assert.deepStrictEqual(answers, [{ status: 'found-not-started' }, { status: 'found-not-started' }]);
+      assert.deepStrictEqual(starts, { lookups: 1, versions: 1, signIns: 0 });
+    });
+  }
+
+  for (const asks of [[false, true, false], [true, false, true]]) {
+    test(`three overlapping requests, ${asks.map((signIn) => (signIn ? 'sign in' : 'only start')).join(', ')}, share one lookup, one version run and one sign-in check, each answered in its kind`, async (t) => {
+      const { answers, starts } = await overlapping(t, asks);
+      assert.deepStrictEqual(answers, asks.map((signIn) => (signIn ? READY : STARTED)));
+      assert.deepStrictEqual(starts, ONE_SET);
+    });
+  }
+
+  test('a request joined across sign-in options is logged as joined', async (t) => {
+    const appData = makeTempDir('setup-check-log-');
+    await overlapping(t, [false, true, false], { appData });
+    assert.deepStrictEqual(logLines(appData).map((l) => l.split(' ').slice(1, 3).join(' ')),
+      ['request joined', 'request joined', 'lookup found', 'version started', 'sign-in passed']);
+  });
+
+  test('a request after the check ended starts a fresh one: one to sign in after a check only to start gets ready, never started, and the reverse gets started', async (t) => {
+    const f = fakes(t, signedIn());
+    const check = checker(f.mod, 'darwin', { shellConfigDir: runsOnce });
+    assert.deepStrictEqual(await check.check({ signIn: false }), STARTED);
+    assert.deepStrictEqual(await check.check({ signIn: true }), READY, 'a fresh check, which signs in');
+    assert.deepStrictEqual(await check.check({ signIn: false }), STARTED, 'and a fresh check after it, which does not');
+    assert.deepStrictEqual(f.calls.map(stage), ['lookup', 'version', 'lookup', 'version', 'sign-in', 'lookup', 'version']);
+  });
+});
+
 describe('a failed sign-in check gives the reason main gives', () => {
   async function reasonOf(t, reply, act) {
     const f = fakes(t, signedIn({ signIn: reply }));

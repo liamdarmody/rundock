@@ -186,8 +186,10 @@ function createSetupCheck({
   extendPath = null,
 } = {}) {
   let found = { bin: null, version: null };
-  // The check running for each kind of request, joined by the next like it.
-  const running = new Map();
+  // The check running, { signIn, result }, joined by every request made while
+  // it runs. A request to sign in sets signIn, so it signs in after its
+  // version run.
+  let running = null;
   // Folders found on the User PATH or written to it in this run of the app,
   // which are not read or written again. A write that failed is not here, so
   // the next check tries it again.
@@ -292,7 +294,7 @@ function createSetupCheck({
   // `found` changes only as a check ends, so Sign in during a check has the
   // last one's copy and version: kept when this one started its copy, and
   // cleared when it found none or could not start it.
-  async function run(withSignIn) {
+  async function run(job) {
     const bin = await lookup();
     if (!bin) { found = { bin: null, version: null }; return { status: 'not-installed' }; }
     // Before the first start, which on Windows can be slow.
@@ -313,22 +315,28 @@ function createSetupCheck({
       return { status: 'found-not-started' };
     }
     log('version', 'started', start);
-    const result = withSignIn ? await signIn(plan) : { status: 'started' };
+    const result = job.signIn ? await signIn(plan) : { status: 'started' };
     found = { bin, version };
     return result;
   }
 
   return {
     // { status }: not-installed, found-not-started, then started when asked
-    // not to sign in, else ready or not-authenticated with its reason. A
-    // request while a check of its kind runs joins it; one after it ends
-    // starts afresh.
+    // not to sign in, else ready or not-authenticated with its reason. One
+    // check runs at a time: a request while it runs joins it, whatever either
+    // asked, and a request to sign in makes it sign in after its version run.
+    // Each gets its own kind of answer: one only to start gets started for a
+    // copy that started. A request after the check ends starts afresh.
     check({ signIn: withSignIn = true } = {}) {
-      const kind = withSignIn ? 'sign-in' : 'start';
-      if (running.has(kind)) { log('request', 'joined', deps.now()); return running.get(kind); }
-      const check = run(withSignIn).finally(() => { running.delete(kind); });
-      running.set(kind, check);
-      return check;
+      if (running) log('request', 'joined', deps.now());
+      else {
+        const job = { signIn: withSignIn };
+        job.result = run(job).finally(() => { running = null; });
+        running = job;
+      }
+      running.signIn = running.signIn || withSignIn;
+      const { result } = running;
+      return withSignIn ? result : result.then((r) => (r.status === 'ready' || r.status === 'not-authenticated' ? { status: 'started' } : r));
     },
     // The copy the last check started, and the version it gave, for Sign in.
     found: () => ({ ...found }),

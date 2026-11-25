@@ -46,9 +46,9 @@ const MUTATIONS = [
     "      const stdout = childProcess.execFileSync(plan.program, [...plan.args, '--version'], { env: startEnv(plan), timeout: deps.timeouts.version });"],
   // Start a check per request and the screen's polls each start their own
   // children, queued behind the slow one.
-  [CHECK, 'a request while a check of its kind runs joins it',
-    '      if (running.has(kind)) {',
-    '      if (false) {'],
+  [CHECK, 'a request while a check runs joins it',
+    "      if (running) log('request', 'joined', deps.now());",
+    "      if (false) log('request', 'joined', deps.now());"],
   // ===== FOUND IS NEVER NOT INSTALLED =====
   // A slow first start would send the person back to the install command for
   // a copy that is there.
@@ -107,6 +107,11 @@ const MUTATIONS = [
   [CHECK, 'the copy found is kept until the next check ends',
     '    const bin = await lookup();\n',
     '    found = { bin: null, version: null };\n    const bin = await lookup();\n'],
+  // Join only a check asked the same way and the launch and the setup screen
+  // each start their own children, side by side.
+  [CHECK, 'a request joins the check running whatever its sign-in option',
+    "      if (running) log('request', 'joined', deps.now());\n      else {",
+    "      if (running && running.signIn === withSignIn) log('request', 'joined', deps.now());\n      else {"],
 ];
 
 // The reporter is named explicitly rather than left to the default, which
