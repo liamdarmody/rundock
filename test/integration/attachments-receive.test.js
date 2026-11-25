@@ -466,6 +466,119 @@ describe('every path back into the handler writes once and records once', () => 
     h.reapConvo(id);
   });
 
+  // The record changed after the message was stored and before the server
+  // sent it back into the handler: its entry taken out, or the record left
+  // unreadable. Each re-entry is then refused, and nothing reaches a process.
+  const BROKEN = [['removed', 'gone from the record'], ['unreadable', 'in a record that cannot be read']];
+  function breakRecord(id, entryId, how) {
+    const at = path.join(folderOf(id), 'record.json');
+    if (how === 'unreadable') { fs.writeFileSync(at, 'not json'); return; }
+    const record = JSON.parse(fs.readFileSync(at, 'utf-8'));
+    record.messages = record.messages.filter((m) => !m || m.id !== entryId);
+    fs.writeFileSync(at, JSON.stringify(record));
+  }
+  // Every chat_refused for `id` after `since`, once the first has arrived and
+  // the re-entries have had time to do anything else.
+  async function refusedOnReentry(id, since) {
+    const refused = (m) => m.type === 'chat_refused' && m.conversationId === id;
+    assert.ok(await arrived(refused, { since }), 'the re-entry is answered with chat_refused');
+    await h.delay(500);
+    return client.messages.slice(since).filter(refused).map((m) => [m.code, m.title, m.text]);
+  }
+  const BAD_ENTRY = ['bad-entry', 'Message not sent', FALLBACK];
+
+  for (const [how, label] of BROKEN) {
+    test(`the transition buffer's replay is refused when its entry is ${label}, and reaches no process`, async () => {
+      const id = h.freshConvoId('buffered-broken');
+      answers('ASK-BUFBROKEN');
+      const t = { state: 'killing', owner: {}, queued: [], failsafe: setTimeout(() => {}, 30000) };
+      h.internal.convoTransitions.set(id, t);
+      try {
+        const since = client.messages.length;
+        chat(id, 'ASK-BUFBROKEN see this', [file('Screen Shot.png', png())]);
+        const stored = await storedFor(id, since);
+        assert.ok(stored, 'the message is answered with chat_stored');
+        assert.ok(await h.waitUntil(() => t.queued.length > 0), 'and queued');
+        breakRecord(id, stored.entry.id, how);
+        const replay = client.messages.length;
+        h.internal.wsHandlerContext.transitions.endConvoTransition(id);
+        assert.deepStrictEqual(await refusedOnReentry(id, replay), [BAD_ENTRY], 'one bad-entry refusal');
+        assert.deepStrictEqual(userRows(id), [], 'no transcript row');
+        assert.deepStrictEqual(spawnsFor(id), [], 'no process started');
+        assert.deepStrictEqual(promptsWith('ASK-BUFBROKEN'), [], 'nothing written to a stdin');
+      } finally {
+        if (h.internal.convoTransitions.get(id) === t) h.internal.wsHandlerContext.transitions.endConvoTransition(id);
+        h.reapConvo(id);
+      }
+    });
+  }
+
+  for (const legacy of [false, true]) {
+    for (const [how, label] of BROKEN) {
+      test(`the ${legacy ? 'legacy' : 'interactive'} resume retry is refused when its entry is ${label}, and reaches no process`, async () => {
+        const id = h.freshConvoId(legacy ? 'retry-legacy-broken' : 'retry-broken');
+        const dead = `dead-broken-${legacy ? 'legacy' : 'interactive'}-${how}`;
+        seed(id, { agentId: 'chief-of-staff', sessionId: dead, sessionIds: [{ agentId: 'chief-of-staff', sessionId: dead }] });
+        scenario([{ match: { promptIncludes: 'ASK-RETRYBROKEN' }, turn: [{ text: 'FRESH-RETRYBROKEN' }] }], [dead], { refusalExitMs: 2000 });
+        h.clearInvocations();
+        if (legacy) process.env.RUNDOCK_LEGACY_SPAWN = '1';
+        const since = client.messages.length;
+        let stored;
+        let refusals;
+        try {
+          chat(id, 'ASK-RETRYBROKEN see this', [file('Screen Shot.png', png())], { sessionId: dead });
+          stored = await storedFor(id, since);
+          assert.ok(stored, 'the message is answered with chat_stored');
+          assert.ok(await arrived((m) => m.subtype === 'session_expired' && m._conversationId === id, { since, timeout: 15000 }),
+            'the resume is refused and still lingering');
+          assert.strictEqual(spawnsFor(id).length, 1, 'and not yet retried');
+          breakRecord(id, stored.entry.id, how);
+          refusals = await refusedOnReentry(id, since);
+        } finally {
+          delete process.env.RUNDOCK_LEGACY_SPAWN;
+        }
+        assert.deepStrictEqual(refusals, [BAD_ENTRY], 'one bad-entry refusal');
+        assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), [dead], 'the refused resume, and no fresh start');
+        assert.deepStrictEqual(promptsWith('ASK-RETRYBROKEN'), [], 'nothing written to a stdin');
+        assert.deepStrictEqual(userRows(id).map((r) => r.text), [stored.content], 'the first pass\'s row, and none for the retry');
+        h.reapConvo(id);
+      });
+    }
+  }
+
+  for (const [how, label] of BROKEN) {
+    test(`the carried loop is refused when the first message's entry is ${label}, and reaches no process`, async () => {
+      const id = h.freshConvoId('carried-broken');
+      const dead = `dead-broken-carried-${how}`;
+      seed(id, { agentId: 'chief-of-staff', sessionId: dead, sessionIds: [{ agentId: 'chief-of-staff', sessionId: dead }] });
+      scenario([
+        { match: { promptIncludes: 'FIRST-CB' }, turn: [{ text: 'DONE-FIRST-CB' }] },
+        { match: { promptIncludes: 'SECOND-CB' }, turn: [{ text: 'DONE-SECOND-CB' }] },
+      ], [dead], { refusalExitMs: 2000 });
+      h.clearInvocations();
+      const since = client.messages.length;
+      chat(id, 'FIRST-CB hello', [file('Screen Shot.png', png())], { sessionId: dead });
+      const first = await storedFor(id, since);
+      assert.ok(first, 'the first is answered with chat_stored');
+      assert.ok(await arrived((m) => m.subtype === 'session_expired' && m._conversationId === id, { since, timeout: 15000 }),
+        'the resume is refused and still lingering');
+      const mid = client.messages.length;
+      chat(id, 'SECOND-CB and this', [file('notes.txt', Buffer.from('hello'))]);
+      const second = await storedFor(id, mid);
+      assert.ok(second, 'the second is answered with chat_stored');
+      assert.ok(await h.waitUntil(() => userRows(id).length === 2), 'and reaches the refused process');
+      assert.strictEqual(spawnsFor(id).length, 1, 'which is not yet retried');
+      breakRecord(id, first.entry.id, how);
+      // The retry and the message carried after it both carry the first
+      // message's reference, so each is refused.
+      assert.deepStrictEqual(await refusedOnReentry(id, mid), [BAD_ENTRY, BAD_ENTRY], 'one bad-entry refusal for each re-entry');
+      assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), [dead], 'the refused resume, and no fresh start');
+      assert.deepStrictEqual(promptsWith('-CB '), [], 'nothing written to a stdin');
+      assert.deepStrictEqual(userRows(id).map((r) => r.text), [first.content, second.content], 'the first pass\'s rows, and none for the retry');
+      h.reapConvo(id);
+    });
+  }
+
   describe('a reference to a record entry, without files', () => {
     const own = h.freshConvoId('ref-own');
     const other = h.freshConvoId('ref-other');
@@ -664,9 +777,15 @@ describe('deleting a conversation deletes its attachments, and says when it coul
     await held;
     assert.ok(await arrived((m) => m.type === 'conversation_deleted' && m.id === id, { since }), 'conversation_deleted is sent');
     assert.ok(await storedFor(id, since), 'the chat is stored');
-    assert.ok(await resultFor(id, 'DONE-ASK-FLIGHT', since), 'and dispatched');
+    // The delete takes the lock straight after the write, so the entry is gone
+    // by the time the stored message comes back into the handler, and its
+    // reference is refused rather than dispatched.
+    assert.ok(await arrived((m) => m.type === 'chat_refused' && m.conversationId === id, { since }), 'the stored message is answered');
+    await h.delay(300);
     const answered = client.messages.slice(since);
-    assert.ok(!answered.some((m) => m.type === 'chat_refused'), 'the chat is not refused');
+    assert.deepStrictEqual(answered.filter((m) => m.type === 'chat_refused').map((m) => m.code), ['bad-entry'],
+      'the files are not refused, and the message naming the deleted entry is refused once');
+    assert.deepStrictEqual([spawnsFor(id).length, promptsWith('ASK-FLIGHT').length], [0, 0], 'and reaches no process');
     assert.ok(!answered.some((m) => m.type === 'conversation_files_kept'), 'no notice');
     assert.strictEqual(listing(folderOf(id)), null, 'the folder is gone');
     h.reapConvo(id);

@@ -113,6 +113,11 @@ const MUTATIONS = [
   [only(DELETE, 'a deleted list holding not json: the conversation goes, its files stay, and the notice says where'), 'files a delete could not remove are reported',
     "    if (kept) ws.send(JSON.stringify({ type: 'conversation_files_kept'",
     "    if (false) ws.send(JSON.stringify({ type: 'conversation_files_kept'"],
+
+  // ===== A REFERENCE SENT BACK INTO THE HANDLER IS CHECKED AGAIN =====
+  [only(RECEIVER, 'the transition buffer\'s replay is refused when its entry is gone from the record, and reaches no process'), 'a reference the server sends back into the handler is checked again',
+    "    // Every reference is checked: the page's on arrival, before it can wait\n",
+    "    if (!fromPage) return false;\n    // Every reference is checked: the page's on arrival, before it can wait\n"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
