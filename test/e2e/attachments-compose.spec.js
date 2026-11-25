@@ -67,8 +67,9 @@ test('files attached through the + button are sent with the message, drawn from 
     const bubble = page.locator('#messages .msg-user').last();
     await expect(bubble).toContainText('see these');
     await expect.poll(async () => (await bubble.textContent()).split('[Attached: ').length - 1).toBe(2);
-    await expect(bubble).toContainText('[Attached: pixel.png');
-    await expect(bubble).toContainText('[Attached: notes.txt');
+    // Each line names the stored copy, in the order picked, with its kind and size.
+    await expect(bubble).toContainText(/\[Attached: \.rundock\/attachments\/\d+\/1-pixel\.png \(PNG image, \d+ KB\)\]/);
+    await expect(bubble).toContainText(/\[Attached: \.rundock\/attachments\/\d+\/2-notes\.txt \(text file, \d+ KB\)\]/);
     await expect(input).toHaveValue('');
     await expect(chips).toHaveCount(0);
     // The turn the send started runs to its end before the next pick.
