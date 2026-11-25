@@ -377,7 +377,7 @@ describe('the most common next step: one append allowed, a second in the same tu
     const g = guard.acquireAnswerFileGuard(ws, (c) => { heard.push(c); glue.surfaceAnswerFileChange({ agentId: 'builder', processId: null }, 'convo-7', c, 'claude'); }, { convoId: 'convo-7', intervalMs: 60_000 });
     const env = {
       ...process.env, RUNDOCK: '1', RUNDOCK_WORKSPACE: ws, RUNDOCK_PORT: String(capture.port), RUNDOCK_EXTRA_DIRS: '',
-      RUNDOCK_CONVO_ID: 'convo-7', RUNDOCK_HOOK_TOKEN: require('../../lib/auth/index.js').issueHookToken('convo-7'), NODE_V8_COVERAGE: '',
+      RUNDOCK_CONVO_ID: 'convo-7', RUNDOCK_HOOK_TOKEN: require('../../lib/auth/index.js').issueHookToken('convo-7', 'default'), NODE_V8_COVERAGE: '',
     };
     const ask = async (sid, line) => {
       const r = await fx.runHook(env, { session_id: sid, hook_event_name: 'PreToolUse', cwd: ws, tool_name: 'Bash', tool_input: { command: `echo '${line}' >> ~/.zshrc` } });

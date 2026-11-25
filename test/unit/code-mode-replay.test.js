@@ -198,7 +198,7 @@ describe('the session, replayed for Claude Code', { skip: SKIP }, () => {
           try { fs.rmSync(boundary.boundaryPermissionsPath()); } catch (e) { /* none yet */ }
           wsh.handleSetWorkingFolders({}, { send() {} }, { folders: [v.stored] });
           claudeRt.wireClaudeRuntimeDeps({ getActualPort: () => capture.port });
-          const env = { ...claudeRt.getSpawnEnv('convo-replay'), HOME: v.home };
+          const env = { ...claudeRt.getSpawnEnv('convo-replay', 'default'), HOME: v.home };
           const envDead = { ...env, RUNDOCK_PORT: String(deadPort) };
           const calls = session({ R: `${v.P}/app`, RA: `${v.PA}/app`, P: v.P, PA: v.PA, H: v.home });
           const allowed = new Set();
@@ -290,7 +290,7 @@ describe('the session, replayed for Claude Code', { skip: SKIP }, () => {
     const v = W.VARIANTS.a;
     const sid = `replay-repeat-14-${process.pid}`;
     const claudeRt = require('../../lib/runtime/claude.js');
-    const env = { ...claudeRt.getSpawnEnv('convo-replay'), HOME: v.home };
+    const env = { ...claudeRt.getSpawnEnv('convo-replay', 'default'), HOME: v.home };
     await fx.runHook(env, { session_id: sid, hook_event_name: 'PreToolUse', cwd: fx.real(`${v.PA}/app`), tool_name: 'Bash', tool_input: { command: 'git push origin main' } });
     const payload = capture.posted.get(sid);
     assert.ok(payload, 'the hook still asks the server');

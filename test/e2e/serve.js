@@ -53,7 +53,7 @@ fs.writeFileSync(credentials.STORAGE_STATE, JSON.stringify({
 }), { mode: 0o600 });
 fs.writeFileSync(credentials.SESSION_FILE, token, { mode: 0o600 });
 fs.writeFileSync(credentials.HOOK_TOKENS, JSON.stringify(Object.fromEntries(
-  credentials.HOOK_SCOPES.map((scope) => [scope == null ? '' : scope, auth.issueHookToken(scope)]),
+  credentials.HOOK_SCOPES.map((scope) => [scope == null ? '' : scope, auth.issueHookToken(scope, 'default')]),
 )), { mode: 0o600 });
 
 startServer({ port: PORT });

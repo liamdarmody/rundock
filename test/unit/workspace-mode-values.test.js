@@ -30,7 +30,7 @@ function readersFor(stored) {
   const prompt = buildSystemPrompt({ name: 'Scout', displayName: 'Scout' });
   return {
     tools: srv.getDisallowedTools(),
-    codeEnv: srv.getSpawnEnv('c').RUNDOCK_CODE_MODE,
+    codeEnv: srv.getSpawnEnv('c', 'default').RUNDOCK_CODE_MODE,
     codeRule: /Rundock is running in Code mode/.test(prompt),
     sandboxOn: sandboxSwitchFor(dir).on,
   };

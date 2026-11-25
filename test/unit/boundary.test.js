@@ -708,7 +708,7 @@ describe('agent scratch files', () => {
     // Derive the path from the environment a spawned agent ACTUALLY receives,
     // not from the helper. Asking the helper would pass even if the spawn env
     // pointed somewhere else entirely, which is the thing worth knowing.
-    const env = claudeRuntime.getSpawnEnv('convo-scratch');
+    const env = claudeRuntime.getSpawnEnv('convo-scratch', 'default');
     assert.ok(env.TMPDIR, 'the spawn env carries a temp directory');
     assert.strictEqual(env.TEMP, env.TMPDIR, 'all three names agree');
     assert.strictEqual(env.TMP, env.TMPDIR, 'all three names agree');

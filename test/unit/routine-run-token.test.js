@@ -146,7 +146,7 @@ describe('the environment a routine run is started with', () => {
 
   test('an agent started with neither a conversation nor a run token has no token, even one it inherited', () => {
     const saved = process.env.RUNDOCK_HOOK_TOKEN;
-    process.env.RUNDOCK_HOOK_TOKEN = auth.issueHookToken('convo-inherited');
+    process.env.RUNDOCK_HOOK_TOKEN = auth.issueHookToken('convo-inherited', 'alpha');
     try {
       assert.strictEqual('RUNDOCK_HOOK_TOKEN' in claudeRt.getSpawnEnv(null), false);
       assert.strictEqual('RUNDOCK_HOOK_TOKEN' in claudeRt.getSpawnEnv(''), false);
@@ -155,10 +155,10 @@ describe('the environment a routine run is started with', () => {
     }
   });
 
-  test('a conversation\'s agent is started with its conversation\'s token, as before', () => {
-    const env = claudeRt.getSpawnEnv('convo-as-before');
-    assert.strictEqual(env.RUNDOCK_HOOK_TOKEN, auth.issueHookToken('convo-as-before'));
-    assert.strictEqual(auth.hookTokenScope(env.RUNDOCK_HOOK_TOKEN), 'convo-as-before');
+  test('a conversation\'s agent is started with its own token in that conversation', () => {
+    const env = claudeRt.getSpawnEnv('convo-as-before', 'alpha');
+    assert.strictEqual(env.RUNDOCK_HOOK_TOKEN, auth.issueHookToken('convo-as-before', 'alpha'));
+    assert.deepStrictEqual(auth.hookTokenScope(env.RUNDOCK_HOOK_TOKEN), { conversationId: 'convo-as-before', agentId: 'alpha' });
     assert.strictEqual(auth.hookTokenRun(env.RUNDOCK_HOOK_TOKEN), null);
   });
 });
@@ -424,7 +424,7 @@ describe('a run\'s cards still open as it ends are refused and counted with it',
 
   test('only that run\'s open cards are refused, every window is told, each is counted once, and a later answer does nothing', async () => {
     const [tokenA, tokenB] = [auth.issueRunHookToken('run-a'), auth.issueRunHookToken('run-b')];
-    const convo = claudeRt.getSpawnEnv('convo-left-open').RUNDOCK_HOOK_TOKEN;
+    const convo = claudeRt.getSpawnEnv('convo-left-open', 'alpha').RUNDOCK_HOOK_TOKEN;
     try {
       const mine = [await asked(tokenA), await asked(tokenA)];
       const others = [await asked(tokenB), await asked(convo)];
@@ -484,7 +484,7 @@ describe('a conversation\'s token is checked as before', () => {
     const c = counted.length;
     lookup = () => { throw new Error('a conversation\'s card never asks for a run'); };
     try {
-      const { card, out } = await askAndDeny(claudeRt.getSpawnEnv('convo-checked'), outsideRead('session-of-run-a'));
+      const { card, out } = await askAndDeny(claudeRt.getSpawnEnv('convo-checked', 'alpha'), outsideRead('session-of-run-a'));
       assert.strictEqual(card._conversationId, 'convo-checked');
       assert.strictEqual(card._run, undefined);
       assert.strictEqual(reasonOf(out), refusalNotice('denied', 'Bash'), 'and told to stop and ask, as before');

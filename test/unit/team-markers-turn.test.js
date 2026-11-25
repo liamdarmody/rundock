@@ -221,6 +221,12 @@ describe('a hand-off is the record on the entry, and nothing an agent wrote', ()
     assert.deepStrictEqual(saves, [], 'and nothing reached the save');
   });
 
+  test('a team change card is raised with no asker: it names who brought Doc in on the card itself', () => {
+    docTurn({ delegation: { originalAgentId: 'chief-of-staff', originalProcessId: 'p0' } }, `Done.\n${SAVE}`);
+    assert.strictEqual(requests.length, 1, 'one card');
+    assert.ok(!('agentId' in requests[0]), `no asker is passed: ${JSON.stringify(Object.keys(requests[0]))}`);
+  });
+
   // A CARD'S OUTCOME THAT CANNOT BE KEPT IS NEVER LOST, AND NEVER TOLD AS A
   // STOP. The card was held on the record, when it was raised, with the
   // outcome a stop gives it; once decided, the outcome takes its place. With

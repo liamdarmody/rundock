@@ -149,7 +149,7 @@ after(async () => {
 // included, spawns with.
 const ROUTINE_TOKEN = auth.issueRunHookToken(ROUTINE_RUN.id);
 const routineEnv = () => claudeRt.getSpawnEnv(null, ROUTINE_TOKEN);
-const conversationEnv = (convo) => claudeRt.getSpawnEnv(convo);
+const conversationEnv = (convo) => claudeRt.getSpawnEnv(convo, 'default');
 
 function runHook(env, input, { preload } = {}) {
   return new Promise((resolve) => {

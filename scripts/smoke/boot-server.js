@@ -8,7 +8,7 @@ const auth = require('../../lib/auth/index.js');
 
 process.on('message', (m) => {
   if (!m || m.type !== 'hook-token' || !process.send) return;
-  process.send({ type: 'hook-token', id: m.id, token: auth.issueHookToken(m.conversationId == null ? null : m.conversationId) });
+  process.send({ type: 'hook-token', id: m.id, token: auth.issueHookToken(m.conversationId == null ? null : m.conversationId, 'default') });
 });
 
 require('../../server.js').startServer();
