@@ -56,6 +56,9 @@
 // rule before it exits, an ordinary turn before it answers.
 // A crash rule may give "beforeSession": true to fail at startup, before the
 // session's transcript exists, as an expired login does.
+// Any rule may give "keepSession": true to keep its turn's transcript as a chat
+// run keeps it, under the session id the run reports, with its lines stamped
+// at the time they are written.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
 // Any rule may give "untilFile": "<path>" to hold its turn until that file
 // exists, so a test decides the moment a run ends rather than racing a delay.
@@ -587,18 +590,25 @@ function buildEnvelopes(rule) {
 // for.
 const tfx = require(path.join(__dirname, '..', '..', 'fixtures', 'session-transcript.js'));
 
-function transcriptFile() {
-  if (!FIXED_SESSION) return null;
+function transcriptFile(rule) {
+  if (!FIXED_SESSION && !rule.keepSession) return null;
   const dir = path.join(process.env.HOME || '', '.claude', 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
   try {
     fs.mkdirSync(dir, { recursive: true });
-    return path.join(dir, `${FIXED_SESSION}.jsonl`);
+    return path.join(dir, `${SESSION_ID}.jsonl`);
   } catch (e) { return null; }
+}
+
+// A kept chat session's lines carry the time they are written, so a reader
+// can place them against the conversation's own rows; the fixture's fixed
+// time otherwise.
+function stampFor(rule) {
+  return rule.keepSession ? new Date().toISOString() : undefined;
 }
 
 function putTranscript(rule, lines) {
   if (rule.skipTranscript) return;
-  const file = transcriptFile();
+  const file = transcriptFile(rule);
   if (!file) return;
   try { fs.writeFileSync(file, lines.join('')); } catch (e) { /* best effort, like every log here */ }
 }
@@ -611,8 +621,8 @@ function putTranscript(rule, lines) {
 // pass against it.
 function beginTranscript(rule, prompt) {
   putTranscript(rule, [
-    tfx.prompt(FIXED_SESSION, String(prompt)),
-    ...(rule.writes || []).map(w => tfx.unanswered(FIXED_SESSION, {
+    tfx.prompt(SESSION_ID, String(prompt), stampFor(rule)),
+    ...(rule.writes || []).map(w => tfx.unanswered(SESSION_ID, {
       tool: w.tool || 'Write', file: path.resolve(process.cwd(), w.file), outcome: w.outcome || 'create', at: w.at, content: w.content,
     })),
   ]);
@@ -625,8 +635,8 @@ function beginTranscript(rule, prompt) {
 // whose transcript goes missing still changed the workspace, which is the case
 // that separates "changed nothing" from "nobody can say".
 function finishTranscript(rule, prompt, shellRan = []) {
-  const lines = [tfx.prompt(FIXED_SESSION, String(prompt))];
-  for (const ran of shellRan) lines.push(tfx.shellTool(FIXED_SESSION, ran));
+  const lines = [tfx.prompt(SESSION_ID, String(prompt), stampFor(rule))];
+  for (const ran of shellRan) lines.push(tfx.shellTool(SESSION_ID, ran));
   for (const w of rule.writes || []) {
     const file = path.resolve(process.cwd(), w.file);
     // WHETHER THIS WAS A CREATION OR AN OVERWRITE IS DECIDED BY THE DISK, not
@@ -646,9 +656,9 @@ function finishTranscript(rule, prompt, shellRan = []) {
         fs.writeFileSync(file, w.content != null ? String(w.content) : `${outcome}:${w.file}\n`);
       } catch (e) { /* the transcript still records what was attempted */ }
     }
-    lines.push(tfx.completed(FIXED_SESSION, { tool: w.tool || 'Write', file, outcome, at: w.at, content: w.content, refusal }));
+    lines.push(tfx.completed(SESSION_ID, { tool: w.tool || 'Write', file, outcome, at: w.at, content: w.content, refusal }));
   }
-  for (const block of rule.turn || []) if (block.text != null) lines.push(tfx.say(FIXED_SESSION, block.text));
+  for (const block of rule.turn || []) if (block.text != null) lines.push(tfx.say(SESSION_ID, block.text, stampFor(rule)));
   putTranscript(rule, lines);
 }
 
@@ -656,7 +666,7 @@ function emitTurn(rule, prompt) {
   // Every signal handler this stub installs goes in before the first write of
   // the branch it serves, so no signal can find the process between the two.
   const shellRan = (rule.shell || []).map(runShell);
-  if (FIXED_SESSION) finishTranscript(rule, prompt, shellRan);
+  if (FIXED_SESSION || rule.keepSession) finishTranscript(rule, prompt, shellRan);
   const events = buildEnvelopes(rule);
   // A REPLY STILL BEING FINISHED. `holdAfterText` writes the turn up to the
   // end of its text and holds the rest, the message's end and the result,
@@ -754,7 +764,7 @@ function handleUserMessage(content) {
   // going, which is what progress is read from. It holds the tools asked for
   // and no outcomes yet, which is exactly what a run that died halfway leaves
   // behind.
-  if (FIXED_SESSION && !rule.beforeSession) beginTranscript(rule, content);
+  if ((FIXED_SESSION || rule.keepSession) && !rule.beforeSession) beginTranscript(rule, content);
   if (rule.crash != null) {
     // Abnormal death: exit without emitting a result envelope, so the
     // server's close handler runs with no result for this turn.

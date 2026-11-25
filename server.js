@@ -22,6 +22,7 @@ const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES, stripRundockMarkers } 
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const config = require('./lib/config.js');
+const { MAX_PAYLOAD, createReceiver } = require('./lib/attachments/receive.js');
 const agentsDiscovery = require('./lib/agents/discovery.js');
 const {
   discoverAgents, readNormalisedFile, extractFrontmatterText, titleCase,
@@ -1049,6 +1050,9 @@ const wss = new WebSocketServer({
   // The page offers `rundock` beside the subprotocol carrying its session
   // token (lib/auth); the token is never chosen, so it is never echoed back.
   handleProtocols: (protocols) => (protocols.has(auth.WS_PROTOCOL) ? auth.WS_PROTOCOL : false),
+  // A message with its files is one frame; a frame past this closes only the
+  // socket that sent it (lib/attachments/receive.js).
+  maxPayload: MAX_PAYLOAD,
 });
 
 // Module-level process tracking: survives WebSocket reconnects
@@ -1073,6 +1077,12 @@ function resetAutoResume(convoId) {
   agentAutoResumeCount.set(convoId, 0);
 }
 const connectedClients = new Set(); // All active WebSocket connections
+// A chat's attachments are stored before anything else reads the message.
+// The agent is looked up as the chat handler's routing looks it up.
+const attachmentReceiver = createReceiver({
+  clients: connectedClients,
+  findAgent: (slug) => findAgentBySlug(discoverAgents(), slug),
+});
 const disconnectBuffer = []; // Messages queued while no clients are connected
 
 // Transcript primitives (convoTranscripts cache, load/save/salvage,
@@ -1530,6 +1540,9 @@ wss.on('connection', (ws) => {
   connectedClients.add(ws);
   ws._alive = true;
   ws.on('pong', () => { ws._alive = true; });
+  // A frame over maxPayload errors on this socket, which then closes with
+  // 1009. Without a listener that error would end the server.
+  ws.on('error', (err) => console.error('[WS] socket error:', err && err.message));
 
   // Tell this client about any active processes so it can restore thinking indicators.
   // Always send this message, even when empty, so the client can reconcile stale state.
@@ -1584,6 +1597,12 @@ wss.on('connection', (ws) => {
       if (msg.type === 'chat') {
         const convoId = msg.conversationId || 'default';
         const useLegacy = process.env.RUNDOCK_LEGACY_SPAWN === '1';
+
+        // ATTACHMENTS: stored and recorded once, before the buffer below can
+        // queue the message, so every path back into this handler carries the
+        // stored text and the entry's ID, never the files. A page frame is a
+        // Buffer; the server's own re-entries are strings.
+        if (attachmentReceiver.takes(msg, ws, typeof data !== 'string')) return;
 
         // KILL-WINDOW GUARD: if this conversation is mid-transition (a
         // handoff kill has fired, or a delegate's parent restoration is in
