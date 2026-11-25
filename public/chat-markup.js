@@ -230,6 +230,16 @@
     return `<div class="delegation-line"></div><div class="delegation-badge">${party(fromAgent)} ${verb} ${party(toAgent)}</div><div class="delegation-line"></div>`;
   }
 
+  // The line at the top of a conversation's approval card naming the agent
+  // that asked: "Asked by Wren", after that agent's avatar. The avatar is drawn
+  // as the divider's is, hidden from screen readers with its glyph in data-icon,
+  // so the line's text is the sentence and nothing else.
+  /** @param {AgentLike} agent */
+  function askedByHtml(agent) {
+    const { colour, iconAttr, name } = identity(agent);
+    return `<div class="permission-origin"><span class="avatar xs" style="background:${colour}" aria-hidden="true" data-icon="${iconAttr}"></span><span>Asked by ${name}</span></div>`;
+  }
+
   // What a permission card becomes once it has been answered, whether the user
   // answered it or the server timed it out. The class comes from the decision
   // rather than the label, because the label varies ('✓', '✓ Always', '✕',
@@ -254,6 +264,7 @@
     thinkingIndicatorHtml,
     userBubbleHtml,
     delegationDividerHtml,
+    askedByHtml,
     permissionResolvedHtml,
   };
 }));

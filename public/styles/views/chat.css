@@ -184,6 +184,8 @@ body.light .permission-fields { background: var(--elevated); }
    icon now gutters the whole card rather than only its title row. */
 .permission-actions { display: flex; gap: 8px; align-items: center; padding-left: var(--permission-text-column); flex-wrap: wrap; row-gap: 8px; }
 .btn-perm { padding: 6px 16px; border-radius: var(--radius-lg); font-size: var(--caption); font-weight: 500; cursor: pointer; border: 1px solid var(--border); transition: all var(--duration-base) ease; }
+/* A button that has just appeared or moved, and does not take a click yet. */
+.btn-perm[aria-disabled="true"] { opacity: 0.5; }
 /* #1a1a1a is dark text on a BRIGHT status fill, and is correct in both
    themes for that reason. It is not a hardcoded copy of the dark theme's
    --base: tokenising it would make it light-on-light in light mode.

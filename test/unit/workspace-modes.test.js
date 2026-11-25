@@ -530,7 +530,7 @@ describe('state + conversation persistence', () => {
   test('getSpawnEnv: RUNDOCK flags, convo id, code-mode flag', () => {
     useWorkspace({});
     srv.writeState({ workspaceMode: 'code' });
-    const env = srv.getSpawnEnv('convo-9');
+    const env = srv.getSpawnEnv('convo-9', 'default');
     assert.strictEqual(env.RUNDOCK, '1');
     assert.strictEqual(env.RUNDOCK_CONVO_ID, 'convo-9');
     assert.strictEqual(env.RUNDOCK_CODE_MODE, '1');
@@ -558,11 +558,11 @@ describe('state + conversation persistence', () => {
     useWorkspace({});
     withInherited('RUNDOCK_CODE_MODE', '1', () => {
       srv.writeState({ workspaceMode: 'notes' });
-      assert.strictEqual(srv.getSpawnEnv('convo-1').RUNDOCK_CODE_MODE, undefined, 'Notes: the inherited flag is cleared');
+      assert.strictEqual(srv.getSpawnEnv('convo-1', 'default').RUNDOCK_CODE_MODE, undefined, 'Notes: the inherited flag is cleared');
       srv.writeState({});
-      assert.strictEqual(srv.getSpawnEnv('convo-1').RUNDOCK_CODE_MODE, undefined, 'and with no mode stored');
+      assert.strictEqual(srv.getSpawnEnv('convo-1', 'default').RUNDOCK_CODE_MODE, undefined, 'and with no mode stored');
       srv.writeState({ workspaceMode: 'code' });
-      assert.strictEqual(srv.getSpawnEnv('convo-1').RUNDOCK_CODE_MODE, '1', 'Code mode is still set where Rundock decides it');
+      assert.strictEqual(srv.getSpawnEnv('convo-1', 'default').RUNDOCK_CODE_MODE, '1', 'Code mode is still set where Rundock decides it');
     });
   });
 
@@ -570,7 +570,7 @@ describe('state + conversation persistence', () => {
     useWorkspace({});
     withInherited('RUNDOCK_CONVO_ID', 'inherited-convo', () => {
       assert.strictEqual(srv.getSpawnEnv(null).RUNDOCK_CONVO_ID, undefined, 'an agent with no conversation names none');
-      assert.strictEqual(srv.getSpawnEnv('convo-7').RUNDOCK_CONVO_ID, 'convo-7', 'and one with a conversation names its own');
+      assert.strictEqual(srv.getSpawnEnv('convo-7', 'default').RUNDOCK_CONVO_ID, 'convo-7', 'and one with a conversation names its own');
     });
   });
 

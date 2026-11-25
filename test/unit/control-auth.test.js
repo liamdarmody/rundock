@@ -101,30 +101,63 @@ describe('lib/auth: the one question', () => {
 });
 
 describe('lib/auth: the hook\'s tokens', () => {
-  test('each conversation has its own token, stable for the launch', () => {
-    const a = auth.issueHookToken('convo-a');
-    assert.strictEqual(auth.issueHookToken('convo-a'), a);
-    assert.notStrictEqual(auth.issueHookToken('convo-b'), a);
-    assert.strictEqual(auth.hookTokenScope(a), 'convo-a');
+  test('each agent in each conversation has its own token, stable for the launch', () => {
+    const a = auth.issueHookToken('convo-a', 'alpha');
+    assert.strictEqual(typeof auth.hookTokenScope(a), 'object', 'a token resolves to the conversation and the agent');
+    assert.deepStrictEqual(auth.hookTokenScope(a), { conversationId: 'convo-a', agentId: 'alpha' });
+    assert.strictEqual(auth.issueHookToken('convo-a', 'alpha'), a, 'the same pair, the same token');
+    const otherAgent = auth.issueHookToken('convo-a', 'beta');
+    const otherConvo = auth.issueHookToken('convo-b', 'alpha');
+    assert.strictEqual(new Set([a, otherAgent, otherConvo]).size, 3, 'another agent or another conversation is another token');
+    assert.deepStrictEqual(auth.hookTokenScope(otherAgent), { conversationId: 'convo-a', agentId: 'beta' });
+    assert.deepStrictEqual(auth.hookTokenScope(otherConvo), { conversationId: 'convo-b', agentId: 'alpha' });
   });
 
-  test('a conversation\'s token is issued and checked as it always was, and belongs to no run', () => {
-    const a = auth.issueHookToken('convo-same');
+  test('two pairs never share a token, whatever characters their ids hold', () => {
+    const pairs = [
+      ['a:b', 'c'], ['a', 'b:c'],
+      ['a","b', 'c'], ['a', 'b","c'],
+      ['a|b', 'c'], ['a', 'b|c'],
+      ['a\u0000b', 'c'], ['a', 'b\u0000c'],
+      ['a,b', 'c'], ['a', 'b,c'],
+    ];
+    const tokens = pairs.map(([c, g]) => auth.issueHookToken(c, g));
+    assert.strictEqual(new Set(tokens).size, pairs.length, 'every pair is its own token');
+    pairs.forEach(([c, g], i) => assert.deepStrictEqual(auth.hookTokenScope(tokens[i]), { conversationId: c, agentId: g }));
+  });
+
+  test('a conversation agent\'s token is checked as it always was, and belongs to no run', () => {
+    const a = auth.issueHookToken('convo-same', 'alpha');
     assert.match(a, /^[A-Za-z0-9_-]{32}$/, '24 random bytes, base64url');
-    assert.strictEqual(auth.issueHookToken('convo-same'), a);
-    assert.strictEqual(auth.hookScopeOf(fakeReq({ [auth.HOOK_HEADER]: a })), 'convo-same');
+    assert.deepStrictEqual(auth.hookScopeOf(fakeReq({ [auth.HOOK_HEADER]: a })), { conversationId: 'convo-same', agentId: 'alpha' });
     assert.strictEqual(auth.hookTokenRun(a), null);
     assert.strictEqual(auth.hookRunOf(fakeReq({ [auth.HOOK_HEADER]: a })), null);
     // Retiring a run's token is no way to retire a conversation's.
     auth.retireRunHookToken(a);
-    assert.strictEqual(auth.hookTokenScope(a), 'convo-same');
+    assert.deepStrictEqual(auth.hookTokenScope(a), { conversationId: 'convo-same', agentId: 'alpha' });
   });
 
-  test('no conversation is no token: no token is shared by every routine run; an unknown token belongs to nothing', () => {
-    for (const none of [null, undefined, '']) assert.strictEqual(auth.issueHookToken(none), null);
+  test('the scope handed out is a copy: changing it changes nothing the server holds', () => {
+    const a = auth.issueHookToken('convo-copy', 'alpha');
+    const scope = auth.hookTokenScope(a);
+    assert.strictEqual(typeof scope, 'object', 'a token resolves to the conversation and the agent');
+    scope.agentId = 'beta';
+    scope.conversationId = 'convo-other';
+    assert.deepStrictEqual(auth.hookTokenScope(a), { conversationId: 'convo-copy', agentId: 'alpha' });
+  });
+
+  test('no conversation or no agent is no token; an unknown token belongs to nothing', () => {
+    for (const none of [null, undefined, '']) {
+      assert.strictEqual(auth.issueHookToken(none, 'alpha'), null, 'no conversation');
+      assert.strictEqual(auth.issueHookToken('convo-none', none), null, 'no agent');
+    }
+    assert.strictEqual(auth.issueHookToken('convo-none'), null, 'an agent left out');
     assert.strictEqual(auth.hookTokenScope('made-up'), undefined);
     assert.strictEqual(auth.hookTokenScope(''), undefined);
+    assert.strictEqual(auth.hookTokenScope(42), undefined);
+    assert.strictEqual(auth.hookTokenScope(null), undefined);
     assert.strictEqual(auth.hookScopeOf(fakeReq({})), undefined);
+    assert.strictEqual(auth.hookScopeOf(fakeReq({ [auth.HOOK_HEADER]: 'made-up' })), undefined);
   });
 
   test('each routine run gets a token of its own, bound to that run and to no conversation', () => {
@@ -154,7 +187,7 @@ describe('lib/auth: the hook\'s tokens', () => {
   });
 
   test('a hook token is never the window\'s key', () => {
-    const t = auth.issueHookToken('convo-key');
+    const t = auth.issueHookToken('convo-key', 'alpha');
     assert.strictEqual(auth.authenticate(fakeReq({ [auth.KEY_HEADER]: t }), 3000), false);
   });
 });

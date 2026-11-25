@@ -343,17 +343,17 @@ describe('9. the hook\'s routes take only the token handed to that conversation'
     await res;
   });
 
-  test('an agent is started with a token for its own conversation', () => {
-    const env = h.internal.getSpawnEnv('convo-env');
+  test('an agent is started with a token for its own conversation and itself', () => {
+    const env = h.internal.getSpawnEnv('convo-env', 'alpha');
     assert.ok(env.RUNDOCK_HOOK_TOKEN, 'the hook has a token to send');
-    assert.strictEqual(require('../../../lib/auth/index.js').hookTokenScope(env.RUNDOCK_HOOK_TOKEN), 'convo-env');
+    assert.deepStrictEqual(require('../../../lib/auth/index.js').hookTokenScope(env.RUNDOCK_HOOK_TOKEN), { conversationId: 'convo-env', agentId: 'alpha' });
   });
 });
 
 describe('15. the key never reaches an agent, the environment or the output', () => {
   test('a spawned agent\'s environment holds neither the key nor a browser token', () => {
     const auth = require('../../../lib/auth/index.js');
-    const env = h.internal.getSpawnEnv('convo-leak');
+    const env = h.internal.getSpawnEnv('convo-leak', 'alpha');
     const values = Object.values(env).join('\n');
     assert.ok(!values.includes(auth.launchKey()), 'the launch key is not in the environment');
     assert.ok(!Object.values(process.env).join('\n').includes(auth.launchKey()), 'nor in the server\'s own');

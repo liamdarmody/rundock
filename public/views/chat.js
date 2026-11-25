@@ -898,6 +898,79 @@ function watchCardHost(host) {
   watchedCardHosts.add(host);
 }
 
+// A CARD'S BUTTONS WAIT BEFORE THEY TAKE A CLICK. A card that has just
+// appeared, or moved because something else in the same host arrived, settled
+// or left, sits where the pointer may already be on its way to something else:
+// the second click of a double-click on one card's Allow would answer the card
+// that slid under it. So every button on such a card waits half a second. It
+// is marked aria-disabled, never disabled, which would drop the focus and take
+// it out of the tab order, and each click handler checks the mark first. The
+// wait is a module attribute so a test can set it; no message or file reaches
+// it.
+//
+// Which cards move depends on the host: in the thread, the ones below the
+// change; in the dock, which is pinned by its bottom edge and grows upward,
+// the ones above it. So a change waits out every other card in its host.
+const cardArming = { ms: 500 };
+const cardArmTimers = new WeakMap();
+function unarmCard(card) {
+  const buttons = card.querySelectorAll('.btn-perm');
+  if (!buttons.length || !(cardArming.ms > 0)) return;
+  buttons.forEach(b => b.setAttribute('aria-disabled', 'true'));
+  clearTimeout(cardArmTimers.get(card));
+  cardArmTimers.set(card, setTimeout(() => {
+    cardArmTimers.delete(card);
+    card.querySelectorAll('.btn-perm').forEach(b => b.removeAttribute('aria-disabled'));
+  }, cardArming.ms));
+}
+// Something in this host has just appeared, changed size or gone, so each
+// card in it but the one named waits again.
+function unarmCardsIn(host, except) {
+  if (!host) return;
+  for (const n of host.children) {
+    if (n !== except && n.classList.contains('msg-permission')) unarmCard(n);
+  }
+}
+function cardPlaced(card) {
+  unarmCard(card);
+  unarmCardsIn(card.parentNode, card);
+  cardTops.set(card, cardTop(card));
+  watchCardMoves(card.parentNode);
+}
+const cardArmed = (btn) => btn.getAttribute('aria-disabled') !== 'true';
+
+// A CARD WAITS AGAIN WHENEVER IT MOVES. Other cards are not the only thing that
+// moves one: another agent's reply streaming in above it, a status line or a
+// divider, the thread following the bottom as a reply streams in below it, a
+// scroll, a window resize. So each host is watched, once, for a scroll of it,
+// for any change inside it and for a resize of the window, and after each one
+// every card in it is measured. A card whose top is not where it was last seen
+// waits again from that moment, and where it is now is what the next
+// measurement is compared with. A card that stays put keeps taking clicks: a
+// reply written below a card the person has scrolled up to leaves it armed. A
+// settled card has no buttons, so it never waits.
+const cardTops = new WeakMap();
+const cardTop = (card) => card.getBoundingClientRect().top;
+function unarmMovedCards(host) {
+  for (const n of host.children) {
+    if (!n.classList.contains('msg-permission')) continue;
+    const top = cardTop(n);
+    const moved = top !== cardTops.get(n);
+    cardTops.set(n, top);
+    if (moved) unarmCard(n);
+  }
+}
+const cardMoveHosts = new WeakSet();
+function watchCardMoves(host) {
+  const view = host.ownerDocument.defaultView;
+  if (!view || cardMoveHosts.has(host)) return;
+  cardMoveHosts.add(host);
+  const measure = () => unarmMovedCards(host);
+  host.addEventListener('scroll', measure);
+  new view.MutationObserver(measure).observe(host, { childList: true, subtree: true, characterData: true, attributes: true });
+  view.addEventListener('resize', measure);
+}
+
 // THE FIELDS OF A CONNECTOR REQUEST, built as elements with every value set as
 // text. Each value is an agent's: an address or a subject can carry markup, a
 // right-to-left override or a zero-width character, and none of it may become
@@ -1338,13 +1411,17 @@ function renderPermissionCard(d, convoId, host, settled) {
   // WHO IS ASKING, for a card that is not inside the conversation that
   // asked. A routine's card names the routine and the agent that raised it;
   // a card nothing could be matched to says so, rather than implying it
-  // belongs anywhere.
+  // belongs anywhere. A conversation's card names the agent that asked, from
+  // `_agent`, which the server takes from the asker's hook token and nothing
+  // else; an agent this page does not know draws no line rather than a guess.
   const owner = RundockPermissions.permissionOwner(d);
+  const asker = owner.kind === 'conversation' && d._agent
+    ? (typeof agents !== 'undefined' && Array.isArray(agents) ? agents : []).find(a => a && a.id === d._agent) : null;
   const originHtml = owner.kind === 'routine'
     ? `<div class="permission-origin"><span>${esc(owner.run.routine || 'A routine')}, run by ${esc(agentDisplayName(owner.run.agent))}</span></div>`
     : (owner.kind === 'unattributed'
       ? `<div class="permission-origin unattributed"><span>Unattributed: no conversation or routine could be matched to this request</span></div>`
-      : '');
+      : (asker ? RundockChatMarkup.askedByHtml(asker) : ''));
   card.innerHTML = `
     <div class="permission-card risk-${renderRisk}">
       ${originHtml}
@@ -1393,6 +1470,7 @@ function renderPermissionCard(d, convoId, host, settled) {
   // Attach event listeners safely (no inline onclick)
   card.querySelectorAll('[data-perm-action]').forEach(btn => {
     btn.addEventListener('click', () => {
+      if (!cardArmed(btn)) return;
       const action = btn.dataset.permAction;
       const id = btn.dataset.permId;
       respondPermission(id, action !== 'deny', action === 'always', action === 'allow-folder');
@@ -1403,6 +1481,7 @@ function renderPermissionCard(d, convoId, host, settled) {
   // take and no thinking indicator to pause.
   if (host) {
     host.appendChild(card);
+    cardPlaced(card);
     revealClampedText(card);
     watchCardHost(host);
     return;
@@ -1438,6 +1517,7 @@ function renderPermissionCard(d, convoId, host, settled) {
   } catch (e) { live = null; }
   if (live && live.parentNode === m) m.insertBefore(card, live);
   else m.appendChild(card);
+  cardPlaced(card);
   revealClampedText(card);
   watchCardHost(m);
   drawRepeatHint(card, convoId, requestId);
@@ -1469,6 +1549,14 @@ function repeatHintAgent(convoId) {
   return who ? agentDisplayName(who) : '';
 }
 const REPEAT_HINT_ICON = [['circle', { cx: '12', cy: '12', r: '9' }], ['polyline', { points: '12 7 12 12 15.5 14' }]];
+// A hint the person dismisses takes its space with it, so the cards around it
+// wait again. (One replaced by a newer hint goes as a card is drawn, which
+// already makes them wait.)
+function dropRepeatHint(el) {
+  const host = el.parentNode;
+  el.remove();
+  unarmCardsIn(host);
+}
 function drawRepeatHint(card, convoId, requestId) {
   const model = repeatHintModel();
   const hint = model && repeatHintTracker && model.hintFor(repeatHintTracker, convoId, requestId);
@@ -1508,7 +1596,7 @@ function drawRepeatHint(card, convoId, requestId) {
   close.className = 'repeat-hint-x';
   close.setAttribute('aria-label', 'Dismiss');
   close.textContent = '×';
-  close.addEventListener('click', () => { model.dismiss(repeatHintTracker, convoId); el.remove(); });
+  close.addEventListener('click', () => { model.dismiss(repeatHintTracker, convoId); dropRepeatHint(el); });
   el.append(svg, body, close);
   card.after(el);
 }
@@ -1557,9 +1645,11 @@ function renderPutBackCard(d, convoId, host) {
     </div>
   `;
   card.querySelectorAll('[data-perm-action]').forEach(btn => {
-    btn.addEventListener('click', () => respondPermission(btn.dataset.permId, btn.dataset.permAction !== 'deny', false, false));
+    btn.addEventListener('click', () => {
+      if (cardArmed(btn)) respondPermission(btn.dataset.permId, btn.dataset.permAction !== 'deny', false, false);
+    });
   });
-  if (host) { host.appendChild(card); return; }
+  if (host) { host.appendChild(card); cardPlaced(card); return; }
   const m = document.getElementById('messages');
   if (!m) return;
   const t = document.getElementById('thinking-indicator');
@@ -1581,6 +1671,7 @@ function renderPutBackCard(d, convoId, host) {
   } else {
     m.appendChild(card);
   }
+  cardPlaced(card);
   scrollBottom();
 }
 
@@ -1797,9 +1888,12 @@ function resolvePermissionCard(requestId, allowed, label, keepSummary, text) {
   const summary = typeof text === 'string' ? text
     : ((keepSummary || inDock) ? (card.querySelector('.permission-summary')?.textContent || '') : '');
   card.innerHTML = RundockChatMarkup.permissionResolvedHtml(allowed, label, summary ? esc(summary) : '');
+  // A settled card is smaller, and one that leaves takes its space with it:
+  // either way the cards around it move.
+  unarmCardsIn(card.parentNode, card);
   if (inDock) {
     // Settled cards leave the dock after a moment, long enough to read.
-    setTimeout(() => { card.remove(); updateApprovalsDock(); }, 4000);
+    setTimeout(() => { const list = card.parentNode; card.remove(); unarmCardsIn(list); updateApprovalsDock(); }, 4000);
     updateApprovalsDock();
   }
   return summary;
@@ -2040,7 +2134,7 @@ return {
   describeToolRequest, toolAllowKey, handlePermissionRequest, setStandingToolAllows,
   renderPermissionCard, renderPendingPermissionCards, respondPermission,
   resolvePermissionCard, handleOwnerlessPermissionRequest, endPermissionRequest,
-  reconcilePendingPermissions,
+  reconcilePendingPermissions, cardArming,
   formatToolName, formatToolShort, buildActivitySummary, scrollBottom,
   createSummarisedDivider, drawCompactionDivider, showSummarising, clearSummarising,
 };

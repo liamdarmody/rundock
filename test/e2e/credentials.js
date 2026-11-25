@@ -26,8 +26,10 @@ const HOOK_TOKENS = path.join(DIR, 'hook-tokens.json');
 // The conversations whose hook tokens are issued up front, the ids the specs
 // raise cards in. A routine run's token is its own, issued when the run starts
 // and handed only to its process, so a spec raises a routine's card through
-// the run's own hook.
-const HOOK_SCOPES = ['c1', 'c2', 'c3'];
+// the run's own hook. 'card-moves' is the conversation the moved-card spec
+// creates, and deletes afterwards, so its card is asked by the orchestrator
+// while another agent replies.
+const HOOK_SCOPES = ['c1', 'c2', 'c3', 'card-moves'];
 
 const SESSION_FILE = path.join(DIR, 'session-token');
 // The headers a spec's own socket or request sends as the test browser's page.

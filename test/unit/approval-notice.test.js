@@ -103,6 +103,9 @@ before(async () => {
   global.unread = { markPermission() {}, resolvePermission() {} };
   global.ws = { send: (s) => clicked.push(JSON.parse(s)) };
   chat = require('../../public/views/chat.js');
+  // These tests answer a card the moment it is drawn; the half-second wait
+  // before a card takes a click has its own suite (approvals-asked-by-card).
+  chat.cardArming.ms = 0;
 });
 after(async () => {
   await new Promise((r) => server.close(r));
@@ -116,7 +119,7 @@ after(async () => {
 beforeEach(() => { clicked = []; document.getElementById('messages').innerHTML = ''; });
 
 const env = (convo, extra = {}) => {
-  const e = { ...process.env, RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: convo, RUNDOCK_HOOK_TOKEN: auth.issueHookToken(convo), RUNDOCK_EXTRA_DIRS: '' };
+  const e = { ...process.env, RUNDOCK: '1', RUNDOCK_PORT: String(port), RUNDOCK_WORKSPACE: ws, RUNDOCK_CONVO_ID: convo, RUNDOCK_HOOK_TOKEN: auth.issueHookToken(convo, 'default'), RUNDOCK_EXTRA_DIRS: '' };
   delete e.RUNDOCK_CODE_MODE;
   e.NODE_V8_COVERAGE = '';
   return { ...e, ...extra };

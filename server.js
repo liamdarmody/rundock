@@ -1577,6 +1577,8 @@ wss.on('connection', (ws) => {
         ...(pending.startupFile ? { startup_file: pending.startupFile } : {})
       },
       _conversationId: pending.conversationId,
+      // The agent the server filed it for, as the first delivery named it.
+      ...(pending.agentId ? { _agent: pending.agentId } : {}),
       ...(pending.run ? { _run: pending.run } : {})
     }));
   }
@@ -1754,7 +1756,7 @@ wss.on('connection', (ws) => {
 
             const proc = spawnClaude(args, {
               cwd: WORKSPACE,
-              env: getSpawnEnv(convoId),
+              env: getSpawnEnv(convoId, agentData ? agentData.id : 'default'),
               stdio: ['pipe', 'pipe', 'pipe']
             }, (err) => handleChatSpawnError(err, convoId));
 
@@ -1938,7 +1940,7 @@ wss.on('connection', (ws) => {
 
           const proc = spawnClaude(args, {
             cwd: WORKSPACE,
-            env: getSpawnEnv(convoId),
+            env: getSpawnEnv(convoId, agentData ? agentData.id : 'default'),
             stdio: ['pipe', 'pipe', 'pipe']
           }, (err) => handleChatSpawnError(err, convoId));
 
@@ -2751,12 +2753,15 @@ function getRuntimeStatus() {
 // hook request carries, so the card is drawn the same way whichever runtime
 // asked. Only those fields pass.
 const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'startup_file', 'put_back'];
-function requestServerPermission({ convoId, toolName, toolInput, onDecision, grading }) {
+// `agentId` is the agent whose process asked, when the caller knows it from
+// the process it holds; the card is then labelled with it, live and on replay.
+function requestServerPermission({ convoId, agentId, toolName, toolInput, onDecision, grading }) {
   // An id nothing can guess: an answer is matched to its card by this alone.
   const requestId = 'perm-' + require('crypto').randomBytes(16).toString('hex');
   pendingPermissionRequests.set(requestId, {
     onDecision,
     conversationId: convoId,
+    agentId,
     toolName,
     toolInput,
     timer: setTimeout(() => {
@@ -2777,6 +2782,7 @@ function requestServerPermission({ convoId, toolName, toolInput, onDecision, gra
       ...Object.fromEntries(SERVER_REQUEST_FIELDS.filter(k => grading && grading[k] !== undefined).map(k => [k, grading[k]])),
     },
     _conversationId: convoId,
+    ...(agentId ? { _agent: agentId } : {}),
   }));
   console.log(`[Permission] Server request: ${toolName} convo=${convoId} requestId=${requestId}`);
 }

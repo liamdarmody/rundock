@@ -35,6 +35,9 @@ const MANIFEST = {
     "buildDelegateStoppedNotice",
     "buildDelegationDivider",
     "cancelProcessing",
+    // How long a card's buttons wait after it appears or moves, a setting a
+    // page test changes in place.
+    "cardArming",
     "classifyRisk",
     "clearSummarising",
     "copyAuthCmd",
