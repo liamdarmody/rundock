@@ -27,16 +27,22 @@ const KEPT = 'Rundock deleted the conversation but couldn\'t remove its attached
 
 describe('conversation_files_kept', () => {
   // handle(d) holding only the new arm, with the line drawer it calls cut
-  // from source and the chat view's addSystemMsg recorded.
+  // from source, every argument the arm passes that drawer recorded before it
+  // runs, and every argument of the chat view's addSystemMsg recorded.
   function page(activeConversation) {
     const dom = new JSDOM('<!doctype html><html><body></body></html>', { runScripts: 'dangerously' });
     const w = dom.window;
     w.__drawn = [];
+    w.__calls = [];
     w.eval(`window.__api = (function () {
       const conversations = [{ id: 'alpha', messages: [{ role: 'user', content: 'hello' }] }];
       const activeConversation = ${JSON.stringify(activeConversation)};
-      const addSystemMsg = (text) => window.__drawn.push(text);
-      ${cutFrom(APP_SRC, /function addSystemMsgToConvo\(text, convoId, isError = true, keep = false\) \{[\s\S]*?\n\}/, 'addSystemMsgToConvo')}
+      const addSystemMsg = (...args) => window.__drawn.push(args);
+      const drawToConvo = (function () {
+        ${cutFrom(APP_SRC, /function addSystemMsgToConvo\(text, convoId, isError = true, keep = false\) \{[\s\S]*?\n\}/, 'addSystemMsgToConvo')}
+        return addSystemMsgToConvo;
+      })();
+      function addSystemMsgToConvo(...args) { window.__calls.push(args); return drawToConvo(...args); }
       function handle(d) { switch (d.type) { ${cutFrom(APP_SRC, /case 'conversation_files_kept':[^\n]*/, 'the conversation_files_kept arm')} } }
       return { handle, messages: () => JSON.stringify(conversations) };
     })();`);
@@ -48,7 +54,11 @@ describe('conversation_files_kept', () => {
       const w = page(active);
       const before = w.__api.messages();
       w.__api.handle({ type: 'conversation_files_kept', id: 'alpha', text: KEPT });
-      assert.deepStrictEqual(Array.from(w.__drawn), [KEPT]);
+      const calls = Array.from(w.__calls, (args) => Array.from(args));
+      assert.strictEqual(calls.length, 1, 'the arm draws one line');
+      assert.strictEqual(calls[0][0], KEPT);
+      assert.strictEqual(calls[0][2], false, 'the error flag is exactly false');
+      assert.deepStrictEqual(Array.from(w.__drawn, (args) => Array.from(args)), [[KEPT]]);
       assert.strictEqual(w.__api.messages(), before, 'no conversation\'s messages change');
     });
   }
