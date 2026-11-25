@@ -58,3 +58,61 @@ describe('the User PATH merge keeps every entry', () => {
     assert.deepStrictEqual(env, ENV, 'the environment it expands from is left as it was');
   });
 });
+
+// The two PowerShell scripts are fixed text: a value reaches them only through
+// the child's environment, so nothing a folder holds can become code.
+describe('the PowerShell the User PATH is read and written with', () => {
+  const scripts = () => {
+    const { READ_SCRIPT, WRITE_SCRIPT } = load();
+    assert.strictEqual(typeof READ_SCRIPT, 'string', 'the read script is exported');
+    assert.strictEqual(typeof WRITE_SCRIPT, 'string', 'the write script is exported');
+    return { READ_SCRIPT, WRITE_SCRIPT };
+  };
+  const write = () => scripts().WRITE_SCRIPT;
+  const before = (script, first, second) => {
+    const a = script.indexOf(first);
+    const b = script.indexOf(second);
+    assert.ok(a >= 0, `the script holds ${first}`);
+    assert.ok(b >= 0, `the script holds ${second}`);
+    return a < b;
+  };
+
+  test('the read reads the value as stored, unexpanded, with its kind', () => {
+    const { READ_SCRIPT } = scripts();
+    assert.ok(READ_SCRIPT.includes("[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')"));
+    assert.ok(READ_SCRIPT.includes("GetValue('Path', '', 'DoNotExpandEnvironmentNames')"), 'read raw, never expanded');
+    assert.ok(READ_SCRIPT.includes("GetValueKind('Path')"), 'with its kind');
+    assert.ok(READ_SCRIPT.includes("$kind = 'Missing'"), 'a value that is not there reads as missing');
+  });
+
+  test('each script stops at its first error, so a failure never reads as done', () => {
+    const { READ_SCRIPT, WRITE_SCRIPT } = scripts();
+    for (const script of [READ_SCRIPT, WRITE_SCRIPT]) assert.ok(script.startsWith("$ErrorActionPreference = 'Stop'; "));
+  });
+
+  test('the write reads the value again and writes nothing when it or its kind has changed since', () => {
+    const script = write();
+    assert.ok(before(script, "GetValue('Path', '', 'DoNotExpandEnvironmentNames')", '$k.SetValue('), 'the value is read again before the write');
+    assert.ok(script.includes("if ($kind -cne [string]$env:SETUP_CHECK_PATH_KIND -or $v -cne [string]$env:SETUP_CHECK_PATH_OLD) { [Console]::Out.Write('stale'); exit 0 }"),
+      'a kind or value other than the one read, compared exactly, writes nothing');
+    assert.ok(before(script, "Write('stale'); exit 0", '$k.SetValue('), 'and that comes before the one write');
+    assert.strictEqual(script.split('.SetValue(').length, 2, 'the value is set once, in one call');
+  });
+
+  test('the write sets the new value with the kind it is given', () => {
+    assert.ok(write().includes("$k.SetValue('Path', [string]$env:SETUP_CHECK_PATH_NEW, [Microsoft.Win32.RegistryValueKind][string]$env:SETUP_CHECK_PATH_WRITE_KIND)"));
+  });
+
+  test('a write tells every window the environment changed', () => {
+    const script = write();
+    assert.ok(script.includes('SendMessageTimeout([IntPtr]0xffff, 0x1a, [UIntPtr]::Zero, ' + "'Environment', 2, 5000, [ref]$r)"),
+      'WM_SETTINGCHANGE for Environment, to every top-level window, not waiting on one that hangs');
+    assert.ok(before(script, '$k.SetValue(', 'SendMessageTimeout(['), 'after the write');
+    assert.ok(before(script, 'SendMessageTimeout([', "Write('written')"), 'and before it says written');
+  });
+
+  test('the scripts hold no double quote and no line break, so their one argument needs no escaping', () => {
+    const { READ_SCRIPT, WRITE_SCRIPT } = scripts();
+    for (const script of [READ_SCRIPT, WRITE_SCRIPT]) assert.ok(!/["\r\n]/.test(script));
+  });
+});

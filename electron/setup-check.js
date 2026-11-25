@@ -16,6 +16,7 @@
 
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
+const path = require('node:path');
 const { launchPlan, CLAUDE_CODE } = require('../lib/runtime/npm-launcher.js');
 const { ensureClaudeFolders } = require('../lib/runtime/claude-folders.js');
 
@@ -32,7 +33,7 @@ const deps = {
   execPath: () => process.execPath,
   inElectron: () => Boolean(process.versions && process.versions.electron),
   extendPath: (env, { platform }) => ensureClaudeFolders(env, { platform }),
-  timeouts: { lookup: 5000, version: 30000 },
+  timeouts: { lookup: 5000, pathWrite: 15000, version: 30000 },
 };
 
 // One child, started as a program and its arguments with no shell. Resolves
@@ -120,11 +121,46 @@ function mergeUserPath(raw, folder, env) {
   return text + separator + folder;
 }
 
+// The User PATH is read and written by two fixed PowerShell scripts. Each is
+// one line with no double quote, so its one argument needs no escaping, and a
+// value reaches it only through the child's environment: nothing a folder
+// holds can become code. The read prints the value's kind and its raw text,
+// unexpanded, as base64. The write reads the value again and writes nothing
+// when it or its kind has changed since, sets it in one call, and tells every
+// window the environment changed, so a new PowerShell window sees it.
+const POWERSHELL_ARGS = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command'];
+const READ_RAW = "if ($k -and ($k.GetValueNames() -contains 'Path')) { $kind = [string]$k.GetValueKind('Path'); $v = [string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') }";
+const READ_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')",
+  "$kind = 'Missing'", "$v = ''", READ_RAW,
+  "[Console]::Out.Write($kind + ':' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($v)))",
+].join('; ');
+const WRITE_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  "$k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')",
+  "$kind = 'Missing'", "$v = ''", READ_RAW,
+  "if ($kind -cne [string]$env:SETUP_CHECK_PATH_KIND -or $v -cne [string]$env:SETUP_CHECK_PATH_OLD) { [Console]::Out.Write('stale'); exit 0 }",
+  "$k.SetValue('Path', [string]$env:SETUP_CHECK_PATH_NEW, [Microsoft.Win32.RegistryValueKind][string]$env:SETUP_CHECK_PATH_WRITE_KIND)",
+  '$k.Close()',
+  "Add-Type -Namespace SetupCheck -Name Native -MemberDefinition ('[DllImport(' + [char]34 + 'user32.dll' + [char]34 + ', CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);')",
+  '$r = [UIntPtr]::Zero',
+  "[void][SetupCheck.Native]::SendMessageTimeout([IntPtr]0xffff, 0x1a, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r)",
+  "[Console]::Out.Write('written')",
+].join('; ');
+// The kinds a PATH can be written back as. Any other is left alone.
+const WRITABLE_KINDS = new Set(['Missing', 'String', 'ExpandString']);
+
 // `platform` and `env` are the app's own (process.platform, process.env): the
 // install folders are added to `env`'s PATH before each lookup, and every
 // child is given a copy of it at the moment it starts.
 function createSetupCheck({ platform = process.platform, env = process.env } = {}) {
   let found = { bin: null, version: null };
+  let running = null;
+  // Folders found on the User PATH or written to it in this run of the app,
+  // which are not read or written again. A write that failed is not here, so
+  // the next check tries it again.
+  const onUserPath = new Set();
 
   // The environment a start of the found copy is given. A plan whose program
   // is the app itself (a claude.cmd, run through its package's entry) runs as
@@ -146,10 +182,47 @@ function createSetupCheck({ platform = process.platform, env = process.env } = {
     }
   }
 
+  // Adds `folder` to the User PATH. Never throws: it says what it did, and a
+  // failure leaves the check to go on.
+  async function writeUserPath(folder) {
+    const key = comparable(folder);
+    if (onUserPath.has(key)) return 'present';
+    const powershell = (script, extra, ms) => runChild('powershell.exe', [...POWERSHELL_ARGS, script], { ...env, ...extra }, ms);
+    let kind;
+    let raw;
+    try {
+      const { stdout } = await powershell(READ_SCRIPT, {}, deps.timeouts.pathWrite);
+      const read = /^(\w+):([A-Za-z0-9+/]*={0,2})$/.exec(stdout.toString('utf8').trim());
+      if (!read) return 'failed';
+      [, kind] = read;
+      raw = Buffer.from(read[2], 'base64').toString('utf8');
+    } catch (err) {
+      return err.code === 'ETIMEDOUT' ? 'timeout' : 'failed';
+    }
+    if (!WRITABLE_KINDS.has(kind)) return 'skipped';
+    const next = mergeUserPath(kind === 'Missing' ? null : raw, folder, env);
+    if (next === null) { onUserPath.add(key); return 'present'; }
+    try {
+      const { stdout } = await powershell(WRITE_SCRIPT, {
+        SETUP_CHECK_PATH_KIND: kind,
+        SETUP_CHECK_PATH_OLD: raw,
+        SETUP_CHECK_PATH_NEW: next,
+        SETUP_CHECK_PATH_WRITE_KIND: kind === 'String' ? 'String' : 'ExpandString',
+      }, deps.timeouts.pathWrite);
+      const said = stdout.toString('utf8').trim();
+      if (said === 'written') { onUserPath.add(key); return 'written'; }
+      return said === 'stale' ? 'stale' : 'failed';
+    } catch (err) {
+      return err.code === 'ETIMEDOUT' ? 'timeout' : 'failed';
+    }
+  }
+
   async function run() {
     found = { bin: null, version: null };
     const bin = await lookup();
     if (!bin) return { status: 'not-installed' };
+    // Before the first start, which on Windows can be slow.
+    if (platform === 'win32') await writeUserPath(path.win32.dirname(bin));
     const plan = deps.launchPlan(bin, CLAUDE_CODE, { platform, execPath: deps.execPath() });
     if (!plan || plan.refusal) return { status: 'found-not-started' };
     let version;
@@ -164,10 +237,14 @@ function createSetupCheck({ platform = process.platform, env = process.env } = {
   }
 
   return {
-    check: () => run(),
+    // A request while a check runs joins it; one after it ends starts afresh.
+    check() {
+      if (!running) running = run().finally(() => { running = null; });
+      return running;
+    },
     // The copy the last check started, and the version it gave, for Sign in.
     found: () => ({ ...found }),
   };
 }
 
-module.exports = { OUTPUT_CAP_BYTES, deps, runChild, chooseCandidate, mergeUserPath, createSetupCheck };
+module.exports = { OUTPUT_CAP_BYTES, READ_SCRIPT, WRITE_SCRIPT, deps, runChild, chooseCandidate, mergeUserPath, createSetupCheck };

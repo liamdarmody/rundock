@@ -272,3 +272,207 @@ describe('not installed, as before', () => {
     });
   }
 });
+
+// Overlapping requests from the polling screen share the check already
+// running, so a poll every few seconds never piles up children.
+describe('one check at a time', () => {
+  test('three overlapping requests share one check, and one set of starts', async (t) => {
+    const f = fakes(t, (c) => (isLookup(c) ? { hold: true } : installed()(c)));
+    const check = checker(f.mod);
+    const results = [check.check({ signIn: false }), check.check({ signIn: false }), check.check({ signIn: false })];
+    await until('the lookup', () => f.calls.length === 1);
+    f.calls[0].release({ stdout: `${MAC_BIN}\n` });
+    for (const result of await Promise.all(results)) assert.deepStrictEqual(result, { status: 'started' });
+    assert.deepStrictEqual(f.calls.map((c) => c.program), ['which', MAC_BIN], 'one lookup and one version run for all three');
+  });
+
+  test('a request after the check ended starts a fresh one', async (t) => {
+    const f = fakes(t, installed());
+    const check = checker(f.mod);
+    await check.check({ signIn: false });
+    await check.check({ signIn: false });
+    assert.deepStrictEqual(f.calls.map((c) => c.program), ['which', MAC_BIN, 'which', MAC_BIN]);
+  });
+
+  test('after found but not started, the next check can start it', async (t) => {
+    let versions = 0;
+    const f = fakes(t, (c) => (isVersion(c) && ++versions === 1 ? { status: 1 } : installed()(c)));
+    const check = checker(f.mod);
+    assert.deepStrictEqual(await check.check({ signIn: false }), { status: 'found-not-started' });
+    assert.deepStrictEqual(await check.check({ signIn: false }), { status: 'started' });
+    assert.strictEqual(check.found().bin, MAC_BIN);
+  });
+});
+
+// On Windows the folder Claude Code was found in goes on the User PATH as soon
+// as it is found, so a new PowerShell window recognises `claude` even while its
+// first start is still slow.
+const WIN_FOLDER = 'C:\\Users\\example\\.local\\bin';
+const WIN_ENV = { PATH: 'C:\\Windows', USERPROFILE: 'C:\\Users\\example' };
+const POWERSHELL_ARGS = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command'];
+const isPathRead = (c) => isPowerShell(c) && c.args.at(-1) === load().READ_SCRIPT;
+const isPathWrite = (c) => isPowerShell(c) && c.args.at(-1) === load().WRITE_SCRIPT;
+const stored = (kind, value = '') => ({ stdout: `${kind}:${Buffer.from(value, 'utf8').toString('base64')}` });
+
+function onWindows({ bin = WIN_EXE, read = stored('ExpandString', 'C:\\Windows'), write = { stdout: 'written' }, version = { stdout: '2.1.0\n' } } = {}) {
+  return (c) => {
+    if (isLookup(c)) return { stdout: `${bin}\r\n` };
+    if (isPathRead(c)) return typeof read === 'function' ? read() : read;
+    if (isPathWrite(c)) return typeof write === 'function' ? write() : write;
+    if (isVersion(c)) return version;
+    return {};
+  };
+}
+const onWin = (mod) => mod.createSetupCheck({ platform: 'win32', env: { ...WIN_ENV } });
+const step = (c) => (isLookup(c) ? 'lookup' : isPathRead(c) ? 'path read' : isPathWrite(c) ? 'path write' : isVersion(c) ? 'version' : c.program);
+
+describe('the User PATH is written as soon as Claude Code is found', () => {
+  test('on Windows the PATH is read and written before the version run starts', async (t) => {
+    const f = fakes(t, onWindows());
+    assert.deepStrictEqual(await onWin(f.mod).check({ signIn: false }), { status: 'started' });
+    assert.deepStrictEqual(f.calls.map(step), ['lookup', 'path read', 'path write', 'version']);
+    const write = f.calls.find(isPathWrite);
+    assert.deepStrictEqual(write.args, [...POWERSHELL_ARGS, f.mod.WRITE_SCRIPT]);
+    assert.deepStrictEqual(f.calls.find(isPathRead).args, [...POWERSHELL_ARGS, f.mod.READ_SCRIPT]);
+    const env = write.options.env;
+    assert.deepStrictEqual(
+      [env.SETUP_CHECK_PATH_KIND, env.SETUP_CHECK_PATH_OLD, env.SETUP_CHECK_PATH_NEW, env.SETUP_CHECK_PATH_WRITE_KIND],
+      ['ExpandString', 'C:\\Windows', `C:\\Windows;${WIN_FOLDER}`, 'ExpandString']);
+  });
+
+  const versionFails = [
+    ['times out', (f) => timerOf(f, f.calls.find(isVersion)).fn(), { hold: true }],
+    ['exits non-zero', null, { status: 1 }],
+  ];
+  for (const [name, act, version] of versionFails) {
+    test(`the PATH is written even when the version run ${name}`, async (t) => {
+      const f = fakes(t, onWindows({ version }));
+      const result = onWin(f.mod).check({ signIn: false });
+      if (act) { await until('the version run', () => f.calls.some(isVersion)); act(f); }
+      assert.deepStrictEqual(await result, { status: 'found-not-started' });
+      assert.deepStrictEqual(f.calls.map(step), ['lookup', 'path read', 'path write', 'version']);
+    });
+  }
+
+  test('the PATH is written when the launch plan is refused', async (t) => {
+    const f = fakes(t, onWindows(), { launchPlan: () => ({ refusal: new Error('unreadable package') }) });
+    assert.deepStrictEqual(await onWin(f.mod).check({ signIn: false }), { status: 'found-not-started' });
+    assert.deepStrictEqual(f.calls.map(step), ['lookup', 'path read', 'path write']);
+  });
+
+  for (const platform of ['darwin', 'linux']) {
+    test(`on ${platform} no User PATH is read or written`, async (t) => {
+      const f = fakes(t, installed());
+      await checker(f.mod, platform).check({ signIn: false });
+      assert.ok(!f.calls.some(isPowerShell), 'no PowerShell is started');
+    });
+  }
+
+  test('a lookup that finds nothing writes nothing', async (t) => {
+    const f = fakes(t, (c) => (isLookup(c) ? { status: 1 } : onWindows()(c)));
+    assert.deepStrictEqual(await onWin(f.mod).check({ signIn: false }), { status: 'not-installed' });
+    assert.deepStrictEqual(f.calls.map(step), ['lookup']);
+  });
+
+  test('a folder already on the User PATH is not written, and not read again in the same run', async (t) => {
+    const f = fakes(t, onWindows({ read: stored('ExpandString', 'C:\\Windows;%USERPROFILE%\\.local\\bin') }));
+    const check = onWin(f.mod);
+    await check.check({ signIn: false });
+    await check.check({ signIn: false });
+    assert.deepStrictEqual(f.calls.map(step), ['lookup', 'path read', 'version', 'lookup', 'version']);
+  });
+
+  test('a folder written is not written again in the same run', async (t) => {
+    const f = fakes(t, onWindows());
+    const check = onWin(f.mod);
+    await check.check({ signIn: false });
+    await check.check({ signIn: false });
+    assert.deepStrictEqual(f.calls.map(step), ['lookup', 'path read', 'path write', 'version', 'lookup', 'version']);
+  });
+
+  const writeFails = [
+    ['exits non-zero', null, { status: 1 }],
+    ['times out', (f) => timerOf(f, f.calls.find(isPathWrite)).fn(), { hold: true }],
+    ['finds the value changed since it was read', null, { stdout: 'stale' }],
+    ['says nothing', null, { stdout: '' }],
+  ];
+  for (const [name, act, reply] of writeFails) {
+    test(`a write that ${name} is tried again at the next check, and the version run still starts`, async (t) => {
+      let writes = 0;
+      const f = fakes(t, onWindows({ write: () => (++writes === 1 ? reply : { stdout: 'written' }) }));
+      const check = onWin(f.mod);
+      const first = check.check({ signIn: false });
+      if (act) { await until('the write', () => f.calls.some(isPathWrite)); act(f); }
+      assert.deepStrictEqual(await first, { status: 'started' });
+      await check.check({ signIn: false });
+      await check.check({ signIn: false });
+      assert.deepStrictEqual(f.calls.map(step), [
+        'lookup', 'path read', 'path write', 'version',
+        'lookup', 'path read', 'path write', 'version',
+        'lookup', 'version']);
+    });
+  }
+
+  test('a read that fails writes nothing, and is tried again at the next check', async (t) => {
+    let reads = 0;
+    const f = fakes(t, onWindows({ read: () => (++reads === 1 ? { status: 1 } : stored('ExpandString', 'C:\\Windows')) }));
+    const check = onWin(f.mod);
+    await check.check({ signIn: false });
+    await check.check({ signIn: false });
+    assert.deepStrictEqual(f.calls.map(step), ['lookup', 'path read', 'version', 'lookup', 'path read', 'path write', 'version']);
+  });
+
+  test('a value stored as REG_SZ is written back as REG_SZ', async (t) => {
+    const f = fakes(t, onWindows({ read: stored('String', 'C:\\Windows') }));
+    await onWin(f.mod).check({ signIn: false });
+    const write = f.calls.find(isPathWrite);
+    assert.ok(write, 'a write was started');
+    const env = write.options.env;
+    assert.deepStrictEqual([env.SETUP_CHECK_PATH_KIND, env.SETUP_CHECK_PATH_WRITE_KIND], ['String', 'String']);
+  });
+
+  test('a missing value is created as REG_EXPAND_SZ holding the folder alone', async (t) => {
+    const f = fakes(t, onWindows({ read: stored('Missing') }));
+    await onWin(f.mod).check({ signIn: false });
+    const write = f.calls.find(isPathWrite);
+    assert.ok(write, 'a write was started');
+    const env = write.options.env;
+    assert.deepStrictEqual(
+      [env.SETUP_CHECK_PATH_KIND, env.SETUP_CHECK_PATH_OLD, env.SETUP_CHECK_PATH_NEW, env.SETUP_CHECK_PATH_WRITE_KIND],
+      ['Missing', '', WIN_FOLDER, 'ExpandString']);
+  });
+
+  for (const kind of ['MultiString', 'Binary', 'DWord']) {
+    test(`a value of kind ${kind} is left alone`, async (t) => {
+      const f = fakes(t, onWindows({ read: stored(kind, 'C:\\Windows') }));
+      await onWin(f.mod).check({ signIn: false });
+      assert.deepStrictEqual(f.calls.map(step), ['lookup', 'path read', 'version']);
+    });
+  }
+
+  test('a read that answers in any other form writes nothing', async (t) => {
+    const f = fakes(t, onWindows({ read: { stdout: 'ExpandString C:\\Windows' } }));
+    await onWin(f.mod).check({ signIn: false });
+    assert.deepStrictEqual(f.calls.map(step), ['lookup', 'path read', 'version']);
+  });
+
+  test('a folder reaches PowerShell only as data, whatever it holds', async (t) => {
+    const folders = [
+      "C:\\Users\\o'brien\\.local\\bin",
+      'C:\\Users\\a"b\\.local\\bin',
+      'C:\\Tools;x\\bin',
+      'C:\\R&D\\bin',
+      'C:\\Users\\`x\\bin',
+      'C:\\$(whoami)\\bin',
+      'C:\\%USERPROFILE%\\bin',
+    ];
+    for (const folder of folders) {
+      const f = fakes(t, onWindows({ bin: `${folder}\\claude.exe` }));
+      await onWin(f.mod).check({ signIn: false });
+      const write = f.calls.find(isPathWrite);
+      assert.ok(write, `a write was started for ${folder}`);
+      assert.deepStrictEqual(write.args, [...POWERSHELL_ARGS, f.mod.WRITE_SCRIPT], `the script is the same fixed text for ${folder}`);
+      assert.strictEqual(write.options.env.SETUP_CHECK_PATH_NEW, `C:\\Windows;${folder}`, 'and the folder reaches it unchanged, as data');
+    }
+  });
+});
