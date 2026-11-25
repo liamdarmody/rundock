@@ -151,6 +151,7 @@ describe('the frame limit', () => {
   });
 
   test('a frame of exactly 28,000,000 bytes is read and answered', async () => {
+    assert.strictEqual(h.internal.wss.options.maxPayload, 28000000, 'the limit is this frame\'s size');
     const c = await h.connect();
     c.ws.send(padded('get_conversations', 28000000));
     assert.ok(await arrived((m) => m.type === 'conversations', { on: c, timeout: 20000 }), 'a frame at the limit is answered');
@@ -390,8 +391,17 @@ describe('a stored message carries the stored text into every copy a reload read
   for (const [label, attachments] of [['without attachments', undefined], ['with an empty list', []]]) {
     test(`a text-only message ${label} is dispatched as typed and writes nothing`, async () => {
       const id = h.freshConvoId('plain');
-      answers('ASK-TEXT');
+      answers('ASK-FILES', 'ASK-TEXT');
+      // A message with files first, so there is a folder and a record for the
+      // text-only message to leave as they are.
+      const first = client.messages.length;
+      chat(id, 'ASK-FILES see this', [file('Screen Shot.png', png())]);
+      const stored = await storedFor(id, first);
+      assert.ok(stored, 'the message with files before it is answered with chat_stored');
+      assert.ok(await resultFor(id, 'DONE-ASK-FILES', first), 'and dispatched');
       const before = listing(attachmentsDir());
+      const folder = bytesIn(folderOf(id));
+      const record = entriesOf(id);
       const rec = recordReentries();
       const since = client.messages.length;
       try {
@@ -401,8 +411,10 @@ describe('a stored message carries the stored text into every copy a reload read
         rec.stop();
       }
       assert.deepStrictEqual(listing(attachmentsDir()), before, 'nothing written under .rundock/attachments');
-      const [row, ...more] = userRows(id);
-      assert.deepStrictEqual([row.text, more.length], ['ASK-TEXT just words', 0]);
+      assert.deepStrictEqual(bytesIn(folderOf(id)), folder, 'the conversation\'s folder and its files as they were');
+      assert.deepStrictEqual(entriesOf(id), record, 'and its record');
+      const [, row, ...more] = userRows(id);
+      assert.deepStrictEqual([userRows(id)[0].text, row.text, more.length], [stored.content, 'ASK-TEXT just words', 0]);
       assert.ok(!('attachments' in row) && !('attachmentEntry' in row));
       assert.deepStrictEqual(promptsWith('ASK-TEXT just words').slice(-1), ['ASK-TEXT just words']);
       for (const m of rec.seen.filter((s) => s.conversationId === id)) {
@@ -617,21 +629,27 @@ describe('every path back into the handler writes once and records once', () => 
     let ownStored;
     let otherStored;
 
+    // Asserts nothing, so each test below checks what it was given itself.
     before(async () => {
       answers('ASK-REF', 'REF-OK');
       for (const id of [own, other]) {
         const since = client.messages.length;
         chat(id, 'ASK-REF see this', [file('Screen Shot.png', png())]);
         const stored = await storedFor(id, since);
-        assert.ok(stored && await resultFor(id, 'DONE-ASK-REF', since), 'each conversation holds an entry');
+        await resultFor(id, 'DONE-ASK-REF', since);
         if (id === own) ownStored = stored; else otherStored = stored;
       }
       fs.mkdirSync(folderOf(broken), { recursive: true });
       fs.writeFileSync(path.join(folderOf(broken), 'record.json'), 'not json');
     });
     after(() => { h.reapConvo(own); h.reapConvo(other); });
+    const holds = (id, stored) => {
+      assert.ok(stored, `${id}'s message with files is answered with chat_stored`);
+      assert.deepStrictEqual(entriesOf(id), [stored.entry], `${id} holds the entry its message stored`);
+    };
 
     test('naming an entry of its own conversation is dispatched and writes nothing', async () => {
+      holds(own, ownStored);
       const since = client.messages.length;
       chat(own, 'REF-OK again', undefined, { attachmentEntry: ownStored.entry.id });
       assert.ok(await resultFor(own, 'DONE-REF-OK', since), 'the message is dispatched');
@@ -640,10 +658,13 @@ describe('every path back into the handler writes once and records once', () => 
     });
 
     const cases = [
-      ['an unknown entry', () => [own, 'no-such-entry']],
-      ['a number', () => [own, 42]],
-      ['another conversation\'s entry', () => [own, otherStored.entry.id]],
-      ['an entry of an unreadable record', () => [broken, 'any-entry']],
+      ['an unknown entry', () => { holds(own, ownStored); return [own, 'no-such-entry']; }],
+      ['a number', () => { holds(own, ownStored); return [own, 42]; }],
+      ['another conversation\'s entry', () => { holds(own, ownStored); holds(other, otherStored); return [own, otherStored.entry.id]; }],
+      ['an entry of an unreadable record', () => {
+        assert.throws(() => store.readRecord(h.workspaceDir, broken), { code: 'record-unreadable' }, 'its record does not parse');
+        return [broken, 'any-entry'];
+      }],
     ];
     for (const [label, pick] of cases) {
       test(`naming ${label} is refused`, async () => {
@@ -907,6 +928,10 @@ describe('deleting a conversation deletes its attachments, and says when it coul
       const id = h.freshConvoId('del-none');
       seed(id, { agentId: 'chief-of-staff' });
       await withDeletedList(junk, async () => {
+        // The list refuses the conversation's files, which is why it has no folder.
+        await refusedWith({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content: 'ASK-JUNK see this', attachments: [file('Screen Shot.png', png())] },
+          { code: 'save-failed', title: 'Message not sent', text: FALLBACK });
+        assert.strictEqual(listing(folderOf(id)), null, 'no folder');
         assert.deepStrictEqual(await deleting(id), []);
         assert.ok(!inList(id), 'the conversation is gone from the list');
       });
@@ -934,6 +959,12 @@ describe('deleting a conversation deletes its attachments, and says when it coul
 
   test('an ID of ../..: conversation_deleted, no notice, and nothing created or written', async () => {
     await withoutAttachments(async () => {
+      // The same ID is refused as a message's files' conversation, and creates nothing there either.
+      const since = client.messages.length;
+      client.send({ type: 'chat', conversationId: '../..', agent: 'chief-of-staff', content: 'ASK-UP see this', attachments: [file('Screen Shot.png', png())] });
+      const refused = await arrived((m) => m.type === 'chat_refused', { since });
+      assert.deepStrictEqual(refused && [refused.conversationId, refused.code], ['../..', 'bad-id'], 'the files are refused bad-id');
+      assert.strictEqual(listing(attachmentsDir()), null, 'and no attachments folder is created');
       assert.deepStrictEqual(await deleting('../..'), []);
       assert.strictEqual(listing(attachmentsDir()), null, 'no attachments folder is created');
       for (const dir of [path.join(h.workspaceDir, '.rundock'), h.workspaceDir, path.dirname(h.workspaceDir)]) {
@@ -996,6 +1027,8 @@ describe('deleting a conversation deletes its attachments, and says when it coul
 
 describe('after every test above', () => {
   test('no receive ended in an unhandled rejection', () => {
+    const answered = new Set(client.messages.map((m) => m.type));
+    assert.ok(answered.has('chat_stored') && answered.has('chat_refused'), 'messages with files were stored and refused above');
     assert.deepStrictEqual(rejections, []);
   });
 });
