@@ -26,7 +26,10 @@ const optional = (file, pattern) => {
   }
 };
 const store = optional('../../lib/attachments/store.js', /attachments[\\/]store/);
+const turn = optional('../../lib/attachments/turn.js', /attachments[\\/]turn/);
 const ready = (name) => assert.strictEqual(typeof (store && store[name]), 'function', `store.js exports ${name}`);
+const readyTurn = () => assert.strictEqual(typeof (turn && turn.buildTurn), 'function', 'turn.js loads and exports buildTurn');
+const TURN_PATH = path.join(__dirname, '..', '..', 'lib', 'attachments', 'turn.js');
 
 const ID = '1764000000000';
 const OTHER = '1764000000001';
@@ -113,5 +116,170 @@ describe('readRecordedFile', () => {
     for (const id of BAD_IDS) {
       assert.throws(() => store.readRecordedFile(ws, id, '1-a.png'), (e) => e && e.code === 'bad-id', JSON.stringify(id));
     }
+  });
+});
+
+const lineOf = (file, details, id = ID) => `[Attached: .rundock/attachments/${id}/${file} (${details})]`;
+const PNG_LINE = lineOf('1-screenshot.png', 'PNG image, 1 KB');
+const PDF_LINE = lineOf('3-report.pdf', 'PDF document, 1 KB');
+const TYPED = `look at these\n${PNG_LINE}\n${PDF_LINE}`;
+const GONE = (file) => `[Attached file not available: ${file}]`;
+const CHANGED = (file) => `[Attached file changed since it was attached, so it isn't shown: ${file}]`;
+const turnFor = (ws, text, extra = {}) => turn.buildTurn({ workspace: ws, conversationId: ID, runtime: 'claude', text, ...extra });
+// A message naming the PNG alone, and the same with its line replaced by
+// `form`, every other character kept.
+const ONE = `look at this\n${PNG_LINE}\n`;
+const withPng = (form) => `look at this\n${form}\n`;
+function namesNoPath(content) {
+  assert.ok(!JSON.stringify(content).includes('.rundock/attachments/'), 'no form names a path');
+}
+
+// A FIFO opened for reading without O_NONBLOCK blocks the whole process,
+// which the stall guard can't interrupt, so the FIFO turn is built in a
+// child with a timeout.
+const CHILD = [
+  'const { buildTurn } = require(process.argv[1]);',
+  'const [workspace, conversationId, text] = process.argv.slice(2);',
+  "process.stdout.write(JSON.stringify(buildTurn({ workspace, conversationId, runtime: 'claude', text }).content));",
+].join('\n');
+function turnInChild(ws, text) {
+  const result = spawnSync(process.execPath, ['-e', CHILD, TURN_PATH, ws, ID, text], { encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_V8_COVERAGE: '' } });
+  assert.strictEqual(result.error, undefined, 'the child finished without waiting');
+  assert.strictEqual(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+function makeFifo(file) {
+  const made = spawnSync('mkfifo', [file], { encoding: 'utf8' });
+  assert.strictEqual(made.status, 0, made.stderr);
+}
+
+describe('buildTurn: each stored line is checked against the record', () => {
+  test('a deleted file\'s line says it is not available', async () => {
+    readyTurn();
+    const { ws, png } = await stored();
+    fs.rmSync(png);
+    const { content } = turnFor(ws, ONE);
+    assert.strictEqual(content, withPng(GONE('1-screenshot.png')));
+    namesNoPath(content);
+  });
+
+  test('a link at the stored name to a file outside the workspace is not available', LINKS, async () => {
+    readyTurn();
+    const { ws, png } = await stored();
+    const outside = path.join(outsideFolder(), 'copy.png');
+    fs.copyFileSync(png, outside);
+    fs.rmSync(png);
+    fs.symlinkSync(outside, png);
+    const { content } = turnFor(ws, ONE);
+    assert.strictEqual(content, withPng(GONE('1-screenshot.png')));
+    namesNoPath(content);
+  });
+
+  test('the conversation\'s folder replaced by a link to a copy elsewhere is not available', LINKS, async () => {
+    readyTurn();
+    const { ws } = await stored();
+    const copy = path.join(outsideFolder(), ID);
+    fs.cpSync(folderOf(ws), copy, { recursive: true });
+    fs.rmSync(folderOf(ws), { recursive: true });
+    fs.symlinkSync(copy, folderOf(ws));
+    const { content } = turnFor(ws, TYPED);
+    assert.strictEqual(content, `look at these\n${GONE('1-screenshot.png')}\n${GONE('3-report.pdf')}`);
+    namesNoPath(content);
+  });
+
+  test('a FIFO at the name is not available, without waiting', FIFOS, async () => {
+    readyTurn();
+    const { ws, png } = await stored();
+    fs.rmSync(png);
+    makeFifo(png);
+    const content = turnInChild(ws, ONE);
+    assert.strictEqual(content, withPng(GONE('1-screenshot.png')));
+    namesNoPath(content);
+  });
+
+  test('a folder at the name is not available', async () => {
+    readyTurn();
+    const { ws, png } = await stored();
+    fs.rmSync(png);
+    fs.mkdirSync(png);
+    const { content } = turnFor(ws, ONE);
+    assert.strictEqual(content, withPng(GONE('1-screenshot.png')));
+    namesNoPath(content);
+  });
+
+  test('a name the record does not list is not available, though a file is there', async () => {
+    readyTurn();
+    const { ws } = await stored();
+    fs.writeFileSync(path.join(folderOf(ws), '9-planted.png'), pngBytes());
+    const { content } = turnFor(ws, `see ${lineOf('9-planted.png', 'PNG image, 1 KB')} now`);
+    assert.strictEqual(content, `see ${GONE('9-planted.png')} now`);
+    namesNoPath(content);
+  });
+
+  test('a line naming another conversation\'s folder is not available, though its file is present and listed there', async () => {
+    readyTurn();
+    const { ws } = await stored();
+    await stored(ws, OTHER);
+    assert.strictEqual(store.checkRecordedFile(ws, OTHER, '1-screenshot.png'), 'present', 'the other conversation holds the file');
+    const { content } = turnFor(ws, `from elsewhere: ${lineOf('1-screenshot.png', 'PNG image, 1 KB', OTHER)}`);
+    assert.strictEqual(content, `from elsewhere: ${GONE('1-screenshot.png')}`);
+    namesNoPath(content);
+    assert.ok(!content.includes(OTHER), 'nor the other conversation');
+  });
+
+  test('a record.json holding invalid JSON leaves every line not available', async () => {
+    readyTurn();
+    const { ws } = await stored();
+    fs.writeFileSync(recordOf(ws), '{"messages": [');
+    const { content } = turnFor(ws, TYPED);
+    assert.strictEqual(content, `look at these\n${GONE('1-screenshot.png')}\n${GONE('3-report.pdf')}`);
+    namesNoPath(content);
+  });
+
+  test('a file grown by one byte has changed', async () => {
+    readyTurn();
+    const { ws, png } = await stored();
+    fs.appendFileSync(png, 'x');
+    const { content } = turnFor(ws, ONE);
+    assert.strictEqual(content, withPng(CHANGED('1-screenshot.png')));
+    namesNoPath(content);
+  });
+
+  test('a file rewritten at the same size with other bytes has changed', async () => {
+    readyTurn();
+    const { ws, png } = await stored();
+    const bytes = fs.readFileSync(png);
+    bytes[bytes.length - 1] ^= 1;
+    fs.writeFileSync(png, bytes);
+    const { content } = turnFor(ws, ONE);
+    assert.strictEqual(content, withPng(CHANGED('1-screenshot.png')));
+    namesNoPath(content);
+  });
+
+  test('a line as written comes back unchanged, with every other character', async () => {
+    readyTurn();
+    const { ws } = await stored();
+    const text = `  first\r\n${PNG_LINE}${PDF_LINE} and (then) ]\n\n`;
+    assert.strictEqual(turnFor(ws, text).content, text);
+  });
+
+  test('details edited in the text come back from the record', async () => {
+    readyTurn();
+    const { ws } = await stored();
+    const { content } = turnFor(ws, `big one: ${lineOf('1-screenshot.png', 'PNG image, 9 GB')}`);
+    assert.strictEqual(content, `big one: ${lineOf('1-screenshot.png', 'PNG image, 1 KB')}`);
+  });
+
+  test('a line that is not a stored line stays as typed', async () => {
+    readyTurn();
+    const { ws } = await stored();
+    const text = `[Attached: notes.txt]\n${lineOf('screenshot.png', 'PNG image, 1 KB')}\n${lineOf('1-screenshot.exe', 'PNG image, 1 KB')}`;
+    assert.strictEqual(turnFor(ws, text).content, text);
+  });
+
+  test('turn.js reads no file itself', () => {
+    readyTurn();
+    const source = fs.readFileSync(TURN_PATH, 'utf8');
+    assert.doesNotMatch(source, /\bfs\./, 'every file is read through the store');
   });
 });
