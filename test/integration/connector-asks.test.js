@@ -203,6 +203,58 @@ describe('an agent\'s connector change asks first', () => {
     await refusedBeforeAnyCard(HOLDS_ALPHA, { type: 'save_connector', name: 'local-tools', content: '{"url":"https://mcp.example.com/mcp","args":["--token-file","x"]}', conversationId: 'convo-connectors' }, message);
   });
 
+  test('saving a connector with no conversation id is refused before any card', async () => {
+    const message = 'That connector change didn\'t say which conversation it came from, so nothing was changed.';
+    await refusedBeforeAnyCard(HOLDS_ALPHA, { type: 'save_connector', name: 'example-alpha', content: '{"command":"node"}' }, message);
+  });
+
+  test('saving a connector entry holding a setting the card cannot show is refused before any card, naming it', async () => {
+    const message = 'The connector entry\'s "timeout" isn\'t a setting the approval card can show, so nothing was changed.';
+    await refusedBeforeAnyCard(HOLDS_ALPHA, { type: 'save_connector', name: 'local-tools', content: '{"command":"node","timeout":[1,2]}', conversationId: 'convo-connectors' }, message);
+  });
+
+  // ALLOW WRITES ONLY WHAT THE CARD SHOWED. The file is read again at Allow,
+  // and a change whose card no longer matches it is refused, in its own words,
+  // with the file left as it is.
+  const isOutcome = m => m.type === 'connector_error' || m.type === 'connector_saved';
+  test('two adds of one new name allowed in reverse order keep the one allowed first, and the later Allow is refused', async () => {
+    fs.writeFileSync(mcp(), JSON.stringify({ mcpServers: {} }));
+    const alpha = { url: 'https://alpha.example.com/mcp' };
+    const beta = { url: 'https://beta.example.com/mcp' };
+    let since = client.messages.length;
+    client.send({ type: 'save_connector', name: 'example-alpha', content: JSON.stringify(alpha), conversationId: 'convo-race' });
+    const first = await client.waitFor(isConnectorCard('SaveConnector'), { since, label: 'card for alpha' });
+    since = client.messages.length;
+    client.send({ type: 'save_connector', name: 'example-alpha', content: JSON.stringify(beta), conversationId: 'convo-race' });
+    const second = await client.waitFor(isConnectorCard('SaveConnector'), { since, label: 'card for beta' });
+    assert.deepStrictEqual([first.msg.request.input.action, second.msg.request.input.action], ['add', 'add'], 'both ask to add the name');
+    since = client.messages.length;
+    answer(second.msg, true);
+    await client.waitFor(m => m.type === 'connector_saved', { since, label: 'beta written' });
+    since = client.messages.length;
+    answer(first.msg, true);
+    const { msg } = await client.waitFor(isOutcome, { since, label: 'outcome of the later Allow' });
+    assert.deepStrictEqual({ type: msg.type, message: msg.message }, { type: 'connector_error',
+      message: 'A connector named "example-alpha" is already set up, so nothing was changed. Ask to replace it if you meant to change it.' });
+    assert.deepStrictEqual(servers()['example-alpha'], beta, 'the entry allowed first is kept');
+  });
+
+  test('a replace card shows the entry it replaces, and an Allow after that entry changed writes nothing', async () => {
+    fs.writeFileSync(mcp(), JSON.stringify({ mcpServers: { calendar: { url: 'https://old.example.com/mcp' } } }));
+    let since = client.messages.length;
+    client.send({ type: 'save_connector', name: 'calendar', content: '{"url":"https://mcp.example.com/mcp"}', conversationId: 'convo-replace' });
+    const card = await client.waitFor(isConnectorCard('SaveConnector'), { since, label: 'replace card' });
+    assert.deepStrictEqual(card.msg.request.input, { name: 'calendar', action: 'replace', url: 'https://mcp.example.com/mcp', current: { url: 'https://old.example.com/mcp' } });
+    fs.writeFileSync(mcp(), JSON.stringify({ mcpServers: { calendar: { url: 'https://other.example.com/mcp' } } }));
+    const rewritten = fs.readFileSync(mcp());
+    since = client.messages.length;
+    answer(card.msg, true);
+    const { msg } = await client.waitFor(isOutcome, { since, label: 'outcome of the Allow' });
+    assert.deepStrictEqual({ type: msg.type, message: msg.message }, { type: 'connector_error',
+      message: 'The connectors changed after you were asked, so nothing was changed. Ask again to see the change as it stands now.' });
+    assert.ok(fs.readFileSync(mcp()).equals(rewritten), 'the file is left as it was rewritten');
+  });
+
   test('a refusal goes to the window that asked and no other, and the usual next save asks and writes once allowed', async () => {
     fs.writeFileSync(mcp(), JSON.stringify({ mcpServers: {} }));
     const other = await h.connect();
