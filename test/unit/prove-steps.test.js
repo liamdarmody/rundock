@@ -497,7 +497,7 @@ describe('the test-user steps, run whole on fake system calls', () => {
       assert.ok(all.some((c) => c.fn === 'chmodSync' && c.args[0] === RUNNER.home));
       assert.strictEqual(sys.nodes.get(RUNNER.home).mode & 0o077, 0);
       assert.strictEqual(sys.nodes.get(TEST_HOME).mode, 0o711);
-      assert.deepStrictEqual([sys.nodes.get(`${TEST_HOME}/scratch`).mode, sys.nodes.get(`${TEST_HOME}/scratch`).uid], [0o700, 1001]);
+      assert.deepStrictEqual([sys.nodes.get(`${TEST_HOME}-scratch`).mode, sys.nodes.get(`${TEST_HOME}-scratch`).uid], [0o700, 1001]);
     });
 
     test("the evidence directory is the runner's, made 0700", () => {
@@ -536,6 +536,24 @@ describe('the test-user steps, run whole on fake system calls', () => {
       }
     });
 
+    // The temporary directory every process of the test user is given.
+    const tmpGiven = () => {
+      const given = [...new Set(testUserSpawns(all).map((c) => c.args.find((a) => a.startsWith('TMPDIR='))))];
+      assert.strictEqual(given.length, 1, given.join(', '));
+      return given[0].slice('TMPDIR='.length);
+    };
+    const within = (a, b) => a === b || a.startsWith(`${b}/`);
+
+    test("the test user's temporary directory is apart from the runner's home, either way", () => {
+      const tmp = tmpGiven();
+      assert.ok(!within(tmp, RUNNER.home) && !within(RUNNER.home, tmp), tmp);
+    });
+
+    test("the test user's temporary directory is apart from the evidence directory, either way", () => {
+      const tmp = tmpGiven();
+      assert.ok(!within(tmp, EVIDENCE) && !within(EVIDENCE, tmp), tmp);
+    });
+
     test('npm ci --ignore-scripts starts once, only through the test-user function', () => {
       const npm = all.filter(isNpm);
       assert.strictEqual(npm.length, 1);
@@ -549,7 +567,7 @@ describe('the test-user steps, run whole on fake system calls', () => {
       assert.ok(spawns.length > 20);
       for (const c of spawns) {
         assert.deepStrictEqual(c.args.slice(0, 11), ['-n', '-u', 'prove-test', '--', '/usr/bin/env', '-i', `PATH=${NODE_DIR}/bin:/usr/bin:/bin`,
-          `HOME=${TEST_HOME}`, `TMPDIR=${TEST_HOME}/scratch`, 'LANG=C.UTF-8', 'CI=true']);
+          `HOME=${TEST_HOME}`, `TMPDIR=${TEST_HOME}-scratch`, 'LANG=C.UTF-8', 'CI=true']);
         assert.deepStrictEqual([c.opts.argv0, c.opts.stdio[0], c.opts.maxBuffer], ['sudo', 'ignore', LIMIT]);
       }
       for (const c of all.filter((x) => x.fn === 'spawnSync')) assert.strictEqual(c.opts.maxBuffer, LIMIT, c.cmd);

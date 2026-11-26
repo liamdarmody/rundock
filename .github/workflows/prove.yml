@@ -545,7 +545,7 @@ jobs:
           // begin test user
           // The test user runs everything from the commits under test. It has its own
           // group and no other, no sudo, and a home outside the runner's, which holds
-          // its copy of the checkout and its temporary directory.
+          // its copy of the checkout, and a temporary directory beside that home.
           const TEST_USER = 'prove-test';
           // The most output a child may write to each pipe; more fails the step.
           const LIMIT = 64 * 1024 * 1024;
@@ -560,12 +560,15 @@ jobs:
             return { name: fields[0], uid: Number(fields[2]), gid: Number(fields[3]), home: fields[5] };
           }
           // The test user, with its copy, its temporary directory and the real path
-          // of the Node this step runs, which is the one the test user runs too.
+          // of the Node this step runs, which is the one the test user runs too. The
+          // temporary directory is beside the home, never in it: a test makes its
+          // made-up home there, and the tests refuse one inside the account's own.
           function testUser() {
             const path = require('node:path');
             const user = account(TEST_USER);
             const node = require('node:fs').realpathSync(process.execPath);
-            return { ...user, copy: path.join(user.home, 'checkout'), tmp: path.join(user.home, 'scratch'), node, bin: path.dirname(node) };
+            const tmp = path.join(path.dirname(user.home), `${path.basename(user.home)}-scratch`);
+            return { ...user, copy: path.join(user.home, 'checkout'), tmp, node, bin: path.dirname(node) };
           }
           // The one way a process starts as the test user: argv, in cwd, with only
           // these five variables, no input, and each output piped back up to LIMIT.
@@ -934,7 +937,7 @@ jobs:
           // begin test user
           // The test user runs everything from the commits under test. It has its own
           // group and no other, no sudo, and a home outside the runner's, which holds
-          // its copy of the checkout and its temporary directory.
+          // its copy of the checkout, and a temporary directory beside that home.
           const TEST_USER = 'prove-test';
           // The most output a child may write to each pipe; more fails the step.
           const LIMIT = 64 * 1024 * 1024;
@@ -949,12 +952,15 @@ jobs:
             return { name: fields[0], uid: Number(fields[2]), gid: Number(fields[3]), home: fields[5] };
           }
           // The test user, with its copy, its temporary directory and the real path
-          // of the Node this step runs, which is the one the test user runs too.
+          // of the Node this step runs, which is the one the test user runs too. The
+          // temporary directory is beside the home, never in it: a test makes its
+          // made-up home there, and the tests refuse one inside the account's own.
           function testUser() {
             const path = require('node:path');
             const user = account(TEST_USER);
             const node = require('node:fs').realpathSync(process.execPath);
-            return { ...user, copy: path.join(user.home, 'checkout'), tmp: path.join(user.home, 'scratch'), node, bin: path.dirname(node) };
+            const tmp = path.join(path.dirname(user.home), `${path.basename(user.home)}-scratch`);
+            return { ...user, copy: path.join(user.home, 'checkout'), tmp, node, bin: path.dirname(node) };
           }
           // The one way a process starts as the test user: argv, in cwd, with only
           // these five variables, no input, and each output piped back up to LIMIT.
@@ -1434,7 +1440,7 @@ jobs:
           // begin test user
           // The test user runs everything from the commits under test. It has its own
           // group and no other, no sudo, and a home outside the runner's, which holds
-          // its copy of the checkout and its temporary directory.
+          // its copy of the checkout, and a temporary directory beside that home.
           const TEST_USER = 'prove-test';
           // The most output a child may write to each pipe; more fails the step.
           const LIMIT = 64 * 1024 * 1024;
@@ -1449,12 +1455,15 @@ jobs:
             return { name: fields[0], uid: Number(fields[2]), gid: Number(fields[3]), home: fields[5] };
           }
           // The test user, with its copy, its temporary directory and the real path
-          // of the Node this step runs, which is the one the test user runs too.
+          // of the Node this step runs, which is the one the test user runs too. The
+          // temporary directory is beside the home, never in it: a test makes its
+          // made-up home there, and the tests refuse one inside the account's own.
           function testUser() {
             const path = require('node:path');
             const user = account(TEST_USER);
             const node = require('node:fs').realpathSync(process.execPath);
-            return { ...user, copy: path.join(user.home, 'checkout'), tmp: path.join(user.home, 'scratch'), node, bin: path.dirname(node) };
+            const tmp = path.join(path.dirname(user.home), `${path.basename(user.home)}-scratch`);
+            return { ...user, copy: path.join(user.home, 'checkout'), tmp, node, bin: path.dirname(node) };
           }
           // The one way a process starts as the test user: argv, in cwd, with only
           // these five variables, no input, and each output piped back up to LIMIT.
@@ -1857,7 +1866,7 @@ jobs:
           // begin test user
           // The test user runs everything from the commits under test. It has its own
           // group and no other, no sudo, and a home outside the runner's, which holds
-          // its copy of the checkout and its temporary directory.
+          // its copy of the checkout, and a temporary directory beside that home.
           const TEST_USER = 'prove-test';
           // The most output a child may write to each pipe; more fails the step.
           const LIMIT = 64 * 1024 * 1024;
@@ -1872,12 +1881,15 @@ jobs:
             return { name: fields[0], uid: Number(fields[2]), gid: Number(fields[3]), home: fields[5] };
           }
           // The test user, with its copy, its temporary directory and the real path
-          // of the Node this step runs, which is the one the test user runs too.
+          // of the Node this step runs, which is the one the test user runs too. The
+          // temporary directory is beside the home, never in it: a test makes its
+          // made-up home there, and the tests refuse one inside the account's own.
           function testUser() {
             const path = require('node:path');
             const user = account(TEST_USER);
             const node = require('node:fs').realpathSync(process.execPath);
-            return { ...user, copy: path.join(user.home, 'checkout'), tmp: path.join(user.home, 'scratch'), node, bin: path.dirname(node) };
+            const tmp = path.join(path.dirname(user.home), `${path.basename(user.home)}-scratch`);
+            return { ...user, copy: path.join(user.home, 'checkout'), tmp, node, bin: path.dirname(node) };
           }
           // The one way a process starts as the test user: argv, in cwd, with only
           // these five variables, no input, and each output piped back up to LIMIT.
