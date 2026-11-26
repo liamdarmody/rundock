@@ -143,7 +143,8 @@ const CONNECTOR_NOT_JSON = 'The connector entry is not valid JSON, so nothing wa
 const connectorShapeRefused = (key) => `The connector entry's "${key}" isn't in a form the approval card can show exactly, so nothing was changed.`;
 const hiddenSetting = (key) => `The connector entry's "${key}" isn't a setting the approval card can show, so nothing was changed.`;
 const HIDDEN_SETTING_UNNAMED = 'The connector entry holds a setting the approval card can\'t show, so nothing was changed.';
-const CONNECTOR_NO_CONVERSATION ='That connector change didn\'t say which conversation it came from, so nothing was changed.';
+const CONNECTOR_ALREADY_SET_UP = (name) => `A connector named "${name}" is already set up, so nothing was changed. Ask to replace it if you meant to change it.`;
+const CONNECTOR_NO_CONVERSATION = 'That connector change didn\'t say which conversation it came from, so nothing was changed.';
 const CONNECTOR_NOT_ALLOWED = 'The change was not allowed, so nothing was changed.';
 const CONNECTOR_TIMED_OUT = 'Nobody answered the card in time, so nothing was changed.';
 
@@ -880,6 +881,30 @@ describe('dispatch table', () => {
         });
       }
     }
+  });
+
+  // Two saves for one name that isn't there yet both raise add cards. The one
+  // allowed first writes; the other, allowed after, would replace an entry its
+  // card never showed, so it writes nothing.
+  test('two connector saves for one new name both ask to add it, and the one allowed second is refused, keeping the first', () => {
+    assert.strictEqual(typeof connectorWrite.proposeConnectorChange, 'function');
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-two-adds-');
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, '{"mcpServers":{}}');
+      const table = buildDispatch();
+      const first = captureWs();
+      const second = captureWs();
+      table.save_connector(ctx, first, { name: 'example-alpha', content: '{"url":"https://alpha.example.com/mcp"}', conversationId: 'convo-race' });
+      table.save_connector(ctx, second, { name: 'example-alpha', content: '{"url":"https://beta.example.com/mcp"}', conversationId: 'convo-race' });
+      assert.deepStrictEqual(card.asked.map((r) => r.toolInput.action), ['add', 'add'], 'both cards ask to add it');
+      card.answer(1, true);
+      assert.deepStrictEqual(second.sent, [{ type: 'connector_saved', name: 'example-alpha', action: 'saved', takesEffect: 'next agent start' }]);
+      const written = fs.readFileSync(file);
+      card.answer(0, true);
+      assert.deepStrictEqual(first.sent, [{ type: 'connector_error', message: CONNECTOR_ALREADY_SET_UP('example-alpha') }], 'the later Allow is refused');
+      assert.deepStrictEqual(fs.readFileSync(file), written, 'and the entry allowed first stays, byte for byte');
+      assert.deepStrictEqual(JSON.parse(written).mcpServers, { 'example-alpha': { url: 'https://beta.example.com/mcp' } });
+    });
   });
 
   test('routes exactly the enumerated message types, every entry a function', () => {

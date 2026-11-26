@@ -150,6 +150,163 @@ test('a connector change with a refused name and no conversation is refused for 
   });
 });
 
+// ===== What can't be asked about at all =====
+
+const CHANGE_REFUSED = 'That connector change can\'t be made, so nothing was changed.';
+const SETUP_ADDS_ONLY = 'Rundock\'s setup can only add a connector, so nothing was changed.';
+const ALREADY_SET_UP = (name) => `A connector named "${name}" is already set up, so nothing was changed. Ask to replace it if you meant to change it.`;
+const NOT_CONFIGURED = (name) => `No connector named "${name}" is configured in this workspace, so nothing was changed.`;
+const CHANGED = 'The connectors changed after you were asked, so nothing was changed. Ask again to see the change as it stands now.';
+
+test('a connector change that is not an add, a replace or a remove is refused before the file is read', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({}, async (s) => {
+    await refusedAtRequest(s, s.request({ change: 'save' }), 'invalid', CHANGE_REFUSED);
+    assert.deepStrictEqual(s.opened, [], 'the file is never opened');
+  });
+});
+
+test('a connector change from neither an agent nor Rundock\'s setup is refused before the file is read', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({}, async (s) => {
+    await refusedAtRequest(s, s.request({ source: 'window' }), 'invalid', CHANGE_REFUSED);
+    assert.deepStrictEqual(s.opened, [], 'the file is never opened');
+  });
+});
+
+test('a connector change that names no workspace is refused before any file is read', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({}, async (s) => {
+    await refusedAtRequest(s, s.request({ workspace: '' }), 'invalid', CHANGE_REFUSED);
+    assert.deepStrictEqual(s.opened, [], 'no file is opened');
+  });
+});
+
+test('Rundock\'s setup replacing a connector that is set up is refused before the file is read', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': { command: 'node' } }, async (s) => {
+    const req = s.request({ source: 'rundock', change: 'replace', entry: { command: 'node', args: ['server.js'] } });
+    delete req.conversationId;
+    await refusedAtRequest(s, req, 'invalid', SETUP_ADDS_ONLY);
+    assert.deepStrictEqual(s.opened, [], 'the file is never opened');
+  });
+});
+
+test('Rundock\'s setup removing a connector that is set up is refused before the file is read', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': { command: 'node' } }, async (s) => {
+    const req = s.request({ source: 'rundock', change: 'remove', entry: undefined });
+    delete req.conversationId;
+    await refusedAtRequest(s, req, 'invalid', SETUP_ADDS_ONLY);
+    assert.deepStrictEqual(s.opened, [], 'the file is never opened');
+  });
+});
+
+// ===== What the file must hold for the change to make sense =====
+
+test('an agent\'s add of a connector already set up is refused, and nobody is asked', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': { url: 'https://mcp.example.com/mcp' } }, async (s) => {
+    await refusedAtRequest(s, s.request(), 'exists', ALREADY_SET_UP('local-tools'));
+  });
+});
+
+test('Rundock\'s own add of a connector already set up is refused, and nobody is asked', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': { url: 'https://mcp.example.com/mcp' } }, async (s) => {
+    const req = s.request({ source: 'rundock' });
+    delete req.conversationId;
+    await refusedAtRequest(s, req, 'exists', ALREADY_SET_UP('local-tools'));
+  });
+});
+
+test('a replace of a connector that is not set up is refused, and nobody is asked', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ calendar: { url: 'https://mcp.example.com/mcp' } }, async (s) => {
+    await refusedAtRequest(s, s.request({ change: 'replace' }), 'absent', NOT_CONFIGURED('local-tools'));
+  });
+});
+
+test('a remove of a connector that is not set up is refused, and nobody is asked', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ calendar: { url: 'https://mcp.example.com/mcp' } }, async (s) => {
+    await refusedAtRequest(s, s.request({ change: 'remove', entry: undefined }), 'absent', NOT_CONFIGURED('local-tools'));
+  });
+});
+
+// ===== Allow writes only while the file still holds what the card showed =====
+
+// The card is raised, the file is changed while it waits, and the Allow given
+// on it writes nothing: the file keeps what it held at the Allow, one message
+// says why, and no save is reported.
+async function refusedAtAllow(s, req, meanwhile, reason, message) {
+  const { w, outcome } = propose(s, req);
+  assert.strictEqual(s.asked.length, 1, 'one card');
+  meanwhile(s);
+  const atAllow = s.bytes();
+  s.answer(0, true);
+  assert.deepStrictEqual(s.bytes(), atAllow, 'the file is byte-identical to what it held at the Allow');
+  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'one message, the refusal\'s, and no save');
+  assert.deepStrictEqual(await outcome, { ok: false, reason, message });
+}
+const STDIO_HELD = { command: 'node', args: ['tools.js', '--stdio'], env: { API_KEY: 'old-secret' } };
+
+test('an agent\'s add allowed after the same name was set up meanwhile writes nothing and resolves exists', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({}, async (s) => {
+    await refusedAtAllow(s, s.request(), () => s.rewrite({ 'local-tools': { url: 'https://mcp.example.com/mcp' } }), 'exists', ALREADY_SET_UP('local-tools'));
+  });
+});
+
+test('Rundock\'s own add allowed after the same name was set up meanwhile writes nothing and resolves exists', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({}, async (s) => {
+    const req = s.request({ source: 'rundock' });
+    delete req.conversationId;
+    await refusedAtAllow(s, req, () => s.rewrite({ 'local-tools': { url: 'https://mcp.example.com/mcp' } }), 'exists', ALREADY_SET_UP('local-tools'));
+  });
+});
+
+test('a replace allowed after an environment value of the entry changed writes nothing and resolves changed', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': STDIO_HELD }, async (s) => {
+    const meanwhile = () => s.rewrite({ 'local-tools': { ...STDIO_HELD, env: { API_KEY: 'other-secret' } } });
+    await refusedAtAllow(s, s.request({ change: 'replace', entry: { command: 'node', args: ['server.js'] } }), meanwhile, 'changed', CHANGED);
+  });
+});
+
+test('a replace allowed after the entry\'s arguments were reordered writes nothing and resolves changed', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': STDIO_HELD }, async (s) => {
+    const meanwhile = () => s.rewrite({ 'local-tools': { ...STDIO_HELD, args: ['--stdio', 'tools.js'] } });
+    await refusedAtAllow(s, s.request({ change: 'replace', entry: { command: 'node', args: ['server.js'] } }), meanwhile, 'changed', CHANGED);
+  });
+});
+
+test('a replace allowed after the connector was removed meanwhile writes nothing and resolves absent', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': STDIO_HELD, calendar: { url: 'https://mcp.example.com/mcp' } }, async (s) => {
+    const meanwhile = () => s.rewrite({ calendar: { url: 'https://mcp.example.com/mcp' } });
+    await refusedAtAllow(s, s.request({ change: 'replace', entry: { command: 'node', args: ['server.js'] } }), meanwhile, 'absent', NOT_CONFIGURED('local-tools'));
+  });
+});
+
+test('a remove allowed after the entry\'s URL changed writes nothing and resolves changed', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ calendar: { url: 'https://old.example.com/mcp' } }, async (s) => {
+    const meanwhile = () => s.rewrite({ calendar: { url: 'https://mcp.example.com/mcp' } });
+    await refusedAtAllow(s, s.request({ change: 'remove', name: 'calendar', entry: undefined }), meanwhile, 'changed', CHANGED);
+  });
+});
+
+test('a remove allowed after the connector was removed meanwhile writes nothing and resolves absent', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ calendar: { url: 'https://old.example.com/mcp' }, 'local-tools': { command: 'node' } }, async (s) => {
+    const meanwhile = () => s.rewrite({ 'local-tools': { command: 'node' } });
+    await refusedAtAllow(s, s.request({ change: 'remove', name: 'calendar', entry: undefined }), meanwhile, 'absent', NOT_CONFIGURED('calendar'));
+  });
+});
+
 // ===== Every value an Allow writes is on the card =====
 
 const TIMEOUT_REFUSED = 'The connector entry\'s "timeout" isn\'t a setting the approval card can show, so nothing was changed.';
@@ -204,6 +361,51 @@ test('Rundock\'s own add of a connector not yet set up needs no conversation, ra
     assert.deepStrictEqual(s.servers(), { 'local-tools': { command: 'node' } });
     assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
     assert.deepStrictEqual(await outcome, { ok: true, change: 'add', name: 'local-tools', takesEffect: 'next agent start' });
+  });
+});
+
+test('a replace allowed while the entry is as the card showed it writes the new entry', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': STDIO_HELD }, async (s) => {
+    const { w, outcome } = propose(s, s.request({ change: 'replace', entry: { command: 'node', args: ['server.js'] } }));
+    s.answer(0, true);
+    assert.deepStrictEqual(s.servers(), { 'local-tools': { command: 'node', args: ['server.js'] } });
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.deepStrictEqual(await outcome, { ok: true, change: 'replace', name: 'local-tools', takesEffect: 'next agent start' });
+  });
+});
+
+test('a replace allowed after the entry was rewritten with the same settings in another order still writes', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': STDIO_HELD }, async (s) => {
+    const { w, outcome } = propose(s, s.request({ change: 'replace', entry: { command: 'node', args: ['server.js'] } }));
+    s.rewrite({ 'local-tools': { env: { API_KEY: 'old-secret' }, args: ['tools.js', '--stdio'], command: 'node' } });
+    s.answer(0, true);
+    assert.deepStrictEqual(s.servers(), { 'local-tools': { command: 'node', args: ['server.js'] } });
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.deepStrictEqual(await outcome, { ok: true, change: 'replace', name: 'local-tools', takesEffect: 'next agent start' });
+  });
+});
+
+test('a remove allowed while the entry is as the card showed it removes it', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ calendar: { url: 'https://old.example.com/mcp' }, 'local-tools': { command: 'node' } }, async (s) => {
+    const { w, outcome } = propose(s, s.request({ change: 'remove', name: 'calendar', entry: undefined }));
+    s.answer(0, true);
+    assert.deepStrictEqual(s.servers(), { 'local-tools': { command: 'node' } }, 'the other connector stays');
+    assert.deepStrictEqual(w.sent, SAVED('calendar', 'removed'));
+    assert.deepStrictEqual(await outcome, { ok: true, change: 'remove', name: 'calendar', takesEffect: 'next agent start' });
+  });
+});
+
+test('another connector set up while an add card waits is kept beside the one allowed', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({}, async (s) => {
+    const { outcome } = propose(s, s.request());
+    s.rewrite({ calendar: { url: 'https://mcp.example.com/mcp' } });
+    s.answer(0, true);
+    assert.deepStrictEqual(s.servers(), { calendar: { url: 'https://mcp.example.com/mcp' }, 'local-tools': { command: 'node' } });
+    assert.strictEqual((await outcome).ok, true);
   });
 });
 
