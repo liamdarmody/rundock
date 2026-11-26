@@ -3,15 +3,20 @@
 // the page shows the server's sentence as a row in a strip above the view,
 // where it stays, whatever the person opens next, until its own close.
 //
-// The arm is cut out of handle(d) in public/app.js and run in a window built
-// from index.html's <main> markup, with showFilesKeptNotice from the
-// conversations view and the addSystemMsgToConvo and addSystemMsg the arm
-// used to call, so it is the code that ships, and a missing piece fails here
-// by name.
-const { test, describe } = require('node:test');
+// THE PAGE HERE IS THE PAGE THAT SHIPS. It is built from public/index.html,
+// and every script index.html names is run in it, in order, as classic
+// scripts sharing one window, as a browser runs them. Each frame arrives on
+// the page's own socket, so it reaches the page's own handle(d) and, through
+// it, whatever the page holds as showFilesKeptNotice: a notice function that
+// draws nothing fails here. Only what the page reaches outside itself is
+// stood in for: the WebSocket constructor (a socket that records what is sent
+// and never touches the network), fetch (which never answers), and
+// matchMedia, which jsdom does not have.
+const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -34,10 +39,7 @@ function piece(src, from, to, label) {
 }
 
 const ARM = () => piece(APP_SRC, "case 'conversation_files_kept':", 'break;', 'the conversation_files_kept arm');
-const TO_CONVO = () => piece(APP_SRC, 'function addSystemMsgToConvo(', '\n}\n', 'addSystemMsgToConvo');
 const NOTICE = () => piece(CONVOS_SRC, 'function showFilesKeptNotice(', '\n}\n', 'showFilesKeptNotice');
-const SYSTEM = () => piece(CHAT_SRC, 'function addSystemMsg(', '\n', 'addSystemMsg');
-const MAIN = () => piece(INDEX_HTML, '<main class="main">', '</main>', 'the main markup');
 
 // The sentence the server sends for a conversation, from its own template.
 function serverText(id) {
@@ -55,34 +57,90 @@ function requirePieces() {
   assert.strictEqual(typeof view.showFilesKeptNotice, 'function', 'showFilesKeptNotice is a page function');
 }
 
-// A window with index.html's <main>, the arm and the functions it may call,
-// another conversation on screen with its messages loaded, and a socket that
-// records what is sent.
-function page() {
+// Where the server reads each script the page names: under public/, except
+// the one it serves out of the markdown package (lib/http-router.js).
+const FROM_PACKAGE = { '/marked.min.js': path.join(ROOT, 'node_modules', 'marked', 'lib', 'marked.umd.js') };
+const scriptFile = (src) => FROM_PACKAGE[src] || path.join(PUBLIC, ...src.split('/').filter(Boolean));
+
+// Every script index.html names, in its order, compiled once and run in each
+// page.
+let scripts = null;
+function pageScripts() {
+  if (scripts) return scripts;
+  const srcs = [...new JSDOM(INDEX_HTML).window.document.querySelectorAll('script[src]')].map((el) => el.getAttribute('src'));
+  assert.ok(srcs.includes('/views/conversations.js') && srcs.includes('/app.js'), 'index.html loads the conversations view and app.js');
+  assert.ok(srcs.indexOf('/views/conversations.js') < srcs.indexOf('/app.js'), 'the conversations view before app.js');
+  scripts = srcs.map((src) => {
+    const file = scriptFile(src);
+    return new vm.Script(fs.readFileSync(file, 'utf-8'), { filename: file });
+  });
+  return scripts;
+}
+
+// Each page's window is closed after its test: the page sets timers and an
+// interval as it loads.
+const opened = [];
+afterEach(() => { for (const w of opened.splice(0)) w.close(); });
+
+// The shipped page, loaded and connected, with a conversation on screen whose
+// messages are loaded. `notify` sends a conversation_files_kept frame on the
+// page's socket; `sent` is what the page has sent since it connected.
+async function page() {
   requirePieces();
-  const dom = new JSDOM(`<!doctype html><html><body>${MAIN()}</body></html>`, { runScripts: 'dangerously' });
+  const sockets = [];
+  const dom = new JSDOM(INDEX_HTML, {
+    url: 'http://localhost/',
+    runScripts: 'dangerously',
+    pretendToBeVisual: true,
+    beforeParse(w) {
+      w.WebSocket = class {
+        constructor(url) { this.url = url; this.readyState = 0; this.sent = []; sockets.push(this); }
+        send(data) { this.sent.push(String(data)); }
+        close() {}
+      };
+      Object.assign(w.WebSocket, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+      w.fetch = () => new Promise(() => {});
+      w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+    },
+  });
   const w = dom.window;
-  w.eval(`window.__api = (function () {
-    const conversations = [{ id: 'conv-gamma', messages: [{ role: 'user', content: 'hello' }] }];
-    let activeConversation = conversations[0];
-    const scrollBottom = () => {};
-    const ws = { readyState: 1, sent: [], send(data) { this.sent.push(data); } };
-    ${SYSTEM()}
-    ${TO_CONVO()}
-    ${NOTICE()}
-    function handle(d) { switch (d.type) { ${ARM()} } }
-    return { handle, sent: () => JSON.stringify(ws.sent), conversations: () => JSON.parse(JSON.stringify(conversations)) };
-  })();`);
+  opened.push(w);
+  const ctx = dom.getInternalVMContext();
+  for (const script of pageScripts()) script.runInContext(ctx);
+  // The page connects once its sign-in check settles, a few ticks after it
+  // loads.
+  for (let i = 0; i < 50 && !sockets.length; i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(sockets.length, 1, 'the page opens its socket');
+  const socket = sockets[0];
+  socket.readyState = 1;
+  socket.onopen();
+  const since = socket.sent.length;
+  const state = (expr) => vm.runInContext(expr, ctx);
+  state("conversations.push({ id: 'conv-gamma', messages: [{ role: 'user', content: 'hello' }] }); activeConversation = conversations[0];");
   const doc = w.document;
   const box = () => doc.getElementById(STRIP);
   const rows = () => [...box().children];
   const texts = () => rows().map((row) => row.querySelector('.held-strip-text').textContent);
-  const notify = (id, text = textFor(id)) => w.__api.handle({ type: 'conversation_files_kept', id, text });
+  const notify = (id, text = textFor(id)) => socket.onmessage({ data: JSON.stringify({ type: 'conversation_files_kept', id, text }) });
   const messages = () => doc.getElementById('messages');
-  return { w, doc, api: w.__api, box, rows, texts, notify, messages };
+  const conversations = () => JSON.parse(state('JSON.stringify(conversations)'));
+  const sent = () => socket.sent.slice(since);
+  return { w, doc, box, rows, texts, notify, messages, conversations, sent, state };
 }
 
 describe('the notice that a deleted conversation\'s files were kept', () => {
+  test('a conversation_files_kept frame on the page\'s socket reaches the page\'s own showFilesKeptNotice, which adds one row with the server\'s text to #files-kept-notices', async () => {
+    const p = await page();
+    const text = serverText('conv-alpha');
+    const before = p.messages().innerHTML;
+    assert.strictEqual(p.box().hidden, true, 'the strip is hidden before the frame');
+    p.notify('conv-alpha', text);
+    assert.strictEqual(p.rows().length, 1, `one row in #${STRIP}`);
+    assert.deepStrictEqual(p.texts(), [text], 'with the server\'s text');
+    assert.strictEqual(p.box().hidden, false, 'and the strip is shown');
+    assert.strictEqual(p.messages().innerHTML, before, 'nothing is added to #messages');
+  });
+
   test('the arm hands the server\'s text to showFilesKeptNotice and draws no line in the conversation', () => {
     requirePieces();
     const arm = ARM();
@@ -105,8 +163,8 @@ describe('the notice that a deleted conversation\'s files were kept', () => {
     assert.strictEqual(el.closest('.view-panel'), null, 'outside every .view-panel');
   });
 
-  test('a notice is one row built from elements: the text, then one close button', () => {
-    const p = page();
+  test('a notice is one row built from elements: the text, then one close button', async () => {
+    const p = await page();
     p.notify('conv-alpha');
     assert.strictEqual(p.box().hidden, false, 'the strip is shown');
     assert.strictEqual(p.rows().length, 1, 'one row');
@@ -126,27 +184,28 @@ describe('the notice that a deleted conversation\'s files were kept', () => {
     assert.strictEqual(row.querySelectorAll('button').length, 1, 'no other button');
   });
 
-  test('the row says exactly where the files are', () => {
-    const p = page();
+  test('the row says exactly where the files are', async () => {
+    const p = await page();
     const expected = 'Rundock deleted the conversation but couldn\'t remove its attached files. They\'re still in .rundock/attachments/1764000000000/.';
     assert.strictEqual(serverText('1764000000000'), expected, 'the server\'s sentence');
     p.notify('1764000000000', serverText('1764000000000'));
     assert.deepStrictEqual(p.texts(), [expected]);
   });
 
-  test('nothing is drawn in the conversation on screen or kept in any conversation\'s messages', () => {
-    const p = page();
-    const before = p.api.conversations();
+  test('nothing is drawn in the conversation on screen or kept in any conversation\'s messages', async () => {
+    const p = await page();
+    const before = p.conversations();
     p.messages().append(Object.assign(p.doc.createElement('div'), { className: 'msg-user', textContent: 'hello' }));
     p.notify('conv-alpha');
     assert.deepStrictEqual([...p.messages().children].map((el) => el.className), ['msg-user'], 'no line in #messages');
-    assert.deepStrictEqual(p.api.conversations(), before, 'no conversation gains an entry');
+    assert.deepStrictEqual(p.conversations(), before, 'no conversation gains an entry');
   });
 
-  test('a text with markup reaches the page as text', () => {
-    const p = page();
+  test('a text with markup reaches the page as text', async () => {
+    const p = await page();
+    const images = p.doc.querySelectorAll('img').length;
     p.notify('conv-alpha', '<img src=x onerror=alert(1)>');
-    assert.strictEqual(p.doc.querySelectorAll('img').length, 0, 'no img element');
+    assert.strictEqual(p.doc.querySelectorAll('img').length, images, 'no img element is added');
     assert.deepStrictEqual(p.texts(), ['<img src=x onerror=alert(1)>']);
   });
 });
@@ -158,8 +217,8 @@ describe('the files-kept notice stays until it is closed', () => {
     assert.deepStrictEqual(p.texts(), [ALPHA], 'the row is still there with its text');
   }
 
-  test('opening another conversation, which empties the message view, leaves the row', () => {
-    const p = page();
+  test('opening another conversation, which empties the message view, leaves the row', async () => {
+    const p = await page();
     p.notify('conv-alpha');
     const open = piece(CONVOS_SRC, 'function openConversation(', '\n}\n', 'openConversation');
     const empty = "const el=document.getElementById('messages'); el.innerHTML='';";
@@ -169,8 +228,8 @@ describe('the files-kept notice stays until it is closed', () => {
     stillShown(p);
   });
 
-  test('starting a new conversation, which empties the message view, leaves the row', () => {
-    const p = page();
+  test('starting a new conversation, which empties the message view, leaves the row', async () => {
+    const p = await page();
     p.notify('conv-alpha');
     const create = piece(CONVOS_SRC, 'function createConversation(', '\n}\n', 'createConversation');
     const empty = "document.getElementById('messages').innerHTML = '';";
@@ -180,8 +239,8 @@ describe('the files-kept notice stays until it is closed', () => {
     stillShown(p);
   });
 
-  test('a history drawn at the top of the message view leaves the row', () => {
-    const p = page();
+  test('a history drawn at the top of the message view leaves the row', async () => {
+    const p = await page();
     p.notify('conv-alpha');
     const render = piece(CHAT_SRC, 'function renderSessionHistory(', '\n}\n', 'renderSessionHistory');
     const insert = 'el.insertBefore(frag, el.firstChild);';
@@ -223,16 +282,16 @@ describe('the files-kept notice stays until it is closed', () => {
 describe('each files-kept notice closes on its own', () => {
   const closeOf = (row) => row.querySelector('.held-strip-close');
 
-  test('a second notice adds a second row after the first, and both show', () => {
-    const p = page();
+  test('a second notice adds a second row after the first, and both show', async () => {
+    const p = await page();
     p.notify('conv-alpha');
     p.notify('conv-beta');
     assert.deepStrictEqual(p.texts(), [ALPHA, BETA]);
     assert.strictEqual(p.box().hidden, false);
   });
 
-  test('a close removes its own row only, and the other stays with its text', () => {
-    const p = page();
+  test('a close removes its own row only, and the other stays with its text', async () => {
+    const p = await page();
     p.notify('conv-alpha');
     p.notify('conv-beta');
     closeOf(p.rows()[0]).click();
@@ -240,8 +299,8 @@ describe('each files-kept notice closes on its own', () => {
     assert.strictEqual(p.box().hidden, false, 'the strip stays shown');
   });
 
-  test('when the last row is closed the strip is hidden', () => {
-    const p = page();
+  test('when the last row is closed the strip is hidden', async () => {
+    const p = await page();
     p.notify('conv-alpha');
     p.notify('conv-beta');
     closeOf(p.rows()[1]).click();
@@ -251,10 +310,10 @@ describe('each files-kept notice closes on its own', () => {
     assert.strictEqual(p.box().hidden, true);
   });
 
-  test('a close sends nothing to the server', () => {
-    const p = page();
+  test('a close sends nothing to the server', async () => {
+    const p = await page();
     p.notify('conv-alpha');
     closeOf(p.rows()[0]).click();
-    assert.strictEqual(p.api.sent(), '[]', 'nothing sent');
+    assert.deepStrictEqual(p.sent(), [], 'nothing sent');
   });
 });

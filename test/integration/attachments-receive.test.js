@@ -1253,19 +1253,42 @@ describe('a workspace switch while a hand-over holds a message', () => {
     }
   });
 
-  test('a hand-over holding nothing does not hold a switch', async () => {
-    const id = h.freshConvoId('handover-empty');
+  // One sequence, so the promise that an empty hand-over holds nothing is
+  // tested beside the hold it is the exception to: first a hand-over holding a
+  // chat holds a switch until it has replayed the chat, then a hand-over
+  // holding nothing lets the next switch answer while it is still open.
+  test('a hand-over holding a chat holds a switch until it replays the chat, then a hand-over holding nothing lets the next switch answer at once', async () => {
+    const id = h.freshConvoId('handover-then-empty');
+    const empty = h.freshConvoId('handover-empty');
     const other = second('Seventh');
-    const t = transition(id);
+    const third = second('Ninth');
+    const text = 'ASK-HOTHEN just words';
+    answers(['ASK-HOTHEN']);
+    const held = transition(id);
     try {
-      const asked = client.messages.length;
+      chat(id, text, undefined);
+      assert.ok(await h.waitUntil(() => held.queued.length === 1), 'the chat is queued by the first hand-over');
+      let asked = client.messages.length;
       client.send({ type: 'set_workspace', path: other });
-      const answered = await answerAfter(id, asked, 2000);
-      assert.ok(answered && answered.set.type === 'workspace_set' && answered.set.path === other, 'the switch answers within 2 s');
-      assert.strictEqual(answered.held, true, 'while the hand-over is still open');
+      await h.delay(200);
+      assert.ok(!client.messages.slice(asked).some(isAnswer), 'no workspace_set while the first hand-over holds the chat');
+      endTransition(id);
+      const first = await answerAfter(id, asked);
+      assert.ok(first && first.set.type === 'workspace_set' && first.set.path === other, 'the switch goes ahead once the first hand-over ends');
+      assert.strictEqual(first.held, false, 'and not before');
+      assert.deepStrictEqual(userRowsIn(h.workspaceDir, id), [text], 'the replayed chat is in the first workspace\'s transcript');
+
+      const t = transition(empty);
+      asked = client.messages.length;
+      client.send({ type: 'set_workspace', path: third });
+      const next = await answerAfter(empty, asked, 2000);
+      assert.ok(next && next.set.type === 'workspace_set' && next.set.path === third, 'the next switch answers within 2 s');
+      assert.strictEqual(next.held, true, 'while the second hand-over is still open');
       assert.strictEqual(t.queued.length, 0, 'holding nothing');
     } finally {
+      if (h.internal.convoTransitions.has(empty)) endTransition(empty);
       await leave(id);
+      h.reapConvo(empty);
     }
   });
 
