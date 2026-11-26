@@ -426,7 +426,7 @@ describe('a stored message carries the stored text into every copy a reload read
     const project = fs.realpathSync(h.workspaceDir).replace(/[^a-zA-Z0-9]/g, '-');
     const at = path.join(process.env.HOME, '.claude', 'projects', project, `${sessionId}.jsonl`);
     assert.ok(fs.existsSync(at), `the session file is at ${at}`);
-    const user = fs.readFileSync(at, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    const user = h.readAppendedLog(at)
       .filter((l) => l.type === 'user' && typeof l.message.content === 'string');
     assert.ok(user.some((l) => l.message.content.includes(stored.content)), 'a user message holds the whole stored text');
     h.reapConvo(id);
