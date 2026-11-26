@@ -409,6 +409,43 @@ test('another connector set up while an add card waits is kept beside the one al
   });
 });
 
+// ===== The replace card shows the entry it would replace =====
+
+test('a replace card carries the entry it would replace, drawn like the new one', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': { ...STDIO_HELD, timeout: 5 } }, async (s) => {
+    propose(s, s.request({ change: 'replace', entry: { command: 'node', args: ['server.js'] } }));
+    assert.deepStrictEqual(s.asked[0].toolInput, {
+      name: 'local-tools', action: 'replace', command: 'node', args: ['server.js'],
+      current: { command: 'node', args: ['tools.js', '--stdio'], env: ['API_KEY'], others: ['timeout'] },
+    });
+  });
+});
+
+test('a replace card for an entry that is not an object carries an empty current entry', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': 'node tools.js' }, async (s) => {
+    propose(s, s.request({ change: 'replace' }));
+    assert.deepStrictEqual(s.asked[0].toolInput, { name: 'local-tools', action: 'replace', command: 'node', args: [], current: {} });
+  });
+});
+
+test('environment and header values reach neither the replace card\'s input nor what the card says', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  const RP = require('../../public/permissions.js');
+  const held = { url: 'https://old.example.com/mcp', env: { API_KEY: 'old-secret' }, headers: { Authorization: 'Bearer old' } };
+  await inWorkspace({ calendar: held }, async (s) => {
+    const entry = { url: 'https://mcp.example.com/mcp', env: { API_KEY: 'new-secret' }, headers: { Authorization: 'Bearer new' } };
+    propose(s, s.request({ change: 'replace', name: 'calendar', entry }));
+    const input = s.asked[0].toolInput;
+    assert.deepStrictEqual(input.current, { url: 'https://old.example.com/mcp', env: ['API_KEY'], headers: ['Authorization'] }, 'the current entry is on the card, by name');
+    const shown = [JSON.stringify(input), JSON.stringify(RP.describeToolRequest(s.asked[0].toolName, input))];
+    for (const value of ['old-secret', 'Bearer old', 'new-secret', 'Bearer new']) {
+      for (const text of shown) assert.ok(!text.includes(value), `${value} is not shown`);
+    }
+  });
+});
+
 // ===== Only an Allow on the change's own card writes =====
 
 const CHANGES = [

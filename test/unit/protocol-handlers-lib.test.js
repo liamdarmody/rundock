@@ -309,7 +309,7 @@ describe('dispatch table', () => {
     inWorkspace(dir, () => {
       fs.writeFileSync(file, JSON.stringify({ mcpServers: { calendar: { url: 'https://old.example.com/mcp' } } }));
       buildDispatch().save_connector(ctx, captureWs(), { name: 'calendar', content: '{"type":"http","url":"https://mcp.example.com/mcp","headers":{"Authorization":"x"}}', conversationId: 'convo-url' });
-      assert.deepStrictEqual(card.asked[0].toolInput, { name: 'calendar', action: 'replace', url: 'https://mcp.example.com/mcp', transport: 'http', headers: ['Authorization'] });
+      assert.deepStrictEqual(card.asked[0].toolInput, { name: 'calendar', action: 'replace', url: 'https://mcp.example.com/mcp', transport: 'http', headers: ['Authorization'], current: { url: 'https://old.example.com/mcp' } });
     });
   });
 
@@ -881,6 +881,20 @@ describe('dispatch table', () => {
         });
       }
     }
+  });
+
+  test('a connector save that says it is an add, for a name already set up, raises a replace card showing the entry it would replace', () => {
+    assert.strictEqual(typeof connectorWrite.proposeConnectorChange, 'function');
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-said-add-');
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, JSON.stringify(CALENDAR));
+      const w = captureWs();
+      buildDispatch().save_connector(ctx, w, { name: 'calendar', change: 'add', content: '{"url":"https://mcp.example.com/mcp"}', conversationId: 'convo-said' });
+      assert.strictEqual(card.asked.length, 1, 'one card');
+      assert.deepStrictEqual(card.asked[0].toolInput, { name: 'calendar', action: 'replace', url: 'https://mcp.example.com/mcp', current: { url: 'https://old.example.com/mcp' } });
+      card.answer(0, true);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, { calendar: { url: 'https://mcp.example.com/mcp' } });
+    });
   });
 
   // Two saves for one name that isn't there yet both raise add cards. The one
