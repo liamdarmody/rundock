@@ -3527,6 +3527,189 @@ const MUTATIONS = [
   [CONNECTOR_WIRING, 'Connector: the handlers are not handed the card',
     '  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses, requestServerPermission },',
     '  runtime: { getRuntimeStatus, killAllChildren, cleanOrphanedProcesses },'],
+  // A connector change the file cannot hold as the card shows it is refused
+  // before any card and before the file is read: the name rule and the entry
+  // rule, each broken alone.
+  [CONNECTOR_ASK, 'Connector: a name may start with a dot or a dash',
+    'const CONNECTOR_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;',
+    'const CONNECTOR_NAME = /^[A-Za-z0-9_.-][A-Za-z0-9_.-]{0,63}$/;'],
+  [CONNECTOR_ASK, 'Connector: a name of 65 characters passes',
+    'const CONNECTOR_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;',
+    'const CONNECTOR_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,64}$/;'],
+  [CONNECTOR_ASK, 'Connector: a name holding a dot-dot passes',
+    ' && !/\\.\\./.test(name)',
+    ''],
+  [CONNECTOR_ASK, 'Connector: a name of __proto__ passes',
+    "const RESERVED_CONNECTOR_NAMES = new Set(['__proto__', 'constructor', 'prototype']);",
+    "const RESERVED_CONNECTOR_NAMES = new Set(['constructor', 'prototype']);"],
+  [CONNECTOR_ASK, 'Connector: a name of constructor passes',
+    "const RESERVED_CONNECTOR_NAMES = new Set(['__proto__', 'constructor', 'prototype']);",
+    "const RESERVED_CONNECTOR_NAMES = new Set(['__proto__', 'prototype']);"],
+  [CONNECTOR_ASK, 'Connector: a name of prototype passes',
+    "const RESERVED_CONNECTOR_NAMES = new Set(['__proto__', 'constructor', 'prototype']);",
+    "const RESERVED_CONNECTOR_NAMES = new Set(['__proto__', 'constructor']);"],
+  [CONNECTOR_ASK, 'Connector: a name that is not a string is read as one, so a missing name passes as undefined',
+    "  return typeof name === 'string' && CONNECTOR_NAME.test(name)",
+    '  return CONNECTOR_NAME.test(name)'],
+  [CONNECTOR_ASK, 'Connector: a removal checks the name by the old rule, not the shared one',
+    'function handleDeleteConnector(ctx, ws, msg) {\n  if (!validConnectorName(msg.name)) {\n',
+    'function handleDeleteConnector(ctx, ws, msg) {\n'
+    + "  if (!(typeof msg.name === 'string' && /^[\\w.-]{1,64}$/.test(msg.name) && !msg.name.includes('..'))) {\n"],
+  [CONNECTOR_ASK, 'Connector: a save reads the file before it checks the name',
+    'function handleSaveConnector(ctx, ws, msg) {\n'
+    + '  if (!validConnectorName(msg.name)) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_NAME_REFUSED }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  let entry;\n'
+    + '  try {\n'
+    + '    entry = JSON.parse(msg.content);\n'
+    + '  } catch (e) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: 'The connector entry is not valid JSON, so nothing was changed.' }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  if (!validConnectorEntry(entry)) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n',
+    'function handleSaveConnector(ctx, ws, msg) {\n'
+    + '  let entry;\n'
+    + '  try {\n'
+    + '    entry = JSON.parse(msg.content);\n'
+    + '  } catch (e) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: 'The connector entry is not valid JSON, so nothing was changed.' }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  if (!validConnectorEntry(entry)) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n'
+    + '  if (!validConnectorName(msg.name)) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_NAME_REFUSED }));\n"
+    + '    return;\n'
+    + '  }\n'],
+  [CONNECTOR_ASK, 'Connector: an entry with neither a command nor a URL passes',
+    "  return typeof entry.command === 'string' || typeof entry.url === 'string';",
+    '  return true;'],
+  [CONNECTOR_ASK, 'Connector: an entry whose command or URL is not a string passes',
+    "  return typeof entry.command === 'string' || typeof entry.url === 'string';",
+    '  return entry.command !== undefined || entry.url !== undefined;'],
+  [CONNECTOR_ASK_FLOW, 'Connector: through the real server, the entry is checked only once the card is allowed',
+    '  if (!validConnectorEntry(entry)) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n'
+    + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n",
+    '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n'
+    + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n"
+    + '    if (!validConnectorEntry(entry)) {\n'
+    + "      ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
+    + '      return;\n'
+    + '    }\n'],
+  // An entry holding a key the card shows in a shape it cannot show exactly is
+  // refused before any card and before the file is read: each key's shape
+  // broken alone, then the order the first bad key is named in, then where the
+  // check runs.
+  [CONNECTOR_ASK, 'Connector: a command that is not a string passes beside a URL',
+    "  ['command', isString],\n",
+    "  ['command', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: args holding something other than strings pass',
+    "  ['args', (v, e) => isString(e.command) && Array.isArray(v) && v.every(isString)],\n",
+    "  ['args', (v, e) => isString(e.command) && Array.isArray(v)],\n"],
+  [CONNECTOR_ASK, 'Connector: args that are not a list pass',
+    "  ['args', (v, e) => isString(e.command) && Array.isArray(v) && v.every(isString)],\n",
+    "  ['args', (v, e) => isString(e.command) && (!Array.isArray(v) || v.every(isString))],\n"],
+  [CONNECTOR_ASK, 'Connector: a URL that is not a string passes beside a command',
+    "  ['url', isString],\n",
+    "  ['url', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: a type that is not a string passes',
+    "  ['type', isString],\n",
+    "  ['type', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: a headersHelper that is not a string passes',
+    "  ['headersHelper', isString],\n",
+    "  ['headersHelper', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: an env that is not a map passes',
+    "  ['env', isStringMap],\n",
+    "  ['env', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: headers that are not a map pass',
+    "  ['headers', isStringMap],\n",
+    "  ['headers', () => true],\n"],
+  [CONNECTOR_ASK, 'Connector: a list passes as an env or headers map',
+    " && !Array.isArray(v) && Object.values(v).every(isString);",
+    ' && Object.values(v).every(isString);'],
+  [CONNECTOR_ASK, 'Connector: env or headers values that are not strings pass',
+    " && !Array.isArray(v) && Object.values(v).every(isString);",
+    ' && !Array.isArray(v);'],
+  [CONNECTOR_ASK, 'Connector: with several bad keys, the last in the order is named',
+    '  const bad = SHOWN_CONNECTOR_SHAPES.find(',
+    '  const bad = SHOWN_CONNECTOR_SHAPES.slice().reverse().find('],
+  [CONNECTOR_ASK, 'Connector: an entry the card cannot show is not checked at all',
+    '  const unshown = unshownConnectorKey(entry);\n',
+    '  const unshown = null;\n'],
+  [CONNECTOR_ASK, 'Connector: an entry the card cannot show is checked only after the file is read',
+    '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n',
+    '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n'
+    + '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'],
+  [CONNECTOR_ASK_FLOW, 'Connector: through the real server, an entry the card cannot show is checked only once the card is allowed',
+    '  const unshown = unshownConnectorKey(entry);\n'
+    + '  if (unshown) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n'
+    + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n",
+    '  const found = connectorFile(ctx, ws);\n'
+    + '  if (!found) return;\n'
+    + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n"
+    + '    const unshown = unshownConnectorKey(entry);\n'
+    + '    if (unshown) {\n'
+    + "      ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + '      return;\n'
+    + '    }\n'],
+  // The card shows args only beside a command string: drop that condition and
+  // args beside a URL alone reach a card that leaves them off.
+  [CONNECTOR_ASK, 'Connector: args pass beside a URL with no command',
+    "  ['args', (v, e) => isString(e.command) && Array.isArray(v) && v.every(isString)],\n",
+    "  ['args', (v, e) => Array.isArray(v) && v.every(isString)],\n"],
   [CM_CLIENT, 'launchctl: the card gives no reason of its own',
     "    'launch-environment': () => 'This changes what macOS starts, or the settings every program started from now on is given, Rundock included, beyond anything Rundock can see or check.',\n",
     ''],
