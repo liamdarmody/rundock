@@ -44,6 +44,12 @@ const ENGINE = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: 
 // A Codex delegate's fresh thread, which sends its own notice.
 const CODEX = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: DRIVEN };
 
+// A rule whose parts sit apart in one file is broken as one mutation: the
+// guard is the text from the first part to the last, which must occur once
+// like any other guard, and each part is replaced inside it.
+const across = (...parts) => new RegExp(parts.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\s\\S]*?'));
+const replacingEach = (...pairs) => (text) => pairs.reduce((out, [from, to]) => out.replace(from, () => to), text);
+
 const MUTATIONS = [
   // ===== WHAT THE PERSON IS TOLD =====
   [CATCH_UP, 'the notice names the agent by its display name',
@@ -69,17 +75,38 @@ const MUTATIONS = [
     '  if (arriving) sendShortenedCopyNotice(convoId, delegateProcessId, shortenedCopyFor(targetAgent.id, missed));\n',
     ''],
   [CODEX, 'a Codex delegate on a fresh thread raises the notice',
-    "      deps.safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content: shortenedNotice, _conversationId: convoId, _processId: entry.processId }));\n",
+    "      if (content) deps.safeSend(JSON.stringify({ type: 'system', subtype: 'notice', content, _conversationId: convoId, _processId: entry.processId }));\n",
     ''],
   [CODEX, 'a Codex delegate whose stored thread resumed raises none',
     '    if (!opened.resumed && shortenedNotice) {',
     '    if (shortenedNotice) {'],
   [ENGINE, 'an agent started again without its refused session raises the notice',
-    '  sendShortenedCopyNotice(convoId, entry.processId, entry.shortenedCopy);\n',
+    '  if (entry.shortenedCopyCut) sendShortenedCopyNotice(convoId, entry.processId, shortenedCopyNotice(name));\n',
     ''],
   [ENGINE, 'a Claude Code delegate resumed with a cut delta raises none',
     '  if (arriving) sendShortenedCopyNotice(convoId, delegateProcessId, shortenedCopyFor(targetAgent.id, missed));',
     '  sendShortenedCopyNotice(convoId, delegateProcessId, shortenedCopyFor(targetAgent.id, missed));'],
+
+  // ===== WHEN THE AGENT'S NAME IS READ =====
+  // The notice names the agent as it is called when the notice is sent. Each
+  // row puts back a notice built before the wait (a resume Claude Code refuses,
+  // a Codex thread still opening), so a rename during the wait went unseen.
+  [ENGINE, 'the notice after a refused resume names the agent as it was when the resume was sent',
+    across(
+      '  if (entry.shortenedCopyCut) sendShortenedCopyNotice(convoId, entry.processId, shortenedCopyNotice(name));',
+      '  orchEntry.shortenedCopyCut = isCutCatchUp(freshMissed);',
+      '  delegateEntry.shortenedCopyCut = isCutCatchUp(delegateFreshMissed);'),
+    replacingEach(
+      ['  if (entry.shortenedCopyCut) sendShortenedCopyNotice(convoId, entry.processId, shortenedCopyNotice(name));',
+        '  sendShortenedCopyNotice(convoId, entry.processId, entry.shortenedCopy);'],
+      ['  orchEntry.shortenedCopyCut = isCutCatchUp(freshMissed);',
+        '  orchEntry.shortenedCopy = shortenedCopyFor(orchestrator.id, freshMissed);'],
+      ['  delegateEntry.shortenedCopyCut = isCutCatchUp(delegateFreshMissed);',
+        '  delegateEntry.shortenedCopy = shortenedCopyFor(targetAgent.id, delegateFreshMissed);'])],
+  [CODEX, 'a Codex notice names the agent as it was before its thread opened',
+    '    const opened = await openCodexThread(entry, convoId, resumeThreadId, model);\n',
+    '    if (shortenedNotice) { const early = shortenedNotice(); shortenedNotice = () => early; }\n'
+      + '    const opened = await openCodexThread(entry, convoId, resumeThreadId, model);\n'],
 
   // ===== WHAT THE AGENT IS TOLD =====
   [CATCH_UP, 'a cut catch-up carries the line under its heading',
