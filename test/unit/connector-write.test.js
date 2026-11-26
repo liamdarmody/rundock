@@ -150,6 +150,28 @@ test('a connector change with a refused name and no conversation is refused for 
   });
 });
 
+// ===== Every value an Allow writes is on the card =====
+
+const TIMEOUT_REFUSED = 'The connector entry\'s "timeout" isn\'t a setting the approval card can show, so nothing was changed.';
+
+test('Rundock\'s own add of an entry holding a setting the card does not show is refused naming it, before the file is read', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({}, async (s) => {
+    const req = s.request({ source: 'rundock', entry: { command: 'node', timeout: 5 } });
+    delete req.conversationId;
+    await refusedAtRequest(s, req, 'invalid', TIMEOUT_REFUSED);
+    assert.deepStrictEqual(s.opened, [], 'the file is never opened');
+  });
+});
+
+test('an agent\'s replace with an entry holding a setting the card does not show is refused naming it, before the file is read', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': { command: 'node' } }, async (s) => {
+    await refusedAtRequest(s, s.request({ change: 'replace', entry: { command: 'node', timeout: 5 } }), 'invalid', TIMEOUT_REFUSED);
+    assert.deepStrictEqual(s.opened, [], 'the file is never opened');
+  });
+});
+
 // ===== Honest changes =====
 
 test('an agent\'s add of a connector not yet set up raises one add card in its conversation, and Allow writes it', async () => {

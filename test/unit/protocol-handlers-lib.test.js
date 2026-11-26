@@ -141,7 +141,9 @@ const CONNECTOR_NAME_REFUSED = 'That connector name can\'t be used, so nothing w
 const CONNECTOR_ENTRY_REFUSED = 'A connector needs a command to run or a URL to reach, so nothing was changed.';
 const CONNECTOR_NOT_JSON = 'The connector entry is not valid JSON, so nothing was changed.';
 const connectorShapeRefused = (key) => `The connector entry's "${key}" isn't in a form the approval card can show exactly, so nothing was changed.`;
-const CONNECTOR_NO_CONVERSATION = 'That connector change didn\'t say which conversation it came from, so nothing was changed.';
+const hiddenSetting = (key) => `The connector entry's "${key}" isn't a setting the approval card can show, so nothing was changed.`;
+const HIDDEN_SETTING_UNNAMED = 'The connector entry holds a setting the approval card can\'t show, so nothing was changed.';
+const CONNECTOR_NO_CONVERSATION ='That connector change didn\'t say which conversation it came from, so nothing was changed.';
 const CONNECTOR_NOT_ALLOWED = 'The change was not allowed, so nothing was changed.';
 const CONNECTOR_TIMED_OUT = 'Nobody answered the card in time, so nothing was changed.';
 
@@ -640,8 +642,84 @@ describe('dispatch table', () => {
     allowedAsShown('{"command":"node","env":{"API_KEY":"x"}}', { command: 'node', args: [], env: ['API_KEY'] });
   });
 
-  test('a connector entry with a key the card does not know still gets its card listing that key, and is written as sent on Allow', () => {
-    allowedAsShown('{"command":"node","timeout":[1,2]}', { command: 'node', args: [], others: ['timeout'] });
+  // A setting the card doesn't show would be written on Allow unseen, so an
+  // entry holding one is refused before the file is read, naming the first.
+  test('a connector entry holding a setting the card does not show is refused before the file is read, naming it', () => {
+    refusedUnread([saving('example-alpha', '{"command":"node","timeout":[1,2]}')], hiddenSetting('timeout'));
+  });
+
+  test('a connector at a URL holding a sign-in setting the card does not show is refused before the file is read, naming it', () => {
+    refusedUnread([saving('example-alpha', '{"url":"https://mcp.example.com/mcp","oauth":{"clientId":"x"}}')], hiddenSetting('oauth'));
+  });
+
+  test('a connector entry holding two settings the card does not show is refused once, naming the first', () => {
+    refusedUnread([saving('example-alpha', '{"command":"node","description":"x","timeout":1}')], hiddenSetting('description'));
+  });
+
+  test('a connector entry whose own key is __proto__ is refused before the file is read, naming it', () => {
+    refusedUnread([saving('example-alpha', '{"command":"node","__proto__":{"x":1}}')], hiddenSetting('__proto__'));
+  });
+
+  test('a connector entry whose extra key holds a line feed is refused without echoing the key', () => {
+    refusedUnread([saving('example-alpha', '{"command":"node","time out\\nURL: https://other.example/mcp":1}')], HIDDEN_SETTING_UNNAMED);
+  });
+
+  // The setting rule comes after the name, entry and shape rules, in the
+  // handler and in the writer alike, so each of those keeps its own message.
+  function refusedFirstBy(name, content, message) {
+    assert.strictEqual(typeof connectorWrite.proposeConnectorChange, 'function');
+    const { dir, card, ctx } = connectorWorkspace('proto-connector-order-');
+    const opened = countingOpens(ctx);
+    inWorkspace(dir, () => {
+      const w = captureWs();
+      connectorWrite.proposeConnectorChange(ctx, w, { workspace: dir, conversationId: 'convo-order', change: 'add', name, entry: JSON.parse(content), source: 'agent' });
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'the writer refuses for the same rule');
+      assert.strictEqual(card.asked.length, 0);
+      assert.deepStrictEqual(opened, []);
+    });
+    refusedUnread([saving(name, content)], message);
+  }
+
+  test('a connector entry with a command that is not a string and a setting the card does not show is refused for the command', () => {
+    refusedFirstBy('example-alpha', '{"url":"https://mcp.example.com/mcp","command":5,"timeout":1}', connectorShapeRefused('command'));
+  });
+
+  test('a connector entry holding only a setting the card does not show is refused for having nothing to run or reach', () => {
+    refusedFirstBy('example-alpha', '{"timeout":1}', CONNECTOR_ENTRY_REFUSED);
+  });
+
+  test('a connector change with a bad name and a setting the card does not show is refused for the name', () => {
+    refusedFirstBy('-tools', '{"command":"node","timeout":1}', CONNECTOR_NAME_REFUSED);
+  });
+
+  test('after a setting the card does not show is refused, the entry without it gets one card and is written on Allow', () => {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-hidden-retry-');
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, '{"mcpServers":{}}');
+      const table = buildDispatch();
+      let w = captureWs();
+      table.save_connector(ctx, w, { name: 'local-tools', content: '{"command":"node","timeout":[1,2]}', conversationId: 'convo-hidden' });
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: hiddenSetting('timeout') }]);
+      assert.strictEqual(card.asked.length, 0, 'the refusal asked nobody');
+      table.save_connector(ctx, (w = captureWs()), { name: 'local-tools', content: '{"command":"node"}', conversationId: 'convo-hidden' });
+      assert.strictEqual(card.asked.length, 1, 'the entry without it gets its card');
+      card.answer(0, true);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, { 'local-tools': { command: 'node' } }, 'and is written once allowed');
+    });
+  });
+
+  test('removing a connector that holds a setting the card does not show lists it by name, and Allow removes it', () => {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-hidden-remove-');
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, JSON.stringify({ mcpServers: { 'local-tools': { command: 'node', timeout: 5 } } }));
+      const w = captureWs();
+      buildDispatch().delete_connector(ctx, w, { name: 'local-tools', conversationId: 'convo-hidden' });
+      assert.strictEqual(card.asked.length, 1, 'one card');
+      assert.deepStrictEqual(card.asked[0].toolInput, { name: 'local-tools', action: 'remove', command: 'node', args: [], others: ['timeout'] });
+      card.answer(0, true);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, {}, 'removed once allowed');
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_saved', name: 'local-tools', action: 'removed', takesEffect: 'next agent start' }]);
+    });
   });
 
   test('the same refused connector save sent twice is refused twice, the same way, and asks nobody', () => {
