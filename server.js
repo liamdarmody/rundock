@@ -3539,16 +3539,14 @@ async function runUniversalSearch(msg) {
 // a teammate's: resumed under this agent, the teammate's work would carry on
 // under this agent's name, so the turn starts fresh instead. Where the record
 // cannot tell (no record, the session unlisted, an entry naming no agent), the
-// session is resumed as before. An agent is matched by its id or its file's
-// slug: the order-0 agent's id is 'default' while its file keeps its own name,
-// and a chain may list its sessions under either.
+// session is resumed as before. Entries are matched by the resolved agent's id
+// alone, since that is the id every chain entry is written with.
 function sessionOfAnotherAgent(convoId, sessionId, agent) {
   if (!sessionId) return false;
   const record = readConversations().find(c => c && c.id === convoId);
   const chain = record && Array.isArray(record.sessionIds) ? record.sessionIds : [];
   const listing = chain.filter(s => s && s.sessionId === sessionId);
-  const names = [agent.id, agent.fileName && agent.fileName.replace('.md', '')].filter(Boolean);
-  return listing.length > 0 && listing.every(s => s.agentId) && !listing.some(s => names.includes(s.agentId));
+  return listing.length > 0 && listing.every(s => s.agentId) && !listing.some(s => s.agentId === agent.id);
 }
 
 // ===== START =====

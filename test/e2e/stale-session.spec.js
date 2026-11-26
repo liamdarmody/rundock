@@ -61,8 +61,8 @@ test('delegating to an agent whose stored session is gone answers fresh, says so
     send({ type: 'get_workspaces' });
     const set = await waitFor((m) => m.type === 'workspaces' && m.current);
     send({ type: 'save_conversation', conversation: {
-      id: CONVO, agentId: 'chief-of-staff', title: 'Stale session e2e', status: 'active', sessionId: LIVE,
-      sessionIds: [{ sessionId: LIVE, agentId: 'chief-of-staff' }, { sessionId: DEAD, agentId: 'wren' }],
+      id: CONVO, agentId: 'default', title: 'Stale session e2e', status: 'active', sessionId: LIVE,
+      sessionIds: [{ sessionId: LIVE, agentId: 'default' }, { sessionId: DEAD, agentId: 'wren' }],
     } });
     // Answered only after the save above has been read: the socket is ordered.
     send({ type: 'get_lists' });
