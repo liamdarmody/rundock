@@ -283,3 +283,188 @@ describe('buildTurn: each stored line is checked against the record', () => {
     assert.doesNotMatch(source, /\bfs\./, 'every file is read through the store');
   });
 });
+
+// A record written by hand, for what the store refuses to keep (a file over
+// a limit, a sixth file) or a type made up here: each message `{ id, files }`,
+// each file `{ file, bytes, width, height }`, written into the folder and
+// described as the store describes it.
+function handWritten(ws, messages, id = ID) {
+  fs.mkdirSync(folderOf(ws, id), { recursive: true });
+  const described = messages.map((message) => ({
+    id: message.id,
+    files: message.files.map((f) => {
+      fs.writeFileSync(path.join(folderOf(ws, id), f.file), f.bytes);
+      const type = f.file.slice(f.file.lastIndexOf('.') + 1);
+      const one = { file: f.file, name: f.file, type, bytes: f.bytes.length, sha256: sha256(f.bytes) };
+      if (f.width !== undefined) Object.assign(one, { width: f.width, height: f.height });
+      return one;
+    }),
+  }));
+  fs.writeFileSync(recordOf(ws, id), JSON.stringify({ messages: described, sent: {} }));
+  return described;
+}
+const imageBlock = (mediaType, bytes) => ({ type: 'image', source: { type: 'base64', media_type: mediaType, data: bytes.toString('base64') } });
+const pdfBlock = (bytes) => ({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: bytes.toString('base64') } });
+const textItem = (text) => ({ type: 'text', text });
+const BYTES = (label, size = 40) => Buffer.alloc(size, label);
+const NOTES_LINE = lineOf('2-notes.txt', 'text file, 1 KB');
+const ALL_THREE = `look at these\n${PNG_LINE}\n${NOTES_LINE}\n${PDF_LINE}`;
+
+describe('buildTurn: a Claude Code turn carries its entry\'s images and PDFs', () => {
+  test('a PNG gives an image block holding its bytes', async () => {
+    readyTurn();
+    const ws = workspace();
+    const png = pngBytes();
+    const entry = await store.writeMessageFiles(ws, ID, [{ name: 'screenshot.png', bytes: png }]);
+    const text = `look at this\n${PNG_LINE}`;
+    assert.deepStrictEqual(turnFor(ws, text, { entryId: entry.id }), { content: [textItem(text), imageBlock('image/png', png)], extraItems: [] });
+  });
+
+  test('a JPEG gives an image/jpeg block', () => {
+    readyTurn();
+    const ws = workspace();
+    const jpg = BYTES('j');
+    handWritten(ws, [{ id: 'entry-1', files: [{ file: '1-photo.jpg', bytes: jpg, width: 10, height: 10 }] }]);
+    const text = lineOf('1-photo.jpg', 'JPEG image, 1 KB');
+    assert.deepStrictEqual(turnFor(ws, text, { entryId: 'entry-1' }).content, [textItem(text), imageBlock('image/jpeg', jpg)]);
+  });
+
+  test('a GIF and a WebP give image/gif and image/webp blocks', () => {
+    readyTurn();
+    const ws = workspace();
+    const gif = BYTES('g');
+    const webp = BYTES('w');
+    handWritten(ws, [{ id: 'entry-1', files: [{ file: '1-a.gif', bytes: gif, width: 10, height: 10 }, { file: '2-b.webp', bytes: webp, width: 10, height: 10 }] }]);
+    const text = `${lineOf('1-a.gif', 'GIF image, 1 KB')}\n${lineOf('2-b.webp', 'WebP image, 1 KB')}`;
+    assert.deepStrictEqual(turnFor(ws, text, { entryId: 'entry-1' }).content,
+      [textItem(text), imageBlock('image/gif', gif), imageBlock('image/webp', webp)]);
+  });
+
+  test('a PDF gives a document block holding its bytes', async () => {
+    readyTurn();
+    const ws = workspace();
+    const pdf = pdfBytes();
+    const entry = await store.writeMessageFiles(ws, ID, [{ name: 'report.pdf', bytes: pdf }]);
+    const text = `the report\n${lineOf('1-report.pdf', 'PDF document, 1 KB')}`;
+    assert.deepStrictEqual(turnFor(ws, text, { entryId: entry.id }), { content: [textItem(text), pdfBlock(pdf)], extraItems: [] });
+  });
+
+  test('a txt, an md and a csv give their lines and no block', () => {
+    readyTurn();
+    const ws = workspace();
+    handWritten(ws, [{ id: 'entry-1', files: [{ file: '1-a.txt', bytes: BYTES('t') }, { file: '2-b.md', bytes: BYTES('m') }, { file: '3-c.csv', bytes: BYTES('c') }] }]);
+    const text = [lineOf('1-a.txt', 'text file, 1 KB'), lineOf('2-b.md', 'Markdown file, 1 KB'), lineOf('3-c.csv', 'CSV file, 1 KB')].join('\n');
+    assert.deepStrictEqual(turnFor(ws, text, { entryId: 'entry-1' }), { content: text, extraItems: [] });
+  });
+
+  test('the text item comes first, then the blocks', async () => {
+    readyTurn();
+    const { ws, entry, png, pdf } = await stored();
+    const { content } = turnFor(ws, ALL_THREE, { entryId: entry.id });
+    assert.ok(Array.isArray(content), 'an array');
+    assert.deepStrictEqual(content[0], textItem(ALL_THREE));
+    assert.deepStrictEqual(content.slice(1), [imageBlock('image/png', fs.readFileSync(png)), pdfBlock(fs.readFileSync(pdf))]);
+  });
+
+  test('two images come in the entry\'s order, whatever the text\'s', async () => {
+    readyTurn();
+    const ws = workspace();
+    const first = pngBytes(100, 100);
+    const second = pngBytes(200, 200);
+    const entry = await store.writeMessageFiles(ws, ID, [{ name: 'first.png', bytes: first }, { name: 'second.png', bytes: second }]);
+    const text = `${lineOf('2-second.png', 'PNG image, 1 KB')} then ${lineOf('1-first.png', 'PNG image, 1 KB')}`;
+    assert.deepStrictEqual(turnFor(ws, text, { entryId: entry.id }).content,
+      [textItem(text), imageBlock('image/png', first), imageBlock('image/png', second)]);
+  });
+
+  test('an entry file the text does not name gets its line appended, and its block', async () => {
+    readyTurn();
+    const ws = workspace();
+    const png = pngBytes();
+    const pdf = pdfBytes();
+    const entry = await store.writeMessageFiles(ws, ID, [{ name: 'screenshot.png', bytes: png }, { name: 'report.pdf', bytes: pdf }]);
+    const pdfLine = lineOf('2-report.pdf', 'PDF document, 1 KB');
+    assert.deepStrictEqual(turnFor(ws, `please read ${pdfLine}`, { entryId: entry.id }).content,
+      [textItem(`please read ${pdfLine}\n${PNG_LINE}`), imageBlock('image/png', png), pdfBlock(pdf)]);
+    assert.deepStrictEqual(turnFor(ws, '', { entryId: entry.id }).content,
+      [textItem(`${PNG_LINE}\n${pdfLine}`), imageBlock('image/png', png), pdfBlock(pdf)], 'with no text, the first line starts it');
+  });
+
+  test('another entry\'s line keeps its line and gives no block', async () => {
+    readyTurn();
+    const ws = workspace();
+    await store.writeMessageFiles(ws, ID, [{ name: 'screenshot.png', bytes: pngBytes() }]);
+    const pdf = pdfBytes();
+    const later = await store.writeMessageFiles(ws, ID, [{ name: 'report.pdf', bytes: pdf }]);
+    const text = `earlier ${PNG_LINE} and now ${lineOf('2-report.pdf', 'PDF document, 1 KB')}`;
+    assert.deepStrictEqual(turnFor(ws, text, { entryId: later.id }).content, [textItem(text), pdfBlock(pdf)]);
+  });
+
+  test('a changed file and a missing file each give their form and no block', async () => {
+    readyTurn();
+    const { ws, entry, png, pdf } = await stored();
+    fs.rmSync(png);
+    fs.appendFileSync(pdf, 'x');
+    const { content } = turnFor(ws, `look at these\n${PNG_LINE}\n${PDF_LINE}`, { entryId: entry.id });
+    assert.strictEqual(content, `look at these\n${GONE('1-screenshot.png')}\n${CHANGED('3-report.pdf')}\n${NOTES_LINE}`);
+    namesNoPath(content.replace(NOTES_LINE, ''));
+  });
+
+  test('a PNG recorded at 3,500,001 bytes gives no block', () => {
+    readyTurn();
+    const ws = workspace();
+    const pdf = pdfBytes();
+    const [entry] = handWritten(ws, [{ id: 'entry-1', files: [{ file: '1-big.png', bytes: pngBytes(640, 480, 3500001), width: 640, height: 480 }, { file: '2-report.pdf', bytes: pdf }] }]);
+    assert.strictEqual(entry.files[0].bytes, 3500001);
+    const { content } = turnFor(ws, 'two files', { entryId: 'entry-1' });
+    assert.deepStrictEqual(content, [textItem(`two files\n${lineOf('1-big.png', 'PNG image, 3.6 MB')}\n${lineOf('2-report.pdf', 'PDF document, 1 KB')}`), pdfBlock(pdf)],
+      'the PDF beside it is still sent');
+  });
+
+  test('an image 8,001 pixels wide gives no block', () => {
+    readyTurn();
+    const ws = workspace();
+    handWritten(ws, [{ id: 'entry-1', files: [{ file: '1-wide.png', bytes: pngBytes(8001, 10), width: 8001, height: 10 }] }]);
+    const text = lineOf('1-wide.png', 'PNG image, 1 KB');
+    assert.deepStrictEqual(turnFor(ws, text, { entryId: 'entry-1' }).content, text);
+  });
+
+  test('an entry of six files gives no block for any of them', () => {
+    readyTurn();
+    const ws = workspace();
+    const files = [1, 2, 3, 4, 5, 6].map((n) => ({ file: `${n}-shot.png`, bytes: pngBytes(10 * n, 10), width: 10 * n, height: 10 }));
+    handWritten(ws, [{ id: 'entry-1', files }]);
+    const text = files.map((f) => lineOf(f.file, 'PNG image, 1 KB')).join('\n');
+    assert.deepStrictEqual(turnFor(ws, text, { entryId: 'entry-1' }).content, text);
+  });
+
+  test('an entry totalling more than the message limit gives no block for any of its files', () => {
+    readyTurn();
+    const ws = workspace();
+    const big = (label) => Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(10000000 - 9, label)]);
+    handWritten(ws, [{ id: 'entry-1', files: [{ file: '1-a.pdf', bytes: big('a') }, { file: '2-b.pdf', bytes: big('b') }, { file: '3-c.png', bytes: pngBytes(), width: 640, height: 480 }] }]);
+    const { content } = turnFor(ws, 'three files', { entryId: 'entry-1' });
+    assert.strictEqual(typeof content, 'string', 'no block: the text alone');
+    assert.strictEqual(content, ['three files', lineOf('1-a.pdf', 'PDF document, 10 MB'), lineOf('2-b.pdf', 'PDF document, 10 MB'), lineOf('3-c.png', 'PNG image, 1 KB')].join('\n'));
+  });
+
+  test('with no entryId, no block', async () => {
+    readyTurn();
+    const { ws } = await stored();
+    assert.deepStrictEqual(turnFor(ws, ALL_THREE), { content: ALL_THREE, extraItems: [] });
+  });
+
+  test('with an entryId the record does not hold, no block', async () => {
+    readyTurn();
+    const { ws } = await stored();
+    assert.deepStrictEqual(turnFor(ws, ALL_THREE, { entryId: 'no-such-entry' }), { content: ALL_THREE, extraItems: [] });
+  });
+
+  test('a Codex runtime is given the checked text, a string, whatever the entry holds', async () => {
+    readyTurn();
+    const { ws, entry, png } = await stored();
+    fs.rmSync(png);
+    const sent = turn.buildTurn({ workspace: ws, conversationId: ID, runtime: 'codex', text: `just this ${PNG_LINE}`, entryId: entry.id });
+    assert.deepStrictEqual(sent, { content: `just this ${GONE('1-screenshot.png')}`, extraItems: [] });
+  });
+});
