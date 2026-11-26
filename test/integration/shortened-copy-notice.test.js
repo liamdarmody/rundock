@@ -438,6 +438,71 @@ describe('stopping the agent after the notice', () => {
   });
 });
 
+// ── Codex delegates ─────────────────────────────────────────────────────
+
+// Valid-shaped thread ids: they pass the shape check, so a resume is tried.
+const STALE_THREAD = '99999999-8888-4777-8666-555555555555';
+const LIVE_THREAD = '22222222-3333-4444-8555-666666666666';
+
+function codexCalls(method) {
+  return h.readInvocations().filter(i => i.mode === 'app-server' && i.method === method);
+}
+
+const EXPIRED_LINE = m => m.type === 'system' && m.subtype === 'notice' && m.content === 'Previous session expired. Starting fresh.';
+
+describe('a Codex delegate brought into a long conversation', () => {
+  test('on a new thread: the person is told once, by name, before it replies', async () => {
+    assert.strictEqual(nameOf('researcher'), 'Ida', 'sanity: the researcher is called Ida');
+    const convoId = h.freshConvoId('short-codex-new');
+    const talk = longTalk();
+    assertCutBy(arrivingDelta(talk, 'researcher'), 'truncated');
+    seedTalk(convoId, talk);
+    seed(convoId, { agentId: 'chief-of-staff', sessionIds: [] });
+    scenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'ALPHA-ASK-CODEX' },
+        turn: [{ agentTool: { subagent_type: 'researcher', description: 'Handing this to Ida.', prompt: 'ALPHA-BRIEF-CODEX' } }] },
+    ]);
+    h.writeCodexScenario([{ match: { promptIncludes: 'ALPHA-BRIEF-CODEX' }, text: 'IDA-REPLY-NEW' }]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'ALPHA-ASK-CODEX please' });
+    await waitForResult(convoId, 'IDA-REPLY-NEW', since, 'the Codex delegate answers');
+
+    assert.strictEqual(codexCalls('thread/start').length, 1, 'a new thread was opened');
+    const notices = noticesFor(convoId, since);
+    assert.strictEqual(notices.length, 1, 'one notice for one arrival');
+    assertShape(notices[0], convoId, noticeText('Ida'));
+    assertPlaced(convoId, since, notices[0], { agent: 'researcher' });
+    const prompt = h.codexTurnPrompts().pop();
+    assert.match(prompt, /ALPHA-BRIEF-CODEX/, 'the brief still arrives');
+    assertLineUnder(prompt, CATCH_UP_HEADINGS.arriving);
+    h.reapConvo(convoId);
+  });
+
+  test('on an expired thread: told once, after the line that says the session expired', async () => {
+    const convoId = h.freshConvoId('short-codex-expired');
+    const talk = longTalk();
+    assertCutBy(arrivingDelta(talk, 'researcher'), 'truncated');
+    seedTalk(convoId, talk);
+    seed(convoId, { agentId: 'chief-of-staff', sessionIds: [{ agentId: 'researcher', sessionId: STALE_THREAD }] });
+    parkParent(convoId, 'p-short-codex-expired');
+    h.writeCodexScenario([{ match: { promptIncludes: 'BRIEF-EXPIRED' }, text: 'IDA-REPLY-EXPIRED' }], { resumeFails: true });
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'researcher', context: 'BRIEF-EXPIRED' });
+    await waitForResult(convoId, 'IDA-REPLY-EXPIRED', since, 'the Codex delegate answers on a fresh thread');
+
+    assert.strictEqual(codexCalls('thread/resume').length, 1, 'the stored thread was tried');
+    assert.strictEqual(codexCalls('thread/start').length, 1, 'and a fresh one opened when it was gone');
+    const notices = noticesFor(convoId, since);
+    assert.strictEqual(notices.length, 1, 'one notice for the fresh start');
+    assertShape(notices[0], convoId, noticeText('Ida'));
+    assertPlaced(convoId, since, notices[0], { agent: 'researcher', afterLine: EXPIRED_LINE });
+    assertLineUnder(h.codexTurnPrompts().pop(), CATCH_UP_HEADINGS.arriving);
+    h.reapConvo(convoId);
+  });
+});
+
 // ── no notice where nothing arrived cut ─────────────────────────────────
 
 describe('no notice where nothing arrived cut', () => {
@@ -580,6 +645,76 @@ describe('no notice where nothing arrived cut', () => {
     assert.strictEqual(spawnsFor(convoId).filter(i => i.resume === 'sess-lead-unused').length, 1, 'the resume was not refused');
     assert.strictEqual(noticesFor(convoId, since).length, 0, 'a fallback never used raises no notice');
     assert.ok(!h.promptsFor('content-lead').pop().includes(LINE), 'and the delta it was handed was not cut');
+    h.reapConvo(convoId);
+  });
+});
+
+describe('no notice from a Codex delegate where nothing arrived cut', () => {
+  test('a Codex delegate arriving into a short conversation', async () => {
+    const convoId = h.freshConvoId('short-codex-uncut');
+    const talk = shortTalk();
+    assertUncut(arrivingDelta(talk, 'researcher'));
+    seedTalk(convoId, talk);
+    seed(convoId, { agentId: 'chief-of-staff', sessionIds: [] });
+    parkParent(convoId, 'p-short-codex-uncut');
+    h.writeCodexScenario([{ match: { promptIncludes: 'BRIEF-CODEX-UNCUT' }, text: 'IDA-UNCUT' }]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'researcher', context: 'BRIEF-CODEX-UNCUT' });
+    await waitForResult(convoId, 'IDA-UNCUT', since, 'the Codex delegate answers');
+    assert.strictEqual(noticesFor(convoId, since).length, 0, 'nothing was cut, so nothing is said');
+    const prompt = h.codexTurnPrompts().pop();
+    assert.match(prompt, /BEFORE YOU JOINED/, 'it was handed the conversation');
+    assert.ok(!prompt.includes(LINE), 'and is not told anything was left out');
+    h.reapConvo(convoId);
+  });
+
+  test('a Codex resume that succeeds, though its unused fallback is cut', async () => {
+    const convoId = h.freshConvoId('short-codex-resumed');
+    const talk = [
+      ...longTalk(),
+      { role: 'agent', agent: 'researcher', text: 'IDA-EARLIER: three suppliers found' },
+      { role: 'agent', agent: 'content-analyst', text: 'ANALYST-AFTER: the numbers check out' },
+    ];
+    assertUncut(returningDelta(talk, 'researcher'));
+    assertCutBy(arrivingDelta(talk, 'researcher'), 'truncated');
+    seedTalk(convoId, talk);
+    seed(convoId, { agentId: 'chief-of-staff', sessionIds: [{ agentId: 'researcher', sessionId: LIVE_THREAD }] });
+    parkParent(convoId, 'p-short-codex-resumed');
+    h.writeCodexScenario([{ match: { promptIncludes: 'BRIEF-CODEX-RESUMED' }, text: 'IDA-RESUMED' }]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'researcher', context: 'BRIEF-CODEX-RESUMED' });
+    await waitForResult(convoId, 'IDA-RESUMED', since, 'the resumed Codex delegate answers');
+    assert.strictEqual(codexCalls('thread/resume').length, 1, 'the stored thread was resumed');
+    assert.strictEqual(codexCalls('thread/start').length, 0, 'and the fallback was never opened');
+    assert.strictEqual(noticesFor(convoId, since).length, 0, 'a fallback never used raises no notice');
+    const prompt = h.codexTurnPrompts().pop();
+    assert.match(prompt, /SINCE YOUR LAST TURN/, 'it was briefed as returning');
+    assert.ok(!prompt.includes(LINE), 'with a delta that was not cut');
+    h.reapConvo(convoId);
+  });
+
+  test('a Codex delegate whose thread never opens', async () => {
+    const convoId = h.freshConvoId('short-codex-no-open');
+    const talk = longTalk();
+    assertCutBy(arrivingDelta(talk, 'researcher'), 'truncated');
+    seedTalk(convoId, talk);
+    seed(convoId, { agentId: 'chief-of-staff', sessionIds: [] });
+    parkParent(convoId, 'p-short-codex-no-open');
+    // Enough overloads to exhaust the protocol client's retries, so thread/start rejects.
+    h.writeCodexScenario([{ match: { promptIncludes: 'BRIEF-NO-OPEN' }, text: 'unreachable' }],
+      { overload: { method: 'thread/start', times: 10 } });
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'researcher', context: 'BRIEF-NO-OPEN' });
+    await client.waitForEvent('system', 'delegate_stopped', convoId, { since, timeout: 15000, label: 'the delegate stopped visibly' });
+    await client.waitFor((m) => m.type === 'system' && m.subtype === 'done' && m._conversationId === convoId
+      && m._agent === 'researcher', { since, timeout: 15000, label: 'the delegate closed' });
+    assert.ok(codexCalls('thread/start').length >= 1, 'a thread was asked for');
+    assert.strictEqual(h.codexTurnPrompts().length, 0, 'no turn started, so the agent was handed nothing');
+    assert.strictEqual(noticesFor(convoId, since).length, 0, 'an agent that never started raises no notice');
+    h.writeCodexScenario([]);
     h.reapConvo(convoId);
   });
 });
