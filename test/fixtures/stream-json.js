@@ -28,8 +28,9 @@ function contentBlockStop(index = 0) {
 }
 
 // Tool use block (Agent, Read, Bash, ...) streamed as start -> input_json_delta -> stop.
-function toolUseStart(name, index = 1) {
-  return { type: 'stream_event', event: { type: 'content_block_start', index, content_block: { type: 'tool_use', id: `toolu_${index}`, name } } };
+// `id` is the block's tool_use id; by default it is made from the index.
+function toolUseStart(name, index = 1, id = `toolu_${index}`) {
+  return { type: 'stream_event', event: { type: 'content_block_start', index, content_block: { type: 'tool_use', id, name } } };
 }
 
 function inputJsonDelta(partialJson, index = 1) {
@@ -51,11 +52,11 @@ function messageStop() {
 }
 
 // Full tool_use flow with the input JSON split into two deltas.
-function toolUseFlow(name, input, index = 1) {
+function toolUseFlow(name, input, index = 1, id = undefined) {
   const json = JSON.stringify(input);
   const mid = Math.max(1, Math.floor(json.length / 2));
   return [
-    toolUseStart(name, index),
+    toolUseStart(name, index, id),
     inputJsonDelta(json.slice(0, mid), index),
     inputJsonDelta(json.slice(mid), index),
     contentBlockStop(index),
