@@ -146,7 +146,7 @@ const MUTATIONS = [
     ''],
   // The conversation list counts what the history shows, from the same list.
   [COUNTS, 'the message count counts Rundock\'s own prompts',
-    '      if (rundockLines.isRundockPrompt(obj.message.content)) continue;\n',
+    '      if (rundockLines.isRundockPrompt(userText)) continue;\n',
     ''],
   [COUNTS, 'the message count counts the <silent> sentinel',
     "      if (rundockLines.isRundockReply(textParts.join('\\n\\n'))) continue;\n",

@@ -23,6 +23,7 @@ const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const config = require('./lib/config.js');
 const { MAX_PAYLOAD, createReceiver } = require('./lib/attachments/receive.js');
+const { userTurnText } = require('./lib/attachments/turn-text.js');
 const agentsDiscovery = require('./lib/agents/discovery.js');
 const {
   discoverAgents, readNormalisedFile, extractFrontmatterText, titleCase,
@@ -477,9 +478,11 @@ async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
     try {
       const obj = JSON.parse(line);
       if (isClaudeCodeNote(obj)) continue;
-      // User text messages (not tool results)
-      if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
-        displayable.push({ role: 'user', content: obj.message.content, timestamp: obj.timestamp || null });
+      // User text messages (not tool results), and a turn sent with images
+      // or PDFs as its text (lib/attachments/turn-text.js).
+      const userText = obj.type === 'user' && obj.message ? userTurnText(obj.message.content) : null;
+      if (userText !== null) {
+        displayable.push({ role: 'user', content: userText, timestamp: obj.timestamp || null });
         continue;
       }
       // Assistant messages with text content. Filter out whitespace-only text
@@ -554,12 +557,14 @@ function readSessionMessageCount(filePath) {
     let obj;
     try { obj = JSON.parse(line); } catch (e) { continue; }
     if (isClaudeCodeNote(obj)) continue;
-    // User text turns: tool_result entries have array content and are excluded
-    // by the typeof === 'string' guard.
-    if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
+    // User text turns, and a turn sent with images or PDFs as its text:
+    // tool_result entries have array content and are excluded by
+    // userTurnText, as the history excludes them.
+    const userText = obj.type === 'user' && obj.message ? userTurnText(obj.message.content) : null;
+    if (userText !== null) {
       // Skip Rundock's own prompts: these aren't user-visible bubbles. The one
       // list the history uses too (lib/delegation/rundock-lines.js).
-      if (rundockLines.isRundockPrompt(obj.message.content)) continue;
+      if (rundockLines.isRundockPrompt(userText)) continue;
       count++;
       continue;
     }
@@ -3374,10 +3379,11 @@ async function grepSearchTranscripts(query, convos) {
           // marked as its session file marks it or as its output stream does.
           if (obj.isCompactSummary === true) continue;
           if (obj.type === 'user' && obj.isSynthetic === true) continue;
-          if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
-            if (obj.message.content.toLowerCase().includes(q)) {
+          const userText = obj.type === 'user' && obj.message ? userTurnText(obj.message.content) : null;
+          if (userText !== null) {
+            if (userText.toLowerCase().includes(q)) {
               rl.close();
-              return { ...c, matchType: 'content', snippet: extractSnippet(obj.message.content, q) };
+              return { ...c, matchType: 'content', snippet: extractSnippet(userText, q) };
             }
           }
           if (obj.message && obj.message.role === 'assistant' && Array.isArray(obj.message.content)) {

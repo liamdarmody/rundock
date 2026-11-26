@@ -443,3 +443,63 @@ describe('which session lines are Rundock\'s own', () => {
     ]);
   });
 });
+
+describe('a message sent with images or PDFs', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+
+  // The real parser, reading session files from a home folder made for the
+  // test, as Claude Code keeps them: a turn sent with an image is a line
+  // whose content is the array it was sent.
+  async function fromFiles(convoId, files) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'session-history-merge-home-'));
+    const was = { HOME: process.env.HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+    try {
+      process.env.HOME = home;
+      delete process.env.CLAUDE_CONFIG_DIR;
+      const dir = path.join(home, '.claude', 'projects', 'example-alpha');
+      fs.mkdirSync(dir, { recursive: true });
+      for (const [sessionId, lines] of Object.entries(files)) {
+        fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      }
+      const sent = [];
+      handleGetSessionHistory({ store: { parseSessionHistory: srv.parseSessionHistory } }, { send: (s) => sent.push(JSON.parse(s)) }, {
+        conversationId: convoId,
+        sessionIds: Object.keys(files).map((sessionId) => ({ sessionId })),
+      });
+      for (let i = 0; i < 100 && !sent.length; i++) await new Promise((r) => setTimeout(r, 5));
+      assert.strictEqual(sent.length, 1, 'the handler answered once');
+      return sent[0];
+    } finally {
+      for (const [key, value] of Object.entries(was)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB' } };
+  const asSent = (text, timestamp) => ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }, image] }, timestamp });
+  const answer = (text, timestamp) => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] }, timestamp });
+
+  test('one with a block and its transcript row show once, and one from before the transcript shows in its place', async () => {
+    const convoId = 'attached-charts';
+    const earlier = 'What does this chart show?\n[Attached: .rundock/attachments/1764000000000/1-screenshot.png (PNG image, 1 KB)]';
+    const said = 'And this one?\n[Attached: .rundock/attachments/1764000000000/2-screenshot.png (PNG image, 1 KB)]';
+    newTurn(convoId, said, 'Signups doubled after the launch.');
+    const turnAt = later(50);
+    const res = await fromFiles(convoId, { 'sess-attached-charts': [
+      asSent(earlier, '2026-01-05T09:00:00.000Z'),
+      answer('Revenue by month, rising since March.', '2026-01-05T09:00:20.000Z'),
+      asSent(said, turnAt),
+      answer('Signups doubled after the launch.', later(80)),
+    ] });
+    assert.deepStrictEqual(res.messages.map((m) => m.content), [
+      earlier,
+      'Revenue by month, rising since March.',
+      said,
+      'Signups doubled after the launch.',
+    ]);
+    assert.strictEqual(res.messages[2].timestamp, turnAt, 'the transcript row was matched to its own line, so nothing of it is left to show again');
+  });
+});
