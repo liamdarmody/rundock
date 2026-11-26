@@ -35,6 +35,8 @@ function answer(msg, allow) {
   client.send({ type: 'permission_response', requestId: msg.request_id, conversationId: msg._conversationId, allow, card: true });
 }
 const STDIO = { command: 'node', args: ['tools/server.js', '--stdio'] };
+const NAME_REFUSED = 'That connector name can\'t be used, so nothing was changed. A name uses letters, numbers, dots, dashes and underscores, and starts with a letter, number or underscore.';
+const ENTRY_REFUSED = 'A connector needs a command to run or a URL to reach, so nothing was changed.';
 
 describe('an agent\'s connector change asks first', () => {
   test('a stdio server from a marker shows the card, and writes nothing until Allow', async () => {
@@ -157,7 +159,73 @@ describe('an agent\'s connector change asks first', () => {
     since = client.messages.length;
     client.send({ type: 'save_connector', name: '../../etc/passwd', content: '{}' });
     err = await client.waitFor(m => m.type === 'connector_error', { since, label: 'bad name' });
-    assert.match(err.msg.message, /Invalid connector name/);
+    assert.strictEqual(err.msg.message, NAME_REFUSED);
     assert.strictEqual(client.messages.slice(since).filter(isConnectorCard('SaveConnector')).length, 0, 'no card for a change that could not be made');
+  });
+
+  // A CHANGE THE RULE REFUSES IS REFUSED BEFORE ANY CARD. The first thing the
+  // asking window hears about it is the refusal, in the rule's words, no card
+  // follows, and .mcp.json is left byte for byte as it was.
+  const isAnyConnectorCard = m => isConnectorCard('SaveConnector')(m) || isConnectorCard('DeleteConnector')(m);
+  async function refusedBeforeAnyCard(holds, send, message) {
+    fs.writeFileSync(mcp(), holds);
+    const before = fs.readFileSync(mcp());
+    const since = client.messages.length;
+    client.send(send);
+    const { msg } = await client.waitFor(m => m.type === 'connector_error' || isAnyConnectorCard(m), { since, label: 'refusal or card' });
+    assert.deepStrictEqual({ type: msg.type, message: msg.message }, { type: 'connector_error', message }, 'the refusal comes first, in the rule\'s words');
+    await h.delay(200);
+    assert.strictEqual(client.messages.slice(since).filter(isAnyConnectorCard).length, 0, 'and no card follows it');
+    assert.ok(fs.readFileSync(mcp()).equals(before), 'and .mcp.json is byte-identical');
+  }
+  const HOLDS_ALPHA = JSON.stringify({ mcpServers: { 'example-alpha': { url: 'https://mcp.example.com/mcp' } } });
+
+  test('saving a connector named __proto__ is refused before any card', async () => {
+    await refusedBeforeAnyCard(HOLDS_ALPHA, { type: 'save_connector', name: '__proto__', content: '{"command":"node"}', conversationId: 'convo-connectors' }, NAME_REFUSED);
+  });
+
+  test('removing a connector named .tools is refused before any card, and the entry stays', async () => {
+    const holds = JSON.stringify({ mcpServers: { '.tools': { command: 'node' } } });
+    await refusedBeforeAnyCard(holds, { type: 'delete_connector', name: '.tools', conversationId: 'convo-connectors' }, NAME_REFUSED);
+  });
+
+  test('saving a connector entry with nothing to run or reach is refused before any card', async () => {
+    await refusedBeforeAnyCard(HOLDS_ALPHA, { type: 'save_connector', name: 'example-alpha', content: '{}', conversationId: 'convo-connectors' }, ENTRY_REFUSED);
+  });
+
+  test('saving a connector entry whose args hold null is refused before any card, naming args', async () => {
+    const message = 'The connector entry\'s "args" isn\'t in a form the approval card can show exactly, so nothing was changed.';
+    await refusedBeforeAnyCard(HOLDS_ALPHA, { type: 'save_connector', name: 'local-tools', content: '{"command":"node","args":[null]}', conversationId: 'convo-connectors' }, message);
+  });
+
+  test('saving a connector entry with args beside a URL and no command is refused before any card, naming args', async () => {
+    const message = 'The connector entry\'s "args" isn\'t in a form the approval card can show exactly, so nothing was changed.';
+    await refusedBeforeAnyCard(HOLDS_ALPHA, { type: 'save_connector', name: 'local-tools', content: '{"url":"https://mcp.example.com/mcp","args":["--token-file","x"]}', conversationId: 'convo-connectors' }, message);
+  });
+
+  test('a refusal goes to the window that asked and no other, and the usual next save asks and writes once allowed', async () => {
+    fs.writeFileSync(mcp(), JSON.stringify({ mcpServers: {} }));
+    const other = await h.connect();
+    try {
+      const otherSince = other.messages.length;
+      let since = client.messages.length;
+      client.send({ type: 'save_connector', name: '-tools', content: JSON.stringify(STDIO), conversationId: 'convo-connectors' });
+      const { msg } = await client.waitFor(m => m.type === 'connector_error' || isAnyConnectorCard(m), { since, label: 'refusal to the asking window' });
+      assert.deepStrictEqual({ type: msg.type, message: msg.message }, { type: 'connector_error', message: NAME_REFUSED });
+      await h.delay(200);
+      assert.deepStrictEqual(other.messages.slice(otherSince).filter(m => m.type === 'connector_error' || isAnyConnectorCard(m)), [],
+        'another window hears nothing about a change refused for this one');
+
+      since = client.messages.length;
+      client.send({ type: 'save_connector', name: 'local-tools', content: JSON.stringify(STDIO), conversationId: 'convo-connectors' });
+      const card = await client.waitFor(isConnectorCard('SaveConnector'), { since, label: 'card for the usual save' });
+      assert.deepStrictEqual(card.msg.request.input, { name: 'local-tools', action: 'add', ...STDIO });
+      since = client.messages.length;
+      answer(card.msg, true);
+      await client.waitFor(m => m.type === 'connector_saved', { since, label: 'usual save written' });
+      assert.deepStrictEqual(servers(), { 'local-tools': STDIO }, 'written once allowed');
+    } finally {
+      other.close();
+    }
   });
 });
