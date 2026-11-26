@@ -621,7 +621,7 @@ function putTranscript(rule, lines) {
 // pass against it.
 function beginTranscript(rule, prompt) {
   putTranscript(rule, [
-    tfx.prompt(SESSION_ID, String(prompt), stampFor(rule)),
+    tfx.prompt(SESSION_ID, asSent(prompt), stampFor(rule)),
     ...(rule.writes || []).map(w => tfx.unanswered(SESSION_ID, {
       tool: w.tool || 'Write', file: path.resolve(process.cwd(), w.file), outcome: w.outcome || 'create', at: w.at, content: w.content,
     })),
@@ -635,7 +635,7 @@ function beginTranscript(rule, prompt) {
 // whose transcript goes missing still changed the workspace, which is the case
 // that separates "changed nothing" from "nobody can say".
 function finishTranscript(rule, prompt, shellRan = []) {
-  const lines = [tfx.prompt(SESSION_ID, String(prompt), stampFor(rule))];
+  const lines = [tfx.prompt(SESSION_ID, asSent(prompt), stampFor(rule))];
   for (const ran of shellRan) lines.push(tfx.shellTool(SESSION_ID, ran));
   for (const w of rule.writes || []) {
     const file = path.resolve(process.cwd(), w.file);
@@ -742,19 +742,31 @@ function spawnGrandchild() {
 // why payload assertions were rare enough for the 0.11.2 handback-amnesia bug
 // to survive. `matched` lets a test assert no prompt fell through to the
 // STUB-NO-RULE fallback.
-function logPrompt(content, matched) {
+// `line` is the stdin line exactly as it was read, so a test can hold a turn
+// to the bytes the server wrote; a prompt given as an argument has none.
+function logPrompt(content, matched, line) {
   try {
     fs.appendFileSync(PROMPT_LOG_FILE, JSON.stringify({
       agent: AGENT, sessionId: SESSION_ID, resume: RESUME,
-      prompt: String(content), matched, ts: Date.now(),
+      prompt: String(content), ...(line !== undefined ? { line } : {}), matched, ts: Date.now(),
     }) + '\n');
   } catch (e) { /* logging is best-effort */ }
 }
 
-function handleUserMessage(content) {
+// A user message as its session file keeps it: text as text, and an array
+// (a turn sent with images or PDFs) as the array it was sent.
+function asSent(prompt) {
+  return Array.isArray(prompt) ? prompt : String(prompt);
+}
+
+// `content` is the message's text, which rules match and the prompt log
+// holds; `sent`, for a message read from stdin, is its line and its content
+// as sent, which the transcript keeps.
+function handleUserMessage(content, sent) {
   const rules = loadRules();
   const matchedRule = rules.find(r => matches(r, content));
-  logPrompt(content, !!matchedRule);
+  logPrompt(content, !!matchedRule, sent ? sent.line : undefined);
+  const kept = sent ? sent.content : content;
   const rule = matchedRule || {
     turn: [{ text: `STUB-NO-RULE agent=${AGENT} prompt=${String(content).slice(0, 120)}` }],
   };
@@ -764,7 +776,7 @@ function handleUserMessage(content) {
   // going, which is what progress is read from. It holds the tools asked for
   // and no outcomes yet, which is exactly what a run that died halfway leaves
   // behind.
-  if ((FIXED_SESSION || rule.keepSession) && !rule.beforeSession) beginTranscript(rule, content);
+  if ((FIXED_SESSION || rule.keepSession) && !rule.beforeSession) beginTranscript(rule, kept);
   if (rule.crash != null) {
     // Abnormal death: exit without emitting a result envelope, so the
     // server's close handler runs with no result for this turn.
@@ -799,14 +811,14 @@ function handleUserMessage(content) {
   if (rule.webFetch) {
     const url = String(rule.webFetch);
     fetch(url).then((r) => `WEBFETCH-STATUS ${r.status}`, (e) => `WEBFETCH-ERROR ${e.message}`).then((line) => {
-      emitTurn({ ...rule, turn: [{ tool: { name: 'WebFetch', input: { url, prompt: 'read it' } } }, { text: line }, ...(rule.turn || [])] }, content);
+      emitTurn({ ...rule, turn: [{ tool: { name: 'WebFetch', input: { url, prompt: 'read it' } } }, { text: line }, ...(rule.turn || [])] }, kept);
     });
     return;
   }
   const delay = rule.delayMs || 0;
   const answer = () => {
-    if (delay > 0) setTimeout(() => emitTurn(rule, content), delay);
-    else emitTurn(rule, content);
+    if (delay > 0) setTimeout(() => emitTurn(rule, kept), delay);
+    else emitTurn(rule, kept);
   };
   // `stderrChunks` on an ordinary turn writes that stderr in those pieces, a
   // moment apart, before the turn answers, as a warning printed at startup is.
@@ -874,10 +886,15 @@ if (rl) rl.on('line', (line) => {
   let msg;
   try { msg = JSON.parse(line); } catch (e) { return; }
   if (msg.type === 'user' && msg.message) {
-    const content = typeof msg.message.content === 'string'
-      ? msg.message.content
-      : JSON.stringify(msg.message.content);
-    handleUserMessage(content);
+    // A turn sent with images or PDFs is an array: its text is its text
+    // blocks joined, and the blocks' data is never matched or logged.
+    const sent = msg.message.content;
+    const content = typeof sent === 'string'
+      ? sent
+      : Array.isArray(sent)
+        ? sent.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n\n')
+        : JSON.stringify(sent);
+    handleUserMessage(content, { line, content: sent });
   }
 });
 
