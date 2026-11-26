@@ -266,6 +266,32 @@ describe('the server, given a session the chain lists only under another agent',
     await assertKept(convoId, since, thread, 'summariser');
     h.reapConvo(convoId);
   });
+
+  test('named by a slug that resolves to another id, a session listed only under a teammate is not resumed', async () => {
+    const convoId = h.freshConvoId('raw-slug');
+    seed(convoId, { agentId: 'example-lead', sessionId: 'sess-rs', sessionIds: [{ sessionId: 'sess-rs', agentId: LEAD }] });
+    scenario([{ match: { promptIncludes: 'ASK-RS' }, turn: [{ text: 'FRESH-RS' }] }]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: 'example-lead', content: 'ASK-RS hello', sessionId: 'sess-rs' });
+    await resultFor(convoId, since);
+    assert.deepStrictEqual(spawnsFor(convoId).map(i => [i.agent, i.resume]), [['example-lead', null]], 'started fresh, as itself');
+    await assertKept(convoId, since, 'sess-rs', LEAD);
+    h.reapConvo(convoId);
+  });
+
+  test('a session listed only under the slug of an agent whose id differs is not resumed for a teammate', async () => {
+    const convoId = h.freshConvoId('raw-mate');
+    seed(convoId, { agentId: LEAD, sessionId: 'sess-rm', sessionIds: [{ sessionId: 'sess-rm', agentId: 'example-lead' }] });
+    scenario([{ match: { promptIncludes: 'ASK-RM' }, turn: [{ text: 'FRESH-RM' }] }]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: convoId, agent: LEAD, content: 'ASK-RM hello', sessionId: 'sess-rm' });
+    await resultFor(convoId, since);
+    assert.deepStrictEqual(spawnsFor(convoId).map(i => [i.agent, i.resume]), [[LEAD, null]], 'started fresh, as the lead');
+    await assertKept(convoId, since, 'sess-rm', 'example-lead');
+    h.reapConvo(convoId);
+  });
 });
 
 describe('the server, given a session it cannot tell is another agent\'s, resumes it as before', () => {
@@ -311,6 +337,18 @@ describe('the server, given a session it cannot tell is another agent\'s, resume
     const r = await sent('k5', { agentId: 'default', sessionId: 'sess-k5', sessionIds: [{ sessionId: 'sess-k5', agentId: 'default' }] },
       { agent: 'example-lead', sessionId: 'sess-k5' });
     assert.deepStrictEqual(r.resumes, ['sess-k5']);
+  });
+
+  test('a slug that resolves to another id, the session listed under that slug', async () => {
+    const r = await sent('k8', { agentId: 'example-lead', sessionId: 'sess-k8', sessionIds: [{ sessionId: 'sess-k8', agentId: 'example-lead' }] },
+      { agent: 'example-lead', sessionId: 'sess-k8' });
+    assert.deepStrictEqual(r.resumes, ['sess-k8']);
+  });
+
+  test('the id a slug resolves to, the session listed under that slug', async () => {
+    const r = await sent('k9', { agentId: 'default', sessionId: 'sess-k9', sessionIds: [{ sessionId: 'sess-k9', agentId: 'example-lead' }] },
+      { agent: 'default', sessionId: 'sess-k9' });
+    assert.deepStrictEqual(r.resumes, ['sess-k9']);
   });
 
   test('an agent no longer on the team, the session listed under its name', async () => {

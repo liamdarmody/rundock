@@ -42,7 +42,7 @@ const PAGE = { src: path.join(ROOT, 'public', 'conversation-state.js'), suite: '
 // suite takes a few seconds unbroken, so a row runs all of it.
 const SERVER = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/specialist-session-resume.test.js' };
 
-const CALL = '          if (routedAgent && sessionOfAnotherAgent(convoId, msg.sessionId, routedAgent.id)) msg.sessionId = null;\n';
+const CALL = '          if (routedAgent && sessionOfAnotherAgent(convoId, msg.sessionId, routedAgent)) msg.sessionId = null;\n';
 
 const MUTATIONS = [
   // ===== THE WINDOW =====
@@ -67,8 +67,11 @@ const MUTATIONS = [
     CALL,
     ''],
   [SERVER, 'the server compares the slug the chat names, not the id it resolved to',
-    'sessionOfAnotherAgent(convoId, msg.sessionId, routedAgent.id)',
-    'sessionOfAnotherAgent(convoId, msg.sessionId, msg.agent)'],
+    'sessionOfAnotherAgent(convoId, msg.sessionId, routedAgent)',
+    'sessionOfAnotherAgent(convoId, msg.sessionId, { id: msg.agent })'],
+  [SERVER, 'the server matches the agent by its id alone, not by its file\'s slug',
+    '[agent.id, agent.fileName && agent.fileName.replace(\'.md\', \'\')]',
+    '[agent.id]'],
   [SERVER, 'the check stops short of the legacy spawn',
     'if (routedAgent && sessionOfAnotherAgent(',
     'if (routedAgent && !useLegacy && sessionOfAnotherAgent('],
@@ -76,14 +79,14 @@ const MUTATIONS = [
     'if (routedAgent && sessionOfAnotherAgent(',
     'if (routedAgent && routedAgent.runtime !== \'codex\' && sessionOfAnotherAgent('],
   [SERVER, 'the server drops a session the chain lists under the agent itself',
-    ' && !listing.some(s => s.agentId === agentId);',
+    ' && !listing.some(s => names.includes(s.agentId));',
     ';'],
   [SERVER, 'the server drops a session the chain does not list',
     'return listing.length > 0 && listing.every(',
     'return listing.length === 0 || listing.every('],
   [SERVER, 'the check applies to an agent no longer on the team',
-    'if (routedAgent && sessionOfAnotherAgent(convoId, msg.sessionId, routedAgent.id))',
-    'if (sessionOfAnotherAgent(convoId, msg.sessionId, routedAgent && routedAgent.id))'],
+    'if (routedAgent && sessionOfAnotherAgent(convoId, msg.sessionId, routedAgent))',
+    'if (sessionOfAnotherAgent(convoId, msg.sessionId, routedAgent || {}))'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
