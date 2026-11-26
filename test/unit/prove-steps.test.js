@@ -126,6 +126,12 @@ function makeSystem(job, cfg = {}) {
       if (!n) throw fail('ENOENT', 'lstat', p);
       return stat(n);
     },
+    statSync(p) {
+      log('statSync', [p]);
+      const { node } = follow(p);
+      if (!node) throw fail('ENOENT', 'stat', p);
+      return stat(node);
+    },
     readlinkSync(p, opts) {
       log('readlinkSync', [p, opts]);
       const n = nodes.get(norm(p));
@@ -250,8 +256,8 @@ function makeSystem(job, cfg = {}) {
     }
     if (tool === '/usr/bin/install' && args[0] === '-d') {
       const [, , owner, , group, , mode, target] = args;
-      const id = (name) => (name === sys.user.name ? sys.user.uid : Number(name));
-      put(target, { type: 'dir', mode: parseInt(mode, 8), uid: id(owner), gid: id(group) });
+      const id = (name, key) => (name === sys.user.name ? sys.user[key] : Number(name));
+      put(target, { type: 'dir', mode: parseInt(mode, 8), uid: id(owner, 'uid'), gid: id(group, 'gid') });
       return result({});
     }
     if (tool === '/usr/bin/chown' && args[0] === '--no-dereference' && args[1] === '-R') {
@@ -704,6 +710,66 @@ describe('the test-user steps, run whole on fake system calls', () => {
     test('fails when the copy meets an entry that is not a directory, file or symlink', () => {
       failsAt('red', 'prepare the test user', { setup: (sys) => sys.nodes.set(`${CHECKOUT}/src/pipe`, { type: 'fifo', mode: 0o644, uid: 1000, gid: 1000 }) },
         '"src/pipe" is not a directory, regular file or symlink, which the copy refuses');
+    });
+
+    describe("the test user's temporary directory, beside its home", () => {
+      const TMP = `${TEST_HOME}-scratch`;
+      const TAKEN = `the test user's temporary directory ${JSON.stringify(TMP)} already exists, and only this step may make it`;
+      const READ_BACK = (found) => `the test user's temporary directory ${JSON.stringify(TMP)} reads back as ${found}, where it must be a directory of uid 1001, gid 1001 and mode 0700`;
+      const isMake = (c) => c.fn === 'spawnSync' && c.as === 'root' && c.argv[0] === '/usr/bin/install' && c.argv[c.argv.length - 1] === TMP;
+      const isRead = (c) => c.fn === 'lstatSync' && c.args[0] === TMP;
+      // Root's install of the directory leaves what make(sys) puts there instead.
+      const madeAs = (make) => ({ rootSpawn: (call, sys) => (isMake(call) ? (make(sys), sys.result({})) : null) });
+
+      test('nothing at the path: it is looked for, made as the test user, then read back without following a link', () => {
+        const sys = makeSystem('red');
+        const r = step(sys, 'prepare the test user');
+        assert.strictEqual(r.code, 0, r.err);
+        const node = sys.nodes.get(TMP);
+        assert.deepStrictEqual([node.type, node.mode, node.uid, node.gid], ['dir', 0o700, 1001, 1001]);
+        const made = r.calls.findIndex(isMake);
+        assert.deepStrictEqual(r.calls[made].argv, ['/usr/bin/install', '-d', '-o', 'prove-test', '-g', 'prove-test', '-m', '0700', TMP]);
+        assert.ok(r.calls.slice(0, made).some(isRead), 'the path is looked for before it is made');
+        assert.ok(r.calls.slice(made + 1).some(isRead), 'the path is read back after it is made');
+      });
+
+      for (const [what, plant] of [
+        ['a directory', (sys) => sys.dir(TMP, 0o700, 1001)],
+        ['a file', (sys) => sys.file(TMP, '', 0o600, 1001)],
+        ['a symlink to a directory', (sys) => sys.link(TMP, RUNNER.home, 1001)],
+        ['a dangling symlink', (sys) => sys.link(TMP, '/fake/users/nowhere', 1001)],
+      ]) {
+        test(`${what} already at the path: fails naming it, and root never makes it`, () => {
+          const { sys, r } = failsAt('red', 'prepare the test user', { setup: plant }, TAKEN);
+          assert.ok(!r.calls.some(isMake));
+          assert.deepStrictEqual([sys.nodes.get(RUNNER.home).uid, sys.nodes.get(RUNNER.home).gid], [RUNNER.uid, RUNNER.uid]);
+        });
+      }
+
+      test('made with the wrong owner: fails naming the path and the uid found', () => {
+        failsAt('red', 'prepare the test user', madeAs((sys) => Object.assign(sys.dir(TMP, 0o700, 0), { gid: 1001 })),
+          READ_BACK('a directory of uid 0, gid 1001 and mode 0700'));
+      });
+
+      test('made with the wrong group: fails naming the path and the gid found', () => {
+        failsAt('red', 'prepare the test user', madeAs((sys) => Object.assign(sys.dir(TMP, 0o700, 1001), { gid: 0 })),
+          READ_BACK('a directory of uid 1001, gid 0 and mode 0700'));
+      });
+
+      test('made with the wrong mode: fails naming the path and the mode found', () => {
+        failsAt('red', 'prepare the test user', madeAs((sys) => sys.dir(TMP, 0o755, 1001)),
+          READ_BACK('a directory of uid 1001, gid 1001 and mode 0755'));
+      });
+
+      test('read back as a regular file: fails naming the path, though its uid, gid and mode are right', () => {
+        failsAt('red', 'prepare the test user', madeAs((sys) => sys.file(TMP, '', 0o700, 1001)),
+          READ_BACK('a regular file of uid 1001, gid 1001 and mode 0700'));
+      });
+
+      test('read back as a symlink: fails naming the path, though the link leads to a directory that would pass', () => {
+        failsAt('red', 'prepare the test user', madeAs((sys) => { sys.dir('/fake/users/elsewhere', 0o700, 1001); sys.link(TMP, '/fake/users/elsewhere', 1001); }),
+          READ_BACK('a symlink of uid 1001, gid 1001 and mode 0777'));
+      });
     });
   });
 

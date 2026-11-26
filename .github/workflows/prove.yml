@@ -747,7 +747,19 @@ jobs:
             if (exists('/usr/bin/at')) asRoot(['/usr/bin/tee', '-a', '/etc/at.deny'], `${TEST_USER}\n`);
             // The runner reads the copy through the home, which it may not list.
             asRoot(['/usr/bin/chmod', '0711', user.home]);
+            // The temporary directory is made here and nowhere else, so anything
+            // already at its path, a dangling symlink included, fails the step.
+            const tmpDir = `the test user's temporary directory ${JSON.stringify(user.tmp)}`;
+            if (exists(user.tmp)) throw new Error(`${tmpDir} already exists, and only this step may make it`);
             asRoot(['/usr/bin/install', '-d', '-o', TEST_USER, '-g', TEST_USER, '-m', '0700', user.tmp]);
+            // Read back without following a link.
+            const tmp = fs.lstatSync(user.tmp);
+            if (!tmp.isDirectory() || tmp.uid !== user.uid || tmp.gid !== user.gid || (tmp.mode & 0o7777) !== 0o700) {
+              const kind = tmp.isSymbolicLink() ? 'a symlink' : tmp.isDirectory() ? 'a directory'
+                : tmp.isFile() ? 'a regular file' : 'an entry of another kind';
+              const mode = (tmp.mode & 0o7777).toString(8).padStart(4, '0');
+              throw new Error(`${tmpDir} reads back as ${kind} of uid ${tmp.uid}, gid ${tmp.gid} and mode ${mode}, where it must be a directory of uid ${user.uid}, gid ${user.gid} and mode 0700`);
+            }
             asRoot(['/usr/bin/install', '-d', '-o', String(runner.uid), '-g', String(runner.gid), '-m', '0755', user.copy]);
             copyCheckout(process.cwd(), user.copy);
             asRoot(['/usr/bin/chown', '--no-dereference', '-R', `${TEST_USER}:${TEST_USER}`, user.copy]);
