@@ -11,6 +11,8 @@
 // for it, and the card or notice it sent before is unchanged.
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const h = require('../helpers/harness.js');
 const { agentFile, standardTeam } = require('../helpers/workspace.js');
@@ -19,6 +21,24 @@ let client;
 
 // Words that would mean a turn's figures were fed back to the agent.
 const FIGURE_WORDS = ['Worked', 'Tokens as', 'duration_ms', 'input_tokens', 'inputTokens'];
+
+// Each turn reports figures no prompt would hold by chance, so finding one in
+// a later prompt can only mean it was fed back. A number is looked for as
+// written and grouped by thousands, as the page shows it; a string (the time
+// worked, in the page's words) as it stands.
+const CLAUDE_FIGURES = [245137, 18243, 2071, 3917, '4 min 05 s'];
+const CODEX_FIGURES = [52619, 6047, 'under 1 s'];
+const DELEGATE_FIGURES = [31957, 4283, 'under 1 s'];
+
+const grouped = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+function figureForms(figures) {
+  const forms = [];
+  for (const f of figures) {
+    if (typeof f === 'number') forms.push(String(f), grouped(f));
+    else forms.push(f);
+  }
+  return [...new Set(forms)];
+}
 
 function team() {
   return {
@@ -42,11 +62,19 @@ function messagesFor(convoId, since) {
   return client.messages.slice(since).filter(m => m._conversationId === convoId);
 }
 
-function assertNoFigures(prompt, label) {
+function assertNoFigures(prompt, label, figures) {
   assert.ok(typeof prompt === 'string' && prompt.length > 0, `${label}: the prompt was sent`);
   for (const word of FIGURE_WORDS) {
     assert.ok(!prompt.includes(word), `${label}: the prompt carries no "${word}"`);
   }
+  assert.ok(Array.isArray(figures) && figures.length > 0, `${label}: the figures to look for are named`);
+  for (const form of figureForms(figures)) {
+    assert.ok(!prompt.includes(form), `${label}: the prompt carries no "${form}"`);
+  }
+}
+
+function transcriptOf(convoId) {
+  return JSON.parse(fs.readFileSync(path.join(h.workspaceDir, '.rundock', 'transcripts', `${convoId}.json`), 'utf-8'));
 }
 
 describe('a Claude Code turn', () => {
@@ -60,15 +88,15 @@ describe('a Claude Code turn', () => {
       {
         match: { agent: 'lead-designer', promptIncludes: 'usage-first ask' },
         turn: [{ text: 'First answer.' }],
-        resultExtra: { duration_ms: 245000, usage: { input_tokens: 18240, cache_read_input_tokens: 2048, output_tokens: 3905 } },
+        resultExtra: { duration_ms: 245137, usage: { input_tokens: 18243, cache_read_input_tokens: 2071, output_tokens: 3917 } },
       },
       { match: { agent: 'lead-designer', promptIncludes: 'usage-second ask' }, turn: [{ text: 'Second answer.' }] },
     ]);
 
     client.send({ type: 'chat', conversationId: convoId, agent: 'lead-designer', content: 'usage-first ask' });
     const { msg: first } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { label: 'first result' });
-    assert.strictEqual(first.duration_ms, 245000, 'the time Claude Code reported reaches the page');
-    assert.deepStrictEqual(first.usage, { input_tokens: 18240, cache_read_input_tokens: 2048, output_tokens: 3905 },
+    assert.strictEqual(first.duration_ms, 245137, 'the time Claude Code reported reaches the page');
+    assert.deepStrictEqual(first.usage, { input_tokens: 18243, cache_read_input_tokens: 2071, output_tokens: 3917 },
       'the tokens Claude Code reported reach the page unchanged');
     await client.waitForEvent('system', 'done', convoId);
 
@@ -79,7 +107,7 @@ describe('a Claude Code turn', () => {
 
     const prompts = h.promptsFor('lead-designer');
     assert.strictEqual(prompts.length, 2, 'one prompt per message');
-    assertNoFigures(prompts[1], 'second Claude Code turn');
+    assertNoFigures(prompts[1], 'second Claude Code turn', CLAUDE_FIGURES);
     h.reapConvo(convoId);
   });
 
@@ -125,7 +153,7 @@ describe('a Codex turn', () => {
     const convoId = h.freshConvoId('use');
     h.clearInvocations();
     h.writeCodexScenario([
-      { match: { promptIncludes: 'codex-usage first' }, text: 'First from Ida.', usage: { inputTokens: 1840, outputTokens: 390 } },
+      { match: { promptIncludes: 'codex-usage first' }, text: 'First from Ida.', usage: { inputTokens: 52619, outputTokens: 6047 } },
       { match: { promptIncludes: 'codex-usage second' }, text: 'Second from Ida.' },
     ]);
 
@@ -134,9 +162,17 @@ describe('a Codex turn', () => {
     const { msg: first } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId, { label: 'first codex result' });
     assert.strictEqual(first.duration_ms, 100, 'the time on the turn Codex completed');
     assert.strictEqual(first._runtime, 'codex');
-    assert.deepStrictEqual(first.usage, { inputTokens: 1840, cachedInputTokens: 0, outputTokens: 390, reasoningOutputTokens: 0 },
+    assert.deepStrictEqual(first.usage, { inputTokens: 52619, cachedInputTokens: 0, outputTokens: 6047, reasoningOutputTokens: 0 },
       'the tokens Codex reported for the turn');
     await client.waitForEvent('system', 'done', convoId);
+
+    // The reply kept for the conversation is its words alone.
+    const replies = transcriptOf(convoId).filter(e => e.role === 'agent' && !e.type);
+    assert.deepStrictEqual(replies.map(e => e.text), ['First from Ida.'], 'the transcript keeps the reply text and nothing the turn used');
+    assert.deepStrictEqual(Object.keys(replies[0]).sort(), ['agent', 'role', 'text', 'timestamp'], 'the transcript entry has no field for what the turn used');
+    for (const form of figureForms(CODEX_FIGURES)) {
+      assert.ok(!replies[0].text.includes(form), `the transcript entry carries no "${form}"`);
+    }
 
     const since = client.messages.length;
     client.send({ type: 'chat', conversationId: convoId, agent: 'researcher', content: 'codex-usage second', sessionId: init._sessionId });
@@ -146,7 +182,7 @@ describe('a Codex turn', () => {
 
     const prompts = h.codexTurnPrompts();
     assert.strictEqual(prompts.length, 2, 'one turn per message');
-    assertNoFigures(prompts[1], 'second Codex turn');
+    assertNoFigures(prompts[1], 'second Codex turn', CODEX_FIGURES);
     h.reapConvo(convoId);
   });
 
@@ -164,17 +200,19 @@ describe('a Codex turn', () => {
       },
     ]);
     h.writeCodexScenario([
-      { match: { promptIncludes: 'usage-delegate brief' }, text: 'DELEGATE-PAYLOAD found. <!-- RUNDOCK:COMPLETE -->' },
+      { match: { promptIncludes: 'usage-delegate brief' }, text: 'DELEGATE-PAYLOAD found. <!-- RUNDOCK:COMPLETE -->', usage: { inputTokens: 31957, outputTokens: 4283 } },
     ]);
 
     client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'usage-delegate please' });
     const { msg: result } = await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'researcher', { label: 'codex delegate result' });
     assert.strictEqual(result.duration_ms, 100, 'the time on the turn Codex completed');
     assert.strictEqual(result._runtime, 'codex');
+    assert.deepStrictEqual(result.usage, { inputTokens: 31957, cachedInputTokens: 0, outputTokens: 4283, reasoningOutputTokens: 0 },
+      'the tokens Codex reported for the delegate\'s turn reach the page');
 
     const handback = () => h.promptsFor('chief-of-staff').find(p => p.includes('[SYSTEM: pipeline-complete]'));
     assert.ok(await h.waitUntil(() => !!handback()), 'the parent is handed the delegate\'s output');
-    assertNoFigures(handback(), 'the handback to the parent');
+    assertNoFigures(handback(), 'the handback to the parent', DELEGATE_FIGURES);
     h.reapConvo(convoId);
   });
 

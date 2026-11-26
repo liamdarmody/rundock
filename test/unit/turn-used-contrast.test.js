@@ -111,29 +111,21 @@ const SURFACES = ['--elevated', '--base'];
 const LINE_CLASSES = ['.activity-summary', '.activity-time', '.activity-tool', '.turn-used', '.turn-used-line', '.turn-details', '.turn-tokens', '.turn-tokens-line'];
 
 describe('the tokens the line under a reply reads', () => {
-  // Pins the parse, which reads main's stylesheets too; its sibling "the
-  // line, Details, the step times and the token sentence take
-  // --text-2-strong and no other token" fails on main.
-  test('the parse found more than a handful of declarations', () => {
+  test('the line, Details, the step times and the token sentence take --text-2-strong and no other token', () => {
     // A floor under the extraction: a walk that stopped finding rules would
-    // otherwise leave empty maps, and every lookup below would fail for a
-    // reason the message does not name.
+    // otherwise leave empty maps, and every lookup here and below would fail
+    // for a reason the message does not name.
     assert.ok(DARK && DARK.size > 40, 'the token parse found almost nothing in :root, so nothing below is measured');
     assert.ok(LIGHT && LIGHT.size > 15, 'the token parse found almost nothing in body.light, so nothing below is measured');
     assert.ok(CHAT.size > 40, 'the chat.css parse found almost no rules, so nothing below is measured');
-  });
-
-  test('the line, Details, the step times and the token sentence take --text-2-strong and no other token', () => {
     for (const selector of LINE_RULES) {
       assert.strictEqual(declared(selector, 'color'), 'var(--text-2-strong)', `${selector} must take --text-2-strong`);
     }
   });
 
-  // Pins what main already does; its sibling "the line, Details, the step
-  // times and the token sentence take --text-2-strong and no other token"
-  // fails on main.
-  test('the step names keep --text-1', () => {
+  test('the step names keep --text-1 while the line itself takes --text-2-strong', () => {
     assert.strictEqual(declared('.activity-tool', 'color'), 'var(--text-1)');
+    assert.strictEqual(declared('.turn-used-line', 'color'), 'var(--text-2-strong)', 'the line has a rule of its own, at --text-2-strong');
   });
 
   test('no rule naming the line or its steps fades it with opacity', () => {

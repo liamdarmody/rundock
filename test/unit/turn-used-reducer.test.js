@@ -75,13 +75,15 @@ test('a stopped turn\'s badge carries the duration the server measured', () => {
   assert.strictEqual(ef.turnStartTime, START);
 });
 
-// Pins what main already does (no duration); its sibling "a stopped turn's
-// badge carries the duration the server measured" shares the setup and fails on main.
-test('a stopped turn the server could not time carries no duration', () => {
+test('a stopped turn the server could not time carries no duration, where a timed one carries its own', () => {
   const { effects } = reduce(streaming(), { type: 'system', subtype: 'cancelled', _conversationId: CONVO, _toolCalls: [], _turnStartTime: null }, LIVE);
   const ef = effects.find((e) => e.type === 'add-cancelled-badge');
   assert.ok(ef);
   assert.strictEqual(ef.durationMs, undefined);
+  const timed = reduce(streaming(), { type: 'system', subtype: 'cancelled', _conversationId: CONVO, _toolCalls: [], _turnStartTime: START, duration_ms: 72000 }, LIVE)
+    .effects.find((e) => e.type === 'add-cancelled-badge');
+  assert.ok(timed, 'the timed stop draws its badge');
+  assert.strictEqual(timed.durationMs, 72000, 'a stop the server timed carries that time');
 });
 
 // Pins what main already does (the stored reply); its sibling "a streamed

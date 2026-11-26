@@ -56,19 +56,21 @@ describe('the cancelled message', () => {
     });
   });
 
-  // Pins what main already does (no time on the message); its sibling
-  // "carries the time from the turn's start to the Stop" fails on main.
+  // Each is paired with a turn whose start was recorded, stopped at the same
+  // moment, so the one that carries no time is told apart from a message that
+  // never carries one.
   for (const [label, start] of [['no start', undefined], ['a null start', null], ['a start sent as text', String(START)], ['a start of NaN', NaN], ['an infinite start', Infinity]]) {
-    test(`a turn with ${label} carries no time`, () => {
+    test(`a turn with ${label} carries no time, where a recorded start carries the measured time`, () => {
+      const { cancelled: timed } = stopAt(START + 72000, START);
+      assert.strictEqual(timed.duration_ms, 72000, 'a recorded start gives the time to the Stop');
       const { cancelled } = stopAt(START + 72000, start);
       assert.ok(!Object.prototype.hasOwnProperty.call(cancelled, 'duration_ms'), 'no duration_ms key');
     });
   }
 
-  // Pins what main already does; its sibling "keeps every field it carried
-  // before" shares the setup and fails on main.
-  test('the done that follows carries no time of its own', () => {
-    const { sent } = stopAt(START + 72000, START);
+  test('the time rides on the cancelled message, and the done that follows carries none of its own', () => {
+    const { sent, cancelled } = stopAt(START + 72000, START);
+    assert.strictEqual(cancelled.duration_ms, 72000, 'the cancelled message carries the time to the Stop');
     const done = sent.find((m) => m.type === 'system' && m.subtype === 'done');
     assert.ok(done, 'done is sent');
     assert.ok(!Object.prototype.hasOwnProperty.call(done, 'duration_ms'));

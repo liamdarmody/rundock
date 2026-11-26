@@ -121,15 +121,11 @@ describe('the captured turns', () => {
   const [one, two] = capturedTurns('codex-auto-compact.jsonl');
   const trailing = captureLines('codex-auto-compact.jsonl')[72].msg;
 
-  // Pins the capture itself, which main already holds; its sibling "turn 1
-  // used the sum of its calls, its repeated update counted once" fails on main.
-  test('the capture holds the two turns and the update that trails the second', () => {
+  test('turn 1 used the sum of its calls, its repeated update counted once', async () => {
+    // The capture holds the two turns and the update that trails the second.
     assert.ok(one && two, 'two turns captured');
     assert.strictEqual(trailing.method, 'thread/tokenUsage/updated');
     assert.strictEqual(trailing.params.turnId, two.turnId);
-  });
-
-  test('turn 1 used the sum of its calls, its repeated update counted once', async () => {
     const done = doneOf(await replay(one.notifications, one));
     assert.deepStrictEqual(done.usage, { inputTokens: 35003, cachedInputTokens: 17280, outputTokens: 49, reasoningOutputTokens: 0 });
   });
@@ -142,20 +138,17 @@ describe('the captured turns', () => {
     ]);
   });
 
-  // Pins what main already does (turn 2's one call is its whole sum); its
-  // sibling "turn 1 used the sum of its calls, its repeated update counted
-  // once" shares the setup and fails on main.
-  test('turn 2 starts its sum again', async () => {
+  test('turn 2 starts its sum again after turn 1\'s, and carries its own time', async () => {
     const server = newClient();
-    await replay(one.notifications, { server, ...one });
+    const first = doneOf(await replay(one.notifications, { server, ...one }));
     const done = doneOf(await replay(two.notifications, { server, ...two }));
     assert.deepStrictEqual(done.usage, { inputTokens: 17536, cachedInputTokens: 13056, outputTokens: 5, reasoningOutputTokens: 0 });
+    assert.deepStrictEqual(first.usage, { inputTokens: 35003, cachedInputTokens: 17280, outputTokens: 49, reasoningOutputTokens: 0 },
+      'turn 1 summed its calls on the same client, so turn 2\'s figures are a fresh sum');
+    assert.strictEqual(done.durationMs, 8889, 'turn 2 carries the time Codex reported for it');
   });
 
-  // Pins what main already does (an update after the turn is dropped); its
-  // sibling "each turn's done carries the time Codex reported for it" shares
-  // the setup and fails on main.
-  test('the update that trails turn 2 changes nothing', async () => {
+  test('the update that trails turn 2 changes neither its tokens nor its time', async () => {
     const server = newClient();
     await replay(one.notifications, { server, ...one });
     const events = await replay(two.notifications, { server, ...two });
@@ -163,16 +156,18 @@ describe('the captured turns', () => {
     server._onNotification(trailing.method, trailing.params);
     assert.strictEqual(JSON.stringify(events), before);
     assert.deepStrictEqual(doneOf(events).usage, { inputTokens: 17536, cachedInputTokens: 13056, outputTokens: 5, reasoningOutputTokens: 0 });
+    assert.strictEqual(doneOf(events).durationMs, 8889, 'the done keeps the time Codex reported for turn 2');
   });
 
-  // Pins what main already does (main keeps the last update rather than a
-  // sum, so a repeat changes nothing); its sibling "a repeated update is
-  // counted once, and only the counts it carried are kept" fails on main.
-  test('the same update arriving again before the turn ends is not added twice', async () => {
+  test('the same update arriving again before the turn ends is not added twice, nor sent on again', async () => {
     const notes = [...two.notifications];
     notes.splice(notes.findIndex((n) => n.method === 'turn/completed'), 0, trailing);
-    const done = doneOf(await replay(notes, two));
+    const events = await replay(notes, two);
+    const done = doneOf(events);
     assert.deepStrictEqual(done.usage, { inputTokens: 17536, cachedInputTokens: 13056, outputTokens: 5, reasoningOutputTokens: 0 });
+    const once = await replay(two.notifications, two);
+    assert.deepStrictEqual(usagesOf(events), usagesOf(once), 'the repeat sends no usage event of its own');
+    assert.strictEqual(done.durationMs, 8889, 'the done carries the time Codex reported for turn 2');
   });
 
   test('each turn\'s done carries the time Codex reported for it', async () => {
@@ -223,15 +218,15 @@ describe('synthetic updates', () => {
     assert.deepStrictEqual(done.usage, { inputTokens: 1300, outputTokens: 60 });
   });
 
-  // Pins what main already does (each turn keeps its own update); its sibling
-  // "two calls in one turn are added together" fails on main.
-  test('two turns with the same numbers each count their own update', async () => {
+  test('two turns with the same numbers each count their own update and carry their own time', async () => {
     const server = newClient();
     const first = doneOf(await replay([P.tokenUsageUpdated(THREAD, 't1'), P.turnCompleted(THREAD, 't1')], { server, threadId: THREAD, turnId: 't1' }));
     const second = doneOf(await replay([P.tokenUsageUpdated(THREAD, 't2'), P.turnCompleted(THREAD, 't2')], { server, threadId: THREAD, turnId: 't2' }));
     const fixture = { inputTokens: 100, cachedInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 0 };
     assert.deepStrictEqual(first.usage, fixture);
     assert.deepStrictEqual(second.usage, fixture);
+    assert.strictEqual(first.durationMs, P.turnCompleted(THREAD, 't1').params.turn.durationMs, 'turn 1 carries the time on its turn/completed');
+    assert.strictEqual(second.durationMs, P.turnCompleted(THREAD, 't2').params.turn.durationMs, 'turn 2 carries the time on its own turn/completed');
   });
 
   test('a turn with no update finishes with no usage, never zeros', async () => {
