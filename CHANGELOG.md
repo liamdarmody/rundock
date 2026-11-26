@@ -8,7 +8,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Added
 
-- **Attach files to a message:** the + button beside the message field attaches images (PNG, JPEG, GIF, WebP), PDFs and text, Markdown or CSV files, up to 5 files and 20 MB per message. Rundock keeps them with the conversation, says under the message field if it couldn't, and removes them when the conversation is deleted.
+- **Attach files to a message:** the + button beside the message field attaches images (PNG, JPEG, GIF, WebP), PDFs and text, Markdown or CSV files, up to 5 files and 20 MB per message. Rundock keeps them with the conversation, says under the message field if it couldn't, and removes them when the conversation is deleted. If it can't remove them, a notice says where they are and stays until you close it.
 - **See what each reply used:** each agent reply now says how long the agent worked on it, such as "Worked 4 min 05 s". Details lists the steps it took and the tokens Claude Code or Codex reported for that reply. The line shows on replies that arrive while the conversation is open, as the step list did.
 
 ### Changed

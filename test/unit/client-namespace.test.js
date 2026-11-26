@@ -97,6 +97,7 @@ const MANIFEST = {
     "sendPrompt",
     "setSidebarPill",
     "setupChat",
+    "showFilesKeptNotice",
     "startConversation",
     "startSetupConversation",
     "toggleConvoListMembership",
