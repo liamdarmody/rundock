@@ -202,6 +202,35 @@ function assertLineUnder(prompt, heading) {
   assert.strictEqual(count(prompt, `${heading}\n${LINE}\n`), 1, 'on its own line directly under the heading');
 }
 
+/** A file a stub waits for, in this run's workspace. Writing it lets the stub carry on. */
+function holdFile(label) {
+  return path.join(h.workspaceDir, `hold-${label}`);
+}
+
+function release(file) {
+  fs.writeFileSync(file, '');
+}
+
+/**
+ * Runs `fn` with an agent's display name changed in its workspace file, the
+ * way a person editing the file changes it, and puts the file back afterwards
+ * whatever happens, so a failure cannot leave the new name for later tests.
+ */
+async function withDisplayName(agentId, name, fn) {
+  const file = path.join(h.workspaceDir, '.claude', 'agents', `${agentId}.md`);
+  const original = fs.readFileSync(file, 'utf-8');
+  const changed = original.replace(/^displayName: .*$/m, `displayName: ${name}`);
+  assert.notStrictEqual(changed, original, `sanity: the ${agentId} file has a display name to change`);
+  fs.writeFileSync(file, changed);
+  h.internal.invalidateAgentCache();
+  try {
+    return await fn();
+  } finally {
+    fs.writeFileSync(file, original);
+    h.internal.invalidateAgentCache();
+  }
+}
+
 // ── arrivals that raise the notice ───────────────────────────────────────
 
 describe('a Claude Code delegate brought into a long conversation', () => {
@@ -339,6 +368,48 @@ describe('a Claude Code delegate brought into a long conversation', () => {
     assertLineUnder(h.promptsFor('content-lead').pop(), CATCH_UP_HEADINGS.arriving);
     h.reapConvo(convoId);
   });
+
+  test('whose stored session is gone, renamed before the refusal: the notice uses the name it has when it is sent', async () => {
+    const was = nameOf('content-lead');
+    const convoId = h.freshConvoId('short-stale-delegate-renamed');
+    const hold = holdFile(convoId);
+    const talk = longTalk();
+    assertCutBy(arrivingDelta(talk), 'truncated');
+    seedTalk(convoId, talk);
+    seed(convoId, {
+      agentId: 'chief-of-staff', sessionId: 'live-orch-r',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'live-orch-r' }, { agentId: 'content-lead', sessionId: 'dead-lead-r' }],
+    });
+    scenario([
+      { match: { resume: true, promptIncludes: 'DRAFT-REQUEST-R' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', description: 'Handing this on.', prompt: 'BRIEF-R write it' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'BRIEF-R' }, turn: [{ text: 'LEAD-FRESH-REPLY-R' }] },
+    ], ['dead-lead-r'], { resumeRefusalUntilFile: hold });
+    h.clearInvocations();
+    const since = client.messages.length;
+    try {
+      client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'DRAFT-REQUEST-R please', sessionId: 'live-orch-r' });
+      assert.ok(await h.waitUntil(() => spawnsFor(convoId).some(i => i.agent === 'content-lead' && i.resume === 'dead-lead-r')),
+        'the lead\'s stored session was tried, and its refusal is held');
+      await withDisplayName('content-lead', 'Raven', async () => {
+        assert.strictEqual(nameOf('content-lead'), 'Raven', 'sanity: the lead is now called Raven');
+        release(hold);
+        await waitForResult(convoId, 'LEAD-FRESH-REPLY-R', since, 'the delegate answers from a fresh session');
+
+        const lead = spawnsFor(convoId).filter(i => i.agent === 'content-lead');
+        assert.deepStrictEqual(lead.map(i => i.resume), ['dead-lead-r', null], 'the resume was refused and the lead started fresh');
+        const notices = noticesFor(convoId, since);
+        assert.strictEqual(notices.length, 1, 'one notice for the fresh start');
+        assert.notStrictEqual(notices[0].content, noticeText(was), `the notice does not name the lead as it was called before: ${notices[0].content}`);
+        assertShape(notices[0], convoId, noticeText('Raven'));
+        const expired = m => m.type === 'system' && m.subtype === 'info' && m.content === startingFresh('Raven');
+        assertPlaced(convoId, since, notices[0], { agent: 'content-lead', afterLine: expired });
+      });
+    } finally {
+      release(hold);
+    }
+    h.reapConvo(convoId);
+  });
 });
 
 describe('an orchestrator whose stored session is gone, handed a conversation back', () => {
@@ -368,6 +439,45 @@ describe('an orchestrator whose stored session is gone, handed a conversation ba
     const prompt = h.promptsFor('chief-of-staff').pop();
     assert.match(prompt, /routing-request/, 'the fresh orchestrator is given the handback');
     assertLineUnder(prompt, CATCH_UP_HEADINGS.arriving);
+    h.reapConvo(convoId);
+  });
+
+  test('renamed before the refusal: the notice uses the name it has when it is sent', async () => {
+    const was = nameOf('chief-of-staff');
+    const convoId = h.freshConvoId('short-stale-handback-renamed');
+    const hold = holdFile(convoId);
+    const talk = longTalk();
+    assertCutBy(arrivingDelta(talk, 'chief-of-staff', ['content-lead']), 'truncated');
+    seedTalk(convoId, talk);
+    seed(convoId, {
+      agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: 'dead-orch-r',
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: 'dead-orch-r' }, { agentId: 'content-lead', sessionId: 'live-lead-r' }],
+    });
+    scenario([
+      { match: { resume: true, promptIncludes: 'FLIGHT-R' }, turn: [{ text: 'Not mine to do. <!-- RUNDOCK:RETURN -->' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'routing-request' }, turn: [{ text: 'ORCH-ROUTED-R' }] },
+    ], ['dead-orch-r'], { resumeRefusalUntilFile: hold });
+    h.clearInvocations();
+    const since = client.messages.length;
+    try {
+      client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'book me a FLIGHT-R', sessionId: 'live-lead-r' });
+      assert.ok(await h.waitUntil(() => spawnsFor(convoId).some(i => i.resume === 'dead-orch-r')),
+        'the orchestrator\'s stored session was tried, and its refusal is held');
+      await withDisplayName('chief-of-staff', 'Raven', async () => {
+        assert.strictEqual(nameOf('chief-of-staff'), 'Raven', 'sanity: the orchestrator is now called Raven');
+        release(hold);
+        await waitForResult(convoId, 'ORCH-ROUTED-R', since, 'the fresh orchestrator routes the request');
+
+        const notices = noticesFor(convoId, since);
+        assert.strictEqual(notices.length, 1, 'one notice for the fresh orchestrator');
+        assert.notStrictEqual(notices[0].content, noticeText(was), `the notice does not name the orchestrator as it was called before: ${notices[0].content}`);
+        assertShape(notices[0], convoId, noticeText('Raven'));
+        const expired = m => m.type === 'system' && m.subtype === 'info' && m.expiredSessionId === 'dead-orch-r';
+        assertPlaced(convoId, since, notices[0], { agent: 'chief-of-staff', autoContinue: true, afterLine: expired });
+      });
+    } finally {
+      release(hold);
+    }
     h.reapConvo(convoId);
   });
 
@@ -499,6 +609,41 @@ describe('a Codex delegate brought into a long conversation', () => {
     assertShape(notices[0], convoId, noticeText('Ida'));
     assertPlaced(convoId, since, notices[0], { agent: 'researcher', afterLine: EXPIRED_LINE });
     assertLineUnder(h.codexTurnPrompts().pop(), CATCH_UP_HEADINGS.arriving);
+    h.reapConvo(convoId);
+  });
+
+  test('on an expired thread, renamed before the thread opens: the notice uses the name it has when it is sent', async () => {
+    const was = nameOf('researcher');
+    const convoId = h.freshConvoId('short-codex-renamed');
+    const hold = holdFile(convoId);
+    const talk = longTalk();
+    assertCutBy(arrivingDelta(talk, 'researcher'), 'truncated');
+    seedTalk(convoId, talk);
+    seed(convoId, { agentId: 'chief-of-staff', sessionIds: [{ agentId: 'researcher', sessionId: STALE_THREAD }] });
+    parkParent(convoId, 'p-short-codex-renamed');
+    h.writeCodexScenario([{ match: { promptIncludes: 'BRIEF-RENAMED' }, text: 'RESEARCHER-REPLY-RENAMED' }],
+      { resumeFails: true, resumeUntilFile: hold });
+    h.clearInvocations();
+    const since = client.messages.length;
+    try {
+      client.send({ type: 'delegate', conversationId: convoId, targetAgent: 'researcher', context: 'BRIEF-RENAMED' });
+      assert.ok(await h.waitUntil(() => codexCalls('thread/resume').length === 1),
+        'the stored thread was tried, and its answer is held');
+      await withDisplayName('researcher', 'Raven', async () => {
+        assert.strictEqual(nameOf('researcher'), 'Raven', 'sanity: the researcher is now called Raven');
+        release(hold);
+        await waitForResult(convoId, 'RESEARCHER-REPLY-RENAMED', since, 'the Codex delegate answers on a fresh thread');
+
+        assert.strictEqual(codexCalls('thread/start').length, 1, 'a fresh thread was opened when the stored one was gone');
+        const notices = noticesFor(convoId, since);
+        assert.strictEqual(notices.length, 1, 'one notice for the fresh start');
+        assert.notStrictEqual(notices[0].content, noticeText(was), `the notice does not name the researcher as it was called before: ${notices[0].content}`);
+        assertShape(notices[0], convoId, noticeText('Raven'));
+        assertPlaced(convoId, since, notices[0], { agent: 'researcher', afterLine: EXPIRED_LINE });
+      });
+    } finally {
+      release(hold);
+    }
     h.reapConvo(convoId);
   });
 });
