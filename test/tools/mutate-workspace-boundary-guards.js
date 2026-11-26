@@ -3565,10 +3565,9 @@ const MUTATIONS = [
   [CONNECTOR_WRITE_ASK, 'Connector: a name that is not a string is read as one, so a missing name passes as undefined',
     "  return typeof name === 'string' && CONNECTOR_NAME.test(name)",
     '  return CONNECTOR_NAME.test(name)'],
-  [CONNECTOR_ASK, 'Connector: a removal checks the name by the old rule, not the shared one',
-    'function handleDeleteConnector(ctx, ws, msg) {\n  if (!validConnectorName(msg.name)) {\n',
-    'function handleDeleteConnector(ctx, ws, msg) {\n'
-    + "  if (!(typeof msg.name === 'string' && /^[\\w.-]{1,64}$/.test(msg.name) && !msg.name.includes('..'))) {\n"],
+  [CONNECTOR_WRITE_ASK, 'Connector: a removal checks the name by the old rule, not the shared one',
+    "    if (!validConnectorName(name)) return refuse('invalid', CONNECTOR_NAME_REFUSED);",
+    "    if (!(typeof name === 'string' && /^[\\w.-]{1,64}$/.test(name) && !name.includes('..'))) return refuse('invalid', CONNECTOR_NAME_REFUSED);"],
   [CONNECTOR_ASK, 'Connector: a save reads the file before it checks the name',
     'function handleSaveConnector(ctx, ws, msg) {\n'
     + '  if (!validConnectorName(msg.name)) {\n'
