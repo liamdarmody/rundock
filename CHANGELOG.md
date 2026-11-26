@@ -8,7 +8,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Added
 
-- **Attach files to a message:** the + button beside the message field attaches images (PNG, JPEG, GIF, WebP), PDFs and text, Markdown or CSV files, up to 5 files and 20 MB per message. Rundock keeps them with the conversation, says under the message field if it couldn't, and removes them when the conversation is deleted.
+- **Attach files to a message:** the + button beside the message field attaches images (PNG, JPEG, GIF, WebP), PDFs and text, Markdown or CSV files, up to 5 files and 20 MB per message. Rundock keeps them with the conversation, says under the message field if it couldn't, and removes them when the conversation is deleted. If it can't remove them, a notice says where they are and stays until you close it.
 
 ### Changed
 
@@ -20,6 +20,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 - **Agents can no longer change your permission answers or workspace settings:** before, when an agent edited the files that hold them, Rundock showed a card, and allowing it saved whatever the agent had written, "Always allow" answers included. Now the edit is refused with no card, and the agent tells you what it wanted to change, so you can make the change yourself in Rundock. A shell command that writes those files still asks.
 - **The setup screen no longer freezes while it checks for Claude Code:** before, on Windows, the first start of a new Claude Code could hold the whole window for a minute, and a copy that was slow to start was reported as not installed. Now the window keeps answering, a copy that is installed but slow to start is shown as such, and Rundock adds its folder to your user PATH with every existing entry kept as it was, so a new PowerShell window recognises `claude`.
+- **Agents tell you where a connector key goes:** before, agents said `.rundock/mcp-secrets.json`, the file connector keys go in, does not travel with the workspace. Now they say it is kept out of git because setup adds `.rundock/` to `.gitignore`, but a synced folder such as OneDrive, iCloud or Dropbox copies it to every device the folder syncs to, so a key put there goes wherever the workspace goes.
 - **You're told when an agent is given a shortened copy of a long conversation:** before, an agent brought into a long conversation was handed only a shortened copy of it, and nothing told you. Now a line in the conversation names the agent and says how to give it what it needs from earlier: paste it again, or save it as a file in the workspace.
 
 ## 0.15.9: Sign-In That Says Why (2026-11-18)

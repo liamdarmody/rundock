@@ -1267,6 +1267,7 @@ function endConvoTransition(convoId, owner) {
   if (owner && t.owner && owner !== t.owner) return; // not this flow's window
   clearTimeout(t.failsafe);
   convoTransitions.delete(convoId);
+  releaseTransitionWaiters(); // they run after the replay below
   if (!t.queued.length) return;
   const liveWs = [...connectedClients].find(c => c.readyState === 1) || [...connectedClients][0];
   if (!liveWs) {
@@ -1294,6 +1295,25 @@ function scheduleScopeReturnKill(e, convoId) {
       try { killProcessTree(e.process); } catch (err) {}
     }
   }, 500);
+}
+
+// A workspace switch waits for the chats a hand-over holds, so each is
+// recorded and dispatched in the workspace it was sent to before the switch
+// stops that workspace's processes and moves the root. Only a transition with
+// a chat queued holds a switch, and none outlives its failsafe, so the
+// failsafe bounds the wait. A waiter is released when any transition ends,
+// after that transition's replay has run, and checks again.
+const transitionWaiters = new Set();
+function transitionsHoldChat() {
+  return [...convoTransitions.values()].some((t) => t.queued.length > 0);
+}
+function whenTransitionEnds() {
+  return new Promise((resolve) => transitionWaiters.add(resolve));
+}
+function releaseTransitionWaiters() {
+  const waiting = [...transitionWaiters];
+  transitionWaiters.clear();
+  for (const resolve of waiting) resolve();
 }
 
 // Heartbeat: detect silently dead connections every 15s
@@ -1506,8 +1526,8 @@ const wsHandlerContext = {
   clients: connectedClients,                      // identity: connected socket set
   pendingPermissions: pendingPermissionRequests,  // identity: pending permission map
   // Kill-window machine: stays in the root, injected as a capability
-  // (unused by the slice-9 handlers; the delegation glue consumes it).
-  transitions: { bufferChatIfTransitioning, beginConvoTransition, endConvoTransition, scheduleScopeReturnKill },
+  // (the delegation glue consumes it; the workspace switch waits on it).
+  transitions: { bufferChatIfTransitioning, beginConvoTransition, endConvoTransition, scheduleScopeReturnKill, transitionsHoldChat, whenTransitionEnds },
   // Conversation/search query surface: the engine and its caches are root-owned.
   store: {
     countConversationMessages, parseSessionHistory,

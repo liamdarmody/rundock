@@ -117,7 +117,7 @@ This split matters because it means Rundock's persistence layer is small and eas
 
 ### MCP credentials
 
-`.mcp.json` is shared and `.rundock/` is not, and that difference is the whole of this. MCP servers commonly take an API key as a literal value, and `.mcp.json` sits at the workspace root with nothing excluding it, so on a workspace shared by repository the key reaches every clone and stays in the history from the first commit, where deleting the file afterwards does not remove it. The values can instead go in `.rundock/mcp-secrets.json`, keyed by server name:
+`.mcp.json` is shared through git and `.rundock/` is not, because setup adds `.rundock/` to the workspace's `.gitignore`: that difference is the whole of this. A synced folder such as OneDrive, iCloud or Dropbox copies both, so a key in either goes wherever the workspace goes. MCP servers commonly take an API key as a literal value, and `.mcp.json` sits at the workspace root with nothing excluding it, so on a workspace shared by repository the key reaches every clone and stays in the history from the first commit, where deleting the file afterwards does not remove it. The values can instead go in `.rundock/mcp-secrets.json`, keyed by server name:
 
 ```json
 { "notion": { "env": { "NOTION_API_KEY": "ntn_..." } } }
@@ -144,7 +144,7 @@ A workspace is any directory that contains, or is intended to contain, Claude Co
 | `System/Playbooks/<slug>/PLAYBOOK.md` | Optional | Alternative skill location, scanned alongside `.claude/skills/`. Used by workspaces that pre-date the standard skill location. |
 | `.claude/settings.local.json` | Optional | Hooks and per-workspace Claude Code settings. Forwarded to spawned subprocesses. |
 | `.claude/settings.json` | Optional | The project's Claude Code settings, loaded for every agent spawned here. The hooks it names, and the scripts under `.claude/hooks/` they commonly run, are started by the runtime itself, so an agent's change to any of them always asks. |
-| `.mcp.json` | Optional | MCP server configuration. Forwarded to spawned subprocesses. Shared with anyone the workspace folder is shared with, git included, so credentials belong in `.rundock/mcp-secrets.json` instead: see MCP credentials, above. Its stdio servers start as their own processes, so an agent's change to it always asks. |
+| `.mcp.json` | Optional | MCP server configuration. Forwarded to spawned subprocesses. Shared with anyone the workspace folder is shared with, git included, so credentials belong in `.rundock/mcp-secrets.json` instead, which git leaves out but a synced folder copies: see MCP credentials, above. Its stdio servers start as their own processes, so an agent's change to it always asks. |
 | `.rundock/` | Created on first run | Rundock's own session state. See above. Auto-added to `.gitignore`. |
 
 A workspace can also contain any other user files at the root or in subfolders. Rundock does not require a particular folder layout outside of the paths above. The browser's file panel reads from the workspace root and respects `.gitignore`.
