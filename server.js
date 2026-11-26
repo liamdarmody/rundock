@@ -24,6 +24,7 @@ const { createDelegationRecord, attachDelegationRecord } = require('./lib/delega
 const config = require('./lib/config.js');
 const { MAX_PAYLOAD, createReceiver } = require('./lib/attachments/receive.js');
 const { userTurnText } = require('./lib/attachments/turn-text.js');
+const { buildTurn } = require('./lib/attachments/turn.js');
 const agentsDiscovery = require('./lib/agents/discovery.js');
 const {
   discoverAgents, readNormalisedFile, extractFrontmatterText, titleCase,
@@ -1736,7 +1737,10 @@ wss.on('connection', (ws) => {
             // Kept until this process has answered a turn: until then it may
             // yet be refused, and then never reads this.
             noteUnstartedWrite(existing, followUp, msg.attachmentEntry);
-            existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUp } }) + '\n');
+            // Its stored lines checked against the record, with its own images
+            // and PDFs; text alone goes as written.
+            const followUpTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: existing.runtime, text: followUp, entryId: msg.attachmentEntry });
+            existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUpTurn.content } }) + '\n');
             // A Claude Code turn's heartbeat, until its result.
             if (existing.startTurnKeepalive) existing.startTurnKeepalive();
           } else {
@@ -1813,7 +1817,8 @@ wss.on('connection', (ws) => {
             // start held for this agent whose process has since gone (reaped,
             // or the server restarted): given here, once.
             const heldCatchUp = takeStoredCatchUp(convoId, entry.agentId);
-            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: heldCatchUp + msg.content } }) + '\n');
+            const firstTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: entry.runtime, text: heldCatchUp + msg.content, entryId: msg.attachmentEntry });
+            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: firstTurn.content } }) + '\n');
 
             const stderrRef = wireProcessHandlers(entry, convoId, ws, {
               enableInterception: true,
@@ -1986,7 +1991,8 @@ wss.on('connection', (ws) => {
 
           // Behind any catch-up stored for this agent, as on the interactive path.
           const legacyCatchUp = takeStoredCatchUp(convoId, entry.agentId);
-          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: legacyCatchUp + msg.content } }) + '\n');
+          const legacyTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: entry.runtime, text: legacyCatchUp + msg.content, entryId: msg.attachmentEntry });
+          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: legacyTurn.content } }) + '\n');
 
           // Legacy mode: no interception, no transcript, no idle tracking
           const legacyStderrRef = wireProcessHandlers(entry, convoId, ws, {

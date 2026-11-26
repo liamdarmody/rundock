@@ -18,6 +18,7 @@ const assert = require('node:assert');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { isDeepStrictEqual } = require('node:util');
 
 const h = require('../helpers/harness.js');
 const store = require('../../lib/attachments/store.js');
@@ -91,6 +92,16 @@ const rows = (id) => h.internal.convoTranscripts.get(id) || h.internal.loadTrans
 const userRows = (id) => rows(id).filter((r) => r.role === 'user');
 const entriesOf = (id) => { try { return store.readRecord(h.workspaceDir, id).messages; } catch (e) { return null; } };
 const promptsWith = (tag) => h.readPrompts().map((p) => p.prompt).filter((p) => p.includes(tag));
+// Each turn read for a message whose text holds `tag`, as the stdin line
+// carried it: a string, or an array for a message with images or PDFs.
+const turnsWith = (tag) => h.readPrompts().filter((p) => p.prompt.includes(tag)).map((p) => JSON.parse(p.line).message.content);
+// The turn a message stored with `sent` is handed over as: the stored text,
+// then a block for each image and PDF, of the bytes sent.
+function withBlocks(stored, sent) {
+  return [{ type: 'text', text: stored.content }, ...sent.map((f) => (/\.pdf$/i.test(f.name)
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: f.data } }
+    : { type: 'image', source: { type: 'base64', media_type: 'image/png', data: f.data } }))];
+}
 // The stored name a line gives: what follows its last slash, up to its label.
 const nameIn = (line) => line.slice(line.lastIndexOf('/') + 1, line.indexOf(' ('));
 
@@ -360,11 +371,12 @@ describe('a refused message writes, records, appends and dispatches nothing', ()
 
 // A message with two files to a fresh conversation, its turn ended, and the
 // session id its run reports.
+const storedFiles = () => [file('Screen Shot.png', png()), file('Incident-Report-22-Nov.pdf', pdf())];
 async function storedMessage(tag) {
   const id = h.freshConvoId(tag.toLowerCase());
   answers([tag], { keepSession: true });
   const since = client.messages.length;
-  chat(id, `${tag} see these`, [file('Screen Shot.png', png()), file('Incident-Report-22-Nov.pdf', pdf())]);
+  chat(id, `${tag} see these`, storedFiles());
   const stored = await storedFor(id, since);
   assert.ok(stored, 'the message is answered with chat_stored');
   assert.ok(await resultFor(id, `DONE-${tag}`, since), 'and dispatched');
@@ -417,7 +429,8 @@ describe('a stored message carries the stored text into every copy a reload read
   test('the prompt the runtime reads holds the whole stored text', async () => {
     const { id, stored } = await storedMessage('ASK-PROMPT');
     assert.ok(h.promptsFor('chief-of-staff').some((p) => p.includes(stored.content)), 'one prompt holds the whole stored text');
-    assert.deepStrictEqual(promptsWith('ASK-PROMPT'), [stored.content]);
+    assert.deepStrictEqual(turnsWith('ASK-PROMPT'), [withBlocks(stored, storedFiles())],
+      'one turn: the whole stored text, then a block for the PNG and one for the PDF');
     h.reapConvo(id);
   });
 
@@ -426,9 +439,9 @@ describe('a stored message carries the stored text into every copy a reload read
     const project = fs.realpathSync(h.workspaceDir).replace(/[^a-zA-Z0-9]/g, '-');
     const at = path.join(process.env.HOME, '.claude', 'projects', project, `${sessionId}.jsonl`);
     assert.ok(fs.existsSync(at), `the session file is at ${at}`);
-    const user = h.readAppendedLog(at)
-      .filter((l) => l.type === 'user' && typeof l.message.content === 'string');
-    assert.ok(user.some((l) => l.message.content.includes(stored.content)), 'a user message holds the whole stored text');
+    const user = h.readAppendedLog(at).filter((l) => l.type === 'user');
+    assert.ok(user.some((l) => isDeepStrictEqual(l.message.content, withBlocks(stored, storedFiles()))),
+      'a user message holds the whole stored text, then its blocks, as the array it was sent');
     h.reapConvo(id);
   });
 
@@ -579,7 +592,7 @@ describe('every path back into the handler writes once and records once', () => 
         assert.ok(stored, 'the message is answered with chat_stored');
         replay(id);
         assert.ok(await resultFor(id, `DONE-${tag}`, since), 'the replay is dispatched');
-        assert.deepStrictEqual(promptsWith(tag), [stored.content], 'once, with the stored text');
+        assert.deepStrictEqual(turnsWith(tag), [withBlocks(stored, sent)], 'once, with the stored text and its blocks');
         writtenOnce(id, [stored]);
       } finally {
         leaveTransition(id, t);
@@ -616,8 +629,8 @@ describe('every path back into the handler writes once and records once', () => 
       const prompts = h.readPrompts().filter((p) => p.prompt.includes('ASK-RETRY'));
       // The stub reads no stdin for a resume it refuses, so only the fresh
       // start's prompt is logged.
-      assert.deepStrictEqual(prompts.map((p) => [p.resume || null, p.prompt]), [[null, stored.content]],
-        'the fresh start is sent the stored text once');
+      assert.deepStrictEqual(prompts.map((p) => [p.resume || null, JSON.parse(p.line).message.content]),
+        [[null, withBlocks(stored, [file('Screen Shot.png', png())])]], 'the fresh start is sent the stored text and its block once');
       writtenOnce(id, [stored]);
       h.reapConvo(id);
     });
@@ -820,8 +833,8 @@ describe('every path back into the handler writes once and records once', () => 
     const stored = await storedFor(id, since);
     assert.ok(stored, 'the files are stored once released');
     assert.ok(await resultFor(id, 'DONE-HELD-B', since), 'and the text after them is answered');
-    assert.deepStrictEqual(h.readPrompts().map((p) => p.prompt).filter((p) => /HELD-[ABX]/.test(p)), [stored.content, 'HELD-B and then'],
-      'in the order sent, and nothing forged');
+    assert.deepStrictEqual(h.readPrompts().filter((p) => /HELD-[ABX]/.test(p.prompt)).map((p) => JSON.parse(p.line).message.content),
+      [withBlocks(stored, [file('Screen Shot.png', png())]), 'HELD-B and then'], 'in the order sent, and nothing forged');
     h.reapConvo(id);
     h.reapConvo(elsewhere);
   });
@@ -959,7 +972,7 @@ describe('deleting a conversation deletes its attachments, and says when it coul
     assert.ok(await resultFor(id, 'DONE-ASK-FLIGHT', since), 'the message is answered by its run');
     const answered = client.messages.slice(since);
     assert.ok(!answered.some((m) => m.type === 'chat_refused'), 'no chat_refused');
-    assert.deepStrictEqual(promptsWith('ASK-FLIGHT'), [stored.content], 'one prompt, with the stored text');
+    assert.deepStrictEqual(turnsWith('ASK-FLIGHT'), [withBlocks(stored, [file('Screen Shot.png', png())])], 'one turn, with the stored text and its block');
     assert.ok(!answered.some((m) => m.type === 'conversation_files_kept'), 'and no notice');
     h.reapConvo(id);
   });
