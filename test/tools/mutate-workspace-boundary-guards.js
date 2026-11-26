@@ -2776,8 +2776,8 @@ const MUTATIONS = [
   // Let a connector send or delete through when nobody can be asked and an
   // agent still running after Rundock has stopped sends with nobody seeing it.
   [CONNECTOR_HOOK_FLOW, 'Connector send: a send or delete is allowed when Rundock cannot be asked',
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;",
-    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || credentialAccess;"],
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess || agentCall;",
+    "  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || credentialAccess || agentCall;"],
   [CONNECTOR_HOOK_FLOW, 'Connector delete: a delete is allowed when Rundock cannot be asked',
     '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name) || isMcpDeleteTool(data.tool_name);',
     '  const connectorAlwaysAsks = isMcpSendTool(data.tool_name);'],
