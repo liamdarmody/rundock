@@ -18,7 +18,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const h = require('../helpers/harness.js');
-const { standardTeam } = require('../helpers/workspace.js');
+const { standardTeam, agentFile } = require('../helpers/workspace.js');
+const { MARKERS } = require('../fixtures/stream-json.js');
+const { receiveAttachments } = require('../../lib/attachments/receive.js');
 
 let client;
 before(async () => {
@@ -288,6 +290,409 @@ describe('a refused resume started fresh, with what was sent while it was starti
     assert.deepStrictEqual((await oneSent('SECOND-O')).content, [{ type: 'text', text: second.content }, imageBlock(OTHER)],
       'the second with its own block alone');
     h.reapConvo(id);
+  });
+});
+
+// A file of the conversation's, stored and then deleted: its line as the
+// record names it, and the form a turn carries in its place.
+async function goneLine(id) {
+  const { content, entry } = await receiveAttachments(h.workspaceDir, { conversationId: id, content: '', attachments: [file('screenshot.png', SCREENSHOT)] });
+  fs.rmSync(path.join(folderOf(id), entry.files[0].file));
+  return { line: content, form: `[Attached file not available: ${entry.files[0].file}]` };
+}
+const swap = (text, gone) => text.split(gone.line).join(gone.form);
+
+// The one stdin line `agent` read whose text holds every tag, read by a
+// process started with no session when `fresh`.
+async function readBy(agent, tags, { fresh = false } = {}) {
+  const all = [].concat(tags);
+  const pick = () => h.readPrompts().filter((p) => p.agent === agent && all.every((t) => p.prompt.includes(t))
+    && p.line !== undefined && (!fresh || p.resume == null));
+  assert.ok(await h.waitUntil(() => pick().length > 0, { timeout: 15000 }), `${agent} reads a turn with ${all.join(', ')}`);
+  const found = pick();
+  assert.strictEqual(found.length, 1, `one turn with ${all.join(', ')}`);
+  return { line: found[0].line, content: JSON.parse(found[0].line).message.content, resume: found[0].resume || null };
+}
+// Text alone, sent as a string in exactly the line it always was.
+function plain(sent, expected) {
+  assert.strictEqual(typeof sent.content, 'string', 'text alone is sent as a string');
+  assert.strictEqual(sent.line, lineOf(expected === undefined ? sent.content : expected), 'in the line it always was');
+}
+// A deleted file's line, sent as not available, with no path anywhere.
+function noLonger(sent, gone) {
+  assert.strictEqual(typeof sent.content, 'string', 'a turn with no files is sent as a string');
+  assert.ok(sent.content.includes(gone.form), 'the deleted file is named as not available');
+  assert.ok(!sent.line.includes('.rundock/attachments/'), 'and no path is given');
+}
+function seedRecord(id, record) {
+  const all = h.internal.readConversations().filter((c) => c.id !== id);
+  h.internal.writeConversations([{ id, title: id, status: 'active', ...record }, ...all]);
+}
+const leadSpawns = (id) => spawnsFor(id).filter((i) => i.agent === 'content-lead').map((i) => i.resume);
+const lineIn = (stored) => stored.content.split('\n').find((l) => l.startsWith('[Attached: '));
+
+describe('each turn the server writes for an agent of its own accord', () => {
+  const expired = (id, since) => arrived((m) => m.subtype === 'session_expired' && m._conversationId === id, { since, timeout: 15000 });
+  const blocked = (offName, name) => `[SYSTEM: delegation-blocked] Your Agent tool call named "${offName}" (${name}), a workspace agent who is not one of your direct reports, so it was NOT run. No subagent may act as ${offName}. Do not retry the same call. If the task needs ${offName}, tell the user this needs routing through ${offName}'s leader and hand back. Otherwise continue without them.`;
+  const routeOn = (who, pending) => `[SYSTEM: ${who} just returned because the user asked for something outside their scope. The user's pending request is: "${pending}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`;
+
+  test('a blocked handoff\'s notice is sent as text alone, and a deleted file\'s line in it as not available', async () => {
+    const agentAt = path.join(h.workspaceDir, '.claude', 'agents', 'gone-designer.md');
+    for (const half of ['T', 'G']) {
+      const id = h.freshConvoId(`turn-block-${half}`);
+      let target = 'lead-designer';
+      let offName = 'Des';
+      let gone = null;
+      if (half === 'G') {
+        // An agent off the lead's team whose name is the deleted file's line.
+        gone = await goneLine(id);
+        fs.writeFileSync(agentAt, agentFile({ name: 'gone-designer', displayName: gone.line, role: 'Designer',
+          description: 'Visual design', type: 'specialist', order: 9, reportsTo: 'chief-of-staff', body: 'You make visuals.' }));
+        h.internal.invalidateAgentCache();
+        target = 'gone-designer';
+        offName = gone.line;
+      }
+      try {
+        scenario([
+          { match: { agent: 'content-lead', promptIncludes: `TASK-4${half}`, promptExcludes: '[SYSTEM:' },
+            turn: [{ text: 'Handing over.' }, { agentTool: { subagent_type: target, prompt: 'x' } }] },
+          { match: { agent: 'content-lead', promptIncludes: '[SYSTEM: delegation-blocked]' }, turn: [{ text: 'OK' }] },
+        ]);
+        h.clearInvocations();
+        chat(id, `TASK-4${half} please`, undefined, { agent: 'content-lead' });
+        const sent = await readBy('content-lead', '[SYSTEM: delegation-blocked]');
+        if (gone) {
+          noLonger(sent, gone);
+          assert.strictEqual(sent.content, swap(blocked(offName, target), gone), 'the notice with each line replaced');
+        } else {
+          plain(sent, blocked(offName, target));
+        }
+      } finally {
+        if (gone) {
+          fs.rmSync(agentAt, { force: true });
+          h.internal.invalidateAgentCache();
+        }
+      }
+      h.reapConvo(id);
+    }
+  });
+
+  test('a delegate\'s brief is sent as text alone, and a deleted file\'s line in it as not available', async () => {
+    for (const half of ['T', 'G']) {
+      const id = h.freshConvoId(`turn-brief-${half}`);
+      const gone = half === 'G' ? await goneLine(id) : null;
+      const brief = gone ? `BRIEF-8G ${gone.line}` : 'BRIEF-8T write it';
+      scenario([
+        { match: { agent: 'chief-of-staff', promptIncludes: `ASK-8${half}`, promptExcludes: '[SYSTEM:' },
+          turn: [{ agentTool: { subagent_type: 'content-lead', prompt: brief } }] },
+        { match: { agent: 'content-lead', promptIncludes: `BRIEF-8${half}` }, turn: [{ text: 'Done.' }] },
+        { match: { promptIncludes: '[SYSTEM:' }, turn: [{ text: '<silent>' }] },
+      ]);
+      h.clearInvocations();
+      chat(id, `ASK-8${half} please`);
+      const sent = await readBy('content-lead', `BRIEF-8${half}`);
+      if (gone) {
+        noLonger(sent, gone);
+        assert.ok(sent.content.includes(`[DELEGATION BRIEF]\n${swap(brief, gone)}`), 'the brief with its line replaced');
+      } else {
+        plain(sent);
+        assert.ok(sent.content.includes(`[DELEGATION BRIEF]\n${brief}`), 'the brief as it was written');
+      }
+      h.reapConvo(id);
+    }
+  });
+
+  test('a delegate is sent the images of the message its leader was answering, though the brief leaves their lines out', async () => {
+    const id = h.freshConvoId('turn-brief-png');
+    scenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'ASK-5A', promptExcludes: '[SYSTEM:' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'BRIEF-5A do it' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'BRIEF-5A' }, turn: [{ text: 'Done.' }] },
+      { match: { promptIncludes: '[SYSTEM:' }, turn: [{ text: '<silent>' }] },
+    ]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'ASK-5A see this', [file('screenshot.png', SCREENSHOT)]);
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is stored');
+    const sent = await readBy('content-lead', 'BRIEF-5A do it');
+    assert.ok(Array.isArray(sent.content), 'the brief is an array');
+    assert.strictEqual(sent.content[0].type, 'text');
+    assert.ok(sent.content[0].text.includes('BRIEF-5A do it'), 'its text holds the brief');
+    assert.ok(sent.content[0].text.includes(lineIn(stored)), 'and the PNG\'s line');
+    assert.deepStrictEqual(sent.content.slice(1), [imageBlock(SCREENSHOT)], 'then the PNG\'s block');
+    h.reapConvo(id);
+  });
+
+  test('a delegation from a follow-up with no files sends the delegate no blocks', async () => {
+    const id = h.freshConvoId('turn-brief-after');
+    scenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'NEXT-5B', promptExcludes: '[SYSTEM:' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'BRIEF-5B do it' } }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'ASK-5B', promptExcludes: '[SYSTEM:' }, turn: [{ text: 'DONE-ASK-5B' }] },
+      { match: { agent: 'content-lead', promptIncludes: 'BRIEF-5B' }, turn: [{ text: 'Done.' }] },
+      { match: { promptIncludes: '[SYSTEM:' }, turn: [{ text: '<silent>' }] },
+    ]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'ASK-5B see this', [file('screenshot.png', SCREENSHOT)]);
+    assert.ok(await storedFor(id, since) && await resultFor(id, 'DONE-ASK-5B', since), 'the first message is stored and answered');
+    assert.deepStrictEqual((await readBy('chief-of-staff', 'ASK-5B')).content.slice(1), [imageBlock(SCREENSHOT)], 'the leader was sent the PNG');
+    chat(id, 'NEXT-5B no files');
+    const sent = await readBy('content-lead', 'BRIEF-5B');
+    plain(sent);
+    h.reapConvo(id);
+  });
+
+  // A conversation whose specialist's stored session is gone: a delegation to
+  // it is refused its resume and starts fresh in the same place.
+  function staleLead(id, t, ask, brief, extra) {
+    seedRecord(id, { agentId: 'chief-of-staff', sessionId: `live-orch-${t}`,
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: `live-orch-${t}` }, { agentId: 'content-lead', sessionId: `dead-lead-${t}` }] });
+    scenario([
+      { match: { resume: true, promptIncludes: ask, promptExcludes: 'DELEGATION BRIEF' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: brief } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'BRIEF-' }, turn: [{ text: 'Done.' }] },
+      { match: { agent: 'content-lead', promptIncludes: 'FOLLOW-' }, turn: [{ text: 'Followed.' }] },
+      { match: { promptIncludes: '[SYSTEM:' }, turn: [{ text: '<silent>' }] },
+    ], [`dead-lead-${t}`], extra);
+  }
+
+  test('a delegate started fresh after its session was refused is sent its brief with the PNG\'s block', async () => {
+    const id = h.freshConvoId('turn-fresh-png');
+    staleLead(id, '5c', 'ASK-5C', 'BRIEF-5C do it');
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'ASK-5C see this', [file('screenshot.png', SCREENSHOT)], { sessionId: 'live-orch-5c' });
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is stored');
+    const sent = await readBy('content-lead', 'BRIEF-5C do it', { fresh: true });
+    assert.deepStrictEqual(leadSpawns(id), ['dead-lead-5c', null], 'refused once, then started fresh');
+    assert.ok(Array.isArray(sent.content), 'the brief is an array');
+    assert.ok(sent.content[0].text.includes('BRIEF-5C do it') && sent.content[0].text.includes(lineIn(stored)), 'its text holds the brief and the PNG\'s line');
+    assert.deepStrictEqual(sent.content.slice(1), [imageBlock(SCREENSHOT)], 'then the PNG\'s block');
+    h.reapConvo(id);
+  });
+
+  test('a delegate started fresh is sent a text brief as it always was, and a deleted file\'s line as not available', async () => {
+    for (const half of ['T', 'G']) {
+      const id = h.freshConvoId(`turn-fresh-${half}`);
+      const t = `5${half.toLowerCase()}`;
+      const gone = half === 'G' ? await goneLine(id) : null;
+      const brief = gone ? `BRIEF-5${half} ${gone.line}` : `BRIEF-5${half} write it`;
+      staleLead(id, t, `ASK-5${half}`, brief);
+      h.clearInvocations();
+      chat(id, `ASK-5${half} please`, undefined, { sessionId: `live-orch-${t}` });
+      const sent = await readBy('content-lead', `BRIEF-5${half}`, { fresh: true });
+      assert.deepStrictEqual(leadSpawns(id), [`dead-lead-${t}`, null], 'refused once, then started fresh');
+      if (gone) {
+        noLonger(sent, gone);
+        assert.ok(sent.content.includes(`[DELEGATION BRIEF]\n${swap(brief, gone)}`), 'the brief with its line replaced');
+      } else {
+        plain(sent);
+        assert.ok(sent.content.includes(`[DELEGATION BRIEF]\n${brief}`), 'the brief as it was written');
+      }
+      h.reapConvo(id);
+    }
+  });
+
+  // What a follow-up sent to the delegate while its refused resume lingers is
+  // read as by the fresh start, with the brief that start was sent. With
+  // `withGone`, the follow-up names a file of the conversation's that is
+  // deleted before it is sent.
+  async function keptFollowUp(half, ask, askFiles, follow, followFiles, { withGone = false } = {}) {
+    const id = h.freshConvoId(`turn-kept-${half}`);
+    const t = `6${half.toLowerCase()}`;
+    const gone = withGone ? await goneLine(id) : null;
+    if (gone) follow = `${follow} ${gone.line}`;
+    staleLead(id, t, `ASK-6${half}`, `BRIEF-6${half} do it`, { refusalExitMs: 1200 });
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, ask, askFiles, { sessionId: `live-orch-${t}` });
+    // Only a message that sent files is answered with chat_stored.
+    const first = askFiles ? await storedFor(id, since) : null;
+    if (askFiles) assert.ok(first, 'the message is stored');
+    assert.ok(await expired(id, since), 'the delegate\'s resume is refused and still lingering');
+    const mid = client.messages.length;
+    chat(id, follow, followFiles, { agent: 'content-lead' });
+    const stored = followFiles ? await storedFor(id, mid) : null;
+    if (followFiles) assert.ok(stored, 'the follow-up is stored');
+    const sent = await readBy('content-lead', `FOLLOW-6${half}`, { fresh: true });
+    const brief = await readBy('content-lead', `BRIEF-6${half}`, { fresh: true });
+    assert.deepStrictEqual(leadSpawns(id), [`dead-lead-${t}`, null], 'one fresh start carries both');
+    h.reapConvo(id);
+    return { first, stored, sent, brief, gone };
+  }
+
+  test('a follow-up kept for a delegate starting fresh is sent as text alone, and a deleted file\'s line in it as not available', async () => {
+    const plainRun = await keptFollowUp('T', 'ASK-6T please', undefined, 'FOLLOW-6T just words');
+    plain(plainRun.sent, 'FOLLOW-6T just words');
+    const goneRun = await keptFollowUp('G', 'ASK-6G please', undefined, 'FOLLOW-6G', undefined, { withGone: true });
+    noLonger(goneRun.sent, goneRun.gone);
+    assert.strictEqual(goneRun.sent.content, `FOLLOW-6G ${goneRun.gone.form}`, 'the follow-up with its line replaced');
+  });
+
+  test('a follow-up with its own PNG kept for a delegate starting fresh is sent its own block, and the brief only the first message\'s', async () => {
+    const run = await keptFollowUp('D', 'ASK-6D see this', [file('screenshot.png', SCREENSHOT)], 'FOLLOW-6D and this one', [file('diagram.png', OTHER)]);
+    assert.deepStrictEqual(run.sent.content, [{ type: 'text', text: run.stored.content }, imageBlock(OTHER)], 'the follow-up with its own block alone');
+    assert.ok(Array.isArray(run.brief.content), 'the brief is an array');
+    assert.deepStrictEqual(run.brief.content.slice(1), [imageBlock(SCREENSHOT)], 'with the first message\'s block alone');
+  });
+
+  test('a leader started fresh for a handback is sent it as text alone, and a deleted file\'s line in it as not available', async () => {
+    for (const half of ['T', 'G']) {
+      const id = h.freshConvoId(`turn-orch-fresh-${half}`);
+      const t = `5o${half.toLowerCase()}`;
+      const gone = half === 'G' ? await goneLine(id) : null;
+      const req = gone ? `REQ-5O${half} ${gone.line}` : `REQ-5O${half} just words`;
+      seedRecord(id, { agentId: 'chief-of-staff', activeAgentId: 'content-lead', sessionId: `dead-orch-${t}`,
+        sessionIds: [{ agentId: 'chief-of-staff', sessionId: `dead-orch-${t}` }, { agentId: 'content-lead', sessionId: `live-lead-${t}` }] });
+      scenario([
+        { match: { resume: true, promptIncludes: `REQ-5O${half}` }, turn: [{ text: `Not mine. ${MARKERS.RETURN}` }] },
+        { match: { agent: 'chief-of-staff', promptIncludes: 'routing-request' }, turn: [{ text: 'Routing.' }] },
+      ], [`dead-orch-${t}`]);
+      h.clearInvocations();
+      chat(id, req, undefined, { agent: 'content-lead', sessionId: `live-lead-${t}` });
+      const sent = await readBy('chief-of-staff', 'routing-request', { fresh: true });
+      if (gone) {
+        noLonger(sent, gone);
+        assert.ok(sent.content.includes(`The user's latest request was: "${swap(req, gone)}"`), 'the request with its line replaced');
+      } else {
+        plain(sent);
+        assert.ok(sent.content.includes('[SYSTEM: routing-request] content-lead returned because the request was outside their scope.'), 'the routing request');
+        assert.ok(sent.content.includes(`The user's latest request was: "${req}"`), 'with the request as it was written');
+      }
+      h.reapConvo(id);
+    }
+  });
+
+  test('a handback to the leader is sent as text alone, and a deleted file\'s line in it as not available', async () => {
+    for (const half of ['T', 'G']) {
+      const id = h.freshConvoId(`turn-handback-${half}`);
+      const gone = half === 'G' ? await goneLine(id) : null;
+      const task = gone ? `TASK-7${half} ${gone.line}` : `TASK-7${half} just words`;
+      scenario([
+        { match: { agent: 'content-lead', promptIncludes: `TASK-7${half}` }, turn: [{ text: `Not mine. ${MARKERS.RETURN}` }] },
+        { match: { agent: 'chief-of-staff', promptIncludes: 'routing-request' }, turn: [{ text: 'Routing.' }] },
+      ]);
+      h.clearInvocations();
+      chat(id, task, undefined, { agent: 'content-lead' });
+      const sent = await readBy('chief-of-staff', 'routing-request');
+      if (gone) {
+        noLonger(sent, gone);
+        assert.ok(sent.content.includes(`The user's latest request was: "${swap(task, gone)}"`), 'the request with its line replaced');
+      } else {
+        plain(sent);
+        assert.ok(sent.content.includes('[SYSTEM: routing-request] content-lead returned because the request was outside their scope.'), 'the routing request');
+        assert.ok(sent.content.includes(`The user's latest request was: "${task}"`), 'with the request as it was written');
+      }
+      h.reapConvo(id);
+    }
+  });
+
+  test('a return from a sub-delegate to the leader is sent as text alone, and a deleted file\'s line in it as not available', async () => {
+    for (const half of ['T', 'G']) {
+      const id = h.freshConvoId(`turn-skip-${half}`);
+      const gone = half === 'G' ? await goneLine(id) : null;
+      const sub = gone ? `SUB-9${half} ${gone.line}` : `SUB-9${half} brief`;
+      scenario([
+        { match: { agent: 'chief-of-staff', promptIncludes: `SETUP-9${half}`, promptExcludes: '[SYSTEM:' }, turn: [{ text: 'Ready.' }] },
+        { match: { agent: 'content-lead', promptIncludes: `TASK-9${half}` }, turn: [{ agentTool: { subagent_type: 'content-analyst', prompt: sub } }] },
+        { match: { agent: 'content-analyst', promptIncludes: `SUB-9${half}` }, turn: [{ text: `Outside my scope. ${MARKERS.RETURN}` }] },
+        { match: { agent: 'chief-of-staff', promptIncludes: 'A specialist just returned' }, turn: [{ text: 'Routing.' }] },
+      ]);
+      h.clearInvocations();
+      chat(id, `SETUP-9${half}`);
+      await client.waitForEvent('system', 'done', id);
+      client.send({ type: 'delegate', conversationId: id, targetAgent: 'content-lead', context: `TASK-9${half} please` });
+      const sent = await readBy('chief-of-staff', 'A specialist just returned');
+      const expected = routeOn('A specialist', sub);
+      if (gone) {
+        noLonger(sent, gone);
+        assert.strictEqual(sent.content, swap(expected, gone), 'the routing prompt with its line replaced');
+      } else {
+        plain(sent, expected);
+      }
+      h.reapConvo(id);
+    }
+  });
+
+  // The three prompts a leader started again by its session is sent when a
+  // delegate it handed to closes: out of scope, complete, and no marker.
+  const closes = [
+    { site: 10, marker: ` ${MARKERS.RETURN}`, reads: 'returned because the request was outside their scope',
+      fixed: (out) => [`[SYSTEM: content-lead returned because the request was outside their scope. Here is what they said:\n\n--- content-lead ---\n${out}`],
+      reply: 'Routing.' },
+    { site: 11, marker: ` ${MARKERS.COMPLETE}`, reads: 'has finished the delegated work',
+      fixed: (out) => [`[SYSTEM: pipeline-complete] content-lead has finished the delegated work. Here is their final message to the conversation:\n\n--- content-lead ---\n${out}`],
+      reply: '<silent>' },
+    { site: 12, marker: '', exitAfterTurn: 0, reads: 'completed their work',
+      fixed: (out) => [`[SYSTEM: pipeline-complete] content-lead completed their work. Here is their final message to the conversation:\n\n--- content-lead ---\n${out}`],
+      reply: '<silent>' },
+  ];
+  for (const close of closes) {
+    test(`a leader started again for a delegate's close (${close.reads}) is sent it as text alone, and a deleted file's line in it as not available`, async () => {
+      for (const half of ['T', 'G']) {
+        const tag = `${close.site}${half}`;
+        const id = h.freshConvoId(`turn-close-${tag}`);
+        const gone = half === 'G' ? await goneLine(id) : null;
+        const out = gone ? `OUT-${tag} ${gone.line}` : `OUT-${tag} here it is`;
+        const leadRule = { match: { agent: 'content-lead', promptIncludes: `BRIEF-${tag}` }, turn: [{ text: `${out}${close.marker}` }] };
+        if (close.exitAfterTurn !== undefined) leadRule.exitAfterTurn = close.exitAfterTurn;
+        scenario([
+          { match: { agent: 'chief-of-staff', promptIncludes: `ASK-${tag}`, promptExcludes: '[SYSTEM:' },
+            turn: [{ agentTool: { subagent_type: 'content-lead', prompt: `BRIEF-${tag} go` } }] },
+          leadRule,
+          { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM:' }, turn: [{ text: close.reply }] },
+        ]);
+        h.clearInvocations();
+        chat(id, `ASK-${tag} please`);
+        const sent = await readBy('chief-of-staff', [close.reads, `OUT-${tag}`]);
+        assert.ok(sent.resume, 'read by the leader started again by its session');
+        if (gone) {
+          noLonger(sent, gone);
+          for (const part of close.fixed(swap(out, gone))) assert.ok(sent.content.includes(part), 'the output with its line replaced');
+        } else {
+          plain(sent);
+          for (const part of close.fixed(out)) assert.ok(sent.content.includes(part), `the prompt holds ${part}`);
+          if (close.site === 10) assert.ok(sent.content.includes(`The user's latest request was: "BRIEF-${tag} go"`), 'and the brief as the request');
+        }
+        h.reapConvo(id);
+      }
+    });
+  }
+
+  test('a follow-up passed on to the leader when a delegation ends is sent as text alone, and a deleted file\'s line in it as not available', async () => {
+    for (const half of ['T', 'G']) {
+      const id = h.freshConvoId(`turn-ended-${half}`);
+      const gone = half === 'G' ? await goneLine(id) : null;
+      const follow = gone ? `FOLLOW-13${half} ${gone.line}` : `FOLLOW-13${half} please`;
+      scenario([
+        { match: { agent: 'chief-of-staff', promptIncludes: `SETUP-13${half}`, promptExcludes: '[SYSTEM:' }, turn: [{ text: 'Ready.' }] },
+        { match: { agent: 'content-lead', promptIncludes: `FOLLOW-13${half}` }, turn: [{ text: 'Handled.' }] },
+        { match: { agent: 'content-lead', promptIncludes: `TASK-13${half}` }, turn: [{ text: 'Here.' }] },
+        { match: { agent: 'chief-of-staff', promptIncludes: 'The specialist just returned because the user asked' }, turn: [{ text: 'Routing.' }] },
+      ]);
+      h.clearInvocations();
+      chat(id, `SETUP-13${half}`);
+      await client.waitForEvent('system', 'done', id);
+      const since = client.messages.length;
+      client.send({ type: 'delegate', conversationId: id, targetAgent: 'content-lead', context: `TASK-13${half} please` });
+      assert.ok(await arrived((m) => m.type === 'result' && m._conversationId === id && m._agent === 'content-lead', { since, timeout: 15000 }), 'the delegate answers');
+      const mid = client.messages.length;
+      chat(id, follow, undefined, { agent: 'content-lead' });
+      assert.ok(await arrived((m) => m.type === 'result' && m._conversationId === id && m._agent === 'content-lead', { since: mid, timeout: 15000 }), 'and the follow-up');
+      client.send({ type: 'end_delegation', conversationId: id });
+      const sent = await readBy('chief-of-staff', 'The specialist just returned because the user asked');
+      const expected = routeOn('The specialist', follow);
+      if (gone) {
+        noLonger(sent, gone);
+        assert.strictEqual(sent.content, swap(expected, gone), 'the routing prompt with its line replaced');
+      } else {
+        plain(sent, expected);
+      }
+      h.reapConvo(id);
+    }
   });
 });
 
