@@ -40,6 +40,8 @@
 //                                    // startup exactly as Claude Code refuses an
 //                                    // id it has no session file for
 //     "refusalExitMs": 0,            // how long the refused process lingers
+//     "resumeRefusalUntilFile": "...", // hold that refusal back, writing
+//                                    // nothing, until this file exists
 //     "refusalSplitAt": 0,           // write the refusal line in pieces
 //     "refusalPreamble": "...",      // stderr written just before the refusal
 //     "refusalPreambleJoined": false, // write that preamble and the first piece
@@ -452,8 +454,12 @@ if (REFUSED_RESUME) {
   const finish = () => (wait > 0 ? setTimeout(() => exitWhenWritten(1), wait) : exitWhenWritten(1));
   // `refusalAfterInit` sends the init envelope for the refused id first. The
   // real binary is not known to, but nothing guarantees the order either.
-  if (TOP.refusalAfterInit) { writeOut(fx.toLines([fx.init(RESUME)])); initSent = true; }
-  writePieces(pieces, finish);
+  // `resumeRefusalUntilFile` holds all of it back until that file exists, so
+  // a test can change the workspace while the resume is still undecided.
+  whenFileExists(TOP.resumeRefusalUntilFile, () => {
+    if (TOP.refusalAfterInit) { writeOut(fx.toLines([fx.init(RESUME)])); initSent = true; }
+    writePieces(pieces, finish);
+  });
 }
 
 // AN AGENT FILE CLAUDE CODE CANNOT LOAD, refused the way the real binary
