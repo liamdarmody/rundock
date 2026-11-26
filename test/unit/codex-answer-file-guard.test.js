@@ -400,9 +400,12 @@ describe('the Codex agent is told when its change is put back', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'runtime', 'codex-glue.js'), 'utf8');
     const CALL = 'server.startTurn(threadId, ';
     const inputs = [];
-    for (let i = src.indexOf(CALL); i >= 0; i = src.indexOf(CALL, i + 1)) inputs.push(src.slice(i + CALL.length, i + CALL.length + 40));
+    // Each call with the line before it, where its input is made.
+    for (let i = src.indexOf(CALL); i >= 0; i = src.indexOf(CALL, i + 1)) inputs.push(src.slice(src.lastIndexOf('\n', src.lastIndexOf('\n', i) - 1) + 1, i + CALL.length + 40));
     assert.strictEqual(inputs.length, 2, 'both turn paths are found, so a call that is renamed fails rather than passing on none');
-    for (const input of inputs) assert.ok(input.startsWith('withAgentNotice(convoId, '), input);
+    for (const input of inputs) {
+      assert.match(input, /const turn = codexTurn\(convoId, withAgentNotice\(convoId, \w+\)\);\n\s+const sub = server\.startTurn\(threadId, turn\.content, \{\}, turn\.extraItems\)/, input);
+    }
   });
 });
 

@@ -24,7 +24,11 @@ const { receiveAttachments } = require('../../lib/attachments/receive.js');
 
 let client;
 before(async () => {
-  await h.boot({ agents: standardTeam() });
+  await h.boot({ agents: {
+    ...standardTeam(),
+    researcher: agentFile({ name: 'researcher', displayName: 'Ida', role: 'Researcher', description: 'Researches suppliers',
+      type: 'specialist', order: 5, reportsTo: 'chief-of-staff', runtime: 'codex', body: 'You are Ida, the researcher.' }),
+  } });
   client = await h.connect();
 });
 after(async () => h.shutdown());
@@ -693,6 +697,90 @@ describe('each turn the server writes for an agent of its own accord', () => {
       }
       h.reapConvo(id);
     }
+  });
+});
+
+describe('each turn a Codex agent is handed', () => {
+  // The params of the one turn/start whose text holds `tag`.
+  async function turnStartWith(tag) {
+    const pick = () => h.readInvocations().filter((i) => i.mode === 'app-server' && i.method === 'turn/start'
+      && i.params && [].concat(i.params.input).some((p) => p && p.type === 'text' && String(p.text).includes(tag)));
+    assert.ok(await h.waitUntil(() => pick().length > 0, { timeout: 15000 }), `a turn with ${tag} is started`);
+    const found = pick();
+    assert.strictEqual(found.length, 1, `one turn with ${tag}`);
+    return found[0].params;
+  }
+  // The thread the conversation's Codex agent was given, once it says so.
+  async function threadOf(id, since) {
+    const init = await arrived((m) => m.type === 'system' && m.subtype === 'init' && m._conversationId === id && m._agent === 'researcher', { since, timeout: 15000 });
+    assert.ok(init && typeof init._sessionId === 'string', 'the Codex agent is given a thread');
+    return init._sessionId;
+  }
+  // Text alone: one text item on the thread, the input it always was.
+  function codexPlain(params, threadId, text) {
+    assert.deepStrictEqual(params, { threadId, input: [{ type: 'text', text }] }, 'text alone is the one text item it always was');
+  }
+  // A deleted file's line, sent as not available, with no path anywhere.
+  function codexNoLonger(params, threadId, gone) {
+    assert.strictEqual(params.threadId, threadId, 'on the agent\'s thread');
+    assert.strictEqual(params.input.length, 1, 'one item');
+    assert.strictEqual(params.input[0].type, 'text', 'of text');
+    assert.ok(params.input[0].text.includes(gone.form), 'the deleted file is named as not available');
+    assert.ok(!JSON.stringify(params).includes('.rundock/attachments/'), 'and no path is given');
+  }
+
+  test('a Codex delegate\'s brief is sent as text alone, and a deleted file\'s line in it as not available', async () => {
+    for (const half of ['T', 'G']) {
+      const id = h.freshConvoId(`turn-codex-brief-${half}`);
+      const gone = half === 'G' ? await goneLine(id) : null;
+      const brief = gone ? `BRIEF-14G ${gone.line}` : 'BRIEF-14T find two';
+      scenario([
+        { match: { agent: 'chief-of-staff', promptIncludes: `SETUP-14${half}` }, turn: [{ text: 'Ready.' }] },
+        { match: { promptIncludes: '[SYSTEM:' }, turn: [{ text: '<silent>' }] },
+      ]);
+      h.writeCodexScenario([{ match: { promptIncludes: `BRIEF-14${half}` }, text: `DONE-BRIEF-14${half}` }]);
+      h.clearInvocations();
+      chat(id, `SETUP-14${half}`);
+      await client.waitForEvent('system', 'done', id);
+      const since = client.messages.length;
+      client.send({ type: 'delegate', conversationId: id, targetAgent: 'researcher', context: brief });
+      const threadId = await threadOf(id, since);
+      const params = await turnStartWith(`BRIEF-14${half}`);
+      if (gone) {
+        codexNoLonger(params, threadId, gone);
+        assert.ok(params.input[0].text.includes(swap(brief, gone)), 'the brief with its line replaced');
+      } else {
+        codexPlain(params, threadId, params.input[0].text);
+        assert.ok(params.input[0].text.includes(brief), 'the brief as it was written');
+      }
+      assert.ok(await arrived((m) => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === id
+        && m.fromAgent === 'researcher', { since, timeout: 15000 }), 'the delegate hands back');
+      h.reapConvo(id);
+    }
+  });
+
+  test('a Codex conversation\'s turn is sent as text alone, and a deleted file\'s line in it as not available', async () => {
+    const id = h.freshConvoId('turn-codex-chat');
+    h.writeCodexScenario(['OPEN-15', 'PLAIN-15', 'GONE-15'].map((tag) => ({ match: { promptIncludes: tag }, text: `DONE-${tag}` })));
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'OPEN-15 hello', undefined, { agent: 'researcher' });
+    const threadId = await threadOf(id, since);
+    assert.ok(await resultFor(id, 'DONE-OPEN-15', since), 'the first message is answered');
+    await client.waitForEvent('system', 'done', id);
+    const gone = await goneLine(id);
+    const plainAt = client.messages.length;
+    chat(id, 'PLAIN-15 just words', undefined, { agent: 'researcher', sessionId: threadId });
+    assert.ok(await resultFor(id, 'DONE-PLAIN-15', plainAt), 'the text is answered');
+    await client.waitFor((m) => m.type === 'system' && m.subtype === 'done' && m._conversationId === id, { since: plainAt, label: 'the text\'s turn ends' });
+    const goneAt = client.messages.length;
+    chat(id, `GONE-15 again ${gone.line}`, undefined, { agent: 'researcher', sessionId: threadId });
+    assert.ok(await resultFor(id, 'DONE-GONE-15', goneAt), 'the line is answered');
+    codexPlain(await turnStartWith('PLAIN-15'), threadId, 'PLAIN-15 just words');
+    const params = await turnStartWith('GONE-15');
+    codexNoLonger(params, threadId, gone);
+    codexPlain(params, threadId, `GONE-15 again ${gone.form}`);
+    h.reapConvo(id);
   });
 });
 
