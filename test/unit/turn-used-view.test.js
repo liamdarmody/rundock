@@ -565,6 +565,8 @@ describe('what the line leaves alone', () => {
     assert.strictEqual(next.querySelector('.turn-used, .activity-summary'), null);
   });
 
+  // Pins main's stylesheet (the rule stays where it was); its sibling "the
+  // bubble after a summary divider holds no line" fails on main.
   test('the rule that hides an empty continuation is unchanged, at line 309', () => {
     assert.strictEqual(CHAT_CSS.split('\n')[308], CONTINUATION_RULE);
   });
