@@ -8,7 +8,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 
 ### Added
 
-- **Attach files to a message:** the + button beside the message field attaches images (PNG, JPEG, GIF, WebP), PDFs and text, Markdown or CSV files, up to 5 files and 20 MB per message. Rundock keeps them with the conversation, says under the message field if it couldn't, and removes them when the conversation is deleted. If it can't remove them, a notice says where they are and stays until you close it.
+- **Attach files to a message:** the + button beside the message field attaches images (PNG, JPEG, GIF, WebP), PDFs and text, Markdown or CSV files, up to 5 files and 20 MB per message. Rundock keeps them with the conversation, says under the message field if it couldn't, and removes them when the conversation is deleted. If it can't remove them, a notice says where they are and stays until you close it. An agent on Claude Code sees attached images and PDFs with your message, and so does a teammate it hands the conversation to.
 
 ### Changed
 
