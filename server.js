@@ -1723,6 +1723,10 @@ wss.on('connection', (ws) => {
             existing.toolCalls = [];
             existing.turnStartTime = Date.now();
             existing.lastUserMessage = msg.content;
+            // The record entry of the message this turn answers, when it has
+            // one; a message with none leaves no earlier one behind.
+            if (msg.attachmentEntry) existing.attachmentEntry = msg.attachmentEntry;
+            else delete existing.attachmentEntry;
             existing.scopeReturnSource = null; // User sent new message, allow re-delegation
             resetAutoResume(convoId); // User spoke, reset circuit breaker
             if (existing.delegation) { existing.receivedFollowUp = true; }
@@ -1731,7 +1735,7 @@ wss.on('connection', (ws) => {
             const followUp = withFreshCatchUp(existing, msg.content);
             // Kept until this process has answered a turn: until then it may
             // yet be refused, and then never reads this.
-            noteUnstartedWrite(existing, followUp);
+            noteUnstartedWrite(existing, followUp, msg.attachmentEntry);
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUp } }) + '\n');
             // A Claude Code turn's heartbeat, until its result.
             if (existing.startTurnKeepalive) existing.startTurnKeepalive();
@@ -1792,6 +1796,7 @@ wss.on('connection', (ws) => {
               process: proc, buffer: '', processId, agentId: agentData ? agentData.id : 'default',
               responseText: '', exited: false, resultSent: false,
               lastUserMessage: msg.content,
+              attachmentEntry: msg.attachmentEntry,
               // Agent tool interception state
               pendingAgentTools: null,  // [{ blockIndex, inputJson, complete }]
               toolCalls: [], turnStartTime: Date.now()
@@ -1896,8 +1901,12 @@ wss.on('connection', (ws) => {
                 // process that never answered a turn (its first result clears
                 // the list), so it acted on none of it, and dropping it lost
                 // what the person had said.
+                // Each with the record entry it was sent with, or with none:
+                // never the first message's.
+                const keptBase = { ...freshMsg };
+                delete keptBase.attachmentEntry;
                 for (const carried of takeUnstartedWrites(entry)) {
-                  liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
+                  liveWs.emit('message', JSON.stringify({ ...keptBase, content: carried.content, ...(carried.attachmentEntry ? { attachmentEntry: carried.attachmentEntry } : {}) }));
                 }
                 return;
               }
@@ -1970,6 +1979,7 @@ wss.on('connection', (ws) => {
           }, (err) => handleChatSpawnError(err, convoId));
 
           const entry = { process: proc, buffer: '', processId, agentId: agentData ? agentData.id : 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
+          if (msg.attachmentEntry) entry.attachmentEntry = msg.attachmentEntry;
           processes.set(convoId, entry);
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));

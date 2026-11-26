@@ -705,8 +705,13 @@ describe('every path back into the handler writes once and records once', () => 
     }
   }
 
+  // The retry carries the first message's reference and the message carried
+  // after it its own, so each is checked against the record as it is: with
+  // only the first's entry gone, the second still goes, alone, to a fresh
+  // start; with the record unreadable, neither does.
   for (const [how, label] of BROKEN) {
-    test(`the carried loop is refused when the first message's entry is ${label}, and reaches no process`, async () => {
+    const secondGoes = how === 'removed';
+    test(`the carried loop refuses the first message when its entry is ${label}, and ${secondGoes ? 'the second goes on with its own' : 'neither reaches a process'}`, async () => {
       const id = h.freshConvoId('carried-broken');
       const dead = `dead-broken-carried-${how}`;
       seed(id, dead);
@@ -727,11 +732,13 @@ describe('every path back into the handler writes once and records once', () => 
       assert.ok(await h.waitUntil(() => userRows(id).length === 2), 'and reaches the refused process');
       assert.strictEqual(spawnsFor(id).length, 1, 'which is not yet retried');
       breakRecord(id, first.entry.id, how);
-      // The retry and the message carried after it both carry the first
-      // message's reference, so each is refused.
-      assert.deepStrictEqual(await refusedOnReentry(id, mid), [BAD_ENTRY, BAD_ENTRY], 'one bad-entry refusal for each re-entry');
-      assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), [dead], 'the refused resume, and no fresh start');
-      assert.deepStrictEqual(h.readPrompts().filter((p) => !p.resume && p.prompt.includes('-CB ')), [], 'nothing written to a fresh stdin');
+      assert.deepStrictEqual(await refusedOnReentry(id, mid), secondGoes ? [BAD_ENTRY] : [BAD_ENTRY, BAD_ENTRY],
+        secondGoes ? 'one bad-entry refusal, for the first' : 'one bad-entry refusal for each re-entry');
+      if (secondGoes) assert.ok(await resultFor(id, 'DONE-SECOND-CB', mid), 'the second is answered');
+      assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), secondGoes ? [dead, null] : [dead],
+        secondGoes ? 'the refused resume, then a fresh start for the second' : 'the refused resume, and no fresh start');
+      assert.deepStrictEqual(h.readPrompts().filter((p) => !p.resume && p.prompt.includes('-CB ')).map((p) => p.prompt), secondGoes ? [second.content] : [],
+        secondGoes ? 'the second alone written to a fresh stdin' : 'nothing written to a fresh stdin');
       assert.deepStrictEqual(userRows(id).map((r) => r.text), [first.content, second.content], 'the first pass\'s rows, and none for the retry');
       h.reapConvo(id);
     });
