@@ -389,6 +389,11 @@ const CONNECTOR_ASK_FLOW = { src: path.join(ROOT, 'lib', 'protocol', 'handlers',
 const CONNECTOR_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-change-card.test.js' };
 const CONNECTOR_WIRING = { src: path.join(ROOT, 'server.js'), suite: 'test/integration/connector-asks.test.js' };
 const CONNECTOR_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), suite: 'test/unit/connector-change-card.test.js' };
+// The one writer of a connector change, through its own suite, through the
+// handlers that call it, and through the real server.
+const CONNECTOR_WRITE = { src: path.join(ROOT, 'lib', 'workspace', 'connector-write.js'), suite: 'test/unit/connector-write.test.js' };
+const CONNECTOR_WRITE_ASK = { src: path.join(ROOT, 'lib', 'workspace', 'connector-write.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
+const CONNECTOR_WRITE_FLOW = { src: path.join(ROOT, 'lib', 'workspace', 'connector-write.js'), suite: 'test/integration/connector-asks.test.js' };
 // The per-user connector file, through the real hook and the card's words.
 const SECRETS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/connector-secrets-file.test.js' };
 const SECRETS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-secrets-file.test.js' };
@@ -400,7 +405,7 @@ const RUNS_NOTE = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'te
 // line say what the file decides.
 const GUARD_RUNS = { src: path.join(ROOT, 'lib', 'workspace', 'answer-file-guard.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_LAUNCHER = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
-const GUARD_RUNS_CONNECTOR = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'team.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
+const GUARD_RUNS_CONNECTOR = { src: path.join(ROOT, 'lib', 'workspace', 'connector-write.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 const GUARD_RUNS_LINE = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: 'test/unit/codex-what-runs-guard.test.js' };
 // The guide's instruction about sound hooks, which would otherwise send an
@@ -3449,33 +3454,33 @@ const MUTATIONS = [
     "  const why = RESTORE_REASON[require('../../public/permissions.js').answerFileKind(relative)] || 'it holds the person\\'s permission answers';",
     "  const why = 'it holds the person\\'s permission answers';"],
   // ===== AN AGENT'S CONNECTOR CHANGE ASKS FIRST =====
-  [CONNECTOR_ASK, 'Connector: a change is written without asking',
+  [CONNECTOR_WRITE_ASK, 'Connector: a change is written without asking',
     'function askFirst(ctx, ws, msg, toolName, toolInput, write) {\n',
     'function askFirst(ctx, ws, msg, toolName, toolInput, write) {\n  return write();\n'],
-  [CONNECTOR_ASK_FLOW, 'Connector: through the real server, a change is written without asking',
+  [CONNECTOR_WRITE_FLOW, 'Connector: through the real server, a change is written without asking',
     'function askFirst(ctx, ws, msg, toolName, toolInput, write) {\n',
     'function askFirst(ctx, ws, msg, toolName, toolInput, write) {\n  return write();\n'],
-  [CONNECTOR_ASK, 'Connector: an allow no person gave on a card writes',
+  [CONNECTOR_WRITE_ASK, 'Connector: an allow no person gave on a card writes',
     '      if (allow === true && how && how.card === true) { write(); return; }',
     '      if (allow === true) { write(); return; }'],
-  [CONNECTOR_ASK, 'Connector: Deny or no answer writes',
+  [CONNECTOR_WRITE_ASK, 'Connector: Deny or no answer writes',
     '      if (allow === true && how && how.card === true) { write(); return; }',
     '      if (true) { write(); return; }'],
-  [CONNECTOR_ASK_FLOW, 'Connector: the file is not read again once allowed',
-    "    const now = connectorFile(ctx, ws);\n    if (!now) return;\n    now.parsed.mcpServers[msg.name] = entry;\n    writeConnectorFile(ctx, ws, now.file, now.parsed, 'saved', msg.name);",
-    "    found.parsed.mcpServers[msg.name] = entry;\n    writeConnectorFile(ctx, ws, found.file, found.parsed, 'saved', msg.name);"],
-  [CONNECTOR_ASK, 'Connector: the card is not told the command or its arguments',
+  [CONNECTOR_WRITE_FLOW, 'Connector: the file is not read again once allowed',
+    "      const now = connectorFile(ctx, heard, workspace);\n      if (!now) return refuse('unreadable', unread);\n",
+    '      const now = found;\n'],
+  [CONNECTOR_WRITE_ASK, 'Connector: the card is not told the command or its arguments',
     '    input.command = e.command;\n    input.args = Array.isArray(e.args) ? e.args.map(String) : [];\n',
     ''],
-  [CONNECTOR_ASK, 'Connector: the card is not told the URL',
+  [CONNECTOR_WRITE_ASK, 'Connector: the card is not told the URL',
     "  if (typeof e.url === 'string') input.url = e.url;\n",
     ''],
-  [CONNECTOR_ASK, 'Connector: the card is not told what environment is set',
+  [CONNECTOR_WRITE_ASK, 'Connector: the card is not told what environment is set',
     '  if (keys(e.env).length) input.env = keys(e.env);\n',
     ''],
-  [CONNECTOR_ASK, 'Connector: a removal is described as an addition',
-    "connectorCardInput(msg.name, 'remove',",
-    "connectorCardInput(msg.name, 'add',"],
+  [CONNECTOR_WRITE_ASK, 'Connector: a removal is described as an addition',
+    "connectorCardInput(name, 'remove',",
+    "connectorCardInput(name, 'add',"],
   [CONNECTOR_CARD, 'Connector card: graded below high, so a saved allow answers it and Always allow is offered',
     "    if (toolName === 'SaveConnector' || toolName === 'DeleteConnector') return 'high';\n",
     ''],
@@ -3515,12 +3520,21 @@ const MUTATIONS = [
   [CONNECTOR_CARD, 'Connector card: the header helper is not shown',
     '        lines.push(`Header helper: ${shownValue(i.headersHelper)}`);\n',
     ''],
+  [CONNECTOR_CARD, 'Connector card: a replace card leaves out the entry it replaces',
+    "['Now:', ...connectorLines(current), 'After:', ",
+    "['After:', "],
+  [CONNECTOR_CARD, 'Connector card: a connector that sets PATH is not warned about',
+    'NODE_OPTIONS|PATH|LD_PRELOAD',
+    'NODE_OPTIONS|LD_PRELOAD'],
+  [CONNECTOR_CARD, 'Connector card: the warning is drawn from the entry being replaced',
+    'const warned = list(i.env).filter(',
+    'const warned = list(Object(i.current).env).filter('],
   [CONNECTOR_VIEW, 'Connector card: the detail is clipped like any other',
     "        : (toolName === 'SaveConnector' || toolName === 'DeleteConnector')\n",
     "        : false\n"],
-  [CONNECTOR_ASK_FLOW, 'Connector: a save replaces every connector already there',
-    '    now.parsed.mcpServers[msg.name] = entry;\n',
-    '    now.parsed.mcpServers = { [msg.name]: entry };\n'],
+  [CONNECTOR_WRITE_FLOW, 'Connector: a save replaces every connector already there',
+    '      else now.parsed.mcpServers[name] = entry;\n',
+    '      else now.parsed.mcpServers = { [name]: entry };\n'],
   [CONNECTOR_WIRING, 'Connector: the card\'s id can be guessed from the clock',
     "  const requestId = 'perm-' + require('crypto').randomBytes(16).toString('hex');",
     "  const requestId = 'perm-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);"],
@@ -3530,25 +3544,25 @@ const MUTATIONS = [
   // A connector change the file cannot hold as the card shows it is refused
   // before any card and before the file is read: the name rule and the entry
   // rule, each broken alone.
-  [CONNECTOR_ASK, 'Connector: a name may start with a dot or a dash',
+  [CONNECTOR_WRITE_ASK, 'Connector: a name may start with a dot or a dash',
     'const CONNECTOR_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;',
     'const CONNECTOR_NAME = /^[A-Za-z0-9_.-][A-Za-z0-9_.-]{0,63}$/;'],
-  [CONNECTOR_ASK, 'Connector: a name of 65 characters passes',
+  [CONNECTOR_WRITE_ASK, 'Connector: a name of 65 characters passes',
     'const CONNECTOR_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;',
     'const CONNECTOR_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,64}$/;'],
-  [CONNECTOR_ASK, 'Connector: a name holding a dot-dot passes',
+  [CONNECTOR_WRITE_ASK, 'Connector: a name holding a dot-dot passes',
     ' && !/\\.\\./.test(name)',
     ''],
-  [CONNECTOR_ASK, 'Connector: a name of __proto__ passes',
+  [CONNECTOR_WRITE_ASK, 'Connector: a name of __proto__ passes',
     "const RESERVED_CONNECTOR_NAMES = new Set(['__proto__', 'constructor', 'prototype']);",
     "const RESERVED_CONNECTOR_NAMES = new Set(['constructor', 'prototype']);"],
-  [CONNECTOR_ASK, 'Connector: a name of constructor passes',
+  [CONNECTOR_WRITE_ASK, 'Connector: a name of constructor passes',
     "const RESERVED_CONNECTOR_NAMES = new Set(['__proto__', 'constructor', 'prototype']);",
     "const RESERVED_CONNECTOR_NAMES = new Set(['__proto__', 'prototype']);"],
-  [CONNECTOR_ASK, 'Connector: a name of prototype passes',
+  [CONNECTOR_WRITE_ASK, 'Connector: a name of prototype passes',
     "const RESERVED_CONNECTOR_NAMES = new Set(['__proto__', 'constructor', 'prototype']);",
     "const RESERVED_CONNECTOR_NAMES = new Set(['__proto__', 'constructor']);"],
-  [CONNECTOR_ASK, 'Connector: a name that is not a string is read as one, so a missing name passes as undefined',
+  [CONNECTOR_WRITE_ASK, 'Connector: a name that is not a string is read as one, so a missing name passes as undefined',
     "  return typeof name === 'string' && CONNECTOR_NAME.test(name)",
     '  return CONNECTOR_NAME.test(name)'],
   [CONNECTOR_ASK, 'Connector: a removal checks the name by the old rule, not the shared one',
@@ -3577,7 +3591,12 @@ const MUTATIONS = [
     + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
     + '    return;\n'
     + '  }\n'
-    + '  const found = connectorFile(ctx, ws);\n'
+    + '  const hidden = hiddenSettingRefusal(entry);\n'
+    + '  if (hidden) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws, getWorkspace());\n'
     + '  if (!found) return;\n',
     'function handleSaveConnector(ctx, ws, msg) {\n'
     + '  let entry;\n'
@@ -3596,78 +3615,111 @@ const MUTATIONS = [
     + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
     + '    return;\n'
     + '  }\n'
-    + '  const found = connectorFile(ctx, ws);\n'
+    + '  const hidden = hiddenSettingRefusal(entry);\n'
+    + '  if (hidden) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws, getWorkspace());\n'
     + '  if (!found) return;\n'
     + '  if (!validConnectorName(msg.name)) {\n'
     + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_NAME_REFUSED }));\n"
     + '    return;\n'
     + '  }\n'],
-  [CONNECTOR_ASK, 'Connector: an entry with neither a command nor a URL passes',
+  [CONNECTOR_WRITE_ASK, 'Connector: an entry with neither a command nor a URL passes',
     "  return typeof entry.command === 'string' || typeof entry.url === 'string';",
     '  return true;'],
-  [CONNECTOR_ASK, 'Connector: an entry whose command or URL is not a string passes',
+  [CONNECTOR_WRITE_ASK, 'Connector: an entry whose command or URL is not a string passes',
     "  return typeof entry.command === 'string' || typeof entry.url === 'string';",
     '  return entry.command !== undefined || entry.url !== undefined;'],
-  [CONNECTOR_ASK_FLOW, 'Connector: through the real server, the entry is checked only once the card is allowed',
-    '  if (!validConnectorEntry(entry)) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
-    + '    return;\n'
-    + '  }\n'
-    + '  const unshown = unshownConnectorKey(entry);\n'
-    + '  if (unshown) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
-    + '    return;\n'
-    + '  }\n'
-    + '  const found = connectorFile(ctx, ws);\n'
-    + '  if (!found) return;\n'
-    + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n",
-    '  const unshown = unshownConnectorKey(entry);\n'
-    + '  if (unshown) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
-    + '    return;\n'
-    + '  }\n'
-    + '  const found = connectorFile(ctx, ws);\n'
-    + '  if (!found) return;\n'
-    + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n"
-    + '    if (!validConnectorEntry(entry)) {\n'
-    + "      ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
-    + '      return;\n'
-    + '    }\n'],
+  [CONNECTOR_WRITE_FLOW, 'Connector: through the real server, the entry is checked only once the card is allowed',
+    "      if (!validConnectorEntry(entry)) return refuse('invalid', CONNECTOR_ENTRY_REFUSED);\n"
+    + "      const unshown = unshownConnectorKey(entry);\n"
+    + "      if (unshown) return refuse('invalid', connectorShapeRefused(unshown));\n"
+    + "      const hidden = hiddenSettingRefusal(entry);\n"
+    + "      if (hidden) return refuse('invalid', hidden);\n"
+    + "    }\n"
+    + "    if (!CHANGES.has(change) || !SOURCES.has(source) || typeof workspace !== 'string' || !workspace) return refuse('invalid', CHANGE_REFUSED);\n"
+    + "    if (source === 'rundock' && change !== 'add') return refuse('invalid', SETUP_ADDS_ONLY);\n"
+    + "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
+    + "    // connectorFile says why it could not read; that message is the outcome.\n"
+    + "    let unread = '';\n"
+    + "    const heard = { send: (data) => { unread = JSON.parse(data).message; } };\n"
+    + "    // What the file must still hold for the change to be the one asked about.\n"
+    + "    const stillAsAsked = (read) => {\n"
+    + "      if (change === 'add' && has(read, name)) return ['exists', alreadySetUp(name)];\n"
+    + "      if (change !== 'add' && !has(read, name)) return ['absent', notConfigured(name)];\n"
+    + "      return null;\n"
+    + "    };\n"
+    + "    const found = connectorFile(ctx, heard, workspace);\n"
+    + "    if (!found) return refuse('unreadable', unread);\n"
+    + "    const unlike = stillAsAsked(found);\n"
+    + "    if (unlike) return refuse(...unlike);\n"
+    + "    const before = found.parsed.mcpServers[name];\n"
+    + "    const input = change === 'remove' ? connectorCardInput(name, 'remove', before) : connectorCardInput(name, change, entry);\n"
+    + "    if (change === 'replace') input.current = currentCardInput(before);\n"
+    + "    askFirst(ctx, ws, { conversationId, refuse }, change === 'remove' ? 'DeleteConnector' : 'SaveConnector', input, () => {\n",
+    "      const unshown = unshownConnectorKey(entry);\n"
+    + "      if (unshown) return refuse('invalid', connectorShapeRefused(unshown));\n"
+    + "      const hidden = hiddenSettingRefusal(entry);\n"
+    + "      if (hidden) return refuse('invalid', hidden);\n"
+    + "    }\n"
+    + "    if (!CHANGES.has(change) || !SOURCES.has(source) || typeof workspace !== 'string' || !workspace) return refuse('invalid', CHANGE_REFUSED);\n"
+    + "    if (source === 'rundock' && change !== 'add') return refuse('invalid', SETUP_ADDS_ONLY);\n"
+    + "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
+    + "    // connectorFile says why it could not read; that message is the outcome.\n"
+    + "    let unread = '';\n"
+    + "    const heard = { send: (data) => { unread = JSON.parse(data).message; } };\n"
+    + "    // What the file must still hold for the change to be the one asked about.\n"
+    + "    const stillAsAsked = (read) => {\n"
+    + "      if (change === 'add' && has(read, name)) return ['exists', alreadySetUp(name)];\n"
+    + "      if (change !== 'add' && !has(read, name)) return ['absent', notConfigured(name)];\n"
+    + "      return null;\n"
+    + "    };\n"
+    + "    const found = connectorFile(ctx, heard, workspace);\n"
+    + "    if (!found) return refuse('unreadable', unread);\n"
+    + "    const unlike = stillAsAsked(found);\n"
+    + "    if (unlike) return refuse(...unlike);\n"
+    + "    const before = found.parsed.mcpServers[name];\n"
+    + "    const input = change === 'remove' ? connectorCardInput(name, 'remove', before) : connectorCardInput(name, change, entry);\n"
+    + "    if (change === 'replace') input.current = currentCardInput(before);\n"
+    + "    askFirst(ctx, ws, { conversationId, refuse }, change === 'remove' ? 'DeleteConnector' : 'SaveConnector', input, () => {\n"
+    + "        if (!validConnectorEntry(entry)) return refuse('invalid', CONNECTOR_ENTRY_REFUSED);\n"],
   // An entry holding a key the card shows in a shape it cannot show exactly is
   // refused before any card and before the file is read: each key's shape
   // broken alone, then the order the first bad key is named in, then where the
   // check runs.
-  [CONNECTOR_ASK, 'Connector: a command that is not a string passes beside a URL',
+  [CONNECTOR_WRITE_ASK, 'Connector: a command that is not a string passes beside a URL',
     "  ['command', isString],\n",
     "  ['command', () => true],\n"],
-  [CONNECTOR_ASK, 'Connector: args holding something other than strings pass',
+  [CONNECTOR_WRITE_ASK, 'Connector: args holding something other than strings pass',
     "  ['args', (v, e) => isString(e.command) && Array.isArray(v) && v.every(isString)],\n",
     "  ['args', (v, e) => isString(e.command) && Array.isArray(v)],\n"],
-  [CONNECTOR_ASK, 'Connector: args that are not a list pass',
+  [CONNECTOR_WRITE_ASK, 'Connector: args that are not a list pass',
     "  ['args', (v, e) => isString(e.command) && Array.isArray(v) && v.every(isString)],\n",
     "  ['args', (v, e) => isString(e.command) && (!Array.isArray(v) || v.every(isString))],\n"],
-  [CONNECTOR_ASK, 'Connector: a URL that is not a string passes beside a command',
+  [CONNECTOR_WRITE_ASK, 'Connector: a URL that is not a string passes beside a command',
     "  ['url', isString],\n",
     "  ['url', () => true],\n"],
-  [CONNECTOR_ASK, 'Connector: a type that is not a string passes',
+  [CONNECTOR_WRITE_ASK, 'Connector: a type that is not a string passes',
     "  ['type', isString],\n",
     "  ['type', () => true],\n"],
-  [CONNECTOR_ASK, 'Connector: a headersHelper that is not a string passes',
+  [CONNECTOR_WRITE_ASK, 'Connector: a headersHelper that is not a string passes',
     "  ['headersHelper', isString],\n",
     "  ['headersHelper', () => true],\n"],
-  [CONNECTOR_ASK, 'Connector: an env that is not a map passes',
+  [CONNECTOR_WRITE_ASK, 'Connector: an env that is not a map passes',
     "  ['env', isStringMap],\n",
     "  ['env', () => true],\n"],
-  [CONNECTOR_ASK, 'Connector: headers that are not a map pass',
+  [CONNECTOR_WRITE_ASK, 'Connector: headers that are not a map pass',
     "  ['headers', isStringMap],\n",
     "  ['headers', () => true],\n"],
-  [CONNECTOR_ASK, 'Connector: a list passes as an env or headers map',
+  [CONNECTOR_WRITE_ASK, 'Connector: a list passes as an env or headers map',
     " && !Array.isArray(v) && Object.values(v).every(isString);",
     ' && Object.values(v).every(isString);'],
-  [CONNECTOR_ASK, 'Connector: env or headers values that are not strings pass',
+  [CONNECTOR_WRITE_ASK, 'Connector: env or headers values that are not strings pass',
     " && !Array.isArray(v) && Object.values(v).every(isString);",
     ' && !Array.isArray(v);'],
-  [CONNECTOR_ASK, 'Connector: with several bad keys, the last in the order is named',
+  [CONNECTOR_WRITE_ASK, 'Connector: with several bad keys, the last in the order is named',
     '  const bad = SHOWN_CONNECTOR_SHAPES.find(',
     '  const bad = SHOWN_CONNECTOR_SHAPES.slice().reverse().find('],
   [CONNECTOR_ASK, 'Connector: an entry the card cannot show is not checked at all',
@@ -3679,37 +3731,124 @@ const MUTATIONS = [
     + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
     + '    return;\n'
     + '  }\n'
-    + '  const found = connectorFile(ctx, ws);\n'
+    + '  const hidden = hiddenSettingRefusal(entry);\n'
+    + '  if (hidden) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws, getWorkspace());\n'
     + '  if (!found) return;\n',
-    '  const found = connectorFile(ctx, ws);\n'
+    '  const hidden = hiddenSettingRefusal(entry);\n'
+    + '  if (hidden) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws, getWorkspace());\n'
     + '  if (!found) return;\n'
     + '  const unshown = unshownConnectorKey(entry);\n'
     + '  if (unshown) {\n'
     + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
     + '    return;\n'
     + '  }\n'],
-  [CONNECTOR_ASK_FLOW, 'Connector: through the real server, an entry the card cannot show is checked only once the card is allowed',
-    '  const unshown = unshownConnectorKey(entry);\n'
-    + '  if (unshown) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
-    + '    return;\n'
-    + '  }\n'
-    + '  const found = connectorFile(ctx, ws);\n'
-    + '  if (!found) return;\n'
-    + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n",
-    '  const found = connectorFile(ctx, ws);\n'
-    + '  if (!found) return;\n'
-    + "  askFirst(ctx, ws, msg, 'SaveConnector', connectorCardInput(msg.name, has(found, msg.name) ? 'replace' : 'add', entry), () => {\n"
-    + '    const unshown = unshownConnectorKey(entry);\n'
-    + '    if (unshown) {\n'
-    + "      ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
-    + '      return;\n'
-    + '    }\n'],
+  [CONNECTOR_WRITE_FLOW, 'Connector: through the real server, an entry the card cannot show is checked only once the card is allowed',
+    "      const unshown = unshownConnectorKey(entry);\n"
+    + "      if (unshown) return refuse('invalid', connectorShapeRefused(unshown));\n"
+    + "      const hidden = hiddenSettingRefusal(entry);\n"
+    + "      if (hidden) return refuse('invalid', hidden);\n"
+    + "    }\n"
+    + "    if (!CHANGES.has(change) || !SOURCES.has(source) || typeof workspace !== 'string' || !workspace) return refuse('invalid', CHANGE_REFUSED);\n"
+    + "    if (source === 'rundock' && change !== 'add') return refuse('invalid', SETUP_ADDS_ONLY);\n"
+    + "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
+    + "    // connectorFile says why it could not read; that message is the outcome.\n"
+    + "    let unread = '';\n"
+    + "    const heard = { send: (data) => { unread = JSON.parse(data).message; } };\n"
+    + "    // What the file must still hold for the change to be the one asked about.\n"
+    + "    const stillAsAsked = (read) => {\n"
+    + "      if (change === 'add' && has(read, name)) return ['exists', alreadySetUp(name)];\n"
+    + "      if (change !== 'add' && !has(read, name)) return ['absent', notConfigured(name)];\n"
+    + "      return null;\n"
+    + "    };\n"
+    + "    const found = connectorFile(ctx, heard, workspace);\n"
+    + "    if (!found) return refuse('unreadable', unread);\n"
+    + "    const unlike = stillAsAsked(found);\n"
+    + "    if (unlike) return refuse(...unlike);\n"
+    + "    const before = found.parsed.mcpServers[name];\n"
+    + "    const input = change === 'remove' ? connectorCardInput(name, 'remove', before) : connectorCardInput(name, change, entry);\n"
+    + "    if (change === 'replace') input.current = currentCardInput(before);\n"
+    + "    askFirst(ctx, ws, { conversationId, refuse }, change === 'remove' ? 'DeleteConnector' : 'SaveConnector', input, () => {\n",
+    "      const hidden = hiddenSettingRefusal(entry);\n"
+    + "      if (hidden) return refuse('invalid', hidden);\n"
+    + "    }\n"
+    + "    if (!CHANGES.has(change) || !SOURCES.has(source) || typeof workspace !== 'string' || !workspace) return refuse('invalid', CHANGE_REFUSED);\n"
+    + "    if (source === 'rundock' && change !== 'add') return refuse('invalid', SETUP_ADDS_ONLY);\n"
+    + "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
+    + "    // connectorFile says why it could not read; that message is the outcome.\n"
+    + "    let unread = '';\n"
+    + "    const heard = { send: (data) => { unread = JSON.parse(data).message; } };\n"
+    + "    // What the file must still hold for the change to be the one asked about.\n"
+    + "    const stillAsAsked = (read) => {\n"
+    + "      if (change === 'add' && has(read, name)) return ['exists', alreadySetUp(name)];\n"
+    + "      if (change !== 'add' && !has(read, name)) return ['absent', notConfigured(name)];\n"
+    + "      return null;\n"
+    + "    };\n"
+    + "    const found = connectorFile(ctx, heard, workspace);\n"
+    + "    if (!found) return refuse('unreadable', unread);\n"
+    + "    const unlike = stillAsAsked(found);\n"
+    + "    if (unlike) return refuse(...unlike);\n"
+    + "    const before = found.parsed.mcpServers[name];\n"
+    + "    const input = change === 'remove' ? connectorCardInput(name, 'remove', before) : connectorCardInput(name, change, entry);\n"
+    + "    if (change === 'replace') input.current = currentCardInput(before);\n"
+    + "    askFirst(ctx, ws, { conversationId, refuse }, change === 'remove' ? 'DeleteConnector' : 'SaveConnector', input, () => {\n"
+    + "        const unshown = unshownConnectorKey(entry);\n"
+    + "        if (unshown) return refuse('invalid', connectorShapeRefused(unshown));\n"],
   // The card shows args only beside a command string: drop that condition and
   // args beside a URL alone reach a card that leaves them off.
-  [CONNECTOR_ASK, 'Connector: args pass beside a URL with no command',
+  [CONNECTOR_WRITE_ASK, 'Connector: args pass beside a URL with no command',
     "  ['args', (v, e) => isString(e.command) && Array.isArray(v) && v.every(isString)],\n",
     "  ['args', (v, e) => Array.isArray(v) && v.every(isString)],\n"],
+  // The writer writes only while the file still holds what the card stood
+  // for, takes an agent's change only with its conversation, lets Rundock's
+  // setup only add, and shows a replace card the entry it would replace
+  // without its values; the save names the change from the file alone.
+  [CONNECTOR_WRITE, 'Connector: an add is not checked again at Allow, so it lands on a name set up meanwhile',
+    '      const moved = stillAsAsked(now);\n',
+    "      const moved = change === 'add' ? null : stillAsAsked(now);\n"],
+  [CONNECTOR_WRITE, 'Connector: a replace or removal is checked again at Allow by name only, not by entry',
+    "      if (change !== 'add' && !util.isDeepStrictEqual(now.parsed.mcpServers[name], before)) return refuse('changed', CHANGED);\n",
+    ''],
+  [CONNECTOR_WRITE, 'Connector: an agent\'s change is taken without its conversation',
+    "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n",
+    ''],
+  [CONNECTOR_WRITE, 'Connector: Rundock\'s setup may replace a connector',
+    "    if (source === 'rundock' && change !== 'add') return refuse('invalid', SETUP_ADDS_ONLY);\n",
+    ''],
+  [CONNECTOR_WRITE, 'Connector: a replace card is not given the entry it would replace',
+    "    if (change === 'replace') input.current = currentCardInput(before);\n",
+    ''],
+  [CONNECTOR_WRITE, 'Connector: a replace card is given the entry it would replace with its values',
+    'input.current = currentCardInput(before);',
+    'input.current = before;'],
+  [CONNECTOR_WRITE, 'Connector: the writer takes an entry holding a setting the card cannot show',
+    "      if (hidden) return refuse('invalid', hidden);\n",
+    ''],
+  [CONNECTOR_ASK, 'Connector: a save checks for a setting the card cannot show only after it reads the file',
+    '  const hidden = hiddenSettingRefusal(entry);\n'
+    + '  if (hidden) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + '    return;\n'
+    + '  }\n'
+    + '  const found = connectorFile(ctx, ws, getWorkspace());\n'
+    + '  if (!found) return;\n',
+    '  const found = connectorFile(ctx, ws, getWorkspace());\n'
+    + '  if (!found) return;\n'
+    + '  const hidden = hiddenSettingRefusal(entry);\n'
+    + '  if (hidden) {\n'
+    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + '    return;\n'
+    + '  }\n'],
+  [CONNECTOR_ASK, 'Connector: a save takes its change from the message',
+    "change: has(found, msg.name) ? 'replace' : 'add'",
+    "change: msg.change || (has(found, msg.name) ? 'replace' : 'add')"],
   [CM_CLIENT, 'launchctl: the card gives no reason of its own',
     "    'launch-environment': () => 'This changes what macOS starts, or the settings every program started from now on is given, Rundock included, beyond anything Rundock can see or check.',\n",
     ''],
