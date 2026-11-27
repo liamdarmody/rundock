@@ -112,6 +112,12 @@ const MUTATIONS = [
     "      reads.spent = (reads.spent || 0) + (read.state === 'present' ? read.described.bytes : 0);\n"
       + "      if (reads.spent > 100000000) read = { state: 'missing', described: undefined };\n"
       + '      reads.set(file, read);\n'],
+  [TURN, "the entry's total goes unchecked, so the files of an entry over a message's total are read",
+    '  return total <= LIMITS.messageBytes;\n',
+    '  return true;\n'],
+  [TURN, "the limits are not checked before the entry's files are read, so an entry past them has each read for its line",
+    '  const fits = entryFits(files);\n',
+    '  const fits = true;\n'],
 
   // ===== EACH PROCESS ENTRY CARRIES THE RECORD ENTRY OF THE MESSAGE ITS TURN ANSWERS =====
   [only(ENGINE, "a delegate's brief is sent as text alone, and a deleted file's line in it as not available"), "a delegate's first turn is written as the brief, never through the check",

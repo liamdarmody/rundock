@@ -445,7 +445,7 @@ describe('buildTurn: a Claude Code turn carries its entry\'s images and PDFs', (
     handWritten(ws, [{ id: 'entry-1', files: [{ file: '1-a.pdf', bytes: big('a') }, { file: '2-b.pdf', bytes: big('b') }, { file: '3-c.png', bytes: pngBytes(), width: 640, height: 480 }] }]);
     const { content } = turnFor(ws, 'three files', { entryId: 'entry-1' });
     assert.strictEqual(typeof content, 'string', 'no block: the text alone');
-    assert.strictEqual(content, ['three files', lineOf('1-a.pdf', 'PDF document, 10 MB'), lineOf('2-b.pdf', 'PDF document, 10 MB'), lineOf('3-c.png', 'PNG image, 1 KB')].join('\n'));
+    assert.strictEqual(content, ['three files', GONE('1-a.pdf'), GONE('2-b.pdf'), GONE('3-c.png')].join('\n'));
   });
 
   test('with no entryId, no block', async () => {
@@ -571,8 +571,8 @@ describe('buildTurn: what a turn reads is bounded', () => {
     handWritten(ws, [{ id: 'entry-1', files }]);
     const answers = storeAnswers(t);
     const { content } = turnFor(ws, 'six files', { entryId: 'entry-1' });
-    assert.strictEqual(content, ['six files', ...files.map((f) => lineOf(f.file, 'PNG image, 1 KB'))].join('\n'));
-    assert.deepStrictEqual(kept(answers), files.map((f) => [f.file, 'present', false]));
+    assert.strictEqual(content, ['six files', ...files.map((f) => GONE(f.file))].join('\n'));
+    assert.deepStrictEqual(kept(answers), [], 'none of the files is read, so none keeps bytes');
   });
 
   test('an entry totalling more than the message limit keeps none of its files\' bytes', (t) => {
@@ -582,8 +582,62 @@ describe('buildTurn: what a turn reads is bounded', () => {
     handWritten(ws, [{ id: 'entry-1', files: [{ file: '1-a.pdf', bytes: big('a') }, { file: '2-b.pdf', bytes: big('b') }, { file: '3-c.png', bytes: pngBytes(), width: 640, height: 480 }] }]);
     const answers = storeAnswers(t);
     const { content } = turnFor(ws, 'three files', { entryId: 'entry-1' });
-    assert.strictEqual(content, ['three files', lineOf('1-a.pdf', 'PDF document, 10 MB'), lineOf('2-b.pdf', 'PDF document, 10 MB'), lineOf('3-c.png', 'PNG image, 1 KB')].join('\n'));
-    assert.deepStrictEqual(kept(answers), [['1-a.pdf', 'present', false], ['2-b.pdf', 'present', false], ['3-c.png', 'present', false]]);
+    assert.strictEqual(content, ['three files', GONE('1-a.pdf'), GONE('2-b.pdf'), GONE('3-c.png')].join('\n'));
+    assert.deepStrictEqual(kept(answers), [], 'none of the files is read, so none keeps bytes');
+  });
+
+  // A turn for `entry`, whose text names none of its files: the content and
+  // whether each file was opened, with the bytes read from each.
+  function namingNone(t, ws, entry) {
+    const reads = countReads(t);
+    const { content } = turnFor(ws, 'these files', { entryId: entry.id });
+    const touched = entry.files.map((f) => [f.file, reads.opened(path.join(folderOf(ws), f.file)), reads.from(path.join(folderOf(ws), f.file))]);
+    return { content, touched };
+  }
+
+  test('an entry of six files, its text naming none, opens none of them and names each not available', (t) => {
+    readyTurn();
+    const ws = workspace();
+    const [entry] = sparseRecord(ws, [{ id: 'entry-1', files: [1, 2, 3, 4, 5, 6].map((n) => ({ file: `${n}-shot.png`, size: 1000, width: 10, height: 10 })) }]);
+    const { content, touched } = namingNone(t, ws, entry);
+    assert.strictEqual(content, ['these files', ...entry.files.map((f) => GONE(f.file))].join('\n'), 'no block: the text alone');
+    assert.deepStrictEqual(touched, entry.files.map((f) => [f.file, false, 0]), 'no file is opened');
+  });
+
+  test('an entry over the message total, its text naming none, opens none of its files and names each not available', (t) => {
+    readyTurn();
+    const ws = workspace();
+    const [entry] = sparseRecord(ws, [{ id: 'entry-1', files: [{ file: '1-a.pdf', size: TEN_MB }, { file: '2-b.pdf', size: TEN_MB }, { file: '3-c.png', size: 3500000, width: 640, height: 480 }] }]);
+    const { content, touched } = namingNone(t, ws, entry);
+    assert.strictEqual(content, ['these files', GONE('1-a.pdf'), GONE('2-b.pdf'), GONE('3-c.png')].join('\n'), 'no block: the text alone');
+    assert.deepStrictEqual(touched, entry.files.map((f) => [f.file, false, 0]), 'no file is opened');
+  });
+
+  test('ten matching 10 MB PDFs in the entry, its text naming none, are not read and each is named not available', (t) => {
+    readyTurn();
+    const ws = workspace();
+    const [entry] = sparseRecord(ws, [{ id: 'entry-1', files: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => ({ file: `${n}-report.pdf`, size: TEN_MB })) }]);
+    const { content, touched } = namingNone(t, ws, entry);
+    assert.strictEqual(typeof content, 'string', 'no block: the text alone');
+    assert.strictEqual(content, ['these files', ...entry.files.map((f) => GONE(f.file))].join('\n'));
+    assert.deepStrictEqual(touched, entry.files.map((f) => [f.file, false, 0]), 'no byte of any file is read');
+  });
+
+  test('ten matching 10 MB PDFs in the entry, its text naming one, check that line alone and send no block', (t) => {
+    readyTurn();
+    const ws = workspace();
+    const [entry] = sparseRecord(ws, [{ id: 'entry-1', files: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => ({ file: `${n}-report.pdf`, size: TEN_MB })) }]);
+    const named = lineOf('4-report.pdf', 'PDF document, 10 MB');
+    const reads = countReads(t);
+    const { content } = turnFor(ws, `this one\n${named}`, { entryId: entry.id });
+    assert.strictEqual(typeof content, 'string', 'no block: the text alone');
+    assert.strictEqual(content, [`this one\n${named}`, ...entry.files.filter((f) => f.file !== '4-report.pdf').map((f) => GONE(f.file))].join('\n'),
+      'the named line is the one the record writes');
+    for (const f of entry.files) {
+      const file = path.join(folderOf(ws), f.file);
+      if (f.file === '4-report.pdf') assert.ok(reads.from(file) > 0 && reads.from(file) <= TEN_MB + 1, `the named file is read once: ${reads.from(file)} bytes`);
+      else assert.deepStrictEqual([reads.opened(file), reads.from(file)], [false, 0], `${f.file} is not opened`);
+    }
   });
 
   test('a text quoting eleven earlier 10 MB PDFs keeps every line, each file read no further than its recorded size', (t) => {
