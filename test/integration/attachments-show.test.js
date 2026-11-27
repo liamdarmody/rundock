@@ -16,6 +16,7 @@ const path = require('node:path');
 const h = require('../helpers/harness.js');
 const auth = require('../../lib/auth/index.js');
 const store = require('../../lib/attachments/store.js');
+const receive = require('../../lib/attachments/receive.js');
 
 const LINKS = { skip: process.platform === 'win32' && 'links need privileges on Windows' };
 const ID = '1764000000000';
@@ -62,11 +63,12 @@ function post(urlPath, headers) {
   });
 }
 
-// The conversation's three files as the store keeps them, written afresh.
+// The conversation's three files as the store keeps them, written afresh,
+// answering the record's entry for them.
 async function stored() {
   fs.rmSync(folderOf(ID), { recursive: true, force: true });
   fs.rmSync(path.join(h.workspaceDir, 'copy'), { recursive: true, force: true });
-  await store.writeMessageFiles(h.workspaceDir, ID, [
+  return store.writeMessageFiles(h.workspaceDir, ID, [
     { name: 'diagram.png', bytes: PNG },
     { name: 'report.pdf', bytes: PDF },
     { name: 'notes.csv', bytes: CSV },
@@ -214,5 +216,229 @@ describe('the file route serves a stored file only as its record describes it', 
     } finally {
       store.readRecordedFile = real;
     }
+  });
+});
+
+describe('the history reply says which of its named files are there', () => {
+  const OTHER = '1764000000001';
+  const DIAGRAM = { name: 'diagram.png', type: 'png', bytes: PNG.length, width: 2576, height: 1610 };
+  let client;
+  let sessionsDir;
+  let sessions = 0;
+  let entry;
+
+  // A session file of its own holding these lines, as Claude Code writes them.
+  function session(lines) {
+    const sessionId = `sess-files-${++sessions}`;
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, `${sessionId}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    return sessionId;
+  }
+  const said = (content) => ({ type: 'user', message: { role: 'user', content }, timestamp: null });
+  const answered = (text) => ({ message: { role: 'assistant', content: [{ type: 'text', text }] }, timestamp: null });
+  // A message as the server stores it: its words, then one line per file.
+  const sent = (content, ...files) => receive.storedText(content, ID, { files });
+
+  function history(msg) {
+    const since = client.messages.length;
+    client.send({ type: 'get_session_history', ...msg });
+    return client.waitFor(
+      (m) => m.type === 'session_history' && m.conversationId === msg.conversationId,
+      { since, label: `session_history for ${msg.conversationId}` },
+    ).then((r) => r.msg);
+  }
+  // Every read of a record the history makes while `run` runs.
+  async function counted(run) {
+    const real = store.readRecordedFile;
+    const reads = [];
+    store.readRecordedFile = (...args) => { reads.push(args.slice(1)); return real(...args); };
+    try {
+      return { res: await run(), reads };
+    } finally {
+      store.readRecordedFile = real;
+    }
+  }
+  // The handler's session reader replaced while `run` runs.
+  async function withReader(reader, run) {
+    const ctx = h.internal.wsHandlerContext.store;
+    const real = ctx.parseSessionHistory;
+    ctx.parseSessionHistory = reader;
+    try {
+      return await run();
+    } finally {
+      ctx.parseSessionHistory = real;
+    }
+  }
+
+  before(async () => {
+    client = await h.connect();
+    sessionsDir = path.join(process.env.HOME, '.claude', 'projects', h.workspaceDir.replace(/\//g, '-'));
+  });
+  beforeEach(async () => { entry = await stored(); });
+
+  test('a user message naming a present PNG gives its entry with width and height', async () => {
+    const sessionId = session([said(sent('Here is the diagram', entry.files[0]))]);
+    const res = await history({ conversationId: ID, sessionId });
+    assert.deepStrictEqual(res.files, { '1-diagram.png': { ...DIAGRAM, state: 'present' } });
+  });
+
+  test('a user message naming a file rewritten since it was sent gives it as changed', async () => {
+    fs.writeFileSync(path.join(folderOf(ID), '1-diagram.png'), OTHER_PNG);
+    const sessionId = session([said(sent('Here is the diagram', entry.files[0]))]);
+    const res = await history({ conversationId: ID, sessionId });
+    assert.deepStrictEqual(res.files, { '1-diagram.png': { ...DIAGRAM, state: 'changed' } });
+  });
+
+  test('a user message naming a deleted file gives it as missing', async () => {
+    fs.rmSync(path.join(folderOf(ID), '1-diagram.png'));
+    const sessionId = session([said(sent('Here is the diagram', entry.files[0]))]);
+    const res = await history({ conversationId: ID, sessionId });
+    assert.deepStrictEqual(res.files, { '1-diagram.png': { ...DIAGRAM, state: 'missing' } });
+  });
+
+  test('the history read again after the file is deleted gives it as missing, where the first read gave it present', async () => {
+    const sessionId = session([said(sent('Here is the diagram', entry.files[0]))]);
+    const first = await history({ conversationId: ID, sessionId });
+    assert.deepStrictEqual(first.files, { '1-diagram.png': { ...DIAGRAM, state: 'present' } });
+    fs.rmSync(path.join(folderOf(ID), '1-diagram.png'));
+    const again = await history({ conversationId: ID, sessionId });
+    assert.deepStrictEqual(again.files, { '1-diagram.png': { ...DIAGRAM, state: 'missing' } });
+  });
+
+  test("a name the record doesn't list gives only its state, missing", async () => {
+    fs.writeFileSync(path.join(folderOf(ID), '4-extra.png'), PNG);
+    const unlisted = { file: '4-extra.png', type: 'png', bytes: PNG.length };
+    const sessionId = session([said(sent('And another', unlisted))]);
+    const res = await history({ conversationId: ID, sessionId });
+    assert.deepStrictEqual(res.files, { '4-extra.png': { state: 'missing' } });
+  });
+
+  test('a file the record gives a type other than its name gives is missing', async () => {
+    const record = store.readRecord(h.workspaceDir, ID);
+    record.messages[0].files[0].type = 'pdf';
+    fs.writeFileSync(path.join(folderOf(ID), 'record.json'), JSON.stringify(record));
+    const sessionId = session([said(sent('Here is the diagram', entry.files[0]))]);
+    const res = await history({ conversationId: ID, sessionId });
+    assert.deepStrictEqual(res.files, { '1-diagram.png': { ...DIAGRAM, type: 'pdf', state: 'missing' } });
+  });
+
+  test("a line naming another conversation's present file gives no key", async () => {
+    const theirs = await store.writeMessageFiles(h.workspaceDir, OTHER, [{ name: 'diagram.png', bytes: PNG }]);
+    try {
+      const line = receive.storedText('Look at theirs', OTHER, theirs);
+      const sessionId = session([said(line)]);
+      const res = await history({ conversationId: ID, sessionId });
+      assert.deepStrictEqual(res.files, {});
+    } finally {
+      fs.rmSync(folderOf(OTHER), { recursive: true, force: true });
+    }
+  });
+
+  test('a file of the record that no message names gives no key', async () => {
+    const sessionId = session([said(sent('Only the diagram', entry.files[0]))]);
+    const res = await history({ conversationId: ID, sessionId });
+    assert.ok(res.files && typeof res.files === 'object', 'the reply carries files');
+    assert.deepStrictEqual(Object.keys(res.files), ['1-diagram.png']);
+  });
+
+  test('a line in an assistant message gives no key', async () => {
+    const sessionId = session([said('What did I send?'), answered(sent('You sent this', entry.files[0]))]);
+    const res = await history({ conversationId: ID, sessionId });
+    assert.deepStrictEqual(res.files, {});
+  });
+
+  test('the not-available form a turn writes in place of a line gives no key', async () => {
+    const sessionId = session([said('Here it is\n[Attached file not available: 1-diagram.png]')]);
+    const res = await history({ conversationId: ID, sessionId });
+    assert.deepStrictEqual(res.files, {});
+  });
+
+  test('the changed form a turn writes in place of a line gives no key', async () => {
+    const sessionId = session([said("Here it is\n[Attached file changed since it was attached, so it isn't shown: 1-diagram.png]")]);
+    const res = await history({ conversationId: ID, sessionId });
+    assert.deepStrictEqual(res.files, {});
+  });
+
+  test('a file named in two messages is one key, read once', async () => {
+    const sessionId = session([said(sent('First', entry.files[0])), answered('Seen'), said(sent('Again', entry.files[0], entry.files[0]))]);
+    const { res, reads } = await counted(() => history({ conversationId: ID, sessionId }));
+    assert.deepStrictEqual(res.files, { '1-diagram.png': { ...DIAGRAM, state: 'present' } });
+    assert.deepStrictEqual(reads, [[ID, '1-diagram.png']], 'one read, with no keep');
+  });
+
+  test('a merged reply gives no key for a file named only outside the page it returns', async () => {
+    const sessionId = session([said(sent('First', entry.files[0])), answered('Seen'), said('Second'), answered('Noted')]);
+    const page = await history({ conversationId: ID, sessionIds: [{ sessionId }], limit: 2 });
+    assert.deepStrictEqual(page.messages.map((m) => m.content), ['Second', 'Noted']);
+    assert.deepStrictEqual(page.files, {});
+    const earlier = await history({ conversationId: ID, sessionIds: [{ sessionId }], limit: 2, offset: 2 });
+    assert.deepStrictEqual(Object.keys(earlier.files || {}), ['1-diagram.png'], 'the page that holds the line names it');
+  });
+
+  test('the merged error reply carries no files and reads no record', async () => {
+    const sessionId = session([said(sent('Here is the diagram', entry.files[0]))]);
+    // A session whose lines can't be read as a list fails the merge.
+    const { res, reads } = await counted(() => withReader(async () => ({ messages: null }),
+      () => history({ conversationId: ID, sessionIds: [{ sessionId }] })));
+    assert.deepStrictEqual(res, { type: 'session_history', conversationId: ID, messages: [], totalCount: 0, hasMore: false, files: {} });
+    assert.deepStrictEqual(reads, []);
+  });
+
+  test('the single-session error reply carries no files and reads no record', async () => {
+    const sessionId = session([said(sent('Here is the diagram', entry.files[0]))]);
+    const { res, reads } = await counted(() => withReader(async () => { throw new Error('unreadable'); },
+      () => history({ conversationId: ID, sessionId })));
+    assert.deepStrictEqual(res, { type: 'session_history', conversationId: ID, messages: [], totalCount: 0, hasMore: false, files: {} });
+    assert.deepStrictEqual(reads, []);
+  });
+
+  test('a reply with no conversation id carries no files and reads no record', async () => {
+    const sessionId = session([said(sent('Here is the diagram', entry.files[0]))]);
+    const { res, reads } = await counted(() => history({ sessionId }));
+    assert.strictEqual(res.messages.length, 1);
+    assert.deepStrictEqual(res.files, {});
+    assert.deepStrictEqual(reads, []);
+  });
+
+  test('a reply whose conversation id is off the pattern carries no files and reads no record', async () => {
+    const sessionId = session([said(sent('Here is the diagram', entry.files[0]))]);
+    const { res, reads } = await counted(() => history({ conversationId: 'a.b', sessionId }));
+    assert.strictEqual(res.messages.length, 1);
+    assert.deepStrictEqual(res.files, {});
+    assert.deepStrictEqual(reads, []);
+  });
+
+  test('the single-session reply keeps its messages, counts and paging, with files added', async () => {
+    const third = sent('Third', entry.files[0]);
+    const sessionId = session([said('First'), answered('Second'), said(third)]);
+    const res = await history({ conversationId: ID, sessionId, limit: 2 });
+    assert.deepStrictEqual(res, {
+      type: 'session_history',
+      conversationId: ID,
+      messages: [
+        { role: 'assistant', content: 'Second', timestamp: null },
+        { role: 'user', content: third, timestamp: null },
+      ],
+      totalCount: 3,
+      hasMore: true,
+      files: { '1-diagram.png': { ...DIAGRAM, state: 'present' } },
+    });
+  });
+
+  test('the merged reply keeps its messages, counts and paging, with files added', async () => {
+    const third = sent('Third', entry.files[0]);
+    const sessionId = session([said('First'), answered('Second'), said(third)]);
+    const res = await history({ conversationId: ID, sessionIds: [{ sessionId }], limit: 2 });
+    assert.deepStrictEqual(res, {
+      type: 'session_history',
+      conversationId: ID,
+      messages: [
+        { role: 'assistant', content: 'Second', agentId: null, timestamp: null },
+        { role: 'user', content: third, agentId: null, timestamp: null },
+      ],
+      totalCount: 3,
+      hasMore: true,
+      files: { '1-diagram.png': { ...DIAGRAM, state: 'present' } },
+    });
   });
 });
