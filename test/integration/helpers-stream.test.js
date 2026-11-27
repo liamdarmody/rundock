@@ -765,3 +765,92 @@ test('the idle probe reports the conversation busy while the lead\'s helpers run
   wake('hold-probe');
   await requestDone(convo, since);
 });
+
+// ---------------------------------------------------------------------------
+// Spawn settings: the depth limit and SendMessage refused, for conversations only
+// ---------------------------------------------------------------------------
+const spawnsOf = (convo) => h.readInvocations().filter((i) => i.env.RUNDOCK_CONVO_ID === convo);
+const disallowedOf = (inv) => { const at = inv.argv.indexOf('--disallowed-tools'); return at >= 0 ? inv.argv[at + 1] : null; };
+function assertHelperSettings(inv) {
+  assert.strictEqual(inv.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, '1', `${inv.agent}: the depth limit`);
+  assert.ok((disallowedOf(inv) || '').split(',').includes('SendMessage'), `${inv.agent}: SendMessage is refused: ${disallowedOf(inv)}`);
+}
+
+test('with helpers on, every conversation spawn carries the depth limit and refuses SendMessage', async () => {
+  const convo = open('spawn-settings');
+  h.writeScenario([
+    SKY_SILENT,
+    { match: { agent: 'wren', promptIncludes: '[SYSTEM: work-continues]' }, turn: [{ text: `Finished. ${fx.MARKERS.COMPLETE}` }] },
+    handoff('wren', 'spawn settings start', 'ash', 'ash brief spawn settings'),
+    { match: { agent: 'ash', promptIncludes: 'ash brief spawn settings' }, turn: [{ text: 'My part is done. <!-- RUNDOCK:CONTINUE -->' }] },
+  ]);
+  const since = say(convo, 'spawn settings start');
+  await waitSwitch(convo, since, 'wren', SKY);
+  assert.ok(await h.waitUntil(() => spawnsOf(convo).some((i) => i.agent === 'sky'), { timeout: 20000 }), 'sky was started');
+  const spawned = spawnsOf(convo);
+  assert.deepStrictEqual(spawned.map((i) => i.agent), ['wren', 'ash', 'wren', 'sky'],
+    'the person\'s chat, the handoff, the parent resumed and the orchestrator handed back to');
+  const notes = h.internal.getDisallowedTools();
+  for (const inv of spawned) {
+    assertHelperSettings(inv);
+    assert.strictEqual(disallowedOf(inv), `${notes},SendMessage`, `${inv.agent}: the workspace's own list is kept`);
+  }
+});
+
+test('with helpers on, a lead started again after a loop guard carries the depth limit and refuses SendMessage', async () => {
+  const convo = open('spawn-loop');
+  h.writeScenario([
+    handoff('wren', 'ash returned because the request was outside their scope', 'ash', 'ash brief spawn loop again'),
+    handoff('wren', 'spawn loop start', 'ash', 'ash brief spawn loop'),
+    { match: { agent: 'ash', promptIncludes: 'ash brief spawn loop' }, turn: [{ text: `Not mine. ${fx.MARKERS.RETURN}` }] },
+  ]);
+  const since = say(convo, 'spawn loop start');
+  await client.waitFor((m) => m.type === 'assistant' && m._conversationId === convo && m.message
+    && typeof m.message.content === 'string' && m.message.content.includes('has already completed this task'), { since, timeout: 20000, label: 'the loop guard' });
+  assert.ok(await h.waitUntil(() => spawnsOf(convo).filter((i) => i.agent === 'wren').length >= 3, { timeout: 10000 }), 'wren was started again');
+  const spawned = spawnsOf(convo);
+  assert.deepStrictEqual(spawned.map((i) => i.agent), ['wren', 'ash', 'wren', 'wren'],
+    'the person\'s chat, the handoff, the parent resumed and the parent started again');
+  for (const inv of spawned) assertHelperSettings(inv);
+});
+
+test('with helpers on, a Code-mode spawn, which refuses nothing else, still refuses SendMessage', async () => {
+  const convo = open('spawn-code');
+  let since = client.messages.length;
+  client.send({ type: 'set_workspace_mode', mode: 'code' });
+  await client.waitFor((m) => m.type === 'workspace_mode_changed' && m.mode === 'code', { since, label: 'code mode' });
+  try {
+    h.writeScenario([{ match: { agent: 'wren', promptIncludes: 'spawn in code mode' }, turn: [{ text: 'Done in code mode.' }] }]);
+    await turnDone(convo, say(convo, 'spawn in code mode'));
+    const spawned = spawnsOf(convo);
+    assert.strictEqual(spawned.length, 1);
+    assert.strictEqual(spawned[0].env.RUNDOCK_CODE_MODE, '1', 'the workspace is in Code mode');
+    assert.strictEqual(disallowedOf(spawned[0]), 'SendMessage');
+    assertHelperSettings(spawned[0]);
+  } finally {
+    since = client.messages.length;
+    client.send({ type: 'set_workspace_mode', mode: 'notes' });
+    await client.waitFor((m) => m.type === 'workspace_mode_changed' && m.mode === 'notes', { since, label: 'back to notes' });
+  }
+});
+
+// Saves a routine on Wren's file, so it runs last.
+test('with helpers on, a routine run sets no depth limit and keeps the workspace\'s own list, where a conversation spawn sets the limit', async () => {
+  assert.strictEqual(h.internal.getSpawnEnv(h.freshConvoId('spawn-env'), 'wren').CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, '1', 'a conversation spawn has the limit');
+  assert.strictEqual(h.internal.getSpawnEnv(null, 'a-run-token').CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, undefined, 'a routine\'s spawn env has none');
+  const name = 'Spawn check';
+  const since = client.messages.length;
+  client.send({ type: 'save_routine', agentId: 'wren', routine: { name, schedule: 'every day at 07:00', prompt: 'routine spawn check', runOn: 'local' } });
+  await client.waitFor((m) => m.type === 'routine_saved' && m.name === name, { since, label: 'the routine saved' });
+  h.writeScenario([{ match: { promptIncludes: 'routine spawn check' }, turn: [{ text: 'Checked.' }] }]);
+  client.send({ type: 'run_routine_now', agentId: 'wren', name, occurrence: 0 });
+  const runsDir = path.join(h.workspaceDir, '.rundock', 'runs');
+  const record = () => (fs.existsSync(runsDir) ? fs.readdirSync(runsDir) : []).filter((n) => n.endsWith('.json'))
+    .map((n) => JSON.parse(fs.readFileSync(path.join(runsDir, n), 'utf-8'))).find((r) => r.routine === name);
+  assert.ok(await h.waitUntil(() => { const r = record(); return r && r.status !== 'running'; }, { timeout: 15000 }), 'the run ended');
+  const inv = h.readInvocations().find((i) => i.argv.includes(record().sessionId));
+  assert.ok(inv, 'the run\'s spawn was recorded');
+  assert.strictEqual(inv.env.RUNDOCK_CONVO_ID, null, 'it has no conversation');
+  assert.strictEqual(inv.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, null, 'no depth limit');
+  assert.strictEqual(disallowedOf(inv), h.internal.getDisallowedTools(), 'its list is the workspace mode\'s own, without SendMessage');
+});

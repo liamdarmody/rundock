@@ -240,9 +240,9 @@ test('with helpers off, a result sends done, a helper\'s result included', async
 });
 
 // By design this passes before helpers existed too. Its sibling in
-// helpers-stream.test.js, "with helpers on, a lead's result while a helper
-// runs sends no done, and the first after it finishes does", fails without
-// helpers.
+// helpers-stream.test.js, "with helpers on, the lead's result while a helper
+// runs sends no done and leaves it busy, and the first result after the
+// helper ends sends done", fails without helpers.
 test('with helpers off, the helpers scenario\'s task lines change nothing: its result sends done and no helpers_changed is sent', async () => {
   const convo = open('off-tasks');
   const calls = [agentCall('Explore'), agentCall('Plan')];

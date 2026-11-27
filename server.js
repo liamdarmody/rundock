@@ -1756,7 +1756,7 @@ wss.on('connection', (ws) => {
             const agentData = findAgentBySlug(agentList, requestedAgent);
 
             const systemPrompt = buildSystemPrompt(agentData);
-            const chatDisallowed = getDisallowedTools();
+            const chatDisallowed = helpers.conversationDisallowedTools(getDisallowedTools());
             const chatPermMode = getPermissionMode();
 
             const args = [...getBareArgs(), ...modelArgs(agentData), '--output-format', 'stream-json', '--input-format', 'stream-json',
