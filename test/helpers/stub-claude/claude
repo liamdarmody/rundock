@@ -88,6 +88,15 @@
 // call of its message to the PreToolUse hook once the message has ended, all
 // at once, with its tool_use_id, and to answer each refused call with an
 // error tool result before the rest of the turn: see askAgentHooks below.
+// Each call it allows starts as Claude Code starts it: a task_started line
+// with the call's id as its answer arrives, and, unless the rule gives
+// "running": true, a task_notification (completed) at once, so the helper is
+// done before the turn's result. "finishOn": { "<tool_use id>": "<path>" }
+// finishes that helper once the file exists, turn or no turn. "then": [...]
+// is written in order after the turn's result, each step held by its own
+// "untilFile": its "lines" as given (a helper's lines, task_* lines), then,
+// if it gives a "turn", a whole turn as a wake writes it, with its own
+// "resultExtra". So one message can bring several results.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -189,6 +198,8 @@ try {
       RUNDOCK_WORKSPACE: process.env.RUNDOCK_WORKSPACE || null,
       // Where this copy looks for its sign-in.
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || null,
+      // How deep this copy lets helpers start helpers.
+      CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: process.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH || null,
     },
     // The folder this process was started in, which is also where this log
     // and the scenario are read from.
@@ -698,9 +709,11 @@ function emitTurn(rule, prompt) {
     askAgentHooks(agentCallsOf(rule), (refused) => {
       for (const r of refused) writeOut(JSON.stringify(toolError(r.id, r.said)) + '\n');
       for (const e of events.slice(at)) writeOut(JSON.stringify(e) + '\n');
-      if (rule.exitAfterTurn != null) exitWhenWritten(Number(rule.exitAfterTurn));
-      else if (PRINT) exitWhenWritten(0);
-    });
+      writeSteps(rule.then || [], () => {
+        if (rule.exitAfterTurn != null) exitWhenWritten(Number(rule.exitAfterTurn));
+        else if (PRINT) exitWhenWritten(0);
+      });
+    }, (call) => startHelper(rule, call));
     return;
   }
   if (rule.holdAfterText) {
@@ -906,17 +919,44 @@ function agentCallsOf(rule) {
   }
   return calls;
 }
-function askAgentHooks(calls, then) {
+function askAgentHooks(calls, then, allowed = () => {}) {
   const refused = [];
   let left = calls.length;
-  if (!left || !preToolUseHooks('Agent').length) { then(refused); return; }
+  if (!left || !preToolUseHooks('Agent').length) { calls.forEach((c) => allowed(c)); then(refused); return; }
   for (const call of calls) {
     askPermissionHook({ tool: 'Agent', input: call.input, extra: { tool_use_id: call.id, ...(call.extra || {}) } }, (answer) => {
       const said = answer && answer.hookSpecificOutput ? answer.hookSpecificOutput : {};
       if (said.permissionDecision === 'deny') refused.push({ id: call.id, said: `PreToolUse:Agent hook error: ${said.permissionDecisionReason || ''}` });
+      else allowed(call);
       if (--left === 0) then(refused);
     });
   }
+}
+// An allowed call's helper, as Claude Code reports it: started, then finished
+// at once unless the rule keeps it running or names a file that finishes it.
+function startHelper(rule, call) {
+  const input = call.input || {};
+  const taskId = `task_${call.id}`;
+  writeOut(JSON.stringify(fx.taskStarted({ taskId, toolUseId: call.id, description: input.description || '', subagentType: input.subagent_type })) + '\n');
+  const finish = () => writeOut(JSON.stringify(fx.taskNotification({ taskId, toolUseId: call.id, status: 'completed' })) + '\n');
+  const finishOn = rule.finishOn && rule.finishOn[call.id];
+  if (finishOn) whenFileExists(finishOn, finish);
+  else if (!rule.running) finish();
+}
+// The steps after a turn's result: each waits for its file, writes its lines,
+// then its turn, if any, as a wake writes it.
+function writeSteps(steps, then) {
+  let at = 0;
+  const next = () => {
+    if (at >= steps.length) { then(); return; }
+    const step = steps[at++] || {};
+    whenFileExists(step.untilFile, () => {
+      for (const line of step.lines || []) writeOut(JSON.stringify(line) + '\n');
+      if (step.turn) for (const e of buildEnvelopes({ turn: step.turn, resultExtra: step.resultExtra })) writeOut(JSON.stringify(e) + '\n');
+      next();
+    });
+  };
+  next();
 }
 function toolError(id, said) {
   return { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: said }] } };
