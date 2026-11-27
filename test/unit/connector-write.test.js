@@ -413,20 +413,56 @@ test('another connector set up while an add card waits is kept beside the one al
 
 test('a replace card carries the entry it would replace, drawn like the new one', async () => {
   assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
-  await inWorkspace({ 'local-tools': { ...STDIO_HELD, timeout: 5 } }, async (s) => {
+  await inWorkspace({ 'local-tools': STDIO_HELD }, async (s) => {
     propose(s, s.request({ change: 'replace', entry: { command: 'node', args: ['server.js'] } }));
     assert.deepStrictEqual(s.asked[0].toolInput, {
       name: 'local-tools', action: 'replace', command: 'node', args: ['server.js'],
-      current: { command: 'node', args: ['tools.js', '--stdio'], env: ['API_KEY'], others: ['timeout'] },
+      current: { command: 'node', args: ['tools.js', '--stdio'], env: ['API_KEY'] },
     });
   });
 });
 
-test('a replace card for an entry that is not an object carries an empty current entry', async () => {
+// The entry a replace would overwrite is shown exactly or not at all: a value
+// the card can't draw would be lost on Allow without anyone seeing it.
+const CURRENT_UNSHOWN = (name) => `The connector "${name}" as it is now holds a setting the approval card can't show, so nothing was changed. Change it in .mcp.json yourself.`;
+
+test('a replace of a connector whose current entry holds a setting the card does not show is refused, and nobody is asked', async () => {
   assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
-  await inWorkspace({ 'local-tools': 'node tools.js' }, async (s) => {
-    propose(s, s.request({ change: 'replace' }));
-    assert.deepStrictEqual(s.asked[0].toolInput, { name: 'local-tools', action: 'replace', command: 'node', args: [], current: {} });
+  await inWorkspace({ 'local-tools': { command: 'node', timeout: 5 } }, async (s) => {
+    const req = s.request({ change: 'replace', entry: { command: 'node', args: ['new.js'] } });
+    await refusedAtRequest(s, req, 'invalid', CURRENT_UNSHOWN('local-tools'));
+  });
+});
+
+for (const [what, held] of [['a string', 'node tools.js'], ['null', null], ['an array', ['node', 'tools.js']]]) {
+  test(`a replace of a connector whose current entry is ${what} is refused, and nobody is asked`, async () => {
+    assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+    await inWorkspace({ 'local-tools': held }, async (s) => {
+      const req = s.request({ change: 'replace', entry: { command: 'node', args: ['new.js'] } });
+      await refusedAtRequest(s, req, 'invalid', CURRENT_UNSHOWN('local-tools'));
+    });
+  });
+}
+
+test('a replace of a connector whose current arguments are not a list of strings is refused, and nobody is asked', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': { command: 'node', args: 'old.js' } }, async (s) => {
+    const req = s.request({ change: 'replace', entry: { command: 'node', args: ['new.js'] } });
+    await refusedAtRequest(s, req, 'invalid', CURRENT_UNSHOWN('local-tools'));
+  });
+});
+
+test('a remove of a connector holding a setting the card does not show still asks, listing it by name, and Allow removes it', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({ 'local-tools': { command: 'node', timeout: 5 } }, async (s) => {
+    const { w, outcome } = propose(s, s.request({ change: 'remove', entry: undefined }));
+    assert.strictEqual(s.asked.length, 1, 'one card');
+    assert.strictEqual(s.asked[0].toolName, 'DeleteConnector');
+    assert.deepStrictEqual(s.asked[0].toolInput, { name: 'local-tools', action: 'remove', command: 'node', args: [], others: ['timeout'] });
+    s.answer(0, true);
+    assert.deepStrictEqual(s.servers(), {});
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'removed'));
+    assert.deepStrictEqual(await outcome, { ok: true, change: 'remove', name: 'local-tools', takesEffect: 'next agent start' });
   });
 });
 

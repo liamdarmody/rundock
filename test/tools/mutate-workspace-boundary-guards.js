@@ -3655,6 +3655,7 @@ const MUTATIONS = [
     + "    const unlike = stillAsAsked(found);\n"
     + "    if (unlike) return refuse(...unlike);\n"
     + "    const before = found.parsed.mcpServers[name];\n"
+    + "    if (change === 'replace' && !shownExactly(before)) return refuse('invalid', currentUnshown(name));\n"
     + "    const input = change === 'remove' ? connectorCardInput(name, 'remove', before) : connectorCardInput(name, change, entry);\n"
     + "    if (change === 'replace') input.current = currentCardInput(before);\n"
     + "    askFirst(ctx, ws, { conversationId, refuse }, change === 'remove' ? 'DeleteConnector' : 'SaveConnector', input, () => {\n",
@@ -3680,6 +3681,7 @@ const MUTATIONS = [
     + "    const unlike = stillAsAsked(found);\n"
     + "    if (unlike) return refuse(...unlike);\n"
     + "    const before = found.parsed.mcpServers[name];\n"
+    + "    if (change === 'replace' && !shownExactly(before)) return refuse('invalid', currentUnshown(name));\n"
     + "    const input = change === 'remove' ? connectorCardInput(name, 'remove', before) : connectorCardInput(name, change, entry);\n"
     + "    if (change === 'replace') input.current = currentCardInput(before);\n"
     + "    askFirst(ctx, ws, { conversationId, refuse }, change === 'remove' ? 'DeleteConnector' : 'SaveConnector', input, () => {\n"
@@ -3772,6 +3774,7 @@ const MUTATIONS = [
     + "    const unlike = stillAsAsked(found);\n"
     + "    if (unlike) return refuse(...unlike);\n"
     + "    const before = found.parsed.mcpServers[name];\n"
+    + "    if (change === 'replace' && !shownExactly(before)) return refuse('invalid', currentUnshown(name));\n"
     + "    const input = change === 'remove' ? connectorCardInput(name, 'remove', before) : connectorCardInput(name, change, entry);\n"
     + "    if (change === 'replace') input.current = currentCardInput(before);\n"
     + "    askFirst(ctx, ws, { conversationId, refuse }, change === 'remove' ? 'DeleteConnector' : 'SaveConnector', input, () => {\n",
@@ -3795,6 +3798,7 @@ const MUTATIONS = [
     + "    const unlike = stillAsAsked(found);\n"
     + "    if (unlike) return refuse(...unlike);\n"
     + "    const before = found.parsed.mcpServers[name];\n"
+    + "    if (change === 'replace' && !shownExactly(before)) return refuse('invalid', currentUnshown(name));\n"
     + "    const input = change === 'remove' ? connectorCardInput(name, 'remove', before) : connectorCardInput(name, change, entry);\n"
     + "    if (change === 'replace') input.current = currentCardInput(before);\n"
     + "    askFirst(ctx, ws, { conversationId, refuse }, change === 'remove' ? 'DeleteConnector' : 'SaveConnector', input, () => {\n"
@@ -3829,6 +3833,9 @@ const MUTATIONS = [
     'input.current = before;'],
   [CONNECTOR_WRITE, 'Connector: the writer takes an entry holding a setting the card cannot show',
     "      if (hidden) return refuse('invalid', hidden);\n",
+    ''],
+  [CONNECTOR_WRITE, 'Connector: a replace card is raised over an entry holding a setting the card cannot show',
+    "    if (change === 'replace' && !shownExactly(before)) return refuse('invalid', currentUnshown(name));\n",
     ''],
   [CONNECTOR_ASK, 'Connector: a save checks for a setting the card cannot show only after it reads the file',
     '  const hidden = hiddenSettingRefusal(entry);\n'

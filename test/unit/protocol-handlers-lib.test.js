@@ -143,6 +143,7 @@ const CONNECTOR_NOT_JSON = 'The connector entry is not valid JSON, so nothing wa
 const connectorShapeRefused = (key) => `The connector entry's "${key}" isn't in a form the approval card can show exactly, so nothing was changed.`;
 const hiddenSetting = (key) => `The connector entry's "${key}" isn't a setting the approval card can show, so nothing was changed.`;
 const HIDDEN_SETTING_UNNAMED = 'The connector entry holds a setting the approval card can\'t show, so nothing was changed.';
+const currentUnshown = (name) => `The connector "${name}" as it is now holds a setting the approval card can't show, so nothing was changed. Change it in .mcp.json yourself.`;
 const CONNECTOR_ALREADY_SET_UP = (name) => `A connector named "${name}" is already set up, so nothing was changed. Ask to replace it if you meant to change it.`;
 const CONNECTOR_NO_CONVERSATION = 'That connector change didn\'t say which conversation it came from, so nothing was changed.';
 const CONNECTOR_NOT_ALLOWED = 'The change was not allowed, so nothing was changed.';
@@ -720,6 +721,19 @@ describe('dispatch table', () => {
       card.answer(0, true);
       assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, {}, 'removed once allowed');
       assert.deepStrictEqual(w.sent, [{ type: 'connector_saved', name: 'local-tools', action: 'removed', takesEffect: 'next agent start' }]);
+    });
+  });
+
+  test('saving over a connector that holds a setting the card does not show is refused, and nobody is asked', () => {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-hidden-replace-');
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, JSON.stringify({ mcpServers: { 'local-tools': { command: 'node', timeout: 5 } } }));
+      const before = fs.readFileSync(file);
+      const w = captureWs();
+      buildDispatch().save_connector(ctx, w, { name: 'local-tools', content: '{"command":"node","args":["new.js"]}', conversationId: 'convo-hidden' });
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: currentUnshown('local-tools') }]);
+      assert.strictEqual(card.asked.length, 0, 'no card is raised');
+      assert.deepStrictEqual(fs.readFileSync(file), before, 'the file is byte-identical');
     });
   });
 
