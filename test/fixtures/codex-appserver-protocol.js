@@ -290,6 +290,59 @@ function threadCompacted(threadId, turnId) {
   return { method: 'thread/compacted', params: { threadId, turnId } };
 }
 
+// ── Helper threads (protocol schema, codex-cli 0.156.1) ────────────────────
+
+// A thread the lead's turn started for a helper announces itself with
+// thread/started like any other, its source naming the parent. Upkeep
+// threads (review, compact, memory_consolidation) carry the bare string as
+// the subAgent source. nicknameIn picks where the name travels: 'source'
+// (inside thread_spawn only), 'thread' (on the thread object only) or 'both'.
+function subAgentThreadStarted(threadId, {
+  nickname = null, role = null, source = 'thread_spawn', agentPath = null,
+  parentThreadId = null, depth = 1, nicknameIn = 'both',
+} = {}) {
+  const thread = threadObject(threadId);
+  let subAgent;
+  if (source === 'thread_spawn') {
+    subAgent = { thread_spawn: { parent_thread_id: parentThreadId, depth } };
+    if (nicknameIn !== 'thread') Object.assign(subAgent.thread_spawn, { agent_nickname: nickname, agent_role: role, agent_path: agentPath });
+  } else if (source === 'other') {
+    subAgent = { other: 'custom' };
+  } else {
+    subAgent = source;
+  }
+  thread.source = { subAgent };
+  if (nicknameIn !== 'source') Object.assign(thread, { agentNickname: nickname, agentRole: role, parentThreadId });
+  return { method: 'thread/started', params: { thread } };
+}
+
+// The lead's thread records a helper starting, being given more work or
+// being stopped as a subAgentActivity item.
+function subAgentActivityItem(threadId, turnId, { id, agentPath, agentThreadId, kind = 'started' }, phase = 'started') {
+  return {
+    method: phase === 'completed' ? 'item/completed' : 'item/started',
+    params: { item: { type: 'subAgentActivity', id, agentPath, agentThreadId, kind }, threadId, turnId },
+  };
+}
+
+// A tool item on any thread: commandExecution, fileChange, mcpToolCall or
+// webSearch, started or completed.
+function toolItem(phase, threadId, turnId, spec) {
+  const id = spec.id || `item_${spec.type}_${Math.random().toString(36).slice(2, 8)}`;
+  const status = phase === 'completed' ? 'completed' : 'inProgress';
+  let item;
+  if (spec.type === 'fileChange') {
+    item = { id, type: 'fileChange', status, changes: (spec.paths || []).map(p => ({ path: p, kind: { type: 'update' }, diff: '' })) };
+  } else if (spec.type === 'mcpToolCall') {
+    item = { id, type: 'mcpToolCall', status, server: spec.server, tool: spec.tool, arguments: {} };
+  } else if (spec.type === 'webSearch') {
+    item = { id, type: 'webSearch', query: spec.query };
+  } else {
+    item = { id, type: 'commandExecution', status, command: spec.command, commandActions: [], cwd: '/tmp/stub' };
+  }
+  return { method: phase === 'completed' ? 'item/completed' : 'item/started', params: { item, threadId, turnId } };
+}
+
 // ── Captured failure texts ──────────────────────────────────────────────────
 
 // The quota-exhaustion message the CLI emits when a ChatGPT plan's Codex
@@ -308,4 +361,5 @@ module.exports = {
   tokenUsageUpdated, accountRateLimitsUpdated, turnCompleted,
   errorNotification, commandApprovalRequest, fileChangeApprovalRequest,
   itemStartedContextCompaction, itemCompletedContextCompaction, threadCompacted,
+  subAgentThreadStarted, subAgentActivityItem, toolItem,
 };

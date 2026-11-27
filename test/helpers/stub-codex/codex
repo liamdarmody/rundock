@@ -83,6 +83,38 @@
 //                                            // a number sends it that many times,
 //                                            // as a replay would
 //           "malformed": false }             // shapes missing their fields, instead
+//         "helpers": [ {                     // helper threads this turn starts, one
+//                                            // after another, after the user message:
+//                                            // each sends thread/started and a
+//                                            // subAgentActivity item on the lead's
+//                                            // thread, then runs its own turn
+//           "nickname": "rates", "role": "worker",  // null nickname: none is sent
+//           "agentPath": "root/rates",       // default root/<nickname>
+//           "source": "thread_spawn",        // or review, compact,
+//                                            // memory_consolidation, other
+//           "nicknameIn": "both",            // source, thread or both
+//           "threadStartedFirst": false,     // thread/started before the activity
+//           "noThreadStarted": false,        // the activity item alone
+//           "kind": "started",               // the activity item's kind
+//           "items": [{"type":"commandExecution","command":"ls"},
+//                     {"type":"fileChange","paths":["a.md"]},
+//                     {"type":"mcpToolCall","server":"s","tool":"t"},
+//                     {"type":"webSearch","query":"q"}],
+//           "approval": {...},               // as the rule's, on the helper's turn
+//           "text": "...", "usage": {...}, "status": "completed",  // or failed
+//           "delayMs": 0, "untilFile": "...", "holdForInterrupt": true,
+//           "interruptFails": true,          // turn/interrupt answered with an
+//                                            // error; the turn carries on
+//           "dropInterrupt": true,           // turn/interrupt never answered; the
+//                                            // turn carries on
+//           "depth2": {"approval": {...}},   // the helper starts a helper of its own
+//           "again": {"untilFile": "...", "noActivity": false, ...}
+//                                            // once ended, given more work: an
+//                                            // interacted activity on the lead's
+//                                            // thread, then a new turn on this one
+//         } ],
+//         "awaitHelpers": true,              // the lead's reply waits for every
+//                                            // helper turn to end
 //   } ] } }
 // First matching rule wins. Every invocation and every incoming app-server
 // request is appended to `stub-invocations.jsonl` (cwd) for spawn-argument,
@@ -186,6 +218,115 @@ function runAppServer() {
     send(asfx.turnCompleted(t.threadId, t.turnId, status, error || null));
   }
 
+  // One approval on a helper's turn (or a helper's own helper), answered by
+  // the client: returns 'accept', 'decline' or 'cancel', and waits for a
+  // steered line after the decision when the spec asks, as runTurn does.
+  async function askApproval(t, a) {
+    const itemId = `item_appr_${t.turnId.slice(0, 8)}`;
+    const reqId = ++serverReqId;
+    const base = { threadId: t.threadId, turnId: t.turnId, itemId, reason: a.reason || null };
+    send(a.kind === 'fileChange' ? asfx.itemStartedFileChange(t.threadId, t.turnId, itemId)
+      : asfx.itemStartedCommandExecution(t.threadId, t.turnId, itemId, a.command || 'true'));
+    const decision = await new Promise(resolve => {
+      pendingServerRequests.set(reqId, resolve);
+      send(a.kind === 'fileChange' ? asfx.fileChangeApprovalRequest(reqId, base)
+        : asfx.commandApprovalRequest(reqId, { ...base, command: a.command || 'true' }));
+    });
+    log({ approvalDecision: decision, requestId: reqId, threadId: t.threadId });
+    const key = decision === 'decline' || decision === 'cancel' ? decision : 'accept';
+    const waitMs = key === 'decline' ? a.awaitSteerMs : (key === 'accept' ? a.awaitSteerOnAcceptMs : 0);
+    const until = Date.now() + (waitMs || 0);
+    while (waitMs > 0 && !t.steered && !t.finished && Date.now() < until) await tick(5);
+    return key;
+  }
+
+  // Start one helper from the lead's turn `lead`: its thread/started and the
+  // activity item on the lead's thread in the order the spec asks, then its
+  // own turn, left running.
+  async function launchHelper(lead, h, i) {
+    const nickname = h.nickname === undefined ? `helper${i + 1}` : h.nickname;
+    const agentPath = h.agentPath || `root/${nickname || `helper${i + 1}`}`;
+    const threadId = crypto.randomUUID();
+    const started = () => {
+      if (!h.noThreadStarted) send(asfx.subAgentThreadStarted(threadId, { nickname, role: h.role || null, source: h.source || 'thread_spawn', agentPath, parentThreadId: lead.threadId, nicknameIn: h.nicknameIn || 'both' }));
+    };
+    if (h.threadStartedFirst) started();
+    const act = { id: `act_${lead.turnId.slice(0, 8)}_${i}`, agentPath, agentThreadId: threadId, kind: h.kind || 'started' };
+    send(asfx.subAgentActivityItem(lead.threadId, lead.turnId, act, 'started'));
+    send(asfx.subAgentActivityItem(lead.threadId, lead.turnId, act, 'completed'));
+    await tick();
+    if (!h.threadStartedFirst) started();
+    const ht = { turnId: crypto.randomUUID(), threadId, finished: false, helper: h, lead, agentPath };
+    activeTurns.set(threadId, ht);
+    lead.helperTurns.push(ht);
+    runHelperTurn(ht, h).catch(() => {});
+    await tick();
+  }
+
+  async function runHelperTurn(ht, h) {
+    await helperTurnBody(ht, h);
+    if (!h.again) return;
+    // Given more work once ended (however it ended): the lead's thread
+    // records it, then the helper's thread runs a new turn.
+    const a = h.again;
+    const { threadId, turnId } = ht;
+    if (a.delayMs > 0) await tick(a.delayMs);
+    while (a.untilFile && !fs.existsSync(a.untilFile)) await tick(20);
+    const lead = activeTurns.get(ht.lead.threadId) || ht.lead;
+    if (!a.noActivity) {
+      const act = { id: `act_${lead.turnId.slice(0, 8)}_again_${turnId.slice(0, 4)}`, agentPath: ht.agentPath, agentThreadId: threadId, kind: 'interacted' };
+      send(asfx.subAgentActivityItem(lead.threadId, lead.turnId, act, 'started'));
+      send(asfx.subAgentActivityItem(lead.threadId, lead.turnId, act, 'completed'));
+      await tick();
+    }
+    const next = { turnId: crypto.randomUUID(), threadId, finished: false, helper: a, lead: ht.lead, agentPath: ht.agentPath };
+    activeTurns.set(threadId, next);
+    if (lead.helperTurns) lead.helperTurns.push(next);
+    await runHelperTurn(next, a);
+  }
+
+  async function helperTurnBody(ht, h) {
+    const { threadId, turnId } = ht;
+    send(asfx.threadStatusChanged(threadId, 'active'));
+    send(asfx.turnStarted(threadId, turnId));
+    await tick();
+    if (h.depth2) {
+      // The helper starts one of its own: an activity item on ITS thread.
+      const sub = { turnId: crypto.randomUUID(), threadId: crypto.randomUUID(), finished: false };
+      send(asfx.subAgentActivityItem(threadId, turnId, { id: `act_${turnId.slice(0, 8)}_d2`, agentPath: `${ht.agentPath}/deeper`, agentThreadId: sub.threadId, kind: 'started' }, 'started'));
+      send(asfx.subAgentThreadStarted(sub.threadId, { nickname: 'deeper', parentThreadId: threadId, depth: 2 }));
+      send(asfx.turnStarted(sub.threadId, sub.turnId));
+      if (h.depth2.approval) await askApproval(sub, h.depth2.approval);
+      sub.finished = true;
+      send(asfx.turnCompleted(sub.threadId, sub.turnId, 'completed', null));
+    }
+    if (h.delayMs > 0) await tick(h.delayMs);
+    while (h.untilFile && !fs.existsSync(h.untilFile) && !ht.finished) await tick(20);
+    for (const spec of h.items || []) {
+      if (ht.finished) return;
+      const id = `${spec.type}_${turnId.slice(0, 8)}_${Math.random().toString(36).slice(2, 6)}`;
+      send(asfx.toolItem('started', threadId, turnId, { ...spec, id }));
+      await tick();
+      send(asfx.toolItem('completed', threadId, turnId, { ...spec, id }));
+      await tick();
+    }
+    if (h.approval && !ht.finished) {
+      const key = await askApproval(ht, h.approval);
+      if (key === 'cancel') finishTurn(ht, 'interrupted');
+    }
+    if (h.holdForInterrupt) {
+      const until = Date.now() + 30000;
+      while (!ht.interrupted && !ht.finished && Date.now() < until) await tick(5);
+    }
+    if (ht.finished) return;
+    const itemId = `msg_${turnId.slice(0, 8)}`;
+    send(asfx.itemStartedAgentMessage(threadId, turnId, itemId));
+    send(asfx.agentMessageDelta(threadId, turnId, itemId, h.text || 'HELPER-TEXT'));
+    send(asfx.itemCompletedAgentMessage(threadId, turnId, itemId, h.text || 'HELPER-TEXT'));
+    send(asfx.tokenUsageUpdated(threadId, turnId, h.usage || { inputTokens: 900, outputTokens: 90 }));
+    finishTurn(ht, h.status || 'completed', h.status === 'failed' ? { message: 'helper failed' } : null);
+  }
+
   // Drive one scripted turn. Realistic notification order per RESEARCH.md
   // section 4. Each step awaits a tick so concurrent turns on other threads
   // interleave on the shared stdout, exactly like the real server, and so a
@@ -206,6 +347,12 @@ function runAppServer() {
     const userItemId = `item_user_${shortId}`;
     send(asfx.itemStartedUserMessage(threadId, turnId, userItemId, prompt));
     send(asfx.itemCompletedUserMessage(threadId, turnId, userItemId, prompt));
+
+    t.helperTurns = [];
+    for (let i = 0; i < (rule.helpers || []).length; i++) {
+      await launchHelper(t, rule.helpers[i], i);
+      if (t.finished) return;
+    }
 
     if (rule.delayMs > 0) await tick(rule.delayMs);
     while (rule.untilFile && !fs.existsSync(rule.untilFile) && !t.finished) await tick(20);
@@ -259,6 +406,12 @@ function runAppServer() {
         const steered = (a.afterDecision || {}).steered;
         if (key === 'decline' && t.steered && steered && steered.text != null) text = steered.text;
       }
+    }
+
+    if (rule.awaitHelpers) {
+      const until = Date.now() + 30000;
+      while (t.helperTurns.some(h => !h.finished) && !t.finished && Date.now() < until) await tick(5);
+      if (t.finished) return;
     }
 
     if (rule.error) {
@@ -502,6 +655,12 @@ function runAppServer() {
       }
       case 'turn/interrupt': {
         const t = activeTurns.get(params && params.threadId);
+        // A helper's turn can refuse the interrupt (answered with an error) or
+        // lose it (never answered); either way the helper carries on.
+        if (t && t.helper && (t.helper.interruptFails || t.helper.dropInterrupt)) {
+          if (t.helper.interruptFails) send(asfx.errorResponse(id, -32600, 'turn cannot be interrupted'));
+          return;
+        }
         // Zombie-interrupt simulation (Windows Finding 7, codex-cli 0.144.4
         // on Windows ARM): the interrupt is ACCEPTED with an empty response,
         // but NO turn/completed follows and the turn keeps running in the
