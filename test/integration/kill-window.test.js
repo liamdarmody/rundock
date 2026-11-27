@@ -27,6 +27,7 @@ const path = require('node:path');
 
 const h = require('../helpers/harness.js');
 const { MARKERS } = require('../fixtures/stream-json.js');
+const { makeWorkspace, standardTeam } = require('../helpers/workspace.js');
 
 let client;
 
@@ -311,5 +312,59 @@ describe('kill-window: ordinary paths untouched', () => {
     noErrorCards(convoId, since1);
 
     h.reapConvo(convoId);
+  });
+});
+
+// A workspace switch sent while the window holds a chat waits for the window
+// to end and replay it, so the chat is recorded and dispatched in the
+// workspace it was sent to, never replayed into the next one.
+describe('kill-window race: a workspace switch while the window holds a chat', () => {
+  test('a switch sent while a delegate COMPLETE window holds a chat answers only once the window has ended, with the chat in the first workspace', async () => {
+    const convoId = h.freshConvoId('kws');
+    const other = makeWorkspace({ claudeMd: '# Second fixture\n', agents: standardTeam() });
+    h.clearInvocations();
+    h.writeScenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'kws-complete please' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'kws-complete brief' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'kws-complete brief' },
+        turn: [{ text: `Pipeline delivered. ${MARKERS.COMPLETE}` }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: '[SYSTEM: pipeline-complete]' },
+        turn: [{ text: '<silent>' }] },
+      { match: { agent: 'chief-of-staff', promptIncludes: 'kws follow-up question' },
+        turn: [{ text: 'SWITCH-WINDOW-ANSWER' }] },
+    ]);
+    try {
+      client.send({ type: 'chat', conversationId: convoId, agent: 'chief-of-staff', content: 'kws-complete please' });
+      await client.waitFor(m => m.type === 'result' && m._conversationId === convoId && m._agent === 'content-lead', { label: 'delegate COMPLETE result' });
+      await waitForTransition(convoId);
+      client.send({ type: 'chat', conversationId: convoId, agent: 'content-lead', content: 'kws follow-up question' });
+      await waitForBuffered(convoId);
+
+      assert.strictEqual(h.internal.convoTransitions.has(convoId), true, 'the switch is sent while the window is open');
+      const since = client.messages.length;
+      let held;
+      client.send({ type: 'set_workspace', path: other });
+      const { msg } = await client.waitFor((m) => {
+        if (m.type !== 'workspace_set' && m.type !== 'workspace_error') return false;
+        held = h.internal.convoTransitions.has(convoId);
+        return true;
+      }, { since, timeout: 15000, label: 'the switch answer' });
+      assert.strictEqual(msg.type, 'workspace_set', `the switch failed: ${msg.message}`);
+      assert.strictEqual(msg.path, other);
+      assert.strictEqual(held, false, 'workspace_set arrives only once the window no longer holds the conversation');
+
+      const rows = transcript(convoId).filter(e => e.role === 'user' && e.text === 'kws follow-up question');
+      assert.strictEqual(rows.length, 1, 'the first workspace\'s transcript has the chat once');
+      assert.strictEqual(fs.existsSync(path.join(other, '.rundock', 'transcripts', `${convoId}.json`)), false,
+        'the second workspace has no transcript for the conversation');
+      const prompts = h.readAppendedLog(path.join(other, 'stub-prompts.jsonl')).filter(p => String(p.prompt).includes('kws follow-up question'));
+      assert.deepStrictEqual(prompts, [], 'and no prompt with the chat');
+    } finally {
+      const since = client.messages.length;
+      client.send({ type: 'set_workspace', path: h.workspaceDir });
+      await client.waitFor(m => (m.type === 'workspace_set' && m.path === h.workspaceDir) || m.type === 'workspace_error',
+        { since, timeout: 15000, label: 'the switch back' });
+      h.reapConvo(convoId);
+    }
   });
 });

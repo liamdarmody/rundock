@@ -951,6 +951,29 @@ function openConversation(id, withAnchor) {
   showView('chat'); scrollBottom(true); renderConvoList();
 }
 
+// The notice that a deleted conversation's files were kept (the WS dispatch
+// calls it), as a row in the strip above the view, built from elements and
+// text as the held-routines strip is. Nothing else names the strip, so no
+// conversation switch, history render or workspace change clears a row: only
+// its own close does.
+function showFilesKeptNotice(text) {
+  const box = document.getElementById('files-kept-notices');
+  const row = document.createElement('div');
+  row.className = 'held-strip';
+  const span = document.createElement('span');
+  span.className = 'held-strip-text';
+  span.textContent = text;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'held-strip-close';
+  close.textContent = '\u00d7';
+  close.setAttribute('aria-label', 'Close');
+  close.onclick = () => { row.remove(); if (!box.children.length) box.hidden = true; };
+  row.append(span, close);
+  box.append(row);
+  box.hidden = false;
+}
+
 return {
   persistConversation, handlePersistedConversations, createConversation,
   maybeShowCodexFirstRun, startConversation, startSetupConversation,
@@ -960,5 +983,6 @@ return {
   openConvoMenu, convoMenuEsc, closeConvoMenu, openConvoListMenu,
   toggleConvoListMembership, renderConvoList, renderConvoItem,
   discardIfEmpty, openConversation, replayConversationInto, askFromView,
+  showFilesKeptNotice,
 };
 }));
