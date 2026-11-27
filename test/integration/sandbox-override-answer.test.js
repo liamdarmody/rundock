@@ -257,7 +257,11 @@ test('a routine\'s identical call, its card approved, is refused with no decisio
 // call is then put to Claude Code's check with no card of its own, in the
 // conversation and as the agent the case names. The approved call follows
 // through the same check. A case's command, if it ran, would add to the same
-// file as the approved one.
+// file as the approved one. The case without the flag is defence: Claude Code
+// never puts such a call to the check
+// (test/fixtures/claude-cli-sandbox-override.json), so the stub is told to with
+// `beyondClaudeCode`, to hold the hook's answer to one end to end. The hook's
+// own answer to one is also held in test/unit/hook-permission-request.test.js.
 for (const [label, misuse] of [
   ['from another conversation', (convo, m) => agentTurn(open(h.freshConvoId('override-other-convo')), [noCard(outside(m.command))], [])],
   ['by another agent in the same conversation', async (convo, m) => {
@@ -267,7 +271,7 @@ for (const [label, misuse] of [
     return frames;
   }],
   ['with one character of the command changed', (convo, m) => agentTurn(convo, [noCard(outside(m.command.replace('ran', 'raN')))], [])],
-  ['without the flag', (convo, m) => agentTurn(convo, [noCard({ tool: 'Bash', input: { command: m.command } })], [])],
+  ['without the flag (defence: Claude Code never asks about one)', (convo, m) => agentTurn(convo, [noCard({ tool: 'Bash', input: { command: m.command }, beyondClaudeCode: true })], [])],
   ['by another tool', (convo, m) => agentTurn(convo, [noCard(outside(m.command, 'PowerShell'))], [])],
 ]) {
   test(`an approved command asked for ${label} gets no decision and is refused, and the grant stays for the approved call`, async () => {

@@ -94,11 +94,13 @@ function textTurn(text, { sessionId = null, deltaChunks = 2 } = {}) {
 
 // Claude Code's own refusal of a command outside the sandbox that no
 // PermissionRequest hook allowed, in headless mode: this line, then the call's
-// error result. Nothing ran.
-function sandboxOverrideDenied(toolName, index = 1) {
+// error result. Nothing ran. The line carries the session's id and an id of
+// its own, as the CLI's does (test/fixtures/claude-cli-sandbox-override.json).
+function sandboxOverrideDenied(toolName, index = 1, sessionId = 'stub-session') {
   return {
     type: 'system', subtype: 'permission_denied', tool_name: toolName, tool_use_id: `toolu_${index}`,
     decision_reason_type: 'sandboxOverride', decision_reason: 'dangerouslyDisableSandbox', message: 'Run outside of the sandbox',
+    session_id: sessionId, uuid: require('crypto').randomUUID(),
   };
 }
 

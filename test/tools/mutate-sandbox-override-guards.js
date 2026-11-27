@@ -46,6 +46,11 @@ const SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suit
 const ENGINE = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: 'test/integration/sandbox-override-answer.test.js' };
 // The stand-in for Claude Code, which runs an allowed call's command for real.
 const STUB = { src: path.join(ROOT, 'test', 'helpers', 'stub-claude', 'claude'), suite: ENGINE.suite };
+// The stand-in held to what the installed Claude Code did with the same calls,
+// and the stream line it writes for a refusal.
+const MATCH_SUITE = 'test/unit/stub-claude-sandbox-override-matches-cli.test.js';
+const STUB_MATCH = { src: STUB.src, suite: MATCH_SUITE };
+const STREAM_LINES = { src: path.join(ROOT, 'test', 'fixtures', 'stream-json.js'), suite: MATCH_SUITE };
 
 const MUTATIONS = [
   // ===== ONLY A PERSON'S CLICK ON A CARD RECORDS =====
@@ -151,6 +156,51 @@ const MUTATIONS = [
   [STUB, 'an allowed call\'s command runs',
     "require('child_process').exec(String(toolInput.command), {",
     "require('child_process').exec('echo', {"],
+
+  // ===== THE STAND-IN MATCHES WHAT CLAUDE CODE DID =====
+  // Drop the call id from the refusal line and a reader cannot tell which call
+  // was refused, where Claude Code names it.
+  [STREAM_LINES, 'the refusal line names its call',
+    'tool_name: toolName, tool_use_id: `toolu_${index}`,',
+    'tool_name: toolName,'],
+  // Name another call on the refusal line and the refusal lands on the wrong one.
+  [STREAM_LINES, 'the refusal line names the refused call',
+    'tool_name: toolName, tool_use_id: `toolu_${index}`,',
+    'tool_name: toolName, tool_use_id: `toolu_${index + 1}`,'],
+  // Run a call on any answer and a hook that gave no decision lets it run,
+  // where Claude Code refuses it.
+  [STUB_MATCH, 'only an allow answer runs the call',
+    'const ran = answers.some((a) => JSON.stringify(a) === ALLOW_ONCE);',
+    'const ran = answers.length > 0;'],
+  // Leave the tool's name out of the payload and Rundock's hook is tested on a
+  // question Claude Code never puts.
+  [STUB_MATCH, 'the PermissionRequest payload names the tool',
+    "hook_event_name: 'PermissionRequest', tool_name: tool, tool_input: toolInput,",
+    "hook_event_name: 'PermissionRequest', tool_input: toolInput,"],
+  // Leave out the keys Claude Code adds and the payload is narrower than the CLI's.
+  [STUB_MATCH, 'the PermissionRequest payload carries the effort and the prompt id',
+    "effort: { level: 'medium' }, prompt_id: PROMPT_ID,",
+    ''],
+  // Ask about a call without the flag and the stub puts a question Claude Code
+  // never puts, and refuses a call Claude Code runs.
+  [STUB_MATCH, 'a call without the flag is not put to the PermissionRequest hooks',
+    '&& !!input.tool_input && input.tool_input.dangerouslyDisableSandbox === true',
+    '&& !!input.tool_input'],
+  // Let a call without the flag through to the check with no card of its own
+  // whether or not the scenario says it goes beyond Claude Code.
+  [STUB_MATCH, 'a call without the flag reaches the check only when a test says it goes beyond Claude Code',
+    '&& call.beyondClaudeCode !== true',
+    '&& false'],
+  // Hand the hooks the flag as it was sent and the string "true" reaches them
+  // as a string, where Claude Code gives them true.
+  [STUB_MATCH, 'the hooks see the flag sent as the string "true" as true',
+    "|| sent.dangerouslyDisableSandbox !== 'true') return sent;",
+    '|| true) return sent;'],
+  // Give an empty result for a command that printed nothing and the result
+  // text is not Claude Code's.
+  [STUB_MATCH, 'a Bash call that printed nothing has Claude Code\'s words for it',
+    "(!err && !printed && tool === 'Bash') ? NO_OUTPUT : printed",
+    'printed'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

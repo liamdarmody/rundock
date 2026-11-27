@@ -149,10 +149,23 @@ describe('a command outside the sandbox the hook is asked about by Claude Code',
     });
   }
 
+  // Defence, not Claude Code's behaviour: the CLI never puts a call without
+  // the flag to the PermissionRequest hooks, and gives a flag sent as the
+  // string "true" to them as true (test/fixtures/claude-cli-sandbox-override.json).
+  // The hook still gives no decision to either, should one ever arrive.
   for (const [label, fields] of [
-    ['by another tool', { tool_name: 'Write', tool_input: { file_path: path.join(ws, 'a.txt'), content: 'x', command: 'echo hello', dangerouslyDisableSandbox: true } }],
     ['without the flag', { tool_input: { command: 'echo hello' } }],
     ['with the flag as the string "true"', { tool_input: { command: 'echo hello', dangerouslyDisableSandbox: 'true' } }],
+  ]) {
+    test(`a call ${label}, which Claude Code never sends, still gives no decision and asks nothing`, async () => {
+      const r = await ask(request(fields), undefined);
+      assertNoDecision(r);
+      assert.deepStrictEqual(r.asked, []);
+    });
+  }
+
+  for (const [label, fields] of [
+    ['by another tool', { tool_name: 'Write', tool_input: { file_path: path.join(ws, 'a.txt'), content: 'x', command: 'echo hello', dangerouslyDisableSandbox: true } }],
     ['with the flag false', { tool_input: { command: 'echo hello', dangerouslyDisableSandbox: false } }],
     ['with an empty command', { tool_input: { command: '', dangerouslyDisableSandbox: true } }],
     ['with no command', { tool_input: { dangerouslyDisableSandbox: true } }],
