@@ -238,7 +238,9 @@ export function mountArtifactPreview({ paneElement, content }) {
   return handle;
 }
 
-export function mountImageViewer({ paneElement, path }) {
+// alt is optional: a caller that knows a better name than the path (a sent
+// file's own name) gives it, and the files pane gives none.
+export function mountImageViewer({ paneElement, path, alt }) {
   const doc = paneElement.ownerDocument;
   ensureStyles(doc);
   paneElement.innerHTML = '';
@@ -247,7 +249,7 @@ export function mountImageViewer({ paneElement, path }) {
   wrap.className = 'viewer-image-wrap';
   const img = doc.createElement('img');
   img.src = workspaceFileUrl(path);
-  img.alt = path;
+  img.alt = alt || path;
   wrap.appendChild(img);
   paneElement.appendChild(wrap);
   return makeHandle(paneElement);

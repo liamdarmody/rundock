@@ -33,6 +33,7 @@
     goneFile: [...DOC, 'm14.5 12.5-5 5', 'm9.5 12.5 5 5'],
     goneImage: ['M2 2 22 22', 'M10.41 10.41a2 2 0 1 1-2.83-2.83', 'M13.5 13.5 6 21', 'M18 12 21 15',
       'M3.59 3.59A1.99 1.99 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.052-.22 1.41-.59', 'M21 15V5a2 2 0 0 0-2-2H9'],
+    close: ['M18 6 6 18', 'm6 6 12 12'],
   };
 
   const lines = () => (typeof RundockAttachmentLines !== 'undefined' ? RundockAttachmentLines : require('./attachment-lines.js'));
@@ -139,6 +140,7 @@
     img.setAttribute('width', String(size.width));
     img.setAttribute('height', String(size.height));
     node.appendChild(img);
+    node.addEventListener('click', () => openSentFile(node, conversationId, file, entry, name));
     return node;
   }
 
@@ -156,6 +158,7 @@
       const node = chip('button', 'att-chip', name, meta, 'file');
       node.setAttribute('type', 'button');
       node.setAttribute('aria-label', `Open ${name}`);
+      node.addEventListener('click', () => openSentFile(node, conversationId, line.file, entry, name));
       return node;
     }
     const node = chip('div', 'att-chip plain', name, meta, ext === 'csv' ? 'sheet' : 'file');
@@ -178,6 +181,79 @@
     if (rest) bubble.appendChild(document.createTextNode(rest));
   }
 
-  const api = { mergeSentFiles, mergeStoredFiles, entryFor, drawSentFiles };
+  // OPENING A FILE. An image or a PDF opens larger in a dialog over the
+  // palette's scrim, mounted by the viewers the files pane uses, and closes
+  // back to the button that opened it. Escape is heard on the way down while
+  // a file is open, so the find bar and the rest of the page never see it,
+  // and not at all once it is shut.
+  const loadViewers = () => import('/viewers/registry.js');
+  const thousands = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  let open = null;
+
+  function fileLine(ext, entry) {
+    const size = wording().formatSize(entry.bytes);
+    if (ext === 'pdf') return `PDF · ${size}`;
+    return `${CHIP_TYPES.get(ext)} · ${thousands(entry.width)} × ${thousands(entry.height)} px · ${size}`;
+  }
+
+  function closeSentFile() {
+    if (!open) return;
+    const { scrim, opener, onKey, handle } = open;
+    open = null;
+    document.removeEventListener('keydown', onKey, true);
+    if (handle) handle.destroy();
+    scrim.remove();
+    if (opener.isConnected) opener.focus();
+  }
+
+  function openSentFile(opener, conversationId, file, entry, name) {
+    closeSentFile();
+    const ext = extOf(file);
+    const scrim = el('div', 'palette-overlay');
+    const dialog = el('div', 'sent-file');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-label', name);
+    const head = el('div', 'sent-file-head');
+    const title = el('div', 'sent-file-title');
+    const n = el('div', 'sent-file-name');
+    n.textContent = name;
+    const line = el('div', 'sent-file-line');
+    line.textContent = fileLine(ext, entry);
+    title.append(n, line);
+    const close = el('button', 'sent-file-close');
+    close.setAttribute('type', 'button');
+    close.setAttribute('aria-label', 'Close');
+    close.appendChild(icon('close'));
+    head.append(title, close);
+    const body = el('div', ext === 'pdf' ? 'sent-file-body pdf' : 'sent-file-body');
+    dialog.append(head, body);
+    scrim.appendChild(dialog);
+    const state = { scrim, opener, handle: null };
+    state.onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeSentFile();
+    };
+    // Only a press that starts and ends on the scrim closes: a drag out of
+    // the dialog leaves it open.
+    let pressed = null;
+    scrim.addEventListener('mousedown', (e) => { pressed = e.target; });
+    scrim.addEventListener('click', (e) => { if (e.target === scrim && pressed === scrim) closeSentFile(); });
+    close.addEventListener('click', closeSentFile);
+    document.addEventListener('keydown', state.onKey, true);
+    document.body.appendChild(scrim);
+    open = state;
+    close.focus();
+    const filePath = `.rundock/attachments/${conversationId}/${file}`;
+    api.loadViewers().then((viewers) => {
+      if (open !== state) return;
+      state.handle = ext === 'pdf' ? viewers.mountPdfViewer({ paneElement: body, path: filePath })
+        : viewers.mountImageViewer({ paneElement: body, path: filePath, alt: name });
+    }).catch(() => {});
+  }
+
+  const api = { mergeSentFiles, mergeStoredFiles, entryFor, drawSentFiles, loadViewers };
   return api;
 }));

@@ -15,6 +15,7 @@ const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
 const { storedText } = require('../../lib/attachments/receive.js');
 
@@ -442,5 +443,201 @@ describe('what the page knows of each file, and where it comes from', () => {
       return [...new Function(`${text}\nreturn CHIP_TYPES;`)()];
     };
     assert.deepStrictEqual(cut(read('public', 'sent-files.js'), 'the bubble\'s types'), cut(read('public', 'views', 'composer.js'), 'the composer\'s types'));
+  });
+});
+
+// The viewers the files pane loads. A document here has no module loader, so
+// the page is given the shipped module in its place.
+let registry = null;
+async function viewers() {
+  if (!registry) registry = await import(pathToFileURL(path.join(ROOT, 'public', 'viewers', 'registry.js')).href);
+  return registry;
+}
+const GONE = { file: '6-old.png', name: 'old.png', type: 'png', bytes: 4000, width: 10, height: 10 };
+const PNG_PATH = `.rundock/attachments/${ID}/${PNG.file}`;
+const PDF_PATH = `.rundock/attachments/${ID}/${PDF.file}`;
+
+// A bubble holding a thumbnail, a PDF chip, a plain chip and a gone chip.
+async function sentBubble(p) {
+  const sent = sentFiles(p);
+  const shipped = await viewers();
+  sent.loadViewers = () => Promise.resolve(shipped);
+  remember(p, ID, { [PNG.file]: present(PNG), [PDF.file]: present(PDF), [CSV.file]: present(CSV) });
+  const [thumb, pdf, plain, gone] = chips(draw(p, stored('see these', ID, PNG, PDF, CSV, GONE)));
+  return { thumb, pdf, plain, gone };
+}
+const overlay = (p) => p.doc.querySelector('.palette-overlay');
+const dialog = (p) => p.doc.querySelector('[role="dialog"]');
+const closeButton = (p) => dialog(p).querySelector('button[aria-label="Close"]');
+// The file mounted in the dialog, once the viewers have loaded.
+async function mounted(p, selector) {
+  for (let i = 0; i < 250; i++) {
+    const found = dialog(p) && dialog(p).querySelector(selector);
+    if (found) return found;
+    await new Promise(r => setTimeout(r, 2));
+  }
+  return assert.fail(`the dialog mounts its file: ${dialog(p) ? dialog(p).outerHTML.slice(0, 300) : 'no dialog is open'}`);
+}
+function key(p, target, k) {
+  const e = new p.w.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true });
+  target.dispatchEvent(e);
+  return e;
+}
+// A press of the pointer, down and up on one element, as a browser sends it.
+function press(p, target) {
+  for (const type of ['mousedown', 'mouseup', 'click']) target.dispatchEvent(new p.w.MouseEvent(type, { bubbles: true, cancelable: true }));
+}
+// Every Escape that reaches the document on its way back up.
+function escapesReaching(p) {
+  const seen = [];
+  p.doc.addEventListener('keydown', (e) => { if (e.key === 'Escape') seen.push(e); });
+  return seen;
+}
+function assertOpen(p, name) {
+  assert.ok(dialog(p), 'a dialog is open');
+  assert.strictEqual(dialog(p).getAttribute('aria-label'), name);
+}
+function assertClosed(p, opener) {
+  assert.strictEqual(overlay(p), null, 'the scrim is gone');
+  assert.strictEqual(dialog(p), null, 'the dialog is gone');
+  assert.strictEqual(p.doc.activeElement, opener, 'focus is back on the button that opened it');
+}
+
+describe('an image or a PDF opens larger over the conversation', () => {
+  test('a PNG opens a dialog over the palette\'s scrim with its name, its line and a Close button', async () => {
+    const p = page();
+    const { thumb } = await sentBubble(p);
+    press(p, thumb);
+    const scrim = overlay(p);
+    assert.ok(scrim, 'a scrim is drawn');
+    assert.strictEqual(p.doc.querySelectorAll('.palette-overlay').length, 1, 'one overlay');
+    const rule = between(read('public', 'styles', 'components', 'palette.css'), '.palette-overlay {', '}', 'the palette\'s scrim');
+    assert.ok(rule.includes('position: fixed; inset: 0; background: rgba(0,0,0,0.18);'), `the scrim covers the window in the palette's background: ${rule}`);
+    const d = dialog(p);
+    assert.ok(d && d.parentElement === scrim, 'the dialog sits over the scrim');
+    assert.strictEqual(p.doc.querySelectorAll('[role="dialog"]').length, 1);
+    assert.strictEqual(d.getAttribute('aria-modal'), 'true');
+    assert.strictEqual(d.getAttribute('aria-label'), 'diagram.png');
+    const texts = [...d.querySelectorAll('*')].filter(el => el.children.length === 0 && el.textContent).map(el => el.textContent);
+    assert.deepStrictEqual(texts, ['diagram.png', 'PNG · 2,576 × 1,610 px · 1.9 MB'], 'the name, then the line under it');
+    const close = closeButton(p);
+    assert.ok(close && close.matches('button[type="button"]'), 'a Close button');
+    assert.ok(await mounted(p, 'img'), 'the file');
+  });
+
+  test('the open image has the file\'s name as its alt', async () => {
+    const p = page();
+    const { thumb } = await sentBubble(p);
+    press(p, thumb);
+    const img = await mounted(p, 'img');
+    assert.strictEqual(img.getAttribute('alt'), 'diagram.png');
+    assert.strictEqual(img.getAttribute('src'), (await viewers()).workspaceFileUrl(PNG_PATH));
+  });
+
+  test('a PDF opens in a frame over the file\'s own address, with its pages panel shut', async () => {
+    const p = page();
+    const { pdf } = await sentBubble(p);
+    press(p, pdf);
+    assertOpen(p, 'report.pdf');
+    const texts = [...dialog(p).querySelectorAll('*')].filter(el => el.children.length === 0 && el.textContent).map(el => el.textContent);
+    assert.deepStrictEqual(texts, ['report.pdf', 'PDF · 52 KB']);
+    const frame = await mounted(p, 'iframe');
+    assert.strictEqual(frame.getAttribute('src'), (await viewers()).workspaceFileUrl(PDF_PATH) + '#navpanes=0');
+  });
+
+  test('Enter or Space on a thumbnail opens it', async () => {
+    const p = page();
+    const { thumb } = await sentBubble(p);
+    for (const k of ['Enter', ' ']) {
+      thumb.focus();
+      assert.strictEqual(key(p, thumb, k).defaultPrevented, false, `${k} is left to the button's own activation`);
+      assert.ok(thumb.matches('button[type="button"]'), 'a button, which the key activates');
+      // What a browser does for a key that activates a focused button.
+      thumb.click();
+      assertOpen(p, 'diagram.png');
+      key(p, p.doc.activeElement, 'Escape');
+    }
+  });
+
+  test('opening a file moves focus onto Close', async () => {
+    const p = page();
+    const { pdf } = await sentBubble(p);
+    pdf.focus();
+    press(p, pdf);
+    assertOpen(p, 'report.pdf');
+    assert.strictEqual(p.doc.activeElement, closeButton(p));
+  });
+
+  test('Escape closes the file and puts focus back on its thumbnail, and the next Escape is the page\'s', async () => {
+    const p = page();
+    const { thumb } = await sentBubble(p);
+    thumb.focus();
+    press(p, thumb);
+    await mounted(p, 'img');
+    const seen = escapesReaching(p);
+    const e = key(p, p.doc.activeElement, 'Escape');
+    assert.strictEqual(e.defaultPrevented, true);
+    assert.strictEqual(seen.length, 0, 'the find bar and the rest of the page never see this Escape');
+    assertClosed(p, thumb);
+    const next = key(p, thumb, 'Escape');
+    assert.strictEqual(next.defaultPrevented, false);
+    assert.strictEqual(seen.length, 1, 'with nothing open, Escape goes on to the page');
+  });
+
+  test('the Close button closes the file', async () => {
+    const p = page();
+    const { pdf } = await sentBubble(p);
+    press(p, pdf);
+    await mounted(p, 'iframe');
+    press(p, closeButton(p));
+    assertClosed(p, pdf);
+  });
+
+  test('a click on the scrim closes the file', async () => {
+    const p = page();
+    const { thumb } = await sentBubble(p);
+    press(p, thumb);
+    assertOpen(p, 'diagram.png');
+    press(p, overlay(p));
+    assertClosed(p, thumb);
+  });
+
+  test('a click inside the dialog leaves it open', async () => {
+    const p = page();
+    const { thumb } = await sentBubble(p);
+    press(p, thumb);
+    const img = await mounted(p, 'img');
+    for (const el of [dialog(p), dialog(p).firstElementChild, img]) press(p, el);
+    assertOpen(p, 'diagram.png');
+    assert.ok(overlay(p), 'the scrim stays');
+  });
+
+  test('with no file open, the explanation\'s Escape still closes the explanation', () => {
+    const p = page();
+    const divider = p.w.createSummarisedDivider({ key: 'k1' });
+    p.$('messages').appendChild(divider);
+    const why = divider.querySelector('button.summarised-why');
+    why.click();
+    assert.strictEqual(why.getAttribute('aria-expanded'), 'true');
+    why.focus();
+    const seen = escapesReaching(p);
+    const e = key(p, why, 'Escape');
+    assert.strictEqual(e.defaultPrevented, true);
+    assert.strictEqual(why.getAttribute('aria-expanded'), 'false', 'the explanation is shut');
+    assert.strictEqual(divider.querySelector('.summarised-explain').hidden, true);
+    assert.strictEqual(seen.length, 0);
+    assert.strictEqual(key(p, why, 'Escape').defaultPrevented, false, 'with it shut, Escape is the page\'s');
+    assert.strictEqual(seen.length, 1);
+  });
+
+  test('a plain chip and a gone chip open nothing when clicked', async () => {
+    const p = page();
+    const { plain, gone } = await sentBubble(p);
+    assertPlain(plain, 'notes.csv', 'CSV · 1 KB');
+    assertGone(gone, '6-old.png');
+    for (const el of [plain, gone, plain.querySelector('.att-name'), gone.querySelector('.att-tile')]) press(p, el);
+    await new Promise(r => setTimeout(r, 10));
+    assert.strictEqual(overlay(p), null);
+    assert.strictEqual(dialog(p), null);
   });
 });
