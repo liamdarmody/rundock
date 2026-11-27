@@ -333,3 +333,147 @@ describe('what a Codex send records', () => {
     h.reapConvo(id);
   });
 });
+
+describe('a thread resumed on another app-server process is sent its images again', () => {
+  const recordFile = (id) => path.join(h.workspaceDir, '.rundock', 'attachments', id, 'record.json');
+  // The thread's entry as another process left it.
+  function entryFrom(id, threadId, entry) {
+    const record = JSON.parse(fs.readFileSync(recordFile(id), 'utf8'));
+    record.sent = { ...record.sent, [threadId]: { ...entry, instance: 'another-process' } };
+    fs.writeFileSync(recordFile(id), JSON.stringify(record));
+  }
+  const linesIn = (content) => content.split('\n').filter((l) => l.startsWith('[Attached: '));
+  // A conversation on Codex sent `files`, its first turn ended. Without its
+  // line, the message names its files through its entry alone.
+  async function opening(id, tag, files, { withLine = true } = {}) {
+    const since = client.messages.length;
+    const content = `${tag} have a look`;
+    const ok = await receiveAttachments(h.workspaceDir, { conversationId: id, content, attachments: files });
+    chat(id, withLine ? ok.content : content, undefined, { agent: 'researcher', attachmentEntry: ok.entry.id });
+    const threadId = await threadOf(id, since);
+    await doneAfter(id, since);
+    return { ok, threadId, stored: ok.entry.files.map((f) => f.file) };
+  }
+  // A follow-up with no files on `threadId`, once it ends.
+  async function followUp(id, threadId, content) {
+    const since = client.messages.length;
+    chat(id, content, undefined, { agent: 'researcher', sessionId: threadId });
+    await doneAfter(id, since);
+  }
+
+  test('a follow-up with no files after a PNG, on the same app-server, carries no localImage item', async () => {
+    const id = h.freshConvoId('codex-warm');
+    codexAnswers(['WARM-TA', 'WARM-TB']);
+    h.clearInvocations();
+    const { threadId } = await opening(id, 'WARM-TA', [file('diagram.png', DIAGRAM)], { withLine: false });
+    await followUp(id, threadId, 'WARM-TB and the next step?');
+    const params = await turnStartWith('WARM-TB');
+    assert.deepStrictEqual(params, { threadId, input: [{ type: 'text', text: 'WARM-TB and the next step?' }] }, 'the person\'s text alone');
+    h.reapConvo(id);
+  });
+
+  test('a follow-up on the same app-server naming the PNG\'s line is given the shown-earlier form', async () => {
+    const id = h.freshConvoId('codex-warm-line');
+    codexAnswers(['WARM-TC', 'WARM-TD']);
+    h.clearInvocations();
+    const { ok, threadId, stored } = await opening(id, 'WARM-TC', [file('diagram.png', DIAGRAM)]);
+    await followUp(id, threadId, `WARM-TD the left half of ${lineIn(ok.content)}`);
+    const text = textThen(await turnStartWith('WARM-TD'), []);
+    assert.strictEqual(text, `WARM-TD the left half of ${shownEarlier(stored[0])}`, 'the shown-earlier form');
+    h.reapConvo(id);
+  });
+
+  test('a follow-up after the app-server respawned resumes the thread and carries the PNG\'s line and item after the person\'s text', async () => {
+    const id = h.freshConvoId('codex-respawn');
+    h.writeCodexScenario([
+      { match: { promptIncludes: 'CRASH-TB' }, deltas: ['about to die'], crashMidTurn: true },
+      ...['CRASH-TA', 'CRASH-TC'].map((tag) => ({ match: { promptIncludes: tag }, text: `DONE-${tag}` })),
+    ]);
+    h.clearInvocations();
+    const { ok, threadId, stored } = await opening(id, 'CRASH-TA', [file('diagram.png', DIAGRAM)]);
+    let since = client.messages.length;
+    chat(id, 'CRASH-TB crash now', undefined, { agent: 'researcher', sessionId: threadId });
+    assert.ok(await arrived((m) => m.type === 'system' && m.subtype === 'codex_error' && m._conversationId === id, { since }), 'the turn dies with the app-server');
+    await doneAfter(id, since);
+    since = client.messages.length;
+    chat(id, 'CRASH-TC are you there?', undefined, { agent: 'researcher', sessionId: threadId });
+    assert.ok(await resultFor(id, 'DONE-CRASH-TC', since), 'the follow-up is answered on the respawned app-server');
+    const params = await turnStartWith('CRASH-TC');
+    assert.strictEqual(params.threadId, threadId, 'the same thread, resumed');
+    const text = textThen(params, [localImage(id, stored[0])]);
+    assert.strictEqual(text, `CRASH-TC are you there?\n${lineIn(ok.content)}`, 'the PNG\'s line after the person\'s text');
+    await doneAfter(id, since);
+    h.reapConvo(id);
+  });
+
+  test('a thread whose entry names another app-server instance is sent its PNG again', async () => {
+    const id = h.freshConvoId('codex-other');
+    codexAnswers(['OTHER-TA', 'OTHER-TB']);
+    h.clearInvocations();
+    const { ok, threadId, stored } = await opening(id, 'OTHER-TA', [file('diagram.png', DIAGRAM)]);
+    entryFrom(id, threadId, { files: stored, bytes: DIAGRAM.length, images: 1 });
+    await followUp(id, threadId, 'OTHER-TB and now?');
+    const text = textThen(await turnStartWith('OTHER-TB'), [localImage(id, stored[0])]);
+    assert.strictEqual(text, `OTHER-TB and now?\n${lineIn(ok.content)}`, 'the PNG\'s line after the person\'s text');
+    h.reapConvo(id);
+  });
+
+  test('a PNG deleted before a cold resume is left out, and no path is given', async () => {
+    const id = h.freshConvoId('codex-gone');
+    codexAnswers(['GONE-TA', 'GONE-TB']);
+    h.clearInvocations();
+    const { threadId, stored } = await opening(id, 'GONE-TA', [file('diagram.png', DIAGRAM)]);
+    textThen(await turnStartWith('GONE-TA'), [localImage(id, stored[0])]);
+    entryFrom(id, threadId, { files: stored, bytes: DIAGRAM.length, images: 1 });
+    fs.unlinkSync(pathOf(id, stored[0]));
+    await followUp(id, threadId, 'GONE-TB still there?');
+    const params = await turnStartWith('GONE-TB');
+    assert.deepStrictEqual(params, { threadId, input: [{ type: 'text', text: 'GONE-TB still there?' }] }, 'the person\'s text alone');
+    assert.ok(!JSON.stringify(params).includes('.rundock/attachments/'), 'and no path is given');
+    h.reapConvo(id);
+  });
+
+  test('three images sent earlier are sent again on a cold resume, last listed first', async () => {
+    const id = h.freshConvoId('codex-three');
+    codexAnswers(['THREE-TA', 'THREE-TB']);
+    h.clearInvocations();
+    const images = [png(640, 480, 40), png(800, 600, 50), png(320, 240, 60)];
+    const { ok, threadId, stored } = await opening(id, 'THREE-TA',
+      [file('diagram.png', images[0]), file('chart.png', images[1]), file('sketch.png', images[2])]);
+    entryFrom(id, threadId, { files: stored, bytes: 150, images: 3 });
+    await followUp(id, threadId, 'THREE-TB compare them');
+    const lines = linesIn(ok.content);
+    const text = textThen(await turnStartWith('THREE-TB'), [2, 1, 0].map((i) => localImage(id, stored[i])));
+    assert.strictEqual(text, ['THREE-TB compare them', lines[2], lines[1], lines[0]].join('\n'), 'their lines in the same order');
+    h.reapConvo(id);
+  });
+
+  test('the fresh-thread fallback after a PNG resends nothing', async () => {
+    const id = h.freshConvoId('codex-fresh');
+    codexAnswers(['FRESH-TA', 'FRESH-TB'], { resumeFails: true });
+    h.clearInvocations();
+    const { threadId } = await opening(id, 'FRESH-TA', [file('diagram.png', DIAGRAM)], { withLine: false });
+    await followUp(id, threadId, 'FRESH-TB one more thing');
+    const params = await turnStartWith('FRESH-TB');
+    assert.notStrictEqual(params.threadId, threadId, 'a fresh thread');
+    assert.strictEqual(params.input.length, 1, 'one text item');
+    assert.ok(params.input[0].text.includes('You are Ida') && params.input[0].text.endsWith('\n\nFRESH-TB one more thing'), 'the full first-turn prompt');
+    h.reapConvo(id);
+  });
+
+  test('after a cold resume the thread\'s entry holds the new instance and this turn\'s files alone', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-replaced');
+    codexAnswers(['AFTER-TA', 'AFTER-TB']);
+    h.clearInvocations();
+    const chart = png(800, 600, 50);
+    const { threadId, stored } = await opening(id, 'AFTER-TA', [file('diagram.png', DIAGRAM), file('chart.png', chart)]);
+    entryFrom(id, threadId, { files: stored, bytes: DIAGRAM.length + chart.length, images: 2 });
+    fs.unlinkSync(pathOf(id, stored[1]));
+    await followUp(id, threadId, 'AFTER-TB the first one');
+    const { instance, ...rest } = entryOf(id, threadId) || {};
+    assert.deepStrictEqual(rest, { files: [stored[0]], bytes: DIAGRAM.length, images: 1 }, 'this turn\'s copy alone');
+    assert.match(String(instance), /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'with the instance it was sent through');
+    h.reapConvo(id);
+  });
+});
