@@ -41,6 +41,14 @@ const SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suit
 const RULE = { src: path.join(ROOT, 'lib', 'delegation', 'helpers.js'), suite: 'test/unit/helpers-rule.test.js' };
 // The server end to end: a hook request matched to the lead's message.
 const MATCH = { src: path.join(ROOT, 'lib', 'delegation', 'helpers.js'), suite: 'test/integration/helpers-card.test.js' };
+// The count and the cap, read from task lines and hook answers.
+const COUNT = { src: path.join(ROOT, 'lib', 'delegation', 'helpers.js'), suite: 'test/unit/helpers-count.test.js' };
+// The lead's stream, its result and its holds, end to end.
+const STREAM_SUITE = 'test/integration/helpers-stream.test.js';
+const STREAM = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: STREAM_SUITE };
+const SERVER = { src: path.join(ROOT, 'server.js'), suite: STREAM_SUITE };
+// The env every spawn is given.
+const SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: STREAM_SUITE };
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. The integration suite
 // starts a server and agents for every test, and a broken guard can leave
@@ -85,6 +93,42 @@ const MUTATIONS = [
   // ===== THE LEAD IS GIVEN RUNDOCK'S OWN WORDS FOR A REFUSAL =====
   [HOOK, 'the hook gives a refused Agent call the general refusal words instead of Rundock\'s',
     "agentCall && typeof result.notice === 'string' ? result.notice\n          : ",
+    ''],
+
+  // ===== A HELPER'S OWN LINES STAY OUT OF THE LEAD'S TURN =====
+  [only(STREAM, 'with helpers on, a line from a helper never joins the lead\'s reply or its steps'),
+    'a line with a parent_tool_use_id is read as the lead\'s',
+    '        if (fromHelper(parsed)) continue;\n',
+    ''],
+
+  // ===== EVERY END LOWERS THE COUNT =====
+  [COUNT, 'a helper reported killed stays running in the count',
+    "killed: 'killed', failed: 'failed'",
+    "failed: 'failed'"],
+
+  // ===== THE REQUEST STAYS OPEN WHILE HELPERS RUN =====
+  [only(STREAM, 'with helpers on, the lead\'s result while a helper runs sends no done and leaves it busy, and the first result after the helper ends sends done'),
+    'the lead\'s result sends done while its helpers run',
+    "if (!helping) safeSend(JSON.stringify({ type: 'system', subtype: 'done'",
+    "safeSend(JSON.stringify({ type: 'system', subtype: 'done'"],
+  [only(SERVER, 'with helpers on, a lead the person started keeps its handoff marker\'s kill waiting while its helpers run'),
+    'a handoff marker\'s kill is scheduled while the lead\'s helpers run',
+    '  if (helpers.holdWhileHelping(convoId, () => { if (e.pendingKill && !e.exited) scheduleScopeReturnKill(e, convoId); })) return;\n',
+    ''],
+  [only(SERVER, 'with helpers on, the reaper keeps a lead whose helpers run, and reaps it once the request ends'),
+    'the reaper reaps a lead whose helpers run',
+    '    if (helpers.helping(convoId)) continue;\n',
+    ''],
+
+  // ===== AT MOST FIVE AT ONCE =====
+  [COUNT, 'the cap lets a sixth helper start',
+    'const HELPER_CAP = 5;',
+    'const HELPER_CAP = 6;'],
+
+  // ===== A HELPER CAN'T START HELPERS OF ITS OWN =====
+  [only(SPAWN_ENV, 'with helpers on, every conversation spawn carries the depth limit and refuses SendMessage'),
+    'a conversation spawn is given no subagent spawn depth',
+    "  if (convoId && require('../delegation/helpers.js').HELPERS_ENABLED) env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH = '1';\n",
     ''],
 ];
 
