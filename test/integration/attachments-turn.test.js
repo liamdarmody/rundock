@@ -240,6 +240,32 @@ describe('a refused resume started fresh, with what was sent while it was starti
     h.reapConvo(id);
   });
 
+  test('a stored file deleted while the refused resume lingers is not available to the fresh start, and the other keeps its block', async () => {
+    const id = h.freshConvoId('turn-retry-gone');
+    seed(id, 'dead-turn-g');
+    scenario([{ match: { promptIncludes: 'ASK-G1' }, turn: [{ text: 'FRESH-G1' }], keepSession: true }], ['dead-turn-g'], { refusalExitMs: 1200 });
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'ASK-G1 see these', [file('screenshot.png', SCREENSHOT), file('report.pdf', REPORT)], { sessionId: 'dead-turn-g' });
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is stored');
+    assert.ok(await expired(id, since), 'the resume is refused and still lingering');
+    const shot = stored.entry.files[0].file;
+    const shotLine = stored.content.split('\n').find((l) => l.startsWith('[Attached: ') && l.includes(`/${shot} (`));
+    assert.ok(shotLine, 'the stored text names the PNG');
+    fs.rmSync(path.join(folderOf(id), shot));
+    assert.ok(await resultFor(id, 'FRESH-G1', since), 'the fresh start answers');
+    assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), ['dead-turn-g', null], 'refused once, then started fresh');
+    const sent = await oneSent('ASK-G1');
+    assert.strictEqual(sent.resume, null, 'read by the fresh start');
+    assert.deepStrictEqual(sent.content, [
+      { type: 'text', text: stored.content.split(shotLine).join(`[Attached file not available: ${shot}]`) },
+      pdfBlock(REPORT),
+    ], 'the PNG named as not available with no block, the PDF still with its block');
+    assert.ok(!sent.line.includes(`.rundock/attachments/${id}/${shot}`), 'and no path for the PNG');
+    h.reapConvo(id);
+  });
+
   test('a text-only message sent while it was starting is re-emitted with no record entry, and arrives as a string', async () => {
     const id = h.freshConvoId('turn-retry-text');
     seed(id, 'dead-turn-t');
