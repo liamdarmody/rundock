@@ -641,3 +641,262 @@ describe('an image or a PDF opens larger over the conversation', () => {
     assert.strictEqual(dialog(p), null);
   });
 });
+
+// A name that is markup, and the stored names the write would give it.
+const MARKUP = '<img src=x onerror=alert(1)>.png';
+const MARKED = { file: '7-img-src-x-onerror-alert-1.png', name: MARKUP, type: 'png', bytes: 1900000, width: 2576, height: 1610 };
+const MARKED_GONE = { file: '8-img-src-x-onerror-alert-1.png', name: MARKUP, type: 'png', bytes: 4000, width: 10, height: 10 };
+
+// Every element under root as tag and classes, in order, with an icon's
+// paths and whatever a viewer mounted left out (each is checked on its own).
+function shape(root, skip = () => false) {
+  const out = [];
+  const walk = (node) => {
+    for (const child of node.children) {
+      const cls = child.getAttribute('class');
+      out.push(child.tagName.toLowerCase() + (cls ? '.' + cls.split(' ').join('.') : ''));
+      if (child.tagName.toLowerCase() === 'svg') {
+        assert.ok([...child.querySelectorAll('*')].every(el => el.tagName.toLowerCase() === 'path' && el.attributes.length === 1),
+          'an icon holds only its paths');
+      } else if (!skip(child)) walk(child);
+    }
+  };
+  walk(root);
+  return out;
+}
+function assertNoMarkup(p, root) {
+  assert.strictEqual(root.querySelector('[onerror]'), null, 'no element carries the name\'s handler');
+  assert.strictEqual(p.doc.querySelector('img[src="x"]'), null, 'no image is made from the name');
+}
+
+describe('a file\'s name is shown as text', () => {
+  test('a name holding markup shows as that text in a thumbnail and a gone chip, and the bubble holds only what the draw made', () => {
+    const p = page();
+    remember(p, ID, { [MARKED.file]: present(MARKED), [MARKED_GONE.file]: present(MARKED_GONE, { state: 'changed' }) });
+    const bubble = draw(p, stored('look', ID, MARKED, MARKED_GONE));
+    const [thumb, gone] = chips(bubble);
+    assert.ok(thumb.matches('button.msg-thumb'), `a thumbnail: ${thumb.outerHTML.slice(0, 200)}`);
+    assert.strictEqual(thumb.getAttribute('aria-label'), `Open ${MARKUP}`);
+    assert.strictEqual(thumb.getAttribute('title'), MARKUP);
+    assert.strictEqual(thumb.querySelector('img').getAttribute('alt'), MARKUP);
+    assertGone(gone, MARKUP);
+    assertNoMarkup(p, bubble);
+    assert.deepStrictEqual(shape(bubble), ['div.msg-files', 'button.msg-thumb', 'img',
+      'div.att-chip.gone', 'span.att-tile', 'svg.ic', 'span.att-txt', 'span.att-name', 'span.att-meta']);
+    assert.strictEqual(bubble.lastChild.nodeType, p.w.Node.TEXT_NODE);
+    assert.strictEqual(bubble.lastChild.textContent, 'look');
+  });
+
+  test('a name holding markup shows as that text in the open file\'s name and label, and the dialog holds only what the draw made', async () => {
+    const p = page();
+    const sent = sentFiles(p);
+    const shipped = await viewers();
+    sent.loadViewers = () => Promise.resolve(shipped);
+    remember(p, ID, { [MARKED.file]: present(MARKED) });
+    press(p, chip(draw(p, stored('look', ID, MARKED))));
+    assertOpen(p, MARKUP);
+    const img = await mounted(p, 'img');
+    const d = dialog(p);
+    assert.strictEqual(d.querySelector('.sent-file-name').textContent, MARKUP);
+    assert.strictEqual(img.getAttribute('alt'), MARKUP);
+    assertNoMarkup(p, overlay(p));
+    const body = d.querySelector('.sent-file-body');
+    assert.deepStrictEqual(shape(overlay(p), el => el === body), ['div.sent-file', 'div.sent-file-head', 'div.sent-file-title',
+      'div.sent-file-name', 'div.sent-file-line', 'button.sent-file-close', 'svg.ic', body.tagName.toLowerCase() + '.' + body.className.split(' ').join('.')]);
+    // The body holds what the viewer draws for this file and nothing more.
+    const alone = p.doc.createElement('div');
+    shipped.mountImageViewer({ paneElement: alone, path: `.rundock/attachments/${ID}/${MARKED.file}`, alt: MARKUP });
+    assert.strictEqual(body.innerHTML, alone.innerHTML);
+  });
+});
+
+// THE COLORS. Each row names the rule in the shipped stylesheets and the
+// property carrying a color, reads that declaration (a `body.light` variant
+// wins in light, as on the page), checks it is the token the design sets,
+// resolves it against tokens.css in each theme and measures the WCAG 2 ratio
+// on the surface it is drawn on: a translucent surface over what is under it,
+// and a history bubble at its opacity over the page, each rounded to the 8
+// bits a screen shows. The source is read with plain string search.
+function rules(css) {
+  const src = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const map = new Map();
+  let at = 0;
+  for (;;) {
+    const open = src.indexOf('{', at);
+    if (open === -1) return map;
+    const selector = src.slice(at, open).trim();
+    if (selector.startsWith('@')) {
+      let depth = 1;
+      let i = open + 1;
+      for (; depth && i < src.length; i++) depth += src[i] === '{' ? 1 : src[i] === '}' ? -1 : 0;
+      at = i;
+      continue;
+    }
+    const close = src.indexOf('}', open);
+    const decls = new Map();
+    for (const d of src.slice(open + 1, close).split(';')) {
+      const colon = d.indexOf(':');
+      if (colon > 0) decls.set(d.slice(0, colon).trim(), d.slice(colon + 1).trim());
+    }
+    for (const sel of selector.split(',').map(s => s.trim()).filter(Boolean)) map.set(sel, new Map([...(map.get(sel) || []), ...decls]));
+    at = close + 1;
+  }
+}
+const SHEETS = { chat: rules(CSS), base: rules(read('public', 'styles', 'base.css')) };
+const TOKENS = rules(read('public', 'styles', 'tokens.css'));
+const THEMES = { dark: new Map(TOKENS.get(':root')), light: new Map([...TOKENS.get(':root'), ...TOKENS.get('body.light')]) };
+
+function declared(sheet, selector, property, theme) {
+  const light = SHEETS[sheet].get(`body.light ${selector}`);
+  if (theme === 'light' && light && light.has(property)) return light.get(property);
+  const rule = SHEETS[sheet].get(selector);
+  assert.ok(rule && rule.has(property), `no ${property} on ${selector}; if the rule moved, move this row with it`);
+  return rule.get(property);
+}
+// A color value as { rgb, alpha }, through as many tokens as it names.
+function paint(value, theme, where) {
+  const v = value.trim();
+  if (v.startsWith('var(') && v.endsWith(')')) {
+    const name = v.slice(4, -1).trim();
+    assert.ok(THEMES[theme].has(name), `${where} reads ${name}, which tokens.css does not declare`);
+    return paint(THEMES[theme].get(name), theme, `${where} via ${name}`);
+  }
+  if (v.startsWith('#') && v.length === 7) {
+    const n = parseInt(v.slice(1), 16);
+    assert.ok(Number.isInteger(n), `${where} resolves to ${v}`);
+    return { rgb: [(n >> 16) & 255, (n >> 8) & 255, n & 255], alpha: 1 };
+  }
+  if (v.startsWith('rgba(') && v.endsWith(')')) {
+    const parts = v.slice(5, -1).split(',').map(Number);
+    assert.ok(parts.length === 4 && parts.every(Number.isFinite), `${where} resolves to ${v}`);
+    return { rgb: parts.slice(0, 3), alpha: parts[3] };
+  }
+  return assert.fail(`${where} resolves to ${v}, not a color this test reads`);
+}
+const blend = (rgb, alpha, under) => rgb.map((c, i) => Math.round(c * alpha + under[i] * (1 - alpha)));
+const over = (top, under) => blend(top.rgb, top.alpha, under);
+function luminance(c) {
+  const [r, g, b] = c.map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+const ratio = (a, b) => { const x = luminance(a); const y = luminance(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+
+// A declaration that must be the token the design sets, resolved in a theme.
+function token(sheet, selector, property, expected, theme) {
+  const value = declared(sheet, selector, property, theme);
+  assert.strictEqual(value, expected, `${selector} ${property} in ${theme}`);
+  return value;
+}
+// The surfaces, from the page up: the conversation on the main pane, a
+// person's bubble over it, and a chip in the bubble.
+function surfaces(theme) {
+  const page = paint(declared('base', '.main', 'background', theme), theme, '.main').rgb;
+  const bubble = over(paint(token('chat', '.msg-user .msg-bubble', 'background', 'var(--accent-glow)', theme), theme, 'the bubble'), page);
+  return { page, bubble };
+}
+// A color the last word of a border or outline names, after its width and style.
+function line(sheet, selector, property, width, style, color, theme) {
+  const value = token(sheet, selector, property, `${width} ${style} ${color}`, theme);
+  return value.split(' ').pop();
+}
+function assertRatio(label, theme, fg, bg, need) {
+  const r = ratio(fg, bg);
+  assert.ok(r >= need, `${label} in ${theme} measures ${r.toFixed(2)}:1, needs ${need}`);
+}
+const BOTH = ['dark', 'light'];
+
+describe('every part of a chip and the open file meets its contrast in dark and in light', () => {
+  const chipSurface = (theme) => over(paint(token('chat', '.msg-files .att-chip', 'background', 'var(--card)', theme), theme, 'a chip'), surfaces(theme).bubble);
+
+  test('a chip\'s name, in --text-1 on the chip\'s --card, clears 4.5:1', () => {
+    for (const theme of BOTH) {
+      const fg = over(paint(token('chat', '.msg-files .att-name', 'color', 'var(--text-1)', theme), theme, 'the name'), chipSurface(theme));
+      assertRatio('a chip\'s name', theme, fg, chipSurface(theme), 4.5);
+    }
+  });
+
+  test('a chip\'s meta, in --text-2-strong on the chip\'s --card, clears 4.5:1', () => {
+    for (const theme of BOTH) {
+      const fg = over(paint(token('chat', '.msg-files .att-meta', 'color', 'var(--text-2-strong)', theme), theme, 'the meta'), chipSurface(theme));
+      assertRatio('a chip\'s meta', theme, fg, chipSurface(theme), 4.5);
+    }
+  });
+
+  test('a chip\'s icon, in --text-2-strong on its tile\'s --elevated, clears 3:1', () => {
+    for (const theme of BOTH) {
+      const tile = over(paint(token('chat', '.msg-files .att-tile', 'background', 'var(--elevated)', theme), theme, 'the tile'), chipSurface(theme));
+      const fg = over(paint(token('chat', '.msg-files .att-tile', 'color', 'var(--text-2-strong)', theme), theme, 'the icon'), tile);
+      assertRatio('a chip\'s icon', theme, fg, tile, 3);
+    }
+  });
+
+  test('the focus ring of a thumbnail or a chip, --accent-control 2px out on the bubble\'s --accent-glow over --elevated, clears 3:1', () => {
+    for (const theme of BOTH) {
+      const { page, bubble } = surfaces(theme);
+      assert.strictEqual(token('base', '.main', 'background', 'var(--elevated)', theme), 'var(--elevated)');
+      for (const selector of ['.msg-thumb:focus-visible', '.msg-files .att-chip:focus-visible']) {
+        const color = line('chat', selector, 'outline', '2px', 'solid', 'var(--accent-control)', theme);
+        token('chat', selector, 'outline-offset', '2px', theme);
+        assertRatio(`${selector}'s ring`, theme, over(paint(color, theme, selector), bubble), bubble, 3);
+      }
+      assert.notDeepStrictEqual(bubble, page, 'the bubble is drawn over the page');
+    }
+  });
+
+  // A gone chip in a history bubble, which is drawn at the history's opacity
+  // over the page.
+  function goneParts(theme) {
+    const { page, bubble } = surfaces(theme);
+    const opacity = Number(declared('chat', '.history-msg', 'opacity', theme));
+    assert.ok(opacity > 0 && opacity < 1, `the history is dimmed: ${opacity}`);
+    const chipBg = over(paint(token('chat', '.msg-files .att-chip.gone', 'background', 'var(--elevated)', theme), theme, 'a gone chip'), bubble);
+    const dim = (rgb) => blend(rgb, opacity, page);
+    return { opacity, chipBg, dim };
+  }
+
+  test('a gone chip\'s name, meta and icon, in --text-1 on --elevated at the history\'s opacity, clear 4.5:1', () => {
+    for (const theme of BOTH) {
+      const { chipBg, dim } = goneParts(theme);
+      token('chat', '.msg-files .att-chip.gone .att-tile', 'background', 'transparent', theme);
+      for (const part of ['.att-name', '.att-meta', '.att-tile']) {
+        const selector = `.msg-files .att-chip.gone ${part}`;
+        const fg = over(paint(token('chat', selector, 'color', 'var(--text-1)', theme), theme, selector), chipBg);
+        assertRatio(`a gone chip's ${part.slice(5)}`, theme, dim(fg), dim(chipBg), 4.5);
+      }
+    }
+  });
+
+  test('a gone chip\'s outline, 1px dashed --text-1 at the history\'s opacity, clears 3:1', () => {
+    for (const theme of BOTH) {
+      const { chipBg, dim } = goneParts(theme);
+      const color = line('chat', '.msg-files .att-chip.gone', 'border', '1px', 'dashed', 'var(--text-1)', theme);
+      assertRatio('a gone chip\'s outline', theme, dim(over(paint(color, theme, 'the outline'), chipBg)), dim(chipBg), 3);
+    }
+  });
+
+  const fileSurface = (theme) => {
+    line('chat', '.sent-file', 'border', '1px', 'solid', 'var(--border)', theme);
+    return paint(token('chat', '.sent-file', 'background', 'var(--elevated)', theme), theme, 'the open file').rgb;
+  };
+
+  test('the open file\'s name, in --text-1 on its --elevated, clears 4.5:1', () => {
+    for (const theme of BOTH) {
+      const fg = over(paint(token('chat', '.sent-file-name', 'color', 'var(--text-1)', theme), theme, 'the name'), fileSurface(theme));
+      assertRatio('the open file\'s name', theme, fg, fileSurface(theme), 4.5);
+    }
+  });
+
+  test('the open file\'s line, in --text-2-strong on its --elevated, clears 4.5:1', () => {
+    for (const theme of BOTH) {
+      const fg = over(paint(token('chat', '.sent-file-line', 'color', 'var(--text-2-strong)', theme), theme, 'the line'), fileSurface(theme));
+      assertRatio('the open file\'s line', theme, fg, fileSurface(theme), 4.5);
+    }
+  });
+
+  test('the open file\'s Close, in --text-2-strong on its --elevated, clears 3:1', () => {
+    for (const theme of BOTH) {
+      const fg = over(paint(token('chat', '.sent-file-close', 'color', 'var(--text-2-strong)', theme), theme, 'Close'), fileSurface(theme));
+      assertRatio('the open file\'s Close', theme, fg, fileSurface(theme), 3);
+    }
+  });
+});

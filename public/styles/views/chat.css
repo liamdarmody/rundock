@@ -349,8 +349,9 @@ body.light .stopped-detail { background: var(--elevated); }
 .msg-files .att-meta { font-size: var(--label); line-height: 1.35; color: var(--text-2-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-files .att-chip.plain { cursor: default; }
 .msg-files .att-chip.gone { background: var(--elevated); border: 1px dashed var(--text-1); cursor: default; }
-.msg-files .att-chip.gone .att-tile { background: transparent; color: var(--text-1); }
-.msg-files .att-chip.gone .att-meta { color: var(--text-1); }
+/* A gone chip is all --text-1, so it still reads at the history's 60%. */
+.msg-files .att-chip.gone .att-tile { background: transparent; }
+.msg-files .att-chip.gone .att-name, .msg-files .att-chip.gone .att-meta, .msg-files .att-chip.gone .att-tile { color: var(--text-1); }
 /* A sent image or PDF open over the conversation, on the palette's scrim
    (.palette-overlay), inset from the window's edges. */
 .sent-file { position: absolute; inset: 20px; display: flex; flex-direction: column; overflow: hidden; background: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius-xl); }
