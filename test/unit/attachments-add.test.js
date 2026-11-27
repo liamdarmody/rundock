@@ -155,6 +155,36 @@ async function until(check, label) {
 
 const ZIP = [0x50, 0x4b, 3, 4, 20, 0, 0, 0];
 
+// The browser pasting into the field: `files` on the clipboard, with `text`
+// beside them when given. Returns the event, to read its default.
+function paste(p, files, text = '') {
+  const event = new p.w.Event('paste', { bubbles: true, cancelable: true });
+  const types = (files.length ? ['Files'] : []).concat(text ? ['text/plain'] : []);
+  Object.defineProperty(event, 'clipboardData', { value: { files, types, getData: (type) => (type === 'text/plain' ? text : '') } });
+  p.$('msg-input').dispatchEvent(event);
+  return event;
+}
+
+// The browser's drag as one event of `type` on `target`: carrying `files`,
+// or only the `types` given. Returns the event, to read its default.
+function drag(p, target, type, { files = [], types = files.length ? ['Files'] : ['text/plain'], relatedTarget = null } = {}) {
+  const event = new p.w.MouseEvent(type, { bubbles: true, cancelable: true, relatedTarget, clientY: 1 });
+  Object.defineProperty(event, 'dataTransfer', {
+    value: { types, files, dropEffect: 'none', effectAllowed: 'all', setData() {}, getData: () => '' },
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+// A drag of `files` onto `target` and dropped there, settled once `count`
+// chips show. Returns the drop.
+async function dropped(p, target, files, count) {
+  drag(p, target, 'dragenter', { files });
+  drag(p, target, 'dragover', { files });
+  const event = drag(p, target, 'drop', { files });
+  await until(() => p.chips().length === count, `${count} chips`);
+  return event;
+}
+
 describe('one add, checked in order', () => {
   test('4 files held and an add of 2, one a zip, is refused whole on the count', async () => {
     const p = page();
@@ -552,15 +582,6 @@ describe('a paste adds its files, and a pasted image is named', () => {
   const removeNamed = (p, name) => p.doc.querySelector(`#composer-chips .composer-chip-remove[aria-label="Remove ${name}"]`).click();
   const settled = () => new Promise((resolve) => setTimeout(resolve, 20));
 
-  // The browser pasting into the field: `files` on the clipboard, with `text`
-  // beside them when given. Returns the event, to read its default.
-  function paste(p, files, text = '') {
-    const event = new p.w.Event('paste', { bubbles: true, cancelable: true });
-    const types = (files.length ? ['Files'] : []).concat(text ? ['text/plain'] : []);
-    Object.defineProperty(event, 'clipboardData', { value: { files, types, getData: (type) => (type === 'text/plain' ? text : '') } });
-    p.$('msg-input').dispatchEvent(event);
-    return event;
-  }
   async function pasted(p, files, count) {
     paste(p, files);
     await until(() => p.chips().length === count, `${count} chips`);
@@ -779,25 +800,6 @@ describe('files dropped over the conversation land in the composer, and nothing 
   const field = (p) => p.doc.querySelector('#view-chat .composer-field');
   const marked = (p) => field(p).classList.contains('drop');
 
-  // The browser's drag as one event of `type` on `target`: carrying `files`,
-  // or only the `types` given. Returns the event, to read its default.
-  function drag(p, target, type, { files = [], types = files.length ? ['Files'] : ['text/plain'], relatedTarget = null } = {}) {
-    const event = new p.w.MouseEvent(type, { bubbles: true, cancelable: true, relatedTarget, clientY: 1 });
-    Object.defineProperty(event, 'dataTransfer', {
-      value: { types, files, dropEffect: 'none', effectAllowed: 'all', setData() {}, getData: () => '' },
-    });
-    target.dispatchEvent(event);
-    return event;
-  }
-  // A drag of `files` onto `target` and dropped there, settled once `count`
-  // chips show. Returns the drop.
-  async function dropped(p, target, files, count) {
-    drag(p, target, 'dragenter', { files });
-    drag(p, target, 'dragover', { files });
-    const event = drag(p, target, 'drop', { files });
-    await until(() => p.chips().length === count, `${count} chips`);
-    return event;
-  }
 
   test('a drag of files over the messages marks the field and prevents dragover', () => {
     const p = page();
@@ -1169,5 +1171,76 @@ describe('a PDF held for an agent on Codex holds Send until it goes', () => {
     p.w.fileSendAnswered(sock.sent[0]);
     assert.deepStrictEqual(p.notices(), [{ title: 'report.pdf', text: CODEX_PDF }], 'the page\'s own words for a held PDF');
     assert.deepStrictEqual([p.chips(), p.$('msg-input').value], [['report.pdf'], 'summarise this'], 'the PDF and the text stay');
+  });
+});
+
+describe('a file\'s name is shown as text', () => {
+  const NAME = '<img src=x onerror=alert(1)>.png';
+  const CODEX_PDF = 'This agent runs on Codex, which can\'t read PDFs yet. Attach a screenshot of the page or paste the text.';
+  // Every element under the composer, by tag and class: the same for a file
+  // named as markup as for one with a plain name, so the name drew nothing.
+  const shape = (p) => [...p.doc.querySelectorAll('#view-chat .chat-input *')].map((e) => `${e.tagName.toLowerCase()}.${e.getAttribute('class') || ''}`);
+  const chip = (p, name) => [...p.doc.querySelectorAll('#composer-chips .composer-chip')]
+    .find((c) => c.querySelector('.composer-chip-name').textContent === name);
+  function shownAsText(p, twin) {
+    const named = chip(p, NAME);
+    assert.ok(named, 'a chip shows the name as written');
+    assert.strictEqual(named.getAttribute('title'), NAME);
+    assert.strictEqual(named.querySelector('.composer-chip-remove').getAttribute('aria-label'), `Remove ${NAME}`);
+    assert.strictEqual(p.doc.querySelectorAll('img, [onerror]').length, 0, 'no element from the name');
+    assert.deepStrictEqual(shape(p), shape(twin), 'the composer holds what the draw made and nothing else');
+  }
+
+  test('a file named as markup and picked shows as its name in the chip, its title and its remove button', async () => {
+    const p = page();
+    needs(p);
+    await pick(p, p.file(NAME));
+    const twin = page();
+    await pick(twin, twin.file('plain.png'));
+    shownAsText(p, twin);
+  });
+
+  test('a file named as markup and pasted shows as its name in the chip, its title and its remove button', async () => {
+    // A pasted image takes the name "Pasted image", so the name is carried by
+    // a PDF, which keeps its own.
+    const p = page();
+    needs(p);
+    paste(p, [p.file(NAME), p.file(NAME, pdf())]);
+    await until(() => p.chips().length === 2, '2 chips');
+    assert.deepStrictEqual(p.chips(), ['Pasted image', NAME]);
+    const twin = page();
+    paste(twin, [twin.file('plain.png'), twin.file('plain.png', pdf())]);
+    await until(() => twin.chips().length === 2, '2 chips');
+    shownAsText(p, twin);
+  });
+
+  test('a file named as markup and dropped shows as its name in the chip, its title and its remove button', async () => {
+    const p = page();
+    needs(p);
+    await dropped(p, p.$('messages'), [p.file(NAME)], 1);
+    const twin = page();
+    await dropped(twin, twin.$('messages'), [twin.file('plain.png')], 1);
+    shownAsText(p, twin);
+  });
+
+  test('a message refusing a file named as markup shows the name as its title', async () => {
+    const p = page();
+    needs(p);
+    await pick(p, p.file(NAME, ftyp('heic')));
+    assert.deepStrictEqual(p.notices(), [{ title: NAME, text: HEIC }]);
+    const twin = page();
+    await pick(twin, twin.file('plain.png', ftyp('heic')));
+    assert.strictEqual(p.doc.querySelectorAll('img, [onerror]').length, 0, 'no element from the name');
+    assert.deepStrictEqual(shape(p), shape(twin));
+  });
+
+  test('a codex-pdf message for a PDF named as markup shows the name as its title', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file(NAME, pdf()));
+    assert.deepStrictEqual(p.notices(), [{ title: NAME, text: CODEX_PDF }]);
+    const twin = page({ agentId: 'coder' });
+    await pick(twin, twin.file('plain.png', pdf()));
+    shownAsText(p, twin);
   });
 });
