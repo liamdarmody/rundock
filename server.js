@@ -1649,6 +1649,7 @@ wss.on('connection', (ws) => {
           const requestedAgent = msg.agent || 'default';
           const agentList = discoverAgents();
           const routedAgent = findAgentBySlug(agentList, requestedAgent);
+          if (routedAgent && sessionOfAnotherAgent(convoId, msg.sessionId, routedAgent)) msg.sessionId = null;
           if (routedAgent && routedAgent.runtime === 'codex') {
             startCodexTurn(convoId, msg, routedAgent);
             return;
@@ -3551,6 +3552,21 @@ async function runUniversalSearch(msg) {
   }
 
   return { groups, recent: false };
+}
+
+// Whether the conversation's stored chain lists `sessionId` only under agents
+// other than `agent`, the agent the chat resolved to. Such a session is
+// a teammate's: resumed under this agent, the teammate's work would carry on
+// under this agent's name, so the turn starts fresh instead. Where the record
+// cannot tell (no record, the session unlisted, an entry naming no agent), the
+// session is resumed as before. Entries are matched by the resolved agent's id
+// alone, since that is the id every chain entry is written with.
+function sessionOfAnotherAgent(convoId, sessionId, agent) {
+  if (!sessionId) return false;
+  const record = readConversations().find(c => c && c.id === convoId);
+  const chain = record && Array.isArray(record.sessionIds) ? record.sessionIds : [];
+  const listing = chain.filter(s => s && s.sessionId === sessionId);
+  return listing.length > 0 && listing.every(s => s.agentId) && !listing.some(s => s.agentId === agent.id);
 }
 
 // ===== START =====
