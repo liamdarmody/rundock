@@ -340,6 +340,15 @@ body.light .stopped-detail { background: var(--elevated); }
 /* The + button's name, shown above it on hover and on keyboard focus. */
 .att-tip { display: none; position: absolute; bottom: calc(100% + 6px); left: 0; padding: 4px 8px; font-size: var(--label); font-weight: 400; color: var(--text-1); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none; z-index: 5; }
 .attach-btn:hover .att-tip, .attach-btn:focus-visible .att-tip { display: block; }
+/* A drag of files over the conversation: a dashed ring inside the field's
+   edge, and a cover over what it holds saying what a drop takes. Both are
+   drawn inside the field, so it keeps its size. */
+.composer-field.drop { outline: 1.5px dashed var(--accent-control); outline-offset: -1.5px; box-shadow: none; }
+.composer-drop-cover { position: absolute; inset: 0; z-index: 1; background: var(--card); border-radius: inherit; display: flex; align-items: center; justify-content: center; }
+.composer-drop-msg { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; text-align: center; }
+.composer-drop-msg svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--accent-text); }
+.composer-drop-msg b { font-size: var(--body); font-weight: 600; color: var(--text-1); }
+.composer-drop-msg span { font-size: var(--caption); color: var(--text-2-strong); }
 /* The messages, a column under the field, oldest first. Each is an icon, a
    title above the reason and a Dismiss button. */
 .composer-notice { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; margin-right: 54px; min-width: 0; }

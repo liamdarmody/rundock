@@ -17,3 +17,16 @@ describe('the field\'s + button and tooltip clear their bar in both themes', () 
     ['the tooltip, --text-1 on --surface', ['.att-tip', 'color', '--text-1'], ['.att-tip', 'background', '--surface'], 4.5],
   ]);
 });
+
+const COVER = ['.composer-drop-cover', 'background', '--card'];
+const CHIP = ['.composer-chip', 'background', '--elevated'];
+
+describe('a drag of files over the conversation is drawn clear of the field in both themes', () => {
+  rowsClear(test, CHAT, [
+    ['"Drop to attach", --text-1 on --card', ['.composer-drop-msg b', 'color', '--text-1'], COVER, 4.5],
+    ['the types it takes, --text-2-strong on --card', ['.composer-drop-msg span', 'color', '--text-2-strong'], COVER, 4.5],
+    ['the drop icon, --accent-text on --card', ['.composer-drop-msg svg', 'color', '--accent-text'], COVER, 3],
+    ['the dashed ring against the field', ['.composer-field.drop', 'outline', '--accent-control'], FIELD, 3],
+    ['the dashed ring against a chip', ['.composer-field.drop', 'outline', '--accent-control'], CHIP, 3],
+  ]);
+});

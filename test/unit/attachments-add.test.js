@@ -769,3 +769,202 @@ describe('the composer is drawn as a field holding the chips, the + button and t
     assert.strictEqual(declared(p, '.composer-notice-icon').color, 'var(--attention-text)');
   });
 });
+
+describe('files dropped over the conversation land in the composer, and nothing dropped elsewhere opens in the page', () => {
+  const Kanban = require('../../public/kanban.js');
+  const BOARD = '---\n\nkanban-plugin: board\n\n---\n\n## To do\n\n- [ ] one\n- [ ] two\n\n## Done\n\n';
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const field = (p) => p.doc.querySelector('#view-chat .composer-field');
+  const marked = (p) => field(p).classList.contains('drop');
+
+  // The browser's drag as one event of `type` on `target`: carrying `files`,
+  // or only the `types` given. Returns the event, to read its default.
+  function drag(p, target, type, { files = [], types = files.length ? ['Files'] : ['text/plain'], relatedTarget = null } = {}) {
+    const event = new p.w.MouseEvent(type, { bubbles: true, cancelable: true, relatedTarget, clientY: 1 });
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { types, files, dropEffect: 'none', effectAllowed: 'all', setData() {}, getData: () => '' },
+    });
+    target.dispatchEvent(event);
+    return event;
+  }
+  // A drag of `files` onto `target` and dropped there, settled once `count`
+  // chips show. Returns the drop.
+  async function dropped(p, target, files, count) {
+    drag(p, target, 'dragenter', { files });
+    drag(p, target, 'dragover', { files });
+    const event = drag(p, target, 'drop', { files });
+    await until(() => p.chips().length === count, `${count} chips`);
+    return event;
+  }
+
+  test('a drag of files over the messages marks the field and prevents dragover', () => {
+    const p = page();
+    needs(p);
+    const files = [p.file('a.txt')];
+    const enter = drag(p, p.$('messages'), 'dragenter', { files });
+    const over = drag(p, p.$('messages'), 'dragover', { files });
+    assert.deepStrictEqual([enter.defaultPrevented, over.defaultPrevented], [true, true]);
+    assert.ok(marked(p), 'the field is marked');
+    assert.deepStrictEqual(p.chips(), [], 'a drag adds nothing');
+  });
+
+  test('the cover holds the two lines', () => {
+    const p = page();
+    needs(p);
+    for (const type of ['dragenter', 'dragover', 'dragover']) drag(p, p.$('messages'), type, { files: [p.file('a.txt')] });
+    const covers = field(p).querySelectorAll(':scope > div.composer-drop-cover');
+    assert.strictEqual(covers.length, 1, 'the marked field shows one cover');
+    const message = covers[0].querySelector(':scope > div.composer-drop-msg');
+    assert.ok(message, 'holding the message');
+    assert.deepStrictEqual([...message.children].map((el) => el.tagName.toLowerCase()), ['svg', 'b', 'span']);
+    assert.strictEqual(message.querySelector('b').textContent, 'Drop to attach');
+    assert.strictEqual(message.querySelector('span').textContent, 'Images, PDF, text, Markdown or CSV');
+    // Drawn over the field's content, with a ring inside its edge, so the
+    // field keeps its width and height.
+    assert.strictEqual(p.w.getComputedStyle(field(p)).position, 'relative');
+    assert.strictEqual(p.w.getComputedStyle(covers[0]).position, 'absolute');
+    const own = [...p.doc.styleSheets].flatMap((sheet) => [...sheet.cssRules]).filter((r) => r.selectorText === '.composer-field.drop');
+    assert.ok(own.length, 'chat.css has a rule for the marked field');
+    const ring = own[own.length - 1].style;
+    assert.deepStrictEqual([ring.outline, ring.outlineOffset], ['1.5px dashed var(--accent-control)', '-1.5px']);
+    for (const prop of ['width', 'height', 'padding', 'border', 'margin']) {
+      assert.ok(own.every((r) => !r.style.getPropertyValue(prop)), `marking sets no ${prop}`);
+    }
+  });
+
+  test('a drop over the messages adds the files', async () => {
+    const p = page();
+    needs(p);
+    const capture = new p.w.File([typed('image.png', 10)], 'image.png', { type: 'image/png' });
+    const event = await dropped(p, p.$('messages'), [p.file('a.txt'), capture], 2);
+    assert.strictEqual(event.defaultPrevented, true);
+    assert.deepStrictEqual(p.chips(), ['a.txt', 'image.png'], 'a dropped image keeps its name');
+    assert.ok(!marked(p), 'the drop clears the mark');
+    assert.strictEqual(field(p).querySelector('.composer-drop-cover'), null);
+  });
+
+  test('a drop over the composer adds them', async () => {
+    const p = page();
+    needs(p);
+    const event = await dropped(p, p.$('msg-input'), [p.file('notes.md'), p.file('report.pdf')], 2);
+    assert.strictEqual(event.defaultPrevented, true);
+    assert.deepStrictEqual(p.chips(), ['notes.md', 'report.pdf']);
+    assert.ok(!marked(p));
+  });
+
+  test('a dragleave to outside the view clears the mark', () => {
+    const p = page();
+    needs(p);
+    const files = [p.file('a.txt')];
+    drag(p, p.$('messages'), 'dragover', { files });
+    drag(p, p.$('messages'), 'dragleave', { files, relatedTarget: p.$('msg-input') });
+    assert.ok(marked(p), 'a move within the view keeps it');
+    drag(p, p.$('messages'), 'dragleave', { files, relatedTarget: p.$('sidebar') });
+    assert.ok(!marked(p), 'a move to the sidebar clears it');
+    drag(p, p.$('messages'), 'dragover', { files });
+    drag(p, p.$('messages'), 'dragleave', { files, relatedTarget: null });
+    assert.ok(!marked(p), 'a move out of the window clears it');
+    drag(p, p.$('messages'), 'dragover', { files });
+    drag(p, p.doc.body, 'dragend', { files });
+    assert.ok(!marked(p), 'and so does the drag ending');
+    assert.strictEqual(field(p).querySelector('.composer-drop-cover'), null);
+  });
+
+  // As on the base, so it needs nothing the base lacks.
+  test('a drag of text alone is neither marked nor prevented', async () => {
+    const p = page();
+    const events = ['dragenter', 'dragover', 'drop'].map((type) => drag(p, p.$('msg-input'), type, { types: ['text/plain'] }));
+    assert.deepStrictEqual(events.map((e) => e.defaultPrevented), [false, false, false]);
+    assert.strictEqual(p.doc.querySelector('.drop'), null, 'nothing is marked');
+    await settled();
+    assert.deepStrictEqual(p.chips(), []);
+  });
+
+  test('a drag of files while a send waits marks nothing and adds nothing', async () => {
+    const p = page();
+    needs(p);
+    await pick(p, p.file('a.txt'));
+    type(p, 'see this');
+    pressEnter(p);
+    assert.strictEqual(p.w.sendWaiting('c1'), true, 'the send waits');
+    const files = [p.file('b.txt')];
+    const enter = drag(p, p.$('messages'), 'dragenter', { files });
+    drag(p, p.$('messages'), 'dragover', { files });
+    assert.strictEqual(enter.defaultPrevented, false, 'the view takes no drag');
+    assert.ok(!marked(p), 'the field is not marked');
+    const drop = drag(p, p.$('messages'), 'drop', { files });
+    assert.strictEqual(drop.defaultPrevented, true, 'the file still opens nothing');
+    await settled();
+    assert.deepStrictEqual(p.chips(), ['a.txt']);
+  });
+
+  test('a drop of files on the sidebar is prevented and adds nothing', async () => {
+    const p = page();
+    needs(p);
+    const files = [p.file('a.txt')];
+    // A handler inside the page sees the drag before the window does.
+    const seen = [];
+    p.$('sidebar').addEventListener('drop', (e) => seen.push(e.defaultPrevented));
+    const over = drag(p, p.$('sidebar'), 'dragover', { files });
+    const drop = drag(p, p.$('sidebar'), 'drop', { files });
+    assert.deepStrictEqual([over.defaultPrevented, drop.defaultPrevented], [true, true]);
+    assert.deepStrictEqual(seen, [false], 'the window acts after the page\'s own handlers');
+    assert.ok(!marked(p));
+    await settled();
+    assert.deepStrictEqual(p.chips(), []);
+  });
+
+  test('a drop of 6 files refused whole', async () => {
+    const p = page();
+    needs(p);
+    const files = ['a', 'b', 'c', 'd', 'e', 'f'].map((n) => p.file(`${n}.txt`));
+    drag(p, p.$('messages'), 'dragover', { files });
+    drag(p, p.$('messages'), 'drop', { files });
+    await until(() => p.notices().length === 1, 'the message');
+    assert.deepStrictEqual(p.chips(), []);
+    assert.deepStrictEqual(p.notices(), [{ title: '6 files not added', text: 'That would make 6 files; the limit is 5 per message' }]);
+  });
+
+  test('a drag of files on the board leaves its own handlers\' results as on the base', async () => {
+    const p = page();
+    needs(p);
+    const { mountBoardView } = await import('../../public/viewers/board-view.js');
+    let changes = 0;
+    const board = mountBoardView({ paneElement: p.$('board'), path: 'b.md', content: BOARD, onWikilink() {}, onChange: () => { changes += 1; } }, Kanban);
+    const before = board.getContentForSave();
+    const cards = () => [...p.$('board').querySelectorAll('.board-card')];
+    const markers = () => p.$('board').querySelectorAll('.insert-before, .insert-after, .insert-end').length;
+
+    // A file dragged over a card and dropped on it: the board takes nothing.
+    const files = [p.file('a.txt')];
+    const [one, two] = cards();
+    const over = drag(p, two, 'dragover', { files });
+    assert.strictEqual(markers(), 0, 'the board marks no gap');
+    const drop = drag(p, two, 'drop', { files });
+    assert.deepStrictEqual([board.getContentForSave(), changes], [before, 0], 'the board is unchanged');
+    assert.deepStrictEqual([over.defaultPrevented, drop.defaultPrevented], [true, true], 'and the file opens nothing');
+    assert.ok(!marked(p), 'the field is not marked');
+
+    // A card dragged below the next still moves, with the board's own marks.
+    const frame = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
+    try {
+      drag(p, one, 'dragstart', { types: [] });
+      const cardOver = drag(p, two, 'dragover');
+      assert.ok(two.classList.contains('insert-after'), 'the board marks the gap below');
+      assert.ok(!marked(p), 'the field is not marked');
+      const cardDrop = drag(p, two, 'drop');
+      drag(p, one, 'dragend');
+      await settled();
+      assert.deepStrictEqual([cardOver.defaultPrevented, cardDrop.defaultPrevented], [true, true]);
+    } finally {
+      if (frame) globalThis.requestAnimationFrame = frame; else delete globalThis.requestAnimationFrame;
+    }
+    const after = board.getContentForSave();
+    assert.ok(after.indexOf('- [ ] two') < after.indexOf('- [ ] one'), 'the card moved');
+    assert.strictEqual(changes, 1);
+    assert.strictEqual(markers(), 0);
+    assert.deepStrictEqual(p.chips(), []);
+    board.destroy();
+  });
+});

@@ -471,6 +471,88 @@ function tileFor(kind) {
   return tile;
 }
 
+// ===== DROP =====
+//
+// A drag of files anywhere over the conversation marks the field, which shows
+// what a drop takes, and a drop adds the files. A drag carrying no files (text,
+// a card on the board, a row of the file tree) is left as it was. The window
+// keeps a file dropped anywhere else from opening in the page, in the bubble
+// phase, so a handler inside the page that takes the drag sees it first.
+
+const ICON_DROP = [['path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }], ['polyline', { points: '17 8 12 3 7 8' }],
+  ['line', { x1: '12', x2: '12', y1: '3', y2: '15' }]];
+
+function carriesFiles(event) {
+  return !!event.dataTransfer && Array.from(event.dataTransfer.types || []).includes('Files');
+}
+
+// The field a drop would add to: while a conversation is shown and no send
+// waits.
+function dropField() {
+  const composer = shownComposer();
+  return composer && !composer.waiting ? document.querySelector('#view-chat .composer-field') : null;
+}
+
+// The cover sits over the field's content, so the field keeps its size.
+function markDrop(field) {
+  if (field.classList.contains('drop')) return;
+  const title = document.createElement('b');
+  title.textContent = 'Drop to attach';
+  const types = document.createElement('span');
+  types.textContent = 'Images, PDF, text, Markdown or CSV';
+  const message = document.createElement('div');
+  message.className = 'composer-drop-msg';
+  message.append(iconOf(ICON_DROP, '1.8'), title, types);
+  const cover = document.createElement('div');
+  cover.className = 'composer-drop-cover';
+  cover.appendChild(message);
+  field.classList.add('drop');
+  field.appendChild(cover);
+}
+
+function clearDrop() {
+  for (const field of document.querySelectorAll('.composer-field.drop')) {
+    field.classList.remove('drop');
+    for (const cover of field.querySelectorAll('.composer-drop-cover')) cover.remove();
+  }
+}
+
+function dragOverConversation(event) {
+  const field = carriesFiles(event) ? dropField() : null;
+  if (!field) return;
+  event.preventDefault();
+  markDrop(field);
+}
+
+// Out of the view, or out of the window when nothing is entered.
+function dragLeftConversation(event) {
+  if (!event.relatedTarget || !event.currentTarget.contains(event.relatedTarget)) clearDrop();
+}
+
+function dropOnConversation(event) {
+  clearDrop();
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  if (dropField()) addFiles(event.dataTransfer.files, 'drop');
+}
+
+function guardFileDrag(event) {
+  if (carriesFiles(event)) event.preventDefault();
+}
+
+if (typeof document !== 'undefined') {
+  const view = document.getElementById('view-chat');
+  if (view) {
+    view.addEventListener('dragenter', dragOverConversation);
+    view.addEventListener('dragover', dragOverConversation);
+    view.addEventListener('dragleave', dragLeftConversation);
+    view.addEventListener('drop', dropOnConversation);
+  }
+  window.addEventListener('dragover', guardFileDrag);
+  window.addEventListener('drop', guardFileDrag);
+  window.addEventListener('dragend', clearDrop);
+}
+
 return {
   showComposerFor, refreshAttachButton, openAttachPicker, pickFiles,
   sendReady, sendWaiting, firstAttachedName, sendWithFiles, fileSendAnswered, attachmentsConnectionLost,
