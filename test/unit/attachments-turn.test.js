@@ -468,3 +468,126 @@ describe('buildTurn: a Claude Code turn carries its entry\'s images and PDFs', (
     assert.deepStrictEqual(sent, { content: `just this ${GONE('1-screenshot.png')}`, extraItems: [] });
   });
 });
+
+// A file of `size` zero bytes, which takes no room on disk where the file
+// system allows it.
+function sparse(file, size) {
+  const fd = fs.openSync(file, 'w');
+  try { fs.ftruncateSync(fd, size); } finally { fs.closeSync(fd); }
+}
+
+// The bytes read from each file while the test runs, by path, through a
+// descriptor or by name, and every path opened.
+function countReads(t) {
+  const realOpen = fs.openSync;
+  const realRead = fs.readSync;
+  const realReadFile = fs.readFileSync;
+  const at = new Map();
+  const opened = [];
+  const counts = new Map();
+  const add = (file, n) => counts.set(String(file), (counts.get(String(file)) || 0) + n);
+  t.mock.method(fs, 'openSync', function openSync(file, ...rest) {
+    const fd = realOpen.call(fs, file, ...rest);
+    at.set(fd, file);
+    opened.push(String(file));
+    return fd;
+  });
+  t.mock.method(fs, 'readSync', function readSync(fd, ...rest) {
+    const n = realRead.call(fs, fd, ...rest);
+    add(at.get(fd), n);
+    return n;
+  });
+  t.mock.method(fs, 'readFileSync', function readFileSync(source, ...rest) {
+    const bytes = realReadFile.call(fs, source, ...rest);
+    add(typeof source === 'number' ? at.get(source) : source, bytes.length);
+    return bytes;
+  });
+  return { opened: (file) => opened.includes(file), from: (file) => counts.get(file) || 0 };
+}
+
+// Each answer the store gave turn.js, through the store's export, as
+// `[file, answer]`.
+function storeAnswers(t) {
+  const real = store.readRecordedFile;
+  const answers = [];
+  t.mock.method(store, 'readRecordedFile', function readRecordedFile(...args) {
+    const read = real.apply(store, args);
+    answers.push([args[2], read]);
+    return read;
+  });
+  return answers;
+}
+const kept = (answers) => answers.map(([file, read]) => [file, read.state, 'bytes' in read]);
+
+describe('buildTurn: what a turn reads is bounded', () => {
+  // Far past the largest file the store keeps, a 10,000,000-byte PDF, and
+  // under the 2 GiB one read can take, so a read of the whole file happens
+  // if nothing stops it.
+  const HUGE = 250000000;
+
+  test('a file far larger than the store keeps, its record edited to match, is not available and none of it is read', async (t) => {
+    readyTurn();
+    ready('readRecordedFile');
+    const { ws, pdf } = await stored();
+    sparse(pdf, HUGE);
+    const record = JSON.parse(fs.readFileSync(recordOf(ws), 'utf8'));
+    record.messages[0].files[2].bytes = HUGE;
+    fs.writeFileSync(recordOf(ws), JSON.stringify(record));
+    const reads = countReads(t);
+    const read = store.readRecordedFile(ws, ID, '3-report.pdf');
+    assert.deepStrictEqual([read.state, 'bytes' in read], ['missing', false]);
+    const { content } = turnFor(ws, `the brief\n${lineOf('3-report.pdf', 'PDF document, 250 MB')}`);
+    assert.strictEqual(content, `the brief\n${GONE('3-report.pdf')}`);
+    namesNoPath(content);
+    assert.strictEqual(reads.from(pdf), 0, 'none of the file is read');
+    assert.strictEqual(reads.opened(pdf), false, 'the file is never opened');
+  });
+
+  test('an entry of six files keeps none of their bytes', (t) => {
+    readyTurn();
+    const ws = workspace();
+    const files = [1, 2, 3, 4, 5, 6].map((n) => ({ file: `${n}-shot.png`, bytes: pngBytes(10 * n, 10), width: 10 * n, height: 10 }));
+    handWritten(ws, [{ id: 'entry-1', files }]);
+    const answers = storeAnswers(t);
+    const { content } = turnFor(ws, 'six files', { entryId: 'entry-1' });
+    assert.strictEqual(content, ['six files', ...files.map((f) => lineOf(f.file, 'PNG image, 1 KB'))].join('\n'));
+    assert.deepStrictEqual(kept(answers), files.map((f) => [f.file, 'present', false]));
+  });
+
+  test('an entry totalling more than the message limit keeps none of its files\' bytes', (t) => {
+    readyTurn();
+    const ws = workspace();
+    const big = (label) => Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(10000000 - 9, label)]);
+    handWritten(ws, [{ id: 'entry-1', files: [{ file: '1-a.pdf', bytes: big('a') }, { file: '2-b.pdf', bytes: big('b') }, { file: '3-c.png', bytes: pngBytes(), width: 640, height: 480 }] }]);
+    const answers = storeAnswers(t);
+    const { content } = turnFor(ws, 'three files', { entryId: 'entry-1' });
+    assert.strictEqual(content, ['three files', lineOf('1-a.pdf', 'PDF document, 10 MB'), lineOf('2-b.pdf', 'PDF document, 10 MB'), lineOf('3-c.png', 'PNG image, 1 KB')].join('\n'));
+    assert.deepStrictEqual(kept(answers), [['1-a.pdf', 'present', false], ['2-b.pdf', 'present', false], ['3-c.png', 'present', false]]);
+  });
+
+  test('a turn reads at most 100,000,000 bytes of files, its entry\'s first, and a line past that is not available', (t) => {
+    readyTurn();
+    const ws = workspace();
+    const SIZE = 10000000;
+    const zeros = sha256(Buffer.alloc(SIZE));
+    fs.mkdirSync(folderOf(ws), { recursive: true });
+    const earlier = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => {
+      const file = `${n}-report.pdf`;
+      sparse(path.join(folderOf(ws), file), SIZE);
+      return { id: `entry-${n}`, files: [{ file, name: file, type: 'pdf', bytes: SIZE, sha256: zeros }] };
+    });
+    const png = pngBytes();
+    const shot = '11-screenshot.png';
+    fs.writeFileSync(path.join(folderOf(ws), shot), png);
+    const last = { id: 'entry-11', files: [{ file: shot, name: shot, type: 'png', bytes: png.length, sha256: sha256(png), width: 640, height: 480 }] };
+    fs.writeFileSync(recordOf(ws), JSON.stringify({ messages: [...earlier, last], sent: {} }));
+    const quoted = earlier.map(({ files: [f] }) => lineOf(f.file, 'PDF document, 10 MB'));
+    const shotLine = lineOf(shot, 'PNG image, 1 KB');
+    const reads = countReads(t);
+    const { content } = turnFor(ws, [...quoted, shotLine].join('\n'), { entryId: 'entry-11' });
+    assert.deepStrictEqual(content, [textItem([...quoted.slice(0, 9), GONE('10-report.pdf'), shotLine].join('\n')), imageBlock('image/png', png)]);
+    const total = [...earlier.map(({ files: [f] }) => f.file), shot].reduce((sum, file) => sum + reads.from(path.join(folderOf(ws), file)), 0);
+    assert.ok(total <= 100000000, `read ${total} bytes`);
+    assert.strictEqual(reads.opened(path.join(folderOf(ws), '10-report.pdf')), false, 'the line past the budget opens nothing');
+  });
+});

@@ -73,16 +73,18 @@ const MUTATIONS = [
   // ===== THE STORE READS EACH FILE IN ONE OPEN, AND JUDGES IT BY THE RECORD =====
   // The size check and the length check go, and only the recorded length is
   // read: the fingerprint alone would still catch a file grown at its end,
-  // so the read is bounded too, which is how skipping the size lets one pass.
+  // so the read stops at the recorded size, which is how skipping the size
+  // lets one pass.
   [STORE, 'the size goes unchecked, so a file grown since it was sent reads as present',
     "    if (stat.size !== described.bytes) return { state: 'changed', described };\n"
-      + '    const bytes = fs.readFileSync(fd);\n'
-      + "    if (bytes.length !== described.bytes) return { state: 'changed', described };\n",
-    '    const bytes = Buffer.alloc(described.bytes);\n'
-      + '    fs.readSync(fd, bytes, 0, described.bytes, 0);\n'],
+      + '    // One byte past the recorded size, so a file grown since the stat shows.\n'
+      + '    const read = readAtMost(fd, described.bytes + 1, keep);\n'
+      + '    budget.left -= read.length;\n'
+      + "    if (read.length !== described.bytes) return { state: 'changed', described };\n",
+    '    const read = readAtMost(fd, described.bytes, keep);\n'],
   [STORE, 'the fingerprint goes unchecked, so a file rewritten at the same size reads as present',
-    "    return sum === described.sha256 ? { state: 'present', described, bytes } : { state: 'changed', described };\n",
-    "    return { state: 'present', described, bytes };\n"],
+    "    if (read.sum !== described.sha256) return { state: 'changed', described };\n",
+    ''],
   // The record sits in the conversation's folder, so a link on the way to a
   // file is on the way to the record too: the walk is skipped for both.
   [STORE, 'the walk is skipped, so a link on the way to a file is followed',
@@ -92,17 +94,18 @@ const MUTATIONS = [
   // ===== EACH LINE IN THE TEXT IS CHECKED AGAINST THIS CONVERSATION'S RECORD =====
   [TURN, "a line naming another conversation's folder is checked against that conversation's record",
     'if (id !== conversationId) return notAvailable(file);',
-    'if (id !== conversationId) return lineFor(id, file, readRecordedFile(workspace, id, file));'],
+    'if (id !== conversationId) return lineFor(id, file, store.readRecordedFile(workspace, id, file));'],
   [TURN, 'the turn reads a file by its path after the store has checked it',
-    '      let read = readRecordedFile(workspace, conversationId, file);\n',
-    '      let read = readRecordedFile(workspace, conversationId, file);\n'
+    '      let read = store.readRecordedFile(workspace, conversationId, file, { keep: keep.has(file), budget });\n',
+    '      let read = store.readRecordedFile(workspace, conversationId, file, { keep: keep.has(file), budget });\n'
       + "      const fs = require('node:fs');\n"
       + "      if (read.state === 'present') read = { ...read, bytes: fs.readFileSync(require('node:path').join(workspace, '.rundock', 'attachments', conversationId, file)) };\n"],
 
   // ===== A CLAUDE CODE TURN'S BLOCKS COME FROM ITS RECORD ENTRY =====
   [TURN, 'the blocks come from the lines in the text, not from the record entry',
-    '  const files = entryFiles(workspace, conversationId, entryId);\n',
-    '  const files = [...named].map((file) => read(file).described).filter(Boolean);\n'],
+    "  const files = runtime === 'codex' ? [] : entryFiles(workspace, conversationId, entryId);\n",
+    '  const listed = readRecord(workspace, conversationId).messages.flatMap((m) => m.files);\n'
+      + '  const files = [...text.matchAll(LINE)].map((m) => listed.find((f) => f.file === m.groups.file)).filter(Boolean);\n'],
 
   // ===== EACH PROCESS ENTRY CARRIES THE RECORD ENTRY OF THE MESSAGE ITS TURN ANSWERS =====
   [only(ENGINE, "a delegate's brief is sent as text alone, and a deleted file's line in it as not available"), "a delegate's first turn is written as the brief, never through the check",
