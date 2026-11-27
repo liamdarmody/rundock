@@ -321,17 +321,27 @@ body.light .stopped-detail { background: var(--elevated); }
 .composer-chip-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
 .composer-chip-name { font-size: var(--caption); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-chip-meta { font-size: var(--label); color: var(--text-2); white-space: nowrap; }
-.composer-chip-remove, .composer-notice-dismiss { width: 24px; height: 24px; flex-shrink: 0; border-radius: var(--radius-sm); color: var(--text-2); display: flex; align-items: center; justify-content: center; font-size: 16px; line-height: 1; }
-.composer-chip-remove:hover, .composer-notice-dismiss:hover { color: var(--text-1); background: var(--elevated); }
-.composer-chip-remove:focus-visible, .composer-notice-dismiss:focus-visible, .attach-btn:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+.composer-chip-remove { width: 24px; height: 24px; flex-shrink: 0; border-radius: var(--radius-sm); color: var(--text-2); display: flex; align-items: center; justify-content: center; font-size: 16px; line-height: 1; }
+.composer-chip-remove:hover { color: var(--text-1); background: var(--elevated); }
+.composer-chip-remove:focus-visible, .attach-btn:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
 .attach-btn { width: 42px; height: 42px; flex-shrink: 0; background: var(--card); color: var(--text-2); border-radius: var(--radius-circle); display: flex; align-items: center; justify-content: center; }
 .attach-btn:hover { color: var(--text-1); }
 .attach-btn[hidden] { display: none; }
 .attach-btn svg { width: 18px; height: 18px; }
-.composer-notice { flex-basis: 100%; }
-.composer-notice:not(:empty) { margin-top: 8px; display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--attention) 40%, transparent); border-radius: var(--radius-lg); font-size: var(--caption); color: var(--text-2); line-height: 1.55; }
+/* The messages, a column under the field, oldest first. Each is an icon, a
+   title above the reason and a Dismiss button. */
+.composer-notice { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; margin-right: 54px; min-width: 0; }
+.composer-notice:not(:empty) { margin-top: 8px; }
+.composer-notice-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 6px 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); font-size: var(--caption); line-height: 1.5; color: var(--text-2-strong); }
+.composer-notice-icon { display: flex; flex-shrink: 0; margin-top: 2px; color: var(--attention-text); }
+.composer-notice-icon svg { width: 14px; height: 14px; }
 .composer-notice-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .composer-notice-title { display: block; color: var(--text-1); font-weight: 600; }
+.composer-notice-text { color: var(--text-2-strong); }
+.composer-notice-dismiss { width: 22px; height: 22px; flex-shrink: 0; margin-top: -1px; border-radius: var(--radius-sm); color: var(--text-2-strong); display: flex; align-items: center; justify-content: center; }
+.composer-notice-dismiss svg { width: 14px; height: 14px; }
+.composer-notice-dismiss:hover { color: var(--text-1); background: var(--card); }
+.composer-notice-dismiss:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 0; }
 
 /* A sent message's files, above its text: a thumbnail for an image, a chip
    for a document, and a dashed chip for a file that isn't there as it was

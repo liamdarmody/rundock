@@ -137,6 +137,20 @@ function heldRead(p, name) {
   return { file, release };
 }
 
+function pressEnter(p) {
+  p.$('msg-input').dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+}
+
+async function until(check, label) {
+  for (let i = 0; i < 1000; i++) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.fail(`timed out waiting for ${label}`);
+}
+
+const ZIP = [0x50, 0x4b, 3, 4, 20, 0, 0, 0];
+
 describe('one add, checked in order', () => {
   test('4 files held and an add of 2, one a zip, is refused whole on the count', async () => {
     const p = page();
@@ -366,5 +380,163 @@ describe('a file Rundock can\'t take is refused on its own', () => {
     await pick(p, file);
     assert.deepStrictEqual(p.notices(), [{ title: 'photo.heic', text: HEIC }, { title: 'photo.heic', text: HEIC }]);
     assert.deepStrictEqual(p.chips(), []);
+  });
+});
+
+describe('the messages stack, each until it is dealt with', () => {
+  // Adds in turn, each refused: a HEIC photo, a zip, then a QuickTime file.
+  async function refusedInTurn(p, n) {
+    const files = [p.file('photo.heic', ftyp('heic')), p.file('bundle.zip', ZIP), p.file('clip.mov', ftyp('qt  '))];
+    for (const file of files.slice(0, n)) await pick(p, file);
+  }
+  const dismissals = (p) => [...p.doc.querySelectorAll('#composer-notice .composer-notice-dismiss')];
+  const titles = (p) => p.notices().map((n) => n.title);
+  // Five held and two adds of one more, each refused on the count, which the
+  // base words as it is worded here.
+  async function fullThenRefused(p) {
+    await pick(p, ...['a.md', 'b.md', 'c.md', 'd.md', 'e.md'].map((n) => p.file(n)));
+    await pick(p, p.file('f.txt'));
+    await pick(p, p.file('g.txt'));
+    assert.ok(p.notices().length >= 1, 'a message shows');
+  }
+
+  test('two refused adds in turn give two messages, oldest first', async () => {
+    const p = page();
+    needs(p);
+    await refusedInTurn(p, 2);
+    assert.deepStrictEqual(p.notices(), [{ title: 'photo.heic', text: HEIC }, { title: 'bundle.zip', text: UNSUPPORTED }]);
+    const box = p.$('composer-notice');
+    assert.strictEqual(box.getAttribute('aria-live'), 'polite');
+    assert.strictEqual(box.children.length, 2);
+    for (const item of box.children) {
+      assert.ok(item.matches('div.composer-notice-item'), item.className);
+      assert.strictEqual(item.children.length, 3);
+      const [icon, body, dismiss] = item.children;
+      assert.ok(icon.matches('span.composer-notice-icon'), icon.className);
+      assert.strictEqual(icon.getAttribute('aria-hidden'), 'true');
+      assert.ok(body.matches('div.composer-notice-body'), body.className);
+      assert.deepStrictEqual([...body.children].map((c) => `${c.tagName}.${c.className}`), ['STRONG.composer-notice-title', 'DIV.composer-notice-text']);
+      assert.ok(dismiss.matches('button.composer-notice-dismiss'), dismiss.className);
+      assert.strictEqual(dismiss.getAttribute('type'), 'button');
+      assert.strictEqual(dismiss.getAttribute('aria-label'), 'Dismiss');
+      const style = p.w.getComputedStyle(dismiss);
+      assert.deepStrictEqual([style.width, style.height], ['22px', '22px']);
+    }
+  });
+
+  test('an add that attaches clears both and shows its own', async () => {
+    const p = page();
+    needs(p);
+    await refusedInTurn(p, 2);
+    await pick(p, p.file('a.png'), p.file('clip.mov', ftyp('qt  ')));
+    assert.deepStrictEqual(p.chips(), ['a.png']);
+    assert.deepStrictEqual(p.notices(), [{ title: 'clip.mov', text: UNSUPPORTED }]);
+  });
+
+  test('a remove clears them', async () => {
+    const p = page();
+    await fullThenRefused(p);
+    p.doc.querySelector('#composer-chips .composer-chip-remove').click();
+    assert.strictEqual(p.$('composer-notice').children.length, 0);
+  });
+
+  test('a send clears them', async () => {
+    const p = page();
+    await fullThenRefused(p);
+    type(p, 'these five');
+    pressEnter(p);
+    assert.strictEqual(p.$('composer-notice').children.length, 0);
+  });
+
+  test('a server refusal after two messages leaves only its own', async () => {
+    const p = page();
+    needs(p);
+    await pick(p, p.file('a.png'));
+    await refusedInTurn(p, 2);
+    assert.strictEqual(p.notices().length, 2);
+    type(p, 'see this');
+    pressEnter(p);
+    await until(() => p.w.ws.sent.some((raw) => raw.startsWith('{"type":"chat"')), 'the chat frame');
+    p.w.fileSendAnswered({ type: 'chat_refused', conversationId: 'c1', code: 'disk-full', title: 'Not sent', text: 'The disk is full' });
+    assert.deepStrictEqual(p.notices(), [{ title: 'Not sent', text: 'The disk is full' }]);
+    assert.deepStrictEqual(p.chips(), ['a.png'], 'the files stay');
+  });
+
+  test('Dismiss on the first of three leaves two and puts focus on the next Dismiss', async () => {
+    const p = page();
+    needs(p);
+    await refusedInTurn(p, 3);
+    dismissals(p)[0].click();
+    assert.deepStrictEqual(titles(p), ['bundle.zip', 'clip.mov']);
+    assert.strictEqual(p.doc.activeElement, dismissals(p)[0]);
+  });
+
+  test('Dismiss on the middle of three puts focus on the next Dismiss', async () => {
+    const p = page();
+    needs(p);
+    await refusedInTurn(p, 3);
+    dismissals(p)[1].click();
+    assert.deepStrictEqual(titles(p), ['photo.heic', 'clip.mov']);
+    assert.strictEqual(p.doc.activeElement, dismissals(p)[1]);
+  });
+
+  test('Dismiss on the last puts focus on the one before', async () => {
+    const p = page();
+    needs(p);
+    await refusedInTurn(p, 3);
+    dismissals(p)[2].click();
+    assert.deepStrictEqual(titles(p), ['photo.heic', 'bundle.zip']);
+    assert.strictEqual(p.doc.activeElement, dismissals(p)[1]);
+  });
+
+  test('Dismiss on the only one puts focus on the field', async () => {
+    const p = page();
+    needs(p);
+    await refusedInTurn(p, 1);
+    dismissals(p)[0].click();
+    assert.deepStrictEqual(p.notices(), []);
+    assert.strictEqual(p.doc.activeElement, p.$('msg-input'));
+  });
+
+  test('an add with the field focused leaves focus there', async () => {
+    const p = page();
+    p.$('msg-input').focus();
+    await pick(p, p.file('a.txt'), p.file('photo.heic', ftyp('heic')));
+    assert.strictEqual(p.doc.activeElement, p.$('msg-input'), 'after an add that attaches');
+    await pick(p, ...['b.txt', 'c.txt', 'd.txt', 'e.txt', 'f.txt'].map((n) => p.file(n)));
+    assert.ok(p.notices().length >= 1, 'a message shows');
+    assert.strictEqual(p.doc.activeElement, p.$('msg-input'), 'after an add refused');
+  });
+
+  test('a message that stays keeps its element across a draw', async () => {
+    const p = page();
+    needs(p);
+    await refusedInTurn(p, 1);
+    const box = p.$('composer-notice');
+    const first = box.firstElementChild;
+    const removed = [];
+    const watch = new p.w.MutationObserver((records) => records.forEach((r) => removed.push(...r.removedNodes)));
+    watch.observe(box, { childList: true });
+    await pick(p, p.file('bundle.zip', ZIP));
+    await pick(p, p.file('clip.mov', ftyp('qt  ')));
+    dismissals(p)[1].click();
+    removed.push(...watch.takeRecords().flatMap((r) => [...r.removedNodes]));
+    watch.disconnect();
+    assert.deepStrictEqual(titles(p), ['photo.heic', 'clip.mov']);
+    assert.strictEqual(box.firstElementChild, first, 'the same element');
+    assert.ok(!removed.includes(first), 'its element was never taken out, so it is announced once');
+  });
+
+  test('messages kept in c1 while c2 is shown', async () => {
+    const p = page();
+    needs(p);
+    await refusedInTurn(p, 2);
+    p.open('c2');
+    assert.deepStrictEqual(p.notices(), [], 'c2 shows none of c1\'s');
+    await pick(p, p.file('clip.mov', ftyp('qt  ')));
+    p.open('c1');
+    assert.deepStrictEqual(titles(p), ['photo.heic', 'bundle.zip']);
+    p.open('c2');
+    assert.deepStrictEqual(titles(p), ['clip.mov']);
   });
 });

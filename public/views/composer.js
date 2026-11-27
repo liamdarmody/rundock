@@ -143,32 +143,49 @@ function chipFor(composer, file, index) {
 }
 
 // The messages, oldest first, each a bold title above the text. They are
-// announced by their container and never take focus.
+// announced by their container and never take focus. A message that stays
+// keeps its element, so it is announced once.
 function renderComposerNotice(composer) {
   const box = document.getElementById('composer-notice');
   if (!box) return;
-  box.replaceChildren(...composer.notices.map((notice) => noticeFor(composer, notice)));
+  const items = composer.notices.map((notice) => noticeElements.get(notice) || noticeFor(composer, notice));
+  for (const child of [...box.children]) if (!items.includes(child)) child.remove();
+  items.forEach((item, i) => { if (box.children[i] !== item) box.insertBefore(item, box.children[i] || null); });
 }
 
+// A Dismiss takes its own message away, then focus goes to the next
+// message's Dismiss, or the previous one's, or the field when none is left.
 function noticeFor(composer, notice) {
   const item = document.createElement('div');
   item.className = 'composer-notice-item';
+  const icon = document.createElement('span');
+  icon.className = 'composer-notice-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.appendChild(iconOf(ICON_INFO, '2'));
   const body = document.createElement('div');
   body.className = 'composer-notice-body';
   const title = document.createElement('strong');
   title.className = 'composer-notice-title';
   title.textContent = notice.title;
   const text = document.createElement('div');
+  text.className = 'composer-notice-text';
   text.textContent = notice.text;
   body.append(title, text);
   const dismiss = document.createElement('button');
   dismiss.type = 'button';
   dismiss.className = 'composer-notice-dismiss';
   dismiss.setAttribute('aria-label', 'Dismiss');
-  dismiss.title = 'Dismiss';
-  dismiss.textContent = '×';
-  dismiss.onclick = () => { composer.notices = composer.notices.filter((n) => n !== notice); renderComposerNotice(composer); };
-  item.append(body, dismiss);
+  dismiss.appendChild(iconOf(ICON_CLOSE, '1.8'));
+  dismiss.onclick = () => {
+    const index = composer.notices.indexOf(notice);
+    composer.notices = composer.notices.filter((n) => n !== notice);
+    renderComposerNotice(composer);
+    const left = document.querySelectorAll('#composer-notice .composer-notice-dismiss');
+    const next = left[index] || left[index - 1] || document.getElementById('msg-input');
+    next.focus();
+  };
+  item.append(icon, body, dismiss);
+  noticeElements.set(notice, item);
   return item;
 }
 
@@ -382,6 +399,29 @@ async function addInTurn(convoId, composer, added) {
   passed.forEach((file) => kinds.set(file, checked[added.indexOf(file)]));
   composer.files = composer.files.concat(passed);
   composer.notices = own;
+}
+
+// ===== ICONS =====
+
+// A message to the element drawn for it.
+const noticeElements = new WeakMap();
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const ICON_INFO = [['circle', { cx: '12', cy: '12', r: '10' }], ['path', { d: 'M12 8v4' }], ['path', { d: 'M12 16h.01' }]];
+const ICON_CLOSE = [['path', { d: 'M18 6 6 18' }], ['path', { d: 'm6 6 12 12' }]];
+
+// A 24 by 24 icon stroked in the text's color, each shape a tag and its
+// attributes.
+function iconOf(shapes, strokeWidth) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  const attributes = { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': strokeWidth,
+    'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' };
+  for (const [key, value] of Object.entries(attributes)) svg.setAttribute(key, value);
+  for (const [tag, shape] of shapes) {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const [key, value] of Object.entries(shape)) node.setAttribute(key, value);
+    svg.appendChild(node);
+  }
+  return svg;
 }
 
 return {
