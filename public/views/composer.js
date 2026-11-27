@@ -337,7 +337,8 @@ function composersWorkspaceChanged() {
 // An add is a pick, a paste or a drop, and takes these steps in order:
 //   1. The count: files held plus files added over LIMITS.files refuses the
 //      whole add before any file is read.
-//   2. Each file's bytes are read and checked on its own (checkFile).
+//   2. Each file's bytes are read and checked on its own (checkFile), and a
+//      pasted image is named "Pasted image", then "Pasted image 2" and on.
 //   3. Each refused file gets its own message.
 //   4. The total: bytes held plus the passing files' bytes over
 //      LIMITS.messageBytes refuses every passing file, with one message.
@@ -361,12 +362,12 @@ function addFiles(files, source) {
     composer.adds -= 1;
     if (composers.get(convoId) === composer && activeConversation && activeConversation.id === convoId) renderComposer(composer);
   };
-  const turn = composer.queue.then(() => addInTurn(convoId, composer, added)).finally(done);
+  const turn = composer.queue.then(() => addInTurn(convoId, composer, added, source)).finally(done);
   composer.queue = turn.catch(() => {});
   return turn;
 }
 
-async function addInTurn(convoId, composer, added) {
+async function addInTurn(convoId, composer, added, source) {
   const live = () => composers.get(convoId) === composer && !composer.waiting;
   if (!live()) return;
   const { LIMITS, checkFile } = attachmentSniff();
@@ -384,8 +385,11 @@ async function addInTurn(convoId, composer, added) {
   const own = [];
   const passed = [];
   added.forEach((file, i) => {
-    if (checked[i].code) own.push(refusalWording(checked[i], 1));
-    else passed.push(file);
+    if (checked[i].code) { own.push(refusalWording(checked[i], 1)); return; }
+    // An image's answer carries its size.
+    const kept = source === 'paste' && checked[i].width ? pastedImage(file, composer.files.concat(passed)) : file;
+    kinds.set(kept, checked[i]);
+    passed.push(kept);
   });
   const bytes = composer.files.concat(passed).reduce((sum, file) => sum + file.size, 0);
   if (passed.length && bytes > LIMITS.messageBytes) {
@@ -396,9 +400,36 @@ async function addInTurn(convoId, composer, added) {
     composer.notices = composer.notices.concat(own);
     return;
   }
-  passed.forEach((file) => kinds.set(file, checked[added.indexOf(file)]));
   composer.files = composer.files.concat(passed);
   composer.notices = own;
+}
+
+// A pasted image under its new name: "Pasted image" while no file held is so
+// named, else "Pasted image <m>", m one more than the highest number held and
+// the bare name counting as 1.
+function pastedImage(file, held) {
+  let highest = 0;
+  for (const { name } of held) {
+    const match = /^Pasted image(?: (\d+))?$/.exec(name);
+    if (match) highest = Math.max(highest, match[1] ? Number(match[1]) : 1);
+  }
+  return new File([file], highest ? `Pasted image ${highest + 1}` : 'Pasted image', { type: file.type });
+}
+
+// ===== PASTE =====
+//
+// A paste into the field adds the files on the clipboard. Its default is
+// never prevented, so text on the clipboard still goes into the field.
+function pasteFiles(event) {
+  const files = event.clipboardData ? event.clipboardData.files : null;
+  if (files && files.length) addFiles(files, 'paste');
+}
+
+// Wired once, when the page loads after the composer's markup. Required in
+// Node there is no page.
+if (typeof document !== 'undefined') {
+  const field = document.getElementById('msg-input');
+  if (field) field.addEventListener('paste', pasteFiles);
 }
 
 // ===== ICONS =====

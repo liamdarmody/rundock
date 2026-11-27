@@ -17,6 +17,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const { typed, png, ftyp, pdf, ascii } = require('../helpers/attachment-bytes.js');
+const { makeTempDir } = require('../helpers/workspace.js');
+const { receiveAttachments } = require('../../lib/attachments/receive.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
@@ -538,5 +540,123 @@ describe('the messages stack, each until it is dealt with', () => {
     assert.deepStrictEqual(titles(p), ['photo.heic', 'bundle.zip']);
     p.open('c2');
     assert.deepStrictEqual(titles(p), ['clip.mov']);
+  });
+});
+
+describe('a paste adds its files, and a pasted image is named', () => {
+  // A screen capture as the clipboard holds one.
+  const capture = (p) => new p.w.File([typed('image.png', 10)], 'image.png', { type: 'image/png' });
+  const removes = (p) => [...p.doc.querySelectorAll('#composer-chips .composer-chip-remove')].map((b) => b.getAttribute('aria-label'));
+  const removeNamed = (p, name) => p.doc.querySelector(`#composer-chips .composer-chip-remove[aria-label="Remove ${name}"]`).click();
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  // The browser pasting into the field: `files` on the clipboard, with `text`
+  // beside them when given. Returns the event, to read its default.
+  function paste(p, files, text = '') {
+    const event = new p.w.Event('paste', { bubbles: true, cancelable: true });
+    const types = (files.length ? ['Files'] : []).concat(text ? ['text/plain'] : []);
+    Object.defineProperty(event, 'clipboardData', { value: { files, types, getData: (type) => (type === 'text/plain' ? text : '') } });
+    p.$('msg-input').dispatchEvent(event);
+    return event;
+  }
+  async function pasted(p, files, count) {
+    paste(p, files);
+    await until(() => p.chips().length === count, `${count} chips`);
+  }
+
+  test('two pastes of a PNG give "Pasted image" and "Pasted image 2"', async () => {
+    const p = page();
+    needs(p);
+    await pasted(p, [capture(p)], 1);
+    await pasted(p, [capture(p)], 2);
+    assert.deepStrictEqual(p.chips(), ['Pasted image', 'Pasted image 2']);
+    assert.deepStrictEqual(removes(p), ['Remove Pasted image', 'Remove Pasted image 2']);
+  });
+
+  test('one paste of two PNGs gives the same two names', async () => {
+    const p = page();
+    needs(p);
+    await pasted(p, [capture(p), capture(p)], 2);
+    assert.deepStrictEqual(p.chips(), ['Pasted image', 'Pasted image 2']);
+    assert.deepStrictEqual(removes(p), ['Remove Pasted image', 'Remove Pasted image 2']);
+  });
+
+  test('after "Pasted image 2" is removed from three, the next is "Pasted image 4"', async () => {
+    const p = page();
+    needs(p);
+    await pasted(p, [capture(p), capture(p), capture(p)], 3);
+    removeNamed(p, 'Pasted image 2');
+    assert.deepStrictEqual(p.chips(), ['Pasted image', 'Pasted image 3']);
+    await pasted(p, [capture(p)], 3);
+    assert.deepStrictEqual(p.chips(), ['Pasted image', 'Pasted image 3', 'Pasted image 4']);
+  });
+
+  test('after all are removed, the next is "Pasted image"', async () => {
+    const p = page();
+    needs(p);
+    await pasted(p, [capture(p), capture(p)], 2);
+    removeNamed(p, 'Pasted image');
+    removeNamed(p, 'Pasted image 2');
+    assert.deepStrictEqual(p.chips(), []);
+    await pasted(p, [capture(p)], 1);
+    assert.deepStrictEqual(p.chips(), ['Pasted image']);
+  });
+
+  test('a pasted PDF keeps its name', async () => {
+    const p = page();
+    needs(p);
+    await pasted(p, [p.file('report.pdf')], 1);
+    assert.deepStrictEqual(p.chips(), ['report.pdf']);
+    assert.deepStrictEqual(removes(p), ['Remove report.pdf']);
+  });
+
+  test('a pasted text file and a capture: the capture is named, the text file is not', async () => {
+    const p = page();
+    needs(p);
+    await pasted(p, [p.file('notes.txt'), capture(p)], 2);
+    assert.deepStrictEqual(p.chips(), ['notes.txt', 'Pasted image']);
+  });
+
+  test('a paste of text alone adds nothing and leaves its default', async () => {
+    const p = page();
+    const event = paste(p, [], 'a line of text');
+    assert.strictEqual(event.defaultPrevented, false);
+    await settled();
+    assert.deepStrictEqual(p.chips(), []);
+    assert.strictEqual(p.$('composer-notice').children.length, 0);
+  });
+
+  test('a paste of a PNG with text leaves its default', async () => {
+    const p = page();
+    needs(p);
+    const event = paste(p, [capture(p)], 'a line of text');
+    assert.strictEqual(event.defaultPrevented, false);
+    await until(() => p.chips().length === 1, 'the pasted image');
+    assert.deepStrictEqual(p.chips(), ['Pasted image']);
+  });
+
+  test('a pasted HEIC file is refused under its own name', async () => {
+    const p = page();
+    needs(p);
+    paste(p, [p.file('IMG_0001.heic', ftyp('heic'))]);
+    await until(() => p.notices().length === 1, 'the message');
+    assert.deepStrictEqual(p.notices(), [{ title: 'IMG_0001.heic', text: HEIC }]);
+    assert.deepStrictEqual(p.chips(), []);
+  });
+
+  test('a capture pasted, a line typed and Enter pressed is stored as 1-Pasted_image.png', async () => {
+    const p = page();
+    needs(p);
+    await pasted(p, [capture(p)], 1);
+    type(p, 'what is wrong here?');
+    pressEnter(p);
+    await until(() => p.w.ws.sent.some((raw) => raw.startsWith('{"type":"chat"')), 'the chat frame');
+    const frame = JSON.parse(p.w.ws.sent.find((raw) => raw.startsWith('{"type":"chat"')));
+    assert.deepStrictEqual(frame.attachments.map((a) => a.name), ['Pasted image']);
+    const workspace = fs.realpathSync(makeTempDir('attach-add-'));
+    const { content, entry } = await receiveAttachments(workspace, frame);
+    assert.deepStrictEqual(entry.files.map((f) => [f.file, f.name, f.type]), [['1-Pasted_image.png', 'Pasted image', 'png']]);
+    assert.ok(fs.existsSync(path.join(workspace, '.rundock', 'attachments', 'c1', '1-Pasted_image.png')));
+    assert.ok(content.startsWith('what is wrong here?\n[Attached: .rundock/attachments/c1/1-Pasted_image.png (PNG image'), content);
   });
 });
