@@ -269,10 +269,42 @@ describe('placement: a handoff or a batch of helpers', () => {
     assert.strictEqual(placement.calls[0].verdict.notice, NOTICES.stopped);
   });
 
-  test('a lone handoff that names its teammate in other words stays a handoff, as today', () => {
-    assert.deepStrictEqual(place([call('t1', { subagent_type: 'Rowan', description: 'Research it' })]), { kind: 'handoff' });
-    assert.deepStrictEqual(place([call('t1', { subagent_type: 'fern', description: 'Port it' })]), { kind: 'handoff' }, 'a Codex teammate');
-    assert.deepStrictEqual(place([call('t1', { subagent_type: 'sky', description: 'Design it' })]), { kind: 'handoff' }, 'an agent off the team');
+  test('a lone call naming Fern, who runs on Codex, stays a handoff, as today', () => {
+    assert.deepStrictEqual(place([call('t1', { subagent_type: 'fern', description: 'Port it' })]), { kind: 'handoff' });
+  });
+});
+
+// A lone call that names no teammate exactly is never a handoff: it is placed
+// as a helper, and its hook request is refused with its own reason.
+describe('a lone call that may not start is refused through the hook, never handed over', () => {
+  before(() => useTeam(team()));
+  let n = 0;
+  async function lone(input) {
+    const convo = `lone-call-${++n}`;
+    const placement = helpers().placeMessage(convo, { agentId: 'wren' }, [{ id: 'l1', input }]);
+    const answer = await helpers().answerAgentRequest({ convoId: convo, askedBy: 'wren', data: { tool_use_id: 'l1', tool_input: input } });
+    return { kind: placement.kind, answer };
+  }
+  const refusedWith = (notice) => ({ kind: 'helpers', answer: { allow: false, notice } });
+
+  test('a teammate named by display name', async () => {
+    assert.deepStrictEqual(await lone({ subagent_type: 'Rowan', description: 'Research it' }), refusedWith(NOTICES.inexact));
+  });
+
+  test('a teammate named in another case', async () => {
+    assert.deepStrictEqual(await lone({ subagent_type: 'Example-Research-Lead', description: 'Research it' }), refusedWith(NOTICES.inexact));
+  });
+
+  test('an untyped call whose description names a teammate', async () => {
+    assert.deepStrictEqual(await lone({ description: 'Hand this to Rowan', prompt: 'Look into it.' }), refusedWith(NOTICES.general));
+  });
+
+  test('a general-purpose call whose description names a teammate', async () => {
+    assert.deepStrictEqual(await lone({ subagent_type: 'general-purpose', description: 'rowan researches it', prompt: 'Look into it.' }), refusedWith(NOTICES.general));
+  });
+
+  test('an agent who works for another lead', async () => {
+    assert.deepStrictEqual(await lone({ subagent_type: 'sky', description: 'Design it' }), refusedWith(NOTICES.otherLead));
   });
 });
 

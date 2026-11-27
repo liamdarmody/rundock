@@ -43,6 +43,9 @@ const UNMATCHED = "This call couldn't be matched to the lead's message, so it di
 const DENIED = 'The person chose not to start these teammates. Ask them how they want to go on.';
 const FROM_HELPER = "Helpers can't start helpers. Do this part yourself, and say in your report what you would have handed on.";
 const SELF = "Wren can't be Wren's own helper. Do this part yourself.";
+const INEXACT = 'To start Rowan, set the agent to example-research-lead.';
+const GENERAL = "To start Rowan, set the agent to example-research-lead. A general helper can't work as Rowan.";
+const OTHER_LEAD = 'Sky works for Ash, so only Ash can start Sky. Do this part yourself, or say that this part needs Ash.';
 // Every card in this file times out this soon, so a card left unanswered
 // shows what a timeout does without waiting two minutes.
 const TIMEOUT_MS = 6000;
@@ -352,6 +355,31 @@ test('a lone teammate call in a new request after a batch has ended is a handoff
   say(convo, 'wren', 'then hand over');
   assert.ok(await h.waitUntil(() => invocations('ash', convo).length === 1, { timeout: 15000 }), 'Ash took over');
   assert.strictEqual(helpers().stateOf(convo).latest.kind, 'handoff');
+});
+
+test('a lone call that names no teammate of the lead exactly is refused through the hook with its reason, and nobody takes over', async () => {
+  helpers();
+  const cases = [
+    [agentCall('sky'), OTHER_LEAD],
+    [agentCall('Rowan'), INEXACT],
+    [agentCall('Example-Research-Lead'), INEXACT],
+    [agentCall(null, { description: 'Hand this to Rowan' }), GENERAL],
+  ];
+  for (const [lone, notice] of cases) {
+    const convo = open('helpers-lone-refused');
+    const words = `lone call ${lone.id}`;
+    h.writeScenario([messageRule('wren', words, [lone])]);
+    const since = say(convo, 'wren', words);
+    assert.deepStrictEqual(await answersOf_([lone]), [refused(notice)], `${lone.id} is refused with its reason`);
+    await turnDone(convo, since);
+    assert.strictEqual(helpers().stateOf(convo).latest.kind, 'helpers', `${lone.id} is not a handoff`);
+    assert.strictEqual(agentCards(convo, since).length, 0, 'no card');
+    const wren = invocations('wren', convo);
+    assert.ok(wren.length === 1 && h.pidAlive(wren[0].pid), 'the lead was not ended');
+    for (const agent of ['ash', 'example-research-lead', 'sky']) {
+      assert.strictEqual(invocations(agent, convo).length, 0, `${agent} did not take over`);
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
