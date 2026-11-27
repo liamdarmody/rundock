@@ -26,7 +26,8 @@
 // The files are restored afterwards, including when a run throws. The harness
 // is the same shape as its siblings, deliberately a separate copy: pulling
 // them together means editing instruments already in the gate. No row starts
-// a server, so every row runs its whole suite.
+// a server. Every row runs its whole suite, except a row that breaks the
+// server's own check, which runs the one test that proves it (`only` below).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -47,6 +48,22 @@ const PLACEHOLDER = { src: CHAT_CSS, suite: 'test/unit/composer-placeholder-cont
 const CHIP = { src: CHAT_CSS, suite: 'test/unit/attachment-chip-contrast.test.js' };
 const MESSAGE = { src: CHAT_CSS, suite: 'test/unit/attachment-refusal-contrast.test.js' };
 const DROP = { src: CHAT_CSS, suite: 'test/unit/composer-field-contrast.test.js' };
+// The server's own check of each file's bytes on Send, whatever the page let
+// through.
+const DETECT = { src: path.join(ROOT, 'lib', 'attachments', 'detect.js'), suite: 'test/unit/attachments-add.test.js' };
+
+// ONE NAMED TEST, FOR A ROW THAT BREAKS THE SERVER. A row that breaks the
+// server's own check, rather than the composer, names the test that proves the
+// server refuses what the page let through (`suite#test name`), and only that
+// test runs, so its red is that test's alone. A name that matches nothing runs
+// nothing, which turns nothing red and is reported as a failure.
+const named = new Map();
+function only(target, testName) {
+  const suite = `${target.suite}#${testName}`;
+  const key = `${target.src}\n${suite}`;
+  if (!named.has(key)) named.set(key, { src: target.src, suite });
+  return named.get(key);
+}
 
 const MUTATIONS = [
   // ===== ONE ADD, CHECKED IN ORDER =====
@@ -93,6 +110,12 @@ const MUTATIONS = [
   [ADD, 'a message\'s title shows its file\'s name as text',
     '  title.textContent = notice.title;',
     '  title.innerHTML = notice.title;'],
+
+  // ===== WHAT THE PAGE LETS THROUGH IN ERROR, THE SERVER REFUSES =====
+  [only(DETECT, 'with the composer\'s check made to pass, a HEIC photo is refused by the server\'s check on Send in the words the page gives it on add'),
+    'the server refuses a HEIC photo as HEIC',
+    "    throw refusal(HEIC_BRANDS.has(head(bytes, 8, 12)) ? 'heic' : 'unsupported', { name: label });",
+    "    throw refusal('unsupported', { name: label });"],
 
   // ===== THE QUIETER LINES CAN BE READ =====
   [PLACEHOLDER, 'the field\'s placeholder clears 4.5:1',

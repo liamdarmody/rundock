@@ -415,6 +415,50 @@ describe('a file Rundock can\'t take is refused on its own', () => {
     assert.deepStrictEqual(p.notices(), [{ title: 'photo.heic', text: HEIC }, { title: 'photo.heic', text: HEIC }]);
     assert.deepStrictEqual(p.chips(), []);
   });
+
+  test('with the composer\'s check made to pass, a HEIC photo is refused by the server\'s check on Send in the words the page gives it on add', async () => {
+    const p = page();
+    needs(p);
+    // The page's detector is swapped for a copy whose checkFile refuses
+    // nothing and takes every file for a small PNG, as a detector gone out of
+    // step with the server's would. The composer reads the global at each
+    // add, so the global is replaced whole: the shipped object is left as it
+    // was, and the swap holds whether or not that object is ever frozen.
+    p.w.RundockAttachmentSniff = { ...p.w.RundockAttachmentSniff, checkFile: () => ({ type: 'png', width: 2, height: 2 }) };
+    await pick(p, p.file('photo.heic', ftyp('heic')));
+    assert.deepStrictEqual([p.chips(), p.notices()], [['photo.heic'], []], 'the page let the photo through');
+    type(p, 'see this');
+    pressEnter(p);
+    const frames = () => Array.from(p.w.ws.sent).filter((raw) => raw.startsWith('{"type":"chat"'));
+    await until(() => frames().length === 1, 'the chat frame');
+    const frame = JSON.parse(frames()[0]);
+    // The server, which reads the bytes for itself, takes the message for an
+    // agent on Claude.
+    const workspace = fs.realpathSync(makeTempDir('attach-add-'));
+    const sock = new EventEmitter();
+    Object.assign(sock, { readyState: 1, sent: [], back: [] });
+    sock.send = (raw) => sock.sent.push(JSON.parse(raw));
+    sock.on('message', (raw) => sock.back.push(raw));
+    const was = config.getWorkspace();
+    config.setWorkspace(workspace);
+    try {
+      createReceiver({ clients: new Set([sock]), findAgent: () => ({ runtime: 'claude' }) }).takes(frame, sock, true);
+      await whenReceived('c1');
+    } finally {
+      config.setWorkspace(was);
+    }
+    assert.deepStrictEqual(sock.sent.map((m) => [m.type, m.code]), [['chat_refused', 'heic']]);
+    assert.deepStrictEqual(sock.back, [], 'nothing went on to the agent');
+    assert.strictEqual(fs.existsSync(path.join(workspace, '.rundock', 'attachments')), false, 'nothing was written');
+    // The same photo added to a page whose detector is the shipped one.
+    const twin = page();
+    await pick(twin, twin.file('photo.heic', ftyp('heic')));
+    const onAdd = twin.notices();
+    assert.deepStrictEqual([twin.chips(), onAdd.length], [[], 1], 'the shipped page refuses the photo on add');
+    p.w.fileSendAnswered(sock.sent[0]);
+    assert.deepStrictEqual(p.notices(), onAdd, 'the server\'s refusal shows in the words and title the page gives the photo on add');
+    assert.deepStrictEqual([p.chips(), p.$('msg-input').value], [['photo.heic'], 'see this'], 'the photo and the text stay');
+  });
 });
 
 describe('the messages stack, each until it is dealt with', () => {
