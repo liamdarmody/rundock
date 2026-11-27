@@ -235,7 +235,7 @@ test('a Codex routine that starts a helper shows no rows, and the helper\'s appr
   const since = client.messages.length;
   const agent = h.internal.discoverAgents().find((a) => a.id === 'fern');
   h.internal.executeRoutine(agent, { name: 'helper-routine', schedule: 'every day at 09:00', prompt: 'routine with a helper' }, 'codex-helper-routine');
-  assert.ok(await h.waitUntil(() => h.readInvocations().some((i) => i.approvalDecision != null), 20000), 'the helper asked');
+  assert.ok(await h.waitUntil(() => h.readInvocations().some((i) => i.approvalDecision != null), { timeout: 20000 }), 'the helper asked');
   const decisions = h.readInvocations().filter((i) => i.approvalDecision != null);
   assert.deepStrictEqual(decisions.map((d) => d.approvalDecision), ['decline'], 'declined at once');
   assert.ok(decisions[0].threadId, 'on the helper\'s own thread');
@@ -320,6 +320,172 @@ test('with helpers on, Fern\'s DELEGATE markers name the first agent and get the
     assert.strictEqual(seen[0].rowan, 0, `${c.tag}: Rowan did not start`);
     assert.deepStrictEqual(seen[1], seen[0], `${c.tag}: the same answer, helper events or not`);
   }
+});
+
+// A HELPER'S APPROVALS. A helper's request that needs a card raises it on
+// Fern's turn, naming the helper; the answer goes back on the helper's own
+// request, and any line after it onto the helper's own turn.
+const { refusalNotice, approvalNotice } = require('../../scripts/refusal-notice.js');
+const SHELL = process.platform === 'win32' ? 'PowerShell' : 'Bash';
+const decisions = () => h.readInvocations().filter((i) => i.approvalDecision != null);
+const appServer = (method) => h.readInvocations().filter((i) => i.mode === 'app-server' && i.method === method);
+const fernThread = () => appServer('turn/start')[0].params.threadId;
+const cards = (convo, since) => client.messages.slice(since).filter((m) => m.type === 'control_request' && m._conversationId === convo);
+const cardAfter = (convo, since) => client.waitFor((m) => m.type === 'control_request' && m._conversationId === convo, { since, timeout: 15000, label: 'a card' });
+const answer = (convo, card, allow, extra = {}) => client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convo, allow, ...extra });
+async function decidedOn(threadId, n = 1) {
+  await h.waitUntil(() => decisions().filter((d) => d.threadId === threadId).length >= n, { timeout: 15000 });
+  return decisions().filter((d) => d.threadId === threadId).map((d) => d.approvalDecision);
+}
+// Fern starts rates, which asks to run a command; by default Fern's turn
+// waits for rates to end. `lead` adds to Fern's rule, `config` to the stub's.
+async function ratesAsks(convo, tag, { approval = {}, lead = {}, rates = {}, more = [], config } = {}) {
+  h.clearInvocations();
+  h.writeCodexScenario([{
+    match: { promptIncludes: tag }, text: 'Fern heard from rates.', awaitHelpers: true, ...lead,
+    helpers: [{ nickname: 'rates', ...rates, approval: { command: 'rm -rf build', reason: 'clear the old build', ...approval } }],
+  }, ...more], config);
+  const since = say(convo, `${tag} please`);
+  const { msg: card } = await cardAfter(convo, since);
+  return { since, card };
+}
+
+test('a helper\'s approval raises a card on Fern\'s turn naming the helper, and Allow answers accept on the helper\'s request', async () => {
+  const convo = open('cxallow');
+  const { since, card } = await ratesAsks(convo, 'ALLOW-ONE');
+  assert.strictEqual(card._agent, 'fern', 'the card is on Fern');
+  assert.ok(card._helper, 'the card names a helper');
+  assert.match(card._helper.agentId, UUID_RE);
+  assert.deepStrictEqual(card._helper, { agentId: card._helper.agentId, agentType: 'rates' });
+  assert.strictEqual(card.request.tool_name, SHELL);
+  assert.strictEqual(card.request.input.command, 'rm -rf build');
+  const row = rowNamed(changes(convo, since).pop(), 'rates');
+  assert.strictEqual(card._helper.agentId, row.toolUseId, 'the same helper as its row');
+  assert.deepStrictEqual(decisions(), [], 'nothing answered before the person does');
+  answer(convo, card, true);
+  assert.deepStrictEqual(await decidedOn(card._helper.agentId), ['accept']);
+  await turnDone(convo, since);
+  assert.strictEqual(cards(convo, since).length, 1, 'one card');
+});
+
+test('Deny on a helper\'s card answers decline on the helper\'s request', async () => {
+  const convo = open('cxdeny');
+  const { since, card } = await ratesAsks(convo, 'DENY-ONE');
+  answer(convo, card, false);
+  assert.deepStrictEqual(await decidedOn(card._helper.agentId), ['decline']);
+  await turnDone(convo, since);
+});
+
+test('a helper\'s card left to its time limit answers decline on the helper\'s request', async () => {
+  const convo = open('cxtimeout');
+  const { since, card } = await ratesAsks(convo, 'TIMEOUT-ONE');
+  await client.waitFor((m) => m.type === 'permission_timeout' && m.requestId === card.request_id, { since, timeout: 10000, label: 'the time limit' });
+  assert.deepStrictEqual(await decidedOn(card._helper.agentId), ['decline']);
+  await turnDone(convo, since);
+});
+
+test('cancelling the conversation answers a helper\'s card with cancel on the helper\'s request', async () => {
+  const convo = open('cxcancel');
+  const { since, card } = await ratesAsks(convo, 'CANCEL-ONE');
+  client.send({ type: 'cancel', conversationId: convo });
+  assert.deepStrictEqual(await decidedOn(card._helper.agentId), ['cancel']);
+  await client.waitForEvent('system', 'done', convo, { since, timeout: 15000 });
+});
+
+test('after Deny, the refusal line is steered onto the helper\'s own turn, never Fern\'s', async () => {
+  const convo = open('cxrefuse');
+  const { since, card } = await ratesAsks(convo, 'REFUSE-ONE', { approval: { awaitSteerMs: 4000 } });
+  answer(convo, card, false);
+  await turnDone(convo, since);
+  const steers = appServer('turn/steer');
+  assert.deepStrictEqual(steers.map((s) => [s.params.threadId, s.params.input]), [[card._helper.agentId, [{ type: 'text', text: refusalNotice('denied', SHELL) }]]]);
+  assert.ok(steers[0].params.expectedTurnId, 'bound to the helper\'s turn');
+  assert.ok(!steers.some((s) => s.params.threadId === fernThread()), 'nothing steered onto Fern');
+});
+
+test('after the time limit, the refusal line is steered onto the helper\'s own turn', async () => {
+  const convo = open('cxlimit');
+  const { since, card } = await ratesAsks(convo, 'LIMIT-ONE', { approval: { awaitSteerMs: 4000 } });
+  await turnDone(convo, since);
+  assert.deepStrictEqual(appServer('turn/steer').map((s) => [s.params.threadId, s.params.input[0].text]), [[card._helper.agentId, refusalNotice('timeout', SHELL)]]);
+});
+
+test('after Allow on a card, the approval line is steered onto the helper\'s own turn, never Fern\'s', async () => {
+  const convo = open('cxnotice');
+  const { since, card } = await ratesAsks(convo, 'NOTICE-ONE', { approval: { awaitSteerOnAcceptMs: 4000 } });
+  answer(convo, card, true, { card: true });
+  await turnDone(convo, since);
+  assert.deepStrictEqual(appServer('turn/steer').map((s) => [s.params.threadId, s.params.input[0].text]), [[card._helper.agentId, approvalNotice(SHELL)]]);
+});
+
+test('a helper\'s refusal line that cannot be steered is dropped, never carried into Fern\'s next turn', async () => {
+  const convo = open('cxdrop');
+  const { since, card } = await ratesAsks(convo, 'DROP-ONE', {
+    more: [{ match: { promptIncludes: 'DROP-NEXT' }, text: 'Fern again.' }], config: { noSteer: true },
+  });
+  answer(convo, card, false);
+  await turnDone(convo, since);
+  assert.ok(appServer('turn/steer').length >= 1, 'a steer was tried');
+  const next = say(convo, 'DROP-NEXT please');
+  await turnDone(convo, next);
+  const prompts = h.codexTurnPrompts();
+  assert.strictEqual(prompts.length, 2, 'Fern\'s next turn ran');
+  assert.ok(!prompts[1].includes(refusalNotice('denied', SHELL)), 'the line was not queued for Fern');
+});
+
+test('a helper\'s card still up when Fern\'s turn ends is declined on the helper\'s request', async () => {
+  const convo = open('cxleadend');
+  const gate = hold('leadend');
+  const { since, card } = await ratesAsks(convo, 'LEADEND-ONE', { lead: { awaitHelpers: false, untilFile: gate } });
+  release(gate);
+  await turnDone(convo, since);
+  assert.deepStrictEqual(await decidedOn(card._helper.agentId), ['decline']);
+});
+
+test('a helper\'s approval with no Fern turn running is declined at once and raises no card', async () => {
+  const convo = open('cxnolead');
+  const gate = hold('nolead');
+  h.clearInvocations();
+  h.writeCodexScenario([{
+    match: { promptIncludes: 'NOLEAD-ONE' }, text: 'Fern is done.',
+    helpers: [{ nickname: 'rates', untilFile: gate, approval: { command: 'rm -rf build' } }],
+  }]);
+  const since = say(convo, 'NOLEAD-ONE please');
+  await turnDone(convo, since);
+  const { msg } = await rowsWhere(convo, since, (rows) => stateOf(rows, 'rates') === 'running', 'the rates row');
+  release(gate);
+  assert.deepStrictEqual(await decidedOn(rowNamed(msg, 'rates').toolUseId), ['decline']);
+  await h.delay(300);
+  assert.deepStrictEqual(cards(convo, since), [], 'no card');
+});
+
+test('a helper\'s own helper\'s approval is declined at once with no card, beside the helper\'s that raises one', async () => {
+  const convo = open('cxdeep');
+  const { since, card } = await ratesAsks(convo, 'DEEP-ONE', { rates: { depth2: { approval: { command: 'rm -rf deeper' } } } });
+  const deep = decisions().filter((d) => d.threadId !== card._helper.agentId);
+  assert.deepStrictEqual(deep.map((d) => d.approvalDecision), ['decline'], 'the deeper helper was declined before rates asked');
+  assert.strictEqual(card._helper.agentType, 'rates', 'the one card is rates\'');
+  answer(convo, card, true);
+  await turnDone(convo, since);
+  assert.strictEqual(cards(convo, since).length, 1, 'one card in all');
+});
+
+test('after Deny, the helper\'s next request raises a new card', async () => {
+  const convo = open('cxretry');
+  const gate = hold('retry');
+  const { since, card } = await ratesAsks(convo, 'RETRY-ONE', {
+    lead: { awaitHelpers: false, untilFile: gate },
+    rates: { again: { approval: { command: 'rm -rf build/cache' } } },
+  });
+  answer(convo, card, false);
+  const { msg: second } = await client.waitFor((m) => m.type === 'control_request' && m._conversationId === convo && m.request_id !== card.request_id,
+    { since, timeout: 15000, label: 'a second card' });
+  assert.deepStrictEqual(second._helper, card._helper, 'the same helper asks again');
+  assert.strictEqual(second.request.input.command, 'rm -rf build/cache');
+  answer(convo, second, true);
+  assert.deepStrictEqual(await decidedOn(card._helper.agentId, 2), ['decline', 'accept']);
+  release(gate);
+  await turnDone(convo, since);
 });
 
 test('when the app-server goes, every running helper row fails and the count is zero', async () => {

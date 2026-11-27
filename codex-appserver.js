@@ -876,7 +876,9 @@ class CodexAppServer extends EventEmitter {
       this._writeLine({ jsonrpc: '2.0', id, error: { code: -32601, message: `unsupported server request: ${method}` } });
       return;
     }
-    const state = this._activeTurns.get(params.threadId);
+    // A recorded helper's request is held in its lead's running turn.
+    const helper = this._activeTurns.has(params.threadId) ? null : this._askingHelper(params.threadId);
+    const state = helper ? this._activeTurns.get(helper.leadThreadId) : this._activeTurns.get(params.threadId);
     let answered = false;
     const respond = (decision) => {
       if (!APPROVAL_DECISIONS.has(decision)) {
@@ -907,8 +909,10 @@ class CodexAppServer extends EventEmitter {
     state.approvals.set(id, { timer, respond });
     // steer() adds a line to this same turn after the decision, for the agent
     // to read before it carries on (see steerTurn).
-    const steer = (text) => this.steerTurn(state.threadId, text);
-    this._emitTurnEvent(state, { type: 'approval', kind, requestId: id, params, respond, steer });
+    // A helper's line goes on the helper's own turn.
+    const steer = helper ? (text) => this._steerHelper(helper, params.turnId, text) : (text) => this.steerTurn(state.threadId, text);
+    this._emitTurnEvent(state, { type: 'approval', kind, requestId: id, params, respond, steer,
+      ...(helper ? { helper: { threadId: helper.threadId, name: helper.name } } : {}) });
   }
 
   // ── Helper threads ───────────────────────────────────────────────────────
@@ -1025,6 +1029,26 @@ class CodexAppServer extends EventEmitter {
     }
     this._helperThreads.clear();
     this._threadInfo.clear();
+  }
+
+  // The helper an approval request came from, when it may ask: recorded,
+  // running, not stopped by the cap, and its lead's thread has a turn running
+  // that records helpers. Anything else is declined at once.
+  _askingHelper(threadId) {
+    const rec = this._helperThreads.get(threadId);
+    if (!rec || rec.state !== 'running' || rec.capped) return null;
+    const lead = this._activeTurns.get(rec.leadThreadId);
+    return lead && !lead.finished && lead.helpers ? rec : null;
+  }
+
+  // A line for a helper to read in the turn that asked, as steerTurn does for
+  // a lead. Once the helper has ended there is no turn to read it.
+  _steerHelper(rec, turnId, text) {
+    const expectedTurnId = turnId || rec.turnId;
+    if (rec.state !== 'running' || !expectedTurnId) {
+      return Promise.reject(new Error(`no helper turn to steer on thread ${rec.threadId}`));
+    }
+    return this.request('turn/steer', { threadId: rec.threadId, expectedTurnId, input: [{ type: 'text', text: String(text) }] });
   }
 }
 

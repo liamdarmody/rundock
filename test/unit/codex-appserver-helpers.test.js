@@ -297,3 +297,122 @@ describe('a lead turn without the helpers option', () => {
     assert.strictEqual(c.server._helperThreads ? c.server._helperThreads.size : 0, 0);
   });
 });
+
+describe("a helper's approval requests", () => {
+  // The lead's turn with one helper, rates, running its own turn.
+  async function withRates() {
+    const c = newClient();
+    const lead = await leadTurn(c);
+    feed(c.server, P.subAgentThreadStarted('h1', { nickname: 'rates' }), ...activity('h1'), P.turnStarted('h1', 'turn-h1'));
+    assert.deepStrictEqual(kinds(lead.told), ['start', 'turn'], 'the helper was recorded');
+    return { c, ...lead };
+  }
+  const ask = (id, threadId = 'h1', turnId = `turn-${threadId}`) => P.commandApprovalRequest(id, { threadId, turnId, itemId: `i${id}`, command: 'rm -rf build' });
+  const answers = (c) => c.written.filter((w) => w.result && 'decision' in w.result).map((w) => [w.id, w.result.decision]);
+  const approvalsOf = (events) => events.filter((e) => e.type === 'approval');
+
+  test("a recorded helper's command or file-change approval is held in the lead's turn and emitted there naming the helper, answered on the helper's request id", async () => {
+    const { c, events } = await withRates();
+    feed(c.server, ask(7), P.fileChangeApprovalRequest(8, { threadId: 'h1', turnId: 'turn-h1', itemId: 'i8', grantRoot: '/elsewhere' }));
+    const got = approvalsOf(events);
+    assert.deepStrictEqual(got.map((e) => [e.kind, e.requestId, e.helper]), [
+      ['command', 7, { threadId: 'h1', name: 'rates' }],
+      ['fileChange', 8, { threadId: 'h1', name: 'rates' }],
+    ]);
+    assert.deepStrictEqual([...c.server._activeTurns.get(LEAD).approvals.keys()], [7, 8], "held in the lead's approvals");
+    assert.deepStrictEqual(answers(c), [], 'nothing answered before the person does');
+    got[0].respond('accept');
+    got[1].respond('decline');
+    assert.deepStrictEqual(answers(c), [[7, 'accept'], [8, 'decline']]);
+    assert.strictEqual(c.server._activeTurns.get(LEAD).approvals.size, 0);
+  });
+
+  test("the lead's own approval carries no helper", async () => {
+    // By design this passes before helpers existed too. Its sibling, "a
+    // recorded helper's command or file-change approval is held in the lead's
+    // turn and emitted there naming the helper, answered on the helper's
+    // request id", fails without helpers.
+    const { c, events } = await withRates();
+    feed(c.server, ask(9, LEAD, LEAD_TURN));
+    const [e] = approvalsOf(events);
+    assert.strictEqual(e.requestId, 9);
+    assert.ok(!('helper' in e), 'no helper on the lead\'s own request');
+  });
+
+  test("a line after a helper's decision is steered onto the helper's own turn, never the lead's", async () => {
+    const { c, events } = await withRates();
+    feed(c.server, ask(7));
+    const [e] = approvalsOf(events);
+    e.respond('decline');
+    await e.steer('stop and ask');
+    const steers = c.requests.filter((r) => r.method === 'turn/steer');
+    assert.deepStrictEqual(steers.map((r) => r.params), [{ threadId: 'h1', expectedTurnId: 'turn-h1', input: [{ type: 'text', text: 'stop and ask' }] }]);
+  });
+
+  test('a line for a helper that has ended is refused and nothing is sent', async () => {
+    const { c, events } = await withRates();
+    feed(c.server, ask(7));
+    const [e] = approvalsOf(events);
+    e.respond('decline');
+    feed(c.server, P.turnCompleted('h1', 'turn-h1', 'completed'));
+    await assert.rejects(() => e.steer('too late'), /no helper turn/);
+    assert.deepStrictEqual(c.requests.filter((r) => r.method === 'turn/steer'), []);
+  });
+
+  test("a helper's approval still held when the lead's turn ends is declined", async () => {
+    const { c, events } = await withRates();
+    feed(c.server, ask(7));
+    assert.strictEqual(approvalsOf(events).length, 1, 'held on the lead');
+    feed(c.server, P.turnCompleted(LEAD, LEAD_TURN, 'completed'));
+    assert.deepStrictEqual(answers(c), [[7, 'decline']]);
+  });
+
+  test("a helper's approval with no lead turn running is declined at once and raised nowhere", async () => {
+    const { c, events } = await withRates();
+    feed(c.server, P.turnCompleted(LEAD, LEAD_TURN, 'completed'));
+    const before = events.length;
+    feed(c.server, ask(7));
+    assert.deepStrictEqual(answers(c), [[7, 'decline']]);
+    assert.strictEqual(events.length, before, 'no event');
+  });
+
+  test("a helper's approval after the helper ended is declined at once", async () => {
+    const { c, events } = await withRates();
+    feed(c.server, P.turnCompleted('h1', 'turn-h1', 'completed'), ask(7));
+    assert.deepStrictEqual(answers(c), [[7, 'decline']]);
+    assert.deepStrictEqual(approvalsOf(events), []);
+  });
+
+  test("a helper's own helper's approval is declined at once, beside the helper's that is raised", async () => {
+    const { c, events } = await withRates();
+    feed(c.server, P.subAgentActivityItem('h1', 'turn-h1', { id: 'act-d2', agentPath: 'root/rates/deeper', agentThreadId: 'd2', kind: 'started' }));
+    feed(c.server, P.subAgentThreadStarted('d2', { nickname: 'deeper', parentThreadId: 'h1', depth: 2 }), P.turnStarted('d2', 'turn-d2'));
+    feed(c.server, ask(7, 'd2'), ask(8));
+    assert.deepStrictEqual(answers(c), [[7, 'decline']]);
+    assert.deepStrictEqual(approvalsOf(events).map((e) => e.requestId), [8], "only rates' request is raised");
+  });
+
+  test("a helper's permissions request gets the empty grant at once and nothing reaches the lead's turn", async () => {
+    // By design this passes before helpers existed too. Its sibling, "a
+    // recorded helper's command or file-change approval is held in the lead's
+    // turn and emitted there naming the helper, answered on the helper's
+    // request id", fails without helpers.
+    const { c, events } = await withRates();
+    const before = events.length;
+    feed(c.server, { id: 9, method: 'item/permissions/requestApproval', params: { threadId: 'h1', turnId: 'turn-h1', itemId: 'p9', permissions: { network: { enabled: true } } } });
+    assert.deepStrictEqual(c.written.filter((w) => w.id === 9).map((w) => w.result), [appserver.permissionsRefusal()]);
+    assert.strictEqual(events.length, before);
+  });
+
+  test("on a lead turn without the helpers option, a helper's approval is declined at once", async () => {
+    // By design this passes before helpers existed too. Its sibling, "a
+    // recorded helper's command or file-change approval is held in the lead's
+    // turn and emitted there naming the helper, answered on the helper's
+    // request id", fails without helpers.
+    const c = newClient();
+    const { events } = await leadTurn(c, { helpers: false });
+    feed(c.server, P.subAgentThreadStarted('h1', { nickname: 'rates' }), ...activity('h1'), P.turnStarted('h1', 'turn-h1'), ask(7));
+    assert.deepStrictEqual(answers(c), [[7, 'decline']]);
+    assert.deepStrictEqual(approvalsOf(events), []);
+  });
+});

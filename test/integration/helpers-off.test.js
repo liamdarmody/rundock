@@ -425,3 +425,26 @@ test('with helpers off, no feature flag or agent setting reaches the app-server'
   assert.ok(starts.length >= 1);
   for (const s of starts) assert.doesNotMatch(JSON.stringify(s.params), /features|multi_agent|"agents"/, 'nothing in the thread params');
 });
+
+// By design this passes before helpers existed too. Its sibling in
+// codex-helpers.test.js, "a helper's approval raises a card on Fern's turn
+// naming the helper, and Allow answers accept on the helper's request",
+// fails without helpers.
+test('with helpers off, a helper\'s command approval is declined at once with no card, and Fern\'s turn carries on', async () => {
+  const convo = open('off-approval');
+  h.clearInvocations();
+  h.writeCodexScenario([{
+    match: { promptIncludes: 'off approval' }, text: 'FERN-AFTER', awaitHelpers: true,
+    helpers: [{ nickname: 'rates', approval: { command: 'rm -rf build' } }],
+  }]);
+  const since = sayFern(convo, 'off approval');
+  const { msg: result } = await fernResult(convo, since);
+  await turnDone(convo, since);
+  const decided = h.readInvocations().filter((i) => i.approvalDecision != null);
+  assert.deepStrictEqual(decided.map((d) => d.approvalDecision), ['decline'], 'the helper\'s request was declined');
+  assert.notStrictEqual(decided[0].threadId, appServerCalls('turn/start')[0].params.threadId, 'on the helper\'s thread, not Fern\'s');
+  assert.deepStrictEqual(client.messages.slice(since).filter((m) => m.type === 'control_request' && m._conversationId === convo), [], 'no card');
+  assert.strictEqual(result.result, 'FERN-AFTER', 'Fern\'s turn carried on to her reply');
+  assert.deepStrictEqual(appServerCalls('turn/steer'), [], 'no line was steered');
+  assert.deepStrictEqual(helpersChanged(convo), [], 'no helpers_changed was sent');
+});
