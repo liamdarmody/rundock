@@ -13,7 +13,7 @@
 // each server line fed in as the process would deliver it, the requests it
 // sends and the answers it writes captured. Wire shapes come from
 // test/fixtures/codex-appserver-protocol.js, the same builders the stub uses.
-const { test, describe } = require('node:test');
+const { test, describe, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
 
 const appserver = require('../../codex-appserver.js');
@@ -404,6 +404,17 @@ describe("a helper's approval requests", () => {
     assert.strictEqual(events.length, before);
   });
 
+  test("a helper stopped by the cap has its approval declined at once and raised nowhere", async () => {
+    const c = newClient();
+    const sub = c.server.startTurn(LEAD, 'start some helpers', { helpers: (kind, rec) => { if (kind === 'start') rec.capped = true; } });
+    const events = [];
+    sub.on('event', (e) => events.push(e));
+    await sub.started;
+    feed(c.server, P.subAgentThreadStarted('h6', { nickname: 'inbox' }), ...activity('h6'), P.turnStarted('h6', 'turn-h6'), ask(7, 'h6'));
+    assert.deepStrictEqual(answers(c), [[7, 'decline']]);
+    assert.deepStrictEqual(approvalsOf(events), []);
+  });
+
   test("on a lead turn without the helpers option, a helper's approval is declined at once", async () => {
     // By design this passes before helpers existed too. Its sibling, "a
     // recorded helper's command or file-change approval is held in the lead's
@@ -414,5 +425,159 @@ describe("a helper's approval requests", () => {
     feed(c.server, P.subAgentThreadStarted('h1', { nickname: 'rates' }), ...activity('h1'), P.turnStarted('h1', 'turn-h1'), ask(7));
     assert.deepStrictEqual(answers(c), [[7, 'decline']]);
     assert.deepStrictEqual(approvalsOf(events), []);
+  });
+});
+
+// THE CAP, AS A CONVERSATION'S ROWS HEAR IT. The client tells
+// lib/delegation/helpers.js of each helper with the ways to stop it and to
+// tell its lead (`ctl`); here those are recorded in one list, beside each
+// helpers_changed and each recorded event, so their order can be read.
+describe("the cap on a lead's Codex helpers", () => {
+  const helpers = require('../../lib/delegation/helpers.js');
+  const signals = require('../../lib/signals.js');
+  const LINE = (name) => `Rundock stopped the helper ${name}: at most five helpers run at once. Wait for these to report back, then start the rest.`;
+  const FIVE = ['rates', 'pipeline', 'deck', 'hooks', 'calendar'];
+  let log = [];
+  let prevDeps;
+  let prevRecord;
+  let prevEnabled;
+  before(() => {
+    prevEnabled = helpers.HELPERS_ENABLED;
+    helpers.HELPERS_ENABLED = true;
+    prevDeps = helpers.wireHelpersDeps({ safeSend: (s) => log.push(['rows', JSON.parse(s).helpers]) });
+    prevRecord = signals.recordEvent;
+    signals.recordEvent = (name, fields) => log.push(['event', name, fields]);
+  });
+  after(() => {
+    helpers.HELPERS_ENABLED = prevEnabled;
+    helpers.wireHelpersDeps(prevDeps);
+    signals.recordEvent = prevRecord;
+  });
+  beforeEach(() => { log = []; });
+
+  let n = 0;
+  const convo = () => `cap-unit-${++n}`;
+  const rec = (name) => ({ threadId: `t-${name}`, name, role: null, state: 'running', turnId: null, step: null, file: null, capped: false });
+  function ctl({ interrupt = () => Promise.resolve({}), steer = () => Promise.resolve({}) } = {}) {
+    return {
+      interrupt: () => { log.push(['interrupt']); return interrupt(); },
+      steer: (text) => { log.push(['steer', text]); return steer(text); },
+      queue: (text) => log.push(['queue', text]),
+    };
+  }
+  const tell = (c, r, kind, k = ctl()) => helpers.codexHelper(c, 'fern', r, kind, k);
+  function begin(c, r, k) {
+    tell(c, r, 'start', k);
+    r.turnId = `turn-${r.name}`;
+    tell(c, r, 'turn', k);
+  }
+  function five(c) {
+    const recs = FIVE.map(rec);
+    for (const r of recs) begin(c, r);
+    log = [];
+    return recs;
+  }
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const steps = () => log.map((l) => l[0]);
+  const rowOf = (rows, name) => rows.find((r) => r.agent === name);
+
+  test('a sixth gets no row and no count; once its turn is known it is interrupted, its row shown stopped, Fern steered with one line and the refusal recorded, in that order', async () => {
+    const c = convo();
+    five(c);
+    const inbox = rec('inbox');
+    tell(c, inbox, 'start');
+    assert.strictEqual(inbox.capped, true);
+    assert.deepStrictEqual(log, [], 'no row, no interrupt before its turn is known');
+    assert.strictEqual(helpers.runningCount(c), 5);
+    inbox.turnId = 'turn-inbox';
+    tell(c, inbox, 'turn');
+    await settle();
+    assert.deepStrictEqual(steps(), ['interrupt', 'rows', 'steer', 'event']);
+    const shown = rowOf(log[1][1], 'inbox');
+    assert.deepStrictEqual([shown.toolUseId, shown.state, shown.capped], ['t-inbox', 'killed', true]);
+    assert.ok(log[1][1].filter((r) => r.agent !== 'inbox').every((r) => r.state === 'running' && r.capped === false), 'the five run on');
+    assert.deepStrictEqual(log[2], ['steer', LINE('inbox')]);
+    assert.deepStrictEqual(log[3], ['event', 'helper_cap', { conv: c, agent: 'fern', d: { outcome: 'refused' } }]);
+    assert.strictEqual(helpers.runningCount(c), 5, 'never counted');
+  });
+
+  test('a stopped helper is interrupted once, and its end leaves its row as shown', async () => {
+    const c = convo();
+    five(c);
+    const inbox = rec('inbox');
+    begin(c, inbox);
+    await settle();
+    log = [];
+    tell(c, inbox, 'turn');
+    inbox.state = 'killed';
+    tell(c, inbox, 'end');
+    await settle();
+    assert.deepStrictEqual(log, [], 'no second interrupt and no change');
+    assert.strictEqual(rowOf(helpers.helperRows(c), 'inbox').capped, true);
+  });
+
+  test('when the steer fails, the line is queued for Fern\'s next turn', async () => {
+    const c = convo();
+    five(c);
+    begin(c, rec('inbox'), ctl({ steer: () => Promise.reject(new Error('no active turn to steer')) }));
+    await settle();
+    assert.deepStrictEqual(steps(), ['interrupt', 'rows', 'steer', 'event', 'queue']);
+    assert.deepStrictEqual(log[4], ['queue', LINE('inbox')]);
+  });
+
+  test('when the interrupt fails, the helper runs and is counted, with no steer and no event', async () => {
+    const c = convo();
+    five(c);
+    const inbox = rec('inbox');
+    begin(c, inbox, ctl({ interrupt: () => Promise.reject(new Error('turn cannot be interrupted')) }));
+    await settle();
+    assert.deepStrictEqual(steps(), ['interrupt', 'rows']);
+    const shown = rowOf(log[1][1], 'inbox');
+    assert.deepStrictEqual([shown.state, shown.capped], ['running', false]);
+    assert.strictEqual(inbox.capped, false, 'its requests may ask again');
+    assert.strictEqual(helpers.runningCount(c), 6);
+  });
+
+  test('while five run, a helper given more work is stopped the same way, its row shown stopped', async () => {
+    const c = convo();
+    const rates = rec('rates');
+    begin(c, rates);
+    rates.state = 'completed';
+    tell(c, rates, 'end');
+    for (const r of FIVE.slice(1).concat('inbox').map(rec)) begin(c, r);
+    assert.strictEqual(helpers.runningCount(c), 5);
+    log = [];
+    rates.state = 'running';
+    tell(c, rates, 'start');
+    rates.turnId = 'turn-rates-2';
+    tell(c, rates, 'turn');
+    await settle();
+    assert.deepStrictEqual(steps(), ['interrupt', 'rows', 'steer', 'event']);
+    assert.deepStrictEqual([rowOf(log[1][1], 'rates').state, rowOf(log[1][1], 'rates').capped], ['killed', true]);
+    assert.deepStrictEqual(log[2], ['steer', LINE('rates')]);
+  });
+
+  test('once one of five ends, the next starts and runs', async () => {
+    const c = convo();
+    const recs = five(c);
+    recs[0].state = 'completed';
+    tell(c, recs[0], 'end');
+    log = [];
+    const inbox = rec('inbox');
+    begin(c, inbox);
+    await settle();
+    assert.deepStrictEqual(steps(), ['rows']);
+    assert.strictEqual(rowOf(log[0][1], 'inbox').state, 'running');
+    assert.strictEqual(helpers.runningCount(c), 5);
+  });
+
+  test('two conversations each run five', async () => {
+    const a = convo();
+    const b = convo();
+    for (const c of [a, b]) for (const r of FIVE.map(rec)) begin(c, r);
+    await settle();
+    assert.strictEqual(steps().filter((s) => s === 'rows').length, 10, 'ten rows shown');
+    assert.ok(!steps().includes('interrupt'), 'none stopped');
+    assert.deepStrictEqual([helpers.runningCount(a), helpers.runningCount(b)], [5, 5]);
   });
 });

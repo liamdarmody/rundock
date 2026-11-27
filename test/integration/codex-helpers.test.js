@@ -488,6 +488,234 @@ test('after Deny, the helper\'s next request raises a new card', async () => {
   await turnDone(convo, since);
 });
 
+// THE CAP. At most five helpers run at once in a conversation. A Codex helper
+// is running before Rundock hears of it, so a sixth is stopped: it gets no
+// row or count, its turn is interrupted, its row is shown stopped, Fern reads
+// why and the refusal is recorded.
+const CAP_LINE = (name) => `Rundock stopped the helper ${name}: at most five helpers run at once. Wait for these to report back, then start the rest.`;
+const FIVE = ['rates', 'pipeline', 'deck', 'hooks', 'calendar'];
+const fiveOn = (gate) => FIVE.map((nickname) => ({ nickname, untilFile: gate }));
+const running = (rows) => rows.filter((r) => r.state === 'running').length;
+const maxRunning = (convo, since) => Math.max(0, ...changes(convo, since).map((m) => running(m.helpers || [])));
+const stopped = (name) => (rows) => rows.some((r) => r.agent === name && r.capped);
+function capEvents(convo) {
+  const dir = path.join(h.workspaceDir, '.rundock', 'state');
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => /^events-\d{4}-\d{2}\.jsonl$/.test(f)); } catch (e) { return []; }
+  const out = [];
+  for (const f of files) {
+    for (const l of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) if (l.trim()) out.push(JSON.parse(l));
+  }
+  return out.filter((e) => e.e === 'helper_cap' && e.conv === convo);
+}
+// The app-server's own request time limit, shortened for `fn`.
+async function withRequestLimit(ms, fn) {
+  const server = await glue().getCodexAppServer();
+  const prev = server._requestTimeoutMs;
+  server._requestTimeoutMs = ms;
+  try { return await fn(); } finally { server._requestTimeoutMs = prev; }
+}
+
+test('a sixth helper is stopped: no row or count, then interrupted, its row shown stopped, Fern steered with one line and the refusal recorded, and nothing more reaches the person', async () => {
+  const convo = open('cxcap');
+  const gate = hold('cap');
+  h.clearInvocations();
+  h.writeCodexScenario([
+    { match: { promptIncludes: 'CAP-ONE' }, text: 'Fern waits.', awaitHelpers: true, helpers: [...fiveOn(gate), { nickname: 'inbox', holdForInterrupt: true }] },
+    { match: { promptIncludes: 'CAP-NEXT' }, text: 'Fern again.' },
+  ]);
+  const since = say(convo, 'CAP-ONE please');
+  const { msg } = await rowsWhere(convo, since, stopped('inbox'), 'the inbox row, stopped');
+  const inbox = rowNamed(msg, 'inbox');
+  assert.deepStrictEqual([inbox.state, inbox.capped], ['killed', true]);
+  assert.strictEqual(running(msg.helpers), 5, 'the five run on');
+  assert.ok(!changes(convo, since).some((m) => stateOf(m.helpers || [], 'inbox') === 'running'), 'the inbox never ran on the list');
+  assert.strictEqual(maxRunning(convo, since), 5, 'never more than five counted');
+  assert.ok(await h.waitUntil(() => appServer('turn/steer').length === 1), 'Fern was steered');
+  const calls = h.readInvocations().filter((i) => i.mode === 'app-server' && ['turn/interrupt', 'turn/steer'].includes(i.method));
+  assert.deepStrictEqual(calls.map((i) => i.method), ['turn/interrupt', 'turn/steer'], 'interrupted, then steered');
+  assert.strictEqual(calls[0].params.threadId, inbox.toolUseId, 'the inbox\'s own turn was interrupted');
+  assert.ok(calls[0].params.turnId, 'by its turn id');
+  assert.deepStrictEqual([calls[1].params.threadId, calls[1].params.input], [fernThread(), [{ type: 'text', text: CAP_LINE('inbox') }]]);
+  assert.ok(await h.waitUntil(() => capEvents(convo).length === 1), 'the refusal was recorded');
+  assert.deepStrictEqual(capEvents(convo).map((e) => [e.agent, e.d]), [['fern', { outcome: 'refused' }]]);
+  release(gate);
+  await turnDone(convo, since);
+  const page = client.messages.slice(since).filter((m) => m._conversationId === convo);
+  assert.ok(!page.some((m) => m.type === 'control_request' || m.type === 'error'), 'no card and no error');
+  assert.ok(!JSON.stringify(page).includes('Rundock stopped the helper'), 'the line reached Fern alone');
+  const next = say(convo, 'CAP-NEXT please');
+  await turnDone(convo, next);
+  assert.ok(!h.codexTurnPrompts()[1].includes(CAP_LINE('inbox')), 'said once: not again in Fern\'s next turn');
+  assert.strictEqual(capEvents(convo).length, 1);
+});
+
+test('when a sixth helper\'s interrupt is refused, it runs and is counted, with no line and no event', async () => {
+  const convo = open('cxcapfail');
+  const gate = hold('capfail');
+  h.clearInvocations();
+  h.writeCodexScenario([{ match: { promptIncludes: 'CAPFAIL-ONE' }, text: 'Fern waits.', awaitHelpers: true,
+    helpers: [...fiveOn(gate), { nickname: 'inbox', untilFile: gate, interruptFails: true }] }]);
+  const since = say(convo, 'CAPFAIL-ONE please');
+  const { msg } = await rowsWhere(convo, since, (rows) => stateOf(rows, 'inbox') === 'running', 'the inbox row, running');
+  assert.strictEqual(rowNamed(msg, 'inbox').capped, false);
+  assert.strictEqual(running(msg.helpers), 6, 'six counted');
+  assert.strictEqual(appServer('turn/interrupt').length, 1, 'the interrupt was tried');
+  release(gate);
+  await turnDone(convo, since);
+  await h.delay(200);
+  assert.deepStrictEqual(appServer('turn/steer'), [], 'no line');
+  assert.deepStrictEqual(capEvents(convo), [], 'no event');
+  assert.strictEqual(stateOf(changes(convo, since).pop().helpers, 'inbox'), 'completed');
+});
+
+test('when a sixth helper\'s interrupt is never answered, it runs and is counted once the request times out, with no line and no event', async () => {
+  const convo = open('cxcapdrop');
+  const gate = hold('capdrop');
+  await withRequestLimit(1000, async () => {
+    h.clearInvocations();
+    h.writeCodexScenario([{ match: { promptIncludes: 'CAPDROP-ONE' }, text: 'Fern waits.', awaitHelpers: true,
+      helpers: [...fiveOn(gate), { nickname: 'inbox', untilFile: gate, dropInterrupt: true }] }]);
+    const since = say(convo, 'CAPDROP-ONE please');
+    assert.ok(await h.waitUntil(() => appServer('turn/interrupt').length === 1), 'the interrupt was sent');
+    const sent = Date.now();
+    const { msg } = await rowsWhere(convo, since, (rows) => stateOf(rows, 'inbox') === 'running', 'the inbox row, running');
+    assert.ok(Date.now() - sent >= 500, 'not before the request timed out');
+    assert.strictEqual(running(msg.helpers), 6, 'six counted');
+    release(gate);
+    await turnDone(convo, since);
+    await h.delay(200);
+    assert.deepStrictEqual(appServer('turn/steer'), [], 'no line');
+    assert.deepStrictEqual(capEvents(convo), [], 'no event');
+  });
+});
+
+test('when Fern cannot be steered, the line about a stopped helper is put in her next turn', async () => {
+  const convo = open('cxcapq');
+  const gate = hold('capq');
+  h.clearInvocations();
+  h.writeCodexScenario([
+    { match: { promptIncludes: 'CAPQ-ONE' }, text: 'Fern waits.', awaitHelpers: true, helpers: [...fiveOn(gate), { nickname: 'inbox', holdForInterrupt: true }] },
+    { match: { promptIncludes: 'CAPQ-NEXT' }, text: 'Fern again.' },
+  ], { noSteer: true });
+  const since = say(convo, 'CAPQ-ONE please');
+  await rowsWhere(convo, since, stopped('inbox'), 'the inbox row, stopped');
+  assert.ok(await h.waitUntil(() => appServer('turn/steer').length === 1), 'a steer was tried');
+  release(gate);
+  await turnDone(convo, since);
+  const next = say(convo, 'CAPQ-NEXT please');
+  await turnDone(convo, next);
+  const prompts = h.codexTurnPrompts();
+  assert.ok(!prompts[0].includes(CAP_LINE('inbox')));
+  assert.ok(prompts[1].includes(CAP_LINE('inbox')), 'the line is in Fern\'s next turn');
+});
+
+test('while five run from an earlier turn, a helper Fern starts in a later turn is stopped and she reads why in that turn', async () => {
+  const convo = open('cxcaplater');
+  const gate = hold('caplater');
+  h.clearInvocations();
+  h.writeCodexScenario([
+    { match: { promptIncludes: 'LATER-ONE' }, text: 'Five started.', helpers: fiveOn(gate) },
+    { match: { promptIncludes: 'LATER-TWO' }, text: 'Fern waits.', awaitHelpers: true, helpers: [{ nickname: 'inbox', holdForInterrupt: true }] },
+  ]);
+  const first = say(convo, 'LATER-ONE please');
+  await turnDone(convo, first);
+  assert.strictEqual(helpers().runningCount(convo), 5, 'five still run');
+  const since = say(convo, 'LATER-TWO please');
+  await rowsWhere(convo, since, stopped('inbox'), 'the inbox row, stopped');
+  assert.ok(await h.waitUntil(() => appServer('turn/steer').length === 1), 'Fern was steered');
+  const laterTurn = appServer('turn/start').at(-1).params.threadId;
+  assert.deepStrictEqual(appServer('turn/steer').map((s) => [s.params.threadId, s.params.input[0].text]), [[laterTurn, CAP_LINE('inbox')]], 'onto the turn that started it');
+  assert.strictEqual(maxRunning(convo, first), 5);
+  release(gate);
+  await turnDone(convo, since);
+});
+
+test('after a helper is stopped and one of the five ends, Fern can start it again and it runs', async () => {
+  const convo = open('cxcapretry');
+  const gate = hold('capretry');
+  const ratesGate = hold('capretry-rates');
+  const leadGate = hold('capretry-lead');
+  h.clearInvocations();
+  h.writeCodexScenario([
+    { match: { promptIncludes: 'RETRYCAP-ONE' }, text: 'Fern waits.', untilFile: leadGate,
+      helpers: [{ nickname: 'rates', untilFile: ratesGate }, ...fiveOn(gate).slice(1), { nickname: 'inbox', holdForInterrupt: true }] },
+    { match: { promptIncludes: 'RETRYCAP-TWO' }, text: 'Fern again.', awaitHelpers: true, helpers: [{ nickname: 'inbox' }] },
+  ]);
+  const first = say(convo, 'RETRYCAP-ONE please');
+  await rowsWhere(convo, first, stopped('inbox'), 'the inbox row, stopped');
+  release(leadGate);
+  await turnDone(convo, first);
+  release(ratesGate);
+  await rowsWhere(convo, first, (rows) => stateOf(rows, 'rates') === 'completed', 'rates done');
+  const since = say(convo, 'RETRYCAP-TWO please');
+  const { msg } = await rowsWhere(convo, since, (rows) => rows.some((r) => r.agent === 'inbox' && r.state === 'running'), 'the new inbox row, running');
+  assert.strictEqual(running(msg.helpers), 5, 'five again');
+  await turnDone(convo, since);
+  assert.strictEqual(appServer('turn/interrupt').length, 1, 'only the first was stopped');
+  assert.strictEqual(capEvents(convo).length, 1);
+  release(gate);
+});
+
+test('two conversations each run five helpers at once', async () => {
+  const a = open('cxcapa');
+  const b = open('cxcapb');
+  const gate = hold('captwo');
+  h.clearInvocations();
+  h.writeCodexScenario([
+    { match: { promptIncludes: 'TWO-A' }, text: 'A waits.', awaitHelpers: true, helpers: fiveOn(gate) },
+    { match: { promptIncludes: 'TWO-B' }, text: 'B waits.', awaitHelpers: true, helpers: fiveOn(gate) },
+  ]);
+  const sa = say(a, 'TWO-A please');
+  const sb = say(b, 'TWO-B please');
+  await rowsWhere(a, sa, (rows) => running(rows) === 5, 'five in the first');
+  await rowsWhere(b, sb, (rows) => running(rows) === 5, 'five in the second');
+  assert.deepStrictEqual([helpers().runningCount(a), helpers().runningCount(b)], [5, 5]);
+  assert.deepStrictEqual(appServer('turn/interrupt'), [], 'none stopped');
+  release(gate);
+  await turnDone(a, sa);
+  await turnDone(b, sb);
+});
+
+test('while five run, a helper given more work is stopped the same way, its row shown stopped', async () => {
+  const convo = open('cxcapagain');
+  const gate = hold('capagain');
+  const againGate = hold('capagain-more');
+  const leadGate = hold('capagain-lead');
+  h.clearInvocations();
+  h.writeCodexScenario([{ match: { promptIncludes: 'AGAIN-ONE' }, text: 'Fern waits.', untilFile: leadGate,
+    helpers: [{ nickname: 'rates', again: { untilFile: againGate, holdForInterrupt: true } }, ...fiveOn(gate).slice(1), { nickname: 'inbox', untilFile: gate }] }]);
+  const since = say(convo, 'AGAIN-ONE please');
+  await rowsWhere(convo, since, (rows) => stateOf(rows, 'rates') === 'completed' && running(rows) === 5, 'rates done, five running');
+  release(againGate);
+  const { msg } = await rowsWhere(convo, since, stopped('rates'), 'the rates row, stopped');
+  assert.strictEqual(stateOf(msg.helpers, 'rates'), 'killed');
+  assert.strictEqual(maxRunning(convo, since), 5);
+  assert.ok(await h.waitUntil(() => appServer('turn/steer').length === 1), 'Fern was steered');
+  assert.strictEqual(appServer('turn/steer')[0].params.input[0].text, CAP_LINE('rates'));
+  release(gate);
+  release(leadGate);
+  await turnDone(convo, since);
+});
+
+test('a stopped helper\'s approval is declined at once and raises no card', async () => {
+  const convo = open('cxcapask');
+  const gate = hold('capask');
+  await withRequestLimit(1500, async () => {
+    h.clearInvocations();
+    h.writeCodexScenario([{ match: { promptIncludes: 'CAPASK-ONE' }, text: 'Fern waits.', untilFile: gate,
+      helpers: [...fiveOn(gate), { nickname: 'inbox', dropInterrupt: true, delayMs: 200, approval: { command: 'rm -rf inbox' } }] }]);
+    const since = say(convo, 'CAPASK-ONE please');
+    assert.ok(await h.waitUntil(() => decisions().length === 1), 'the inbox asked');
+    assert.deepStrictEqual(decisions().map((d) => d.approvalDecision), ['decline']);
+    assert.strictEqual(decisions()[0].threadId, appServer('turn/interrupt')[0].params.threadId, 'the stopped helper');
+    assert.deepStrictEqual(cards(convo, since), [], 'no card');
+    await rowsWhere(convo, since, (rows) => !!rowNamed({ helpers: rows }, 'inbox'), 'the inbox row once the request times out');
+    release(gate);
+    await turnDone(convo, since);
+  });
+});
+
 test('when the app-server goes, every running helper row fails and the count is zero', async () => {
   const convo = open('cxcrash');
   const gate = hold('crash');
