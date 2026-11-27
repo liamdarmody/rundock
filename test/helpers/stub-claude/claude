@@ -60,6 +60,8 @@
 // run keeps it, under the session id the run reports, with its lines stamped
 // at the time they are written.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
+// Any rule may give "resultExtra": {...} to add fields to its turn's result,
+// as Claude Code adds duration_ms and usage.
 // Any rule may give "untilFile": "<path>" to hold its turn until that file
 // exists, so a test decides the moment a run ends rather than racing a delay.
 // Any rule may give "holdAfterText": "<path>" to stream its turn's text and
@@ -79,7 +81,11 @@
 // text the write carries.
 // Any rule may give "hooks": [{ "event", "tool", "input", "error", "extra",
 // "untilFile" }] to run Rundock's real permission hook for each call, in
-// order, before its turn: see runHookCalls below.
+// order, before its turn (or the one hook the --settings file names for it,
+// when that is not Rundock's): see runHookCalls below. A Bash or PowerShell
+// call outside the sandbox that the hook allows is then put to the
+// PermissionRequest hooks the --settings file names, as Claude Code does: see
+// askPermissionRequest.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -295,7 +301,10 @@ const SETTINGS = (() => {
   try { return JSON.parse(value.trim().startsWith('{') ? value : fs.readFileSync(value, 'utf8')); } catch (e) { return {}; }
 })();
 function preToolUseHooks(tool) {
-  const entries = (SETTINGS.hooks && Array.isArray(SETTINGS.hooks.PreToolUse)) ? SETTINGS.hooks.PreToolUse : [];
+  return hooksFor('PreToolUse', tool);
+}
+function hooksFor(event, tool) {
+  const entries = (SETTINGS.hooks && Array.isArray(SETTINGS.hooks[event])) ? SETTINGS.hooks[event] : [];
   return entries.filter((e) => {
     const m = e && typeof e.matcher === 'string' ? e.matcher : '';
     if (!m || m === '*') return true;
@@ -531,6 +540,15 @@ function writeEvents(events, then) {
 function buildEnvelopes(rule) {
   const events = [];
   if (!initSent) { events.push(fx.init(SESSION_ID)); initSent = true; }
+  // Each command outside the sandbox the check above was asked about, with
+  // its outcome: the call, then its result or Claude Code's refusal. Its ids
+  // start at 1000, so they never meet a turn's own tool ids.
+  for (const call of SANDBOX_CALLS.splice(0)) {
+    const index = 1000 + (++sandboxCallSeq);
+    events.push(...fx.toolUseFlow(call.tool, call.input, index));
+    if (call.ran) events.push(fx.toolResult(index, call.output, call.failed));
+    else events.push(fx.sandboxOverrideDenied(call.tool, index, SESSION_ID), fx.toolResult(index, 'Run outside of the sandbox', true));
+  }
   let fullText = '';
   let toolIndex = 1;
   let hadTool = false;
@@ -565,7 +583,7 @@ function buildEnvelopes(rule) {
   events.push(fx.messageDelta(hadTool ? 'tool_use' : 'end_turn'));
   events.push(fx.messageStop());
   if (!rule.realStream) events.push(fx.assistantMessage(fullText));
-  events.push(fx.result({ text: fullText, isError: !!rule.isError, sessionId: SESSION_ID }));
+  events.push(fx.result({ text: fullText, isError: !!rule.isError, sessionId: SESSION_ID, extra: rule.resultExtra || {} }));
   return events;
 }
 
@@ -830,6 +848,19 @@ function handleUserMessage(content) {
 // a nested `claude` sends a session of its own, and a field set to null is
 // left out, as a call that names no session would. `untilFile` holds the call
 // until that file exists, so a test decides what happens between two calls.
+// `noCard` puts the call straight to Claude Code's own check below, with no
+// PreToolUse step and so no card of its own: a call that reached the check
+// because something other than its own card allowed it. Claude Code never puts
+// a call without the flag to that check
+// (test/fixtures/claude-cli-sandbox-override.json), so a `noCard` call without
+// it is not modelled, unless it also sets `beyondClaudeCode: true`. That
+// test-only field puts to the check a call Claude Code never puts to it, so a
+// test can hold the hook's answer to one end to end, as defence.
+// When the --settings file names a hook for the call's event and tool and none
+// of them is Rundock's, that one hook is run instead, as runNamedHook runs it,
+// so a recording hook sees what Claude Code would give it; more than one is
+// not modelled. Its answer is logged in the same line.
+// Either hook is given the call's input as Claude Code gives it: see hookView.
 const HOOK_LOG = path.join(process.cwd(), 'stub-hook-answers.jsonl');
 const PERMISSION_HOOK = path.join(__dirname, '..', '..', '..', 'scripts', 'permission-hook.js');
 function runHookCalls(calls, then) {
@@ -838,9 +869,14 @@ function runHookCalls(calls, then) {
     if (at >= calls.length) { then(); return; }
     const call = calls[at++] || {};
     if (call.untilFile && !fs.existsSync(call.untilFile)) { at--; setTimeout(next, 20); return; }
+    if (call.noCard) {
+      if (hookView(call.input || {}).dangerouslyDisableSandbox !== true && call.beyondClaudeCode !== true) notModelled('a call without dangerouslyDisableSandbox put to the PermissionRequest check, which Claude Code never asks about');
+      askPermissionRequest(call.tool || 'Bash', call.input || {}, next);
+      return;
+    }
     const event = call.event || 'PreToolUse';
     const input = {
-      session_id: SESSION_ID, hook_event_name: event, tool_name: call.tool || 'Bash', tool_input: call.input || {}, cwd: process.cwd(),
+      session_id: SESSION_ID, hook_event_name: event, tool_name: call.tool || 'Bash', tool_input: hookView(call.input || {}), cwd: process.cwd(),
       ...(call.error != null ? { error: String(call.error) } : {}),
       ...(call.extra && typeof call.extra === 'object' ? call.extra : {}),
     };
@@ -852,8 +888,15 @@ function runHookCalls(calls, then) {
           pid: process.pid, agent: AGENT, sessionId: SESSION_ID, sentSession: input.session_id || null, subagent: input.agent_id || null, convo: process.env.RUNDOCK_CONVO_ID || null, event, tool: input.tool_name, answer, raw: answer ? undefined : out, ts: Date.now(),
         }) + '\n');
       } catch (e) { /* logging is best-effort */ }
-      next();
+      if (sandboxOffAllowed(event, input, answer)) askPermissionRequest(input.tool_name, call.input || {}, next);
+      else next();
     };
+    const named = hooksFor(event, input.tool_name);
+    if (named.length > 0 && !named.some(isRundockHook)) {
+      if (named.length > 1) notModelled('more than one hook named for one call');
+      runNamedHook(named[0], input, (answer, raw) => { out = raw; log(answer); });
+      return;
+    }
     let child;
     try {
       child = require('child_process').spawn(process.execPath, [PERMISSION_HOOK], { env: process.env, stdio: ['pipe', 'pipe', 'ignore'] });
@@ -862,6 +905,135 @@ function runHookCalls(calls, then) {
     child.on('error', () => {});
     child.on('close', () => { let answer = null; try { answer = JSON.parse(out); } catch (e) { /* raw kept */ } log(answer); });
     child.stdin.end(JSON.stringify(input));
+  };
+  next();
+}
+
+// CLAUDE CODE'S OWN CHECK FOR A COMMAND OUTSIDE THE SANDBOX. A Bash or
+// PowerShell call with `dangerouslyDisableSandbox: true` that a PreToolUse
+// hook allowed is put to the PermissionRequest hooks the --settings file
+// names, in order, each with the payload below on stdin. An answer of exactly
+// allow runs it; no decision, or no entry at all, refuses it, and the next turn
+// opens with the call, the `permission_denied` line and the error result the
+// CLI gives in headless mode. Rundock's own hook is run as runHookCalls runs
+// it; any other hook the entry names is run as runNamedHook runs it. Each
+// check is logged to the hook log as a PermissionRequest line with every
+// answer and its `outcome`. Run for no other call, so every other scenario is
+// as it was.
+//
+// The contract modelled, to compare line by line with a real Claude Code
+// (test/unit/stub-claude-sandbox-override-matches-cli.test.js holds it to
+// what one did, recorded in test/fixtures/claude-cli-sandbox-override.json):
+// - Input, one JSON object on the hook's stdin: session_id, transcript_path,
+//   cwd, permission_mode, effort, prompt_id, hook_event_name
+//   ("PermissionRequest"), tool_name ("Bash" or "PowerShell") and tool_input
+//   (the call's input, flag included, as hookView gives it). No tool_use_id.
+// - The one answer that runs the call, compared as exact JSON text:
+//   {"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
+// - Any other answer, no answer, or no entry: the call does not run, and the
+//   stream carries a `permission_denied` system line for its tool_use_id with
+//   `decision_reason_type: "sandboxOverride"`, then a tool_result for it with
+//   `is_error: true` and the text "Run outside of the sandbox", in that order.
+// - A call without the flag is never put to it: Claude Code asks only the
+//   PreToolUse hooks about one.
+// What it does not model: an answer that denies or changes the input, more
+// than one hook other than Rundock's, PowerShell's own shell, and the
+// `status` system lines Claude Code writes around a request. A call put here
+// with `noCard` models one that reached this check because something other
+// than its own card allowed it.
+//
+// A call that is allowed runs for real: its command goes to the platform's
+// shell, in this process's cwd (the workspace), and what it printed is its
+// result, so a test sees what an approved command did and that a refused one
+// did nothing. A Bash call that printed nothing and succeeded has Claude
+// Code's text for that as its result.
+const ALLOW_ONCE = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
+const NO_OUTPUT = '(Bash completed with no output)';
+const PROMPT_ID = require('crypto').randomUUID();
+const SANDBOX_CALLS = [];
+let sandboxCallSeq = 0;
+function sandboxOffAllowed(event, input, answer) {
+  const said = answer && answer.hookSpecificOutput;
+  return event === 'PreToolUse' && (input.tool_name === 'Bash' || input.tool_name === 'PowerShell')
+    && !!input.tool_input && input.tool_input.dangerouslyDisableSandbox === true
+    && !!said && said.permissionDecision === 'allow';
+}
+// A call's input as Claude Code gives it to a hook: the flag sent as the
+// string "true" arrives as true. The stream keeps the input as it was sent.
+function hookView(sent) {
+  if (!sent || typeof sent !== 'object' || sent.dangerouslyDisableSandbox !== 'true') return sent;
+  return { ...sent, dangerouslyDisableSandbox: true };
+}
+function isRundockHook(hook) {
+  return String(hook.command).includes('permission-hook');
+}
+// A hook that is not Rundock's, run without a shell: only a command made of
+// double-quoted words (a program and its arguments, as `"<node>" "<script>"`)
+// is modelled. The payload goes on its stdin; its answer is its stdout read as
+// JSON, or null, with the text it printed.
+function runNamedHook(hook, payload, done) {
+  const command = String(hook.command);
+  if (!/^\s*(?:"[^"]*"\s*)+$/.test(command)) notModelled('a hook command that is not a quoted program and its quoted arguments');
+  const words = [...command.matchAll(/"([^"]*)"/g)].map(m => m[1]);
+  let out = '';
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    let a = null;
+    try { a = JSON.parse(out); } catch (e) { /* no answer */ }
+    done(a, out);
+  };
+  let child;
+  try {
+    child = require('child_process').spawn(words[0], words.slice(1), {
+      cwd: process.cwd(), env: process.env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true,
+      timeout: (Number(hook.timeout) || 60) * 1000,
+    });
+  } catch (e) { finish(); return; }
+  child.stdout.on('data', (d) => { out += d; });
+  child.stdin.on('error', () => {});
+  child.on('error', finish);
+  child.on('close', finish);
+  child.stdin.end(JSON.stringify(payload));
+}
+function askPermissionRequest(tool, sent, then) {
+  const toolInput = hookView(sent);
+  const hooks = hooksFor('PermissionRequest', tool);
+  const answers = [];
+  const done = () => {
+    const ran = answers.some((a) => JSON.stringify(a) === ALLOW_ONCE);
+    try {
+      fs.appendFileSync(HOOK_LOG, JSON.stringify({
+        pid: process.pid, agent: AGENT, sessionId: SESSION_ID, convo: process.env.RUNDOCK_CONVO_ID || null, event: 'PermissionRequest', tool, command: toolInput.command, answers, outcome: ran ? 'ran' : 'refused', ts: Date.now(),
+      }) + '\n');
+    } catch (e) { /* logging is best-effort */ }
+    if (!ran) { SANDBOX_CALLS.push({ tool, input: sent, ran }); then(); return; }
+    require('child_process').exec(String(toolInput.command), { cwd: process.cwd(), env: process.env, timeout: 10000, windowsHide: true }, (err, stdout, stderr) => {
+      const printed = `${stdout || ''}${stderr || ''}`;
+      SANDBOX_CALLS.push({ tool, input: sent, ran, output: (!err && !printed && tool === 'Bash') ? NO_OUTPUT : printed, failed: !!err });
+      then();
+    });
+  };
+  const payload = {
+    session_id: SESSION_ID, transcript_path: '', cwd: process.cwd(), permission_mode: argValue('--permission-mode') || 'default',
+    effort: { level: 'medium' }, prompt_id: PROMPT_ID,
+    hook_event_name: 'PermissionRequest', tool_name: tool, tool_input: toolInput,
+  };
+  let at = 0;
+  const next = () => {
+    if (at >= hooks.length) { done(); return; }
+    const hook = hooks[at++];
+    if (!isRundockHook(hook)) { runNamedHook(hook, payload, (a) => { answers.push(a); next(); }); return; }
+    let out = '';
+    let child;
+    try {
+      child = require('child_process').spawn(process.execPath, [PERMISSION_HOOK], { env: process.env, stdio: ['pipe', 'pipe', 'ignore'] });
+    } catch (e) { answers.push(null); next(); return; }
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('error', () => {});
+    child.on('close', () => { let a = null; try { a = JSON.parse(out); } catch (e) { /* no answer */ } answers.push(a); next(); });
+    child.stdin.end(JSON.stringify(payload));
   };
   next();
 }

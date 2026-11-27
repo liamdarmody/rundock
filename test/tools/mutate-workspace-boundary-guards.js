@@ -4065,11 +4065,11 @@ const MUTATIONS = [
   // Open the reconnect routes and any process on this machine can open a
   // console here, or spend a turn checking, with no key at all.
   [AUTH_ROUTES, 'Reconnect: the reconnect routes are listed as needing no key',
-    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request')) return true;",
-    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request' || url.startsWith('/api/claude/'))) return true;"],
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request' || url === '/api/sandbox-grant')) return true;",
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request' || url === '/api/sandbox-grant' || url.startsWith('/api/claude/'))) return true;"],
   [RECONNECT_ROUTES, 'Reconnect: a request with no credentials reaches the routes',
-    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request')) return true;",
-    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request' || url.startsWith('/api/claude/'))) return true;"],
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request' || url === '/api/sandbox-grant')) return true;",
+    "  if (method === 'POST' && (url === '/api/auth/session' || url === '/api/permission-request' || url === '/api/sandbox-grant' || url.startsWith('/api/claude/'))) return true;"],
   // An agent's own process tree holds the permission hook's token. Let that
   // token stand for the window and an agent can open a console or spend a turn.
   [RECONNECT_AUTH, 'Reconnect: the permission hook\'s token is taken for the window',
@@ -4783,8 +4783,8 @@ const MUTATIONS = [
     'h && hookUpToDate(h) && h.onFailure',
     'h && h.onFailure'],
   [ON_FAILURE, 'On failure: the PostToolUse entry carries the field too',
-    'hooks: [hookCommand(10)]',
-    'hooks: [{ ...hookCommand(10), onFailure: HOOK_ON_FAILURE }]'],
+    '{ matcher: POST_MATCHER, hooks: [hookCommand(10)] }',
+    '{ matcher: POST_MATCHER, hooks: [{ ...hookCommand(10), onFailure: HOOK_ON_FAILURE }] }'],
   [ON_FAILURE, 'On failure: a settings file that does not parse is rebuilt from {}',
     "      if (e.code !== 'ENOENT') throw new Error(`left ${settingsLocalPath} as it is, it could not be read: ${e.message}`);\n",
     ''],

@@ -72,7 +72,7 @@ function writeAnswer(output, turnOver = false) {
 }
 function allows(output) {
   const own = output && output.hookSpecificOutput;
-  return Boolean(own) && own.permissionDecision === 'allow';
+  return Boolean(own) && (own.permissionDecision === 'allow' || Boolean(own.decision && own.decision.behavior === 'allow'));
 }
 // The end of a call whose answer may be an allow waiting for its turn.
 function endCall() {
@@ -4677,7 +4677,7 @@ function keychainPlatform(env = process.env, versions = process.versions) {
 }
 
 // The token Rundock started this agent with, bound to its conversation. The
-// server's two hook routes accept nothing else, and act only for the
+// server's hook routes accept nothing else, and act only for the
 // conversation it names (lib/auth).
 
 function hookTokenHeader() {
@@ -4715,6 +4715,52 @@ function fetchAgentNotice(done, { check = false } = {}) {
   req.on('error', () => finish(null));
   req.on('timeout', () => { req.destroy(); finish(null); });
   req.end();
+}
+
+// CLAUDE CODE'S OWN QUESTION ABOUT A COMMAND OUTSIDE THE SANDBOX. A Bash or
+// PowerShell call with `dangerouslyDisableSandbox: true` that the PreToolUse
+// answer allowed is put to the PermissionRequest hooks as well, and runs only
+// if one of them answers allow. This one answers allow only when Rundock spends
+// a grant for exactly this call, which a person's click on its card recorded
+// (lib/runtime/sandbox-grants.js), and otherwise gives no decision, `{}`, so
+// the call is refused as it would be with no hook. It never denies, never
+// changes the call, raises no card and leaves the line Rundock left for the
+// agent to the next answer. A throw is answered by refuseUnanswered, which
+// gives no decision for this event.
+const SANDBOX_OVERRIDE_ALLOW = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
+const SANDBOX_GRANT_WAIT_MS = 5000;
+function answerSandboxOverride(request) {
+  const input = request.tool_input;
+  const askable = Boolean(process.env.RUNDOCK) && Boolean(process.env.RUNDOCK_CONVO_ID)
+    && SHELL_TOOLS.has(request.tool_name)
+    && Boolean(input) && typeof input === 'object' && input.dangerouslyDisableSandbox === true
+    && typeof input.command === 'string' && input.command !== '';
+  let answered = false;
+  const finish = (spent) => {
+    if (answered) return;
+    answered = true;
+    writeAnswer(spent ? SANDBOX_OVERRIDE_ALLOW : {});
+    endCall();
+  };
+  if (!askable) { finish(false); return; }
+  const body = JSON.stringify({ tool_name: request.tool_name, tool_input: input });
+  const req = http.request({
+    hostname: '127.0.0.1', port: process.env.RUNDOCK_PORT || 3000, path: '/api/sandbox-grant', method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), ...hookTokenHeader() },
+  }, (res) => {
+    let text = '';
+    res.on('data', (c) => { text += c; if (text.length > 8192) { req.destroy(); finish(false); } });
+    res.on('end', () => {
+      let reply = null;
+      try { reply = JSON.parse(text); } catch (e) { /* no decision */ }
+      finish(res.statusCode === 200 && Boolean(reply) && typeof reply === 'object' && reply.spent === true);
+    });
+    // A reply cut short never reaches `end`.
+    res.on('close', () => finish(false));
+  });
+  setTimeout(() => { req.destroy(); finish(false); }, SANDBOX_GRANT_WAIT_MS);
+  req.on('error', () => finish(false));
+  req.end(body);
 }
 
 // WHETHER THIS HOOK CAN JUDGE A REQUEST AT ALL: a tool name that is a string
@@ -4758,6 +4804,10 @@ if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {
   }, { check: true });
   return;
 }
+// A COMMAND OUTSIDE THE SANDBOX THAT CLAUDE CODE ASKS ABOUT ITSELF
+// (PermissionRequest). Answered only with an allow Rundock grants, and
+// otherwise with no decision; see answerSandboxOverride.
+if (hookEvent === 'PermissionRequest') { answerSandboxOverride(finished); return; }
 // INPUT THIS HOOK CANNOT READ IS REFUSED, inside Rundock, in the words of any
 // request it could not check (refuseUnanswered, at the top), a routine's
 // included. Input that is not JSON, is empty, is cut off, or is JSON but not an

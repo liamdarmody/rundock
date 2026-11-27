@@ -9,6 +9,7 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 ### Added
 
 - **Attach files to a message:** the + button beside the message field attaches images (PNG, JPEG, GIF, WebP), PDFs and text, Markdown or CSV files, up to 5 files and 20 MB per message. Rundock keeps them with the conversation, says under the message field if it couldn't, and removes them when the conversation is deleted. If it can't remove them, a notice says where they are and stays until you close it.
+- **See what each reply used:** each agent reply now says how long the agent worked on it, such as "Worked 4 min 05 s". Details lists the steps it took and the tokens Claude Code or Codex reported for that reply. The line shows on replies that arrive while the conversation is open, as the step list did.
 
 ### Changed
 
@@ -23,6 +24,8 @@ All notable changes to Rundock are documented here. Format follows [Keep a Chang
 - **Agents tell you where a connector key goes:** before, agents said `.rundock/mcp-secrets.json`, the file connector keys go in, does not travel with the workspace. Now they say it is kept out of git because setup adds `.rundock/` to `.gitignore`, but a synced folder such as OneDrive, iCloud or Dropbox copies it to every device the folder syncs to, so a key put there goes wherever the workspace goes.
 - **A reply that ends after you switch workspace:** it is saved with its conversation in the workspace you left, and nothing from that conversation is written into the one you opened.
 - **A connector card shows what it would replace:** before, the card for an agent's change to a connector showed only the new version, some settings by name without their values, and if your connectors changed while the card waited, allowing it could replace or remove one you hadn't seen. Now the card shows the connector as it is and as it would be, with the values of its environment variables and headers hidden, a connector holding a setting the card can't show is refused before you're asked, and Allow changes nothing if the connectors changed after you were asked. The card also warns when a connector would set `PATH`, `NODE_OPTIONS` or another variable that can change what runs on your computer.
+- **An agent no longer picks up a teammate's session:** before, once the earlier session of the agent leading a conversation had expired, your next message to it could resume the session of a teammate it had brought in, so the teammate's work carried on under the lead's name and, if the teammate was Doc, its changes to the team were refused. Now each agent resumes only its own session, or starts a new one.
+- **A command you approve to run outside the sandbox now runs:** before, approving the card for a command an agent wanted to run outside the sandbox did nothing, because Claude Code asked again and nothing answered it, so the command never ran. Now your approval lets that one command run, once. If Claude Code refuses it anyway, the conversation says so and tells you that you can run it yourself in a terminal.
 
 ## 0.15.9: Sign-In That Says Why (2026-11-18)
 
