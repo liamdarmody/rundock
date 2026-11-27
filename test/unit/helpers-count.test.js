@@ -463,6 +463,20 @@ describe('the cap of five helpers at once', () => {
     assert.deepStrictEqual(lastRows(convo).map((r) => r.state), Array(5).fill('killed'), 'the held call is dropped, the rest ended');
     assert.deepStrictEqual(outcomes(await capEventsAt(convo, 1)), ['held'], 'no refusal is recorded');
   });
+
+  test('when another process leads, the last one\'s held calls are refused and its helpers ended, and the new call counts alone', async () => {
+    const m = names('runningCount', 'helperRows');
+    const convo = freshConvo();
+    const answers = ask(convo, explores(6), { agentId: 'wren', process: { pid: 4242 } });
+    await Promise.all(answers.slice(0, 5));
+    const next = ask(convo, explores(1, 7), { agentId: 'wren', process: { pid: 4343 } });
+    assert.strictEqual(await settled(answers[5]), 'answered', 'the held call is answered');
+    assert.deepStrictEqual(await answers[5], { allow: false });
+    assert.strictEqual(await settled(next[0]), 'answered', 'the new call is not held');
+    assert.deepStrictEqual(await next[0], { allow: true });
+    assert.strictEqual(m.runningCount(convo), 1);
+    assert.deepStrictEqual(states(convo), [...Array(5).fill('killed'), 'running']);
+  });
 });
 
 // ---------------------------------------------------------------------------
