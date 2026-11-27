@@ -44,6 +44,8 @@ const HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'te
 const SCAFFOLD = { src: path.join(ROOT, 'lib', 'workspace', 'scaffold.js'), suite: 'test/unit/scaffold-permission-request.test.js' };
 // The stream reader that says a refusal after an approval.
 const ENGINE = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: 'test/integration/sandbox-override-answer.test.js' };
+// The stand-in for Claude Code, which runs an allowed call's command for real.
+const STUB = { src: path.join(ROOT, 'test', 'helpers', 'stub-claude', 'claude'), suite: ENGINE.suite };
 
 const MUTATIONS = [
   // ===== ONLY A PERSON'S CLICK ON A CARD RECORDS =====
@@ -101,12 +103,54 @@ const MUTATIONS = [
   [SCAFFOLD, 'the workspace settings carry the PermissionRequest entry',
     '      if (!currentAsk) keptAsk.push({ matcher: ASK_MATCHER, hooks: [hookCommand(10)] });\n',
     ''],
+  // Take any command that mentions permission-hook for ours and someone
+  // else's hook of that name is deleted when ours is replaced.
+  [SCAFFOLD, 'only a command of the forms Rundock writes is taken for ours',
+    'ownAskCommand.test(h.command)',
+    "h.command.includes('permission-hook')"],
+  // Take an entry for ours when any one of its hooks is, and someone else's
+  // hook beside a stale one of ours is deleted with it.
+  [SCAFFOLD, 'an entry is ours only when every hook in it is',
+    '&& e.hooks.every(h =>',
+    '&& e.hooks.some(h =>'],
 
   // ===== A REFUSAL IS SAID ONLY AFTER AN APPROVAL =====
   // Say it for any refusal and the conversation claims an approval nobody gave.
   [ENGINE, 'the notice follows only a command whose card was approved',
     '  if (!approved) return null;\n',
     ''],
+  // Cap the calls held and a refusal read after enough other calls is not said.
+  [ENGINE, 'a shell call is held however many calls follow it',
+    '  entry._shellCalls.set(id, { toolName: name, command: input.command, flag: input.dangerouslyDisableSandbox, proc });\n',
+    '  entry._shellCalls.set(id, { toolName: name, command: input.command, flag: input.dangerouslyDisableSandbox, proc });\n'
+      + '  while (entry._shellCalls.size > 50) entry._shellCalls.delete(entry._shellCalls.keys().next().value);\n'],
+  // Let a call go on its error result and its refusal, which follows, is not said.
+  [ENGINE, 'an error result does not let a call go',
+    "block.type === 'tool_result' && block.is_error !== true)",
+    "block.type === 'tool_result')"],
+  // Keep a call after its refusal is read and a repeated refusal is said again.
+  [ENGINE, 'a call is let go once its refusal is read',
+    '  entry._shellCalls.delete(line.tool_use_id);\n  if (call.flag !== true) return null;\n',
+    '  if (call.flag !== true) return null;\n'],
+  // Keep a call that ran and it is held for as long as the conversation lasts.
+  [ENGINE, 'a call that ran is let go',
+    '        letGoOfRanShellCalls(entry, parsed);\n',
+    ''],
+  // Keep a process's calls after it ends and they are held for good.
+  [ENGINE, 'a process that ends lets go of its calls',
+    '    if (entry._shellCalls) for (const [id, call] of entry._shellCalls) if (call.proc === keepaliveProc) entry._shellCalls.delete(id);\n',
+    ''],
+  // Let go of every call when any process ends and a successor's refusal is not said.
+  [ENGINE, 'a process that ends lets go of its own calls only',
+    'if (call.proc === keepaliveProc) entry._shellCalls.delete(id);',
+    'entry._shellCalls.delete(id);'],
+
+  // ===== THE STAND-IN RUNS WHAT IT ALLOWS =====
+  // Say a call ran without running its command and a test reads "allowed" as
+  // "ran", with nothing to show the command did anything.
+  [STUB, 'an allowed call\'s command runs',
+    "require('child_process').exec(String(toolInput.command), {",
+    "require('child_process').exec('echo', {"],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

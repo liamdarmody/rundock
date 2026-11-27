@@ -542,7 +542,7 @@ function buildEnvelopes(rule) {
   for (const call of SANDBOX_CALLS.splice(0)) {
     const index = 1000 + (++sandboxCallSeq);
     events.push(...fx.toolUseFlow(call.tool, call.input, index));
-    if (call.ran) events.push(fx.toolResult(index, 'ran'));
+    if (call.ran) events.push(fx.toolResult(index, call.output, call.failed));
     else events.push(fx.sandboxOverrideDenied(call.tool, index), fx.toolResult(index, 'Run outside of the sandbox', true));
   }
   let fullText = '';
@@ -844,6 +844,9 @@ function handleUserMessage(content) {
 // a nested `claude` sends a session of its own, and a field set to null is
 // left out, as a call that names no session would. `untilFile` holds the call
 // until that file exists, so a test decides what happens between two calls.
+// `noCard` puts the call straight to Claude Code's own check below, with no
+// PreToolUse step and so no card of its own: a call that reached the check
+// because something other than its own card allowed it.
 const HOOK_LOG = path.join(process.cwd(), 'stub-hook-answers.jsonl');
 const PERMISSION_HOOK = path.join(__dirname, '..', '..', '..', 'scripts', 'permission-hook.js');
 function runHookCalls(calls, then) {
@@ -852,6 +855,7 @@ function runHookCalls(calls, then) {
     if (at >= calls.length) { then(); return; }
     const call = calls[at++] || {};
     if (call.untilFile && !fs.existsSync(call.untilFile)) { at--; setTimeout(next, 20); return; }
+    if (call.noCard) { askPermissionRequest(call.tool || 'Bash', call.input || {}, next); return; }
     const event = call.event || 'PreToolUse';
     const input = {
       session_id: SESSION_ID, hook_event_name: event, tool_name: call.tool || 'Bash', tool_input: call.input || {}, cwd: process.cwd(),
@@ -891,6 +895,26 @@ function runHookCalls(calls, then) {
 // runHookCalls runs it. Each check is logged to the hook log as a
 // PermissionRequest line with every answer and its `outcome`. Run for no other
 // call, so every other scenario is as it was.
+//
+// The contract modelled, to compare line by line with a real Claude Code:
+// - Input, one JSON object on the hook's stdin: session_id, transcript_path,
+//   cwd, permission_mode, hook_event_name ("PermissionRequest"), tool_name
+//   ("Bash" or "PowerShell") and tool_input (the call's input, flag included).
+// - The one answer that runs the call, compared as exact JSON text:
+//   {"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
+// - Any other answer, no answer, or no entry: the call does not run, and the
+//   stream carries a `permission_denied` system line for its tool_use_id with
+//   `decision_reason_type: "sandboxOverride"`, then a tool_result for it with
+//   `is_error: true` and the text "Run outside of the sandbox", in that order.
+// What it does not model: an answer that denies or changes the input, a hook
+// other than Rundock's, and PowerShell's own shell. A call put here with
+// `noCard`, or without the flag, models one that reached this check; whether
+// Claude Code puts such a call to it at all is not modelled.
+//
+// A call that is allowed runs for real: its command goes to the platform's
+// shell, in this process's cwd (the workspace), and what it printed is its
+// result, so a test sees what an approved command did and that a refused one
+// did nothing.
 const ALLOW_ONCE = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
 const SANDBOX_CALLS = [];
 let sandboxCallSeq = 0;
@@ -910,8 +934,11 @@ function askPermissionRequest(tool, toolInput, then) {
         pid: process.pid, agent: AGENT, sessionId: SESSION_ID, convo: process.env.RUNDOCK_CONVO_ID || null, event: 'PermissionRequest', tool, command: toolInput.command, answers, outcome: ran ? 'ran' : 'refused', ts: Date.now(),
       }) + '\n');
     } catch (e) { /* logging is best-effort */ }
-    SANDBOX_CALLS.push({ tool, input: toolInput, ran });
-    then();
+    if (!ran) { SANDBOX_CALLS.push({ tool, input: toolInput, ran }); then(); return; }
+    require('child_process').exec(String(toolInput.command), { cwd: process.cwd(), env: process.env, timeout: 10000, windowsHide: true }, (err, stdout, stderr) => {
+      SANDBOX_CALLS.push({ tool, input: toolInput, ran, output: `${stdout || ''}${stderr || ''}`, failed: !!err });
+      then();
+    });
   };
   let at = 0;
   const next = () => {

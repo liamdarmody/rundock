@@ -125,15 +125,52 @@ describe('the workspace settings carry a PermissionRequest entry, and keep every
     assert.deepStrictEqual(read(dir).hooks.PermissionRequest, [before, ours, afterOurs], 'an up-to-date entry of ours is kept where it is');
   });
 
-  test('a stale entry of ours is replaced, not joined', () => {
+  // Each form Rundock writes for this event, left at a place it no longer is:
+  // the launcher run with sh, the launcher run by PowerShell, and the runtime
+  // with the hook script.
+  test('a stale entry of ours is replaced, not joined, in each form Rundock writes', () => {
     const dir = workspace();
     open(dir);
     const settings = read(dir);
     const ours = entryFor(settings);
-    settings.hooks.PermissionRequest = [{ matcher: MATCHER, hooks: [{ type: 'command', command: '"/old/place/permission-hook.js"', timeout: 10 }] }];
+    settings.hooks.PermissionRequest = [
+      { matcher: MATCHER, hooks: [{ type: 'command', command: 'sh "/old/place/.rundock/permission-hook.sh"', timeout: 10 }] },
+      { matcher: MATCHER, hooks: [{ type: 'command', command: '& "C:\\old\\place\\.rundock\\permission-hook.cmd"', shell: 'powershell', timeout: 10 }] },
+      { matcher: MATCHER, hooks: [{ type: 'command', command: '"/old/bin/node" "/old/app/scripts/permission-hook.js"', timeout: 10 }] },
+    ];
     save(dir, settings);
     open(dir);
     assert.deepStrictEqual(read(dir).hooks.PermissionRequest, [ours]);
+  });
+
+  test('someone else\'s hook whose command mentions permission-hook stays, in order and unchanged', () => {
+    const dir = workspace();
+    open(dir);
+    const settings = read(dir);
+    const ours = entryFor(settings);
+    const theirs = [
+      { matcher: MATCHER, hooks: [{ type: 'command', command: 'node ./hooks/custom-permission-hook.js' }] },
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'node ./hooks/custom-permission-hook.js', timeout: 5 }] },
+    ];
+    settings.hooks.PermissionRequest = copy(theirs);
+    save(dir, settings);
+    open(dir);
+    assert.deepStrictEqual(read(dir).hooks.PermissionRequest, [...theirs, ours], 'theirs stay, and ours is added after them');
+  });
+
+  test('someone else\'s hook beside a stale one of ours in one entry stays, with the entry unchanged', () => {
+    const dir = workspace();
+    open(dir);
+    const settings = read(dir);
+    const ours = entryFor(settings);
+    const shared = { matcher: MATCHER, hooks: [
+      { type: 'command', command: 'sh "/old/place/.rundock/permission-hook.sh"', timeout: 10 },
+      { type: 'command', command: 'node example/alpha.js' },
+    ] };
+    settings.hooks.PermissionRequest = [copy(shared)];
+    save(dir, settings);
+    open(dir);
+    assert.deepStrictEqual(read(dir).hooks.PermissionRequest, [shared, ours], 'an entry that is not wholly ours is left as it is');
   });
 
   test('a second open writes nothing', () => {
