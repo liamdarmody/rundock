@@ -18,6 +18,10 @@ const team = require('../../lib/protocol/handlers/team.js');
 const { _internal: srv } = require('../../server.js');
 const config = require('../../lib/config.js');
 const { scanMarkers } = require('../../public/markers.js');
+// The connector writer, required inside a try: its own suite pins what it
+// does, and here it is only watched, to see what the handlers tell it.
+let connectorWrite = {};
+try { connectorWrite = require('../../lib/workspace/connector-write.js'); } catch (e) { connectorWrite = {}; }
 
 // The full routing surface of the dispatch table, frozen: 65 message types
 // plus save_agent's two legacy aliases, 67 keys in all.
@@ -137,6 +141,13 @@ const CONNECTOR_NAME_REFUSED = 'That connector name can\'t be used, so nothing w
 const CONNECTOR_ENTRY_REFUSED = 'A connector needs a command to run or a URL to reach, so nothing was changed.';
 const CONNECTOR_NOT_JSON = 'The connector entry is not valid JSON, so nothing was changed.';
 const connectorShapeRefused = (key) => `The connector entry's "${key}" isn't in a form the approval card can show exactly, so nothing was changed.`;
+const hiddenSetting = (key) => `The connector entry's "${key}" isn't a setting the approval card can show, so nothing was changed.`;
+const HIDDEN_SETTING_UNNAMED = 'The connector entry holds a setting the approval card can\'t show, so nothing was changed.';
+const currentUnshown = (name) => `The connector "${name}" as it is now holds a setting the approval card can't show, so nothing was changed. Change it in .mcp.json yourself.`;
+const CONNECTOR_ALREADY_SET_UP = (name) => `A connector named "${name}" is already set up, so nothing was changed. Ask to replace it if you meant to change it.`;
+const CONNECTOR_NO_CONVERSATION = 'That connector change didn\'t say which conversation it came from, so nothing was changed.';
+const CONNECTOR_NOT_ALLOWED = 'The change was not allowed, so nothing was changed.';
+const CONNECTOR_TIMED_OUT = 'Nobody answered the card in time, so nothing was changed.';
 
 describe('dispatch table', () => {
   test('a connector write refuses every way the file can be untrustworthy, and destroys nothing', () => {
@@ -175,7 +186,7 @@ describe('dispatch table', () => {
       // usable map is an empty one.
       fs.writeFileSync(file, '{"mcpServers": "nonsense"}');
       w = captureWs();
-      table.save_connector(ctx, w, { name: 'x', content: '{"url":"https://x"}' });
+      table.save_connector(ctx, w, { name: 'x', content: '{"url":"https://x"}', conversationId: 'convo-file' });
       assert.strictEqual(w.sent[0].type, 'connector_saved');
       assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, { x: { url: 'https://x' } });
 
@@ -192,7 +203,7 @@ describe('dispatch table', () => {
       // A file that reads but cannot be WRITTEN.
       fs.chmodSync(file, 0o444);
       w = captureWs();
-      table.save_connector(ctx, w, { name: 'z', content: '{"url":"https://x"}' });
+      table.save_connector(ctx, w, { name: 'z', content: '{"url":"https://x"}', conversationId: 'convo-file' });
       fs.chmodSync(file, 0o644);
       assert.match(w.sent[0].message, /could not be written/);
 
@@ -274,7 +285,7 @@ describe('dispatch table', () => {
       const msg = scannedConnector(connectorReply(`\`\`\`json\n${STDIO}\n\`\`\`\n`));
       assert.strictEqual(msg.content, STDIO, 'the wrapper is removed');
       const w = captureWs();
-      buildDispatch().save_connector(ctx, w, msg);
+      buildDispatch().save_connector(ctx, w, { ...msg, conversationId: 'convo-wrapped' });
       card.answer(0, true);
       assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers['local-tools'], JSON.parse(STDIO));
       assert.strictEqual(w.sent[0].type, 'connector_saved');
@@ -298,8 +309,8 @@ describe('dispatch table', () => {
     const { dir, file, card, ctx } = connectorWorkspace('proto-connector-url-');
     inWorkspace(dir, () => {
       fs.writeFileSync(file, JSON.stringify({ mcpServers: { calendar: { url: 'https://old.example.com/mcp' } } }));
-      buildDispatch().save_connector(ctx, captureWs(), { name: 'calendar', content: '{"type":"http","url":"https://mcp.example.com/mcp","headers":{"Authorization":"x"}}' });
-      assert.deepStrictEqual(card.asked[0].toolInput, { name: 'calendar', action: 'replace', url: 'https://mcp.example.com/mcp', transport: 'http', headers: ['Authorization'] });
+      buildDispatch().save_connector(ctx, captureWs(), { name: 'calendar', content: '{"type":"http","url":"https://mcp.example.com/mcp","headers":{"Authorization":"x"}}', conversationId: 'convo-url' });
+      assert.deepStrictEqual(card.asked[0].toolInput, { name: 'calendar', action: 'replace', url: 'https://mcp.example.com/mcp', transport: 'http', headers: ['Authorization'], current: { url: 'https://old.example.com/mcp' } });
     });
   });
 
@@ -308,7 +319,7 @@ describe('dispatch table', () => {
       const { dir, file, card, ctx } = connectorWorkspace('proto-connector-deny-');
       inWorkspace(dir, () => {
         const w = captureWs();
-        buildDispatch().save_connector(ctx, w, { name: 'local-tools', content: STDIO });
+        buildDispatch().save_connector(ctx, w, { name: 'local-tools', content: STDIO, conversationId: 'convo-deny' });
         card.answer(0, allow, how, reason);
         assert.ok(!fs.existsSync(file), `allow=${allow} card=${how && how.card} ${reason}: nothing written`);
         assert.strictEqual(w.sent[0].type, 'connector_error', 'and the window is told nothing changed');
@@ -321,10 +332,10 @@ describe('dispatch table', () => {
     const { dir, file, card, ctx } = connectorWorkspace('proto-connector-again-');
     inWorkspace(dir, () => {
       const table = buildDispatch();
-      table.save_connector(ctx, captureWs(), { name: 'local-tools', content: STDIO });
+      table.save_connector(ctx, captureWs(), { name: 'local-tools', content: STDIO, conversationId: 'convo-again' });
       card.answer(0, true);
       fs.writeFileSync(file, JSON.stringify({ mcpServers: {} }));
-      table.save_connector(ctx, captureWs(), { name: 'local-tools', content: STDIO });
+      table.save_connector(ctx, captureWs(), { name: 'local-tools', content: STDIO, conversationId: 'convo-again' });
       assert.strictEqual(card.asked.length, 2, 'the same marker again raises a card of its own');
       assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, {}, 'and nothing is written on the strength of the first');
     });
@@ -336,16 +347,16 @@ describe('dispatch table', () => {
       fs.writeFileSync(file, JSON.stringify({ mcpServers: { notion: { command: 'npx', args: ['-y', 'notion-mcp'] } } }));
       const table = buildDispatch();
       let w = captureWs();
-      table.delete_connector(ctx, w, { name: 'notion' });
+      table.delete_connector(ctx, w, { name: 'notion', conversationId: 'convo-remove' });
       assert.deepStrictEqual(card.asked[0].toolInput, { name: 'notion', action: 'remove', command: 'npx', args: ['-y', 'notion-mcp'] });
       assert.strictEqual(card.asked[0].toolName, 'DeleteConnector');
       assert.ok(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers.notion, 'still there while the card waits');
       card.answer(0, false);
       assert.ok(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers.notion, 'and after Deny');
-      table.delete_connector(ctx, (w = captureWs()), { name: 'notion' });
+      table.delete_connector(ctx, (w = captureWs()), { name: 'notion', conversationId: 'convo-remove' });
       card.answer(1, true);
       assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, {}, 'gone once allowed');
-      table.delete_connector(ctx, (w = captureWs()), { name: 'never-there' });
+      table.delete_connector(ctx, (w = captureWs()), { name: 'never-there', conversationId: 'convo-remove' });
       assert.strictEqual(card.asked.length, 2, 'removing what is not there asks nobody');
       assert.match(w.sent[0].message, /No connector named/);
     });
@@ -460,7 +471,7 @@ describe('dispatch table', () => {
     for (const [content, shown] of [['{"command":"node"}', { command: 'node', args: [] }], ['{"url":"https://mcp.example.com/mcp"}', { url: 'https://mcp.example.com/mcp' }]]) {
       const { dir, card, ctx } = connectorWorkspace('proto-connector-entry-');
       inWorkspace(dir, () => {
-        buildDispatch().save_connector(ctx, captureWs(), { name: 'example-alpha', content });
+        buildDispatch().save_connector(ctx, captureWs(), { name: 'example-alpha', content, conversationId: 'convo-entry' });
         assert.strictEqual(card.asked.length, 1, `${content}: one card`);
         assert.deepStrictEqual(card.asked[0].toolInput, { name: 'example-alpha', action: 'add', ...shown });
       });
@@ -593,7 +604,7 @@ describe('dispatch table', () => {
       assert.strictEqual(card.asked.length, 0, 'the refusal asked nobody');
       assert.deepStrictEqual(opened, [], 'or opened the file');
       fs.writeFileSync(file, '{"mcpServers":{}}');
-      table.save_connector(ctx, (w = captureWs()), { name: 'example-alpha', content: '{"command":"node","args":["null"]}' });
+      table.save_connector(ctx, (w = captureWs()), { name: 'example-alpha', content: '{"command":"node","args":["null"]}', conversationId: 'convo-retry' });
       assert.strictEqual(card.asked.length, 1, 'the corrected entry gets its card');
       assert.deepStrictEqual(card.asked[0].toolInput, { name: 'example-alpha', action: 'add', command: 'node', args: ['null'] });
       card.answer(0, true);
@@ -633,8 +644,97 @@ describe('dispatch table', () => {
     allowedAsShown('{"command":"node","env":{"API_KEY":"x"}}', { command: 'node', args: [], env: ['API_KEY'] });
   });
 
-  test('a connector entry with a key the card does not know still gets its card listing that key, and is written as sent on Allow', () => {
-    allowedAsShown('{"command":"node","timeout":[1,2]}', { command: 'node', args: [], others: ['timeout'] });
+  // A setting the card doesn't show would be written on Allow unseen, so an
+  // entry holding one is refused before the file is read, naming the first.
+  test('a connector entry holding a setting the card does not show is refused before the file is read, naming it', () => {
+    refusedUnread([saving('example-alpha', '{"command":"node","timeout":[1,2]}')], hiddenSetting('timeout'));
+  });
+
+  test('a connector at a URL holding a sign-in setting the card does not show is refused before the file is read, naming it', () => {
+    refusedUnread([saving('example-alpha', '{"url":"https://mcp.example.com/mcp","oauth":{"clientId":"x"}}')], hiddenSetting('oauth'));
+  });
+
+  test('a connector entry holding two settings the card does not show is refused once, naming the first', () => {
+    refusedUnread([saving('example-alpha', '{"command":"node","description":"x","timeout":1}')], hiddenSetting('description'));
+  });
+
+  test('a connector entry whose own key is __proto__ is refused before the file is read, naming it', () => {
+    refusedUnread([saving('example-alpha', '{"command":"node","__proto__":{"x":1}}')], hiddenSetting('__proto__'));
+  });
+
+  test('a connector entry whose extra key holds a line feed is refused without echoing the key', () => {
+    refusedUnread([saving('example-alpha', '{"command":"node","time out\\nURL: https://other.example/mcp":1}')], HIDDEN_SETTING_UNNAMED);
+  });
+
+  // The setting rule comes after the name, entry and shape rules, in the
+  // handler and in the writer alike, so each of those keeps its own message.
+  function refusedFirstBy(name, content, message) {
+    assert.strictEqual(typeof connectorWrite.proposeConnectorChange, 'function');
+    const { dir, card, ctx } = connectorWorkspace('proto-connector-order-');
+    const opened = countingOpens(ctx);
+    inWorkspace(dir, () => {
+      const w = captureWs();
+      connectorWrite.proposeConnectorChange(ctx, w, { workspace: dir, conversationId: 'convo-order', change: 'add', name, entry: JSON.parse(content), source: 'agent' });
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'the writer refuses for the same rule');
+      assert.strictEqual(card.asked.length, 0);
+      assert.deepStrictEqual(opened, []);
+    });
+    refusedUnread([saving(name, content)], message);
+  }
+
+  test('a connector entry with a command that is not a string and a setting the card does not show is refused for the command', () => {
+    refusedFirstBy('example-alpha', '{"url":"https://mcp.example.com/mcp","command":5,"timeout":1}', connectorShapeRefused('command'));
+  });
+
+  test('a connector entry holding only a setting the card does not show is refused for having nothing to run or reach', () => {
+    refusedFirstBy('example-alpha', '{"timeout":1}', CONNECTOR_ENTRY_REFUSED);
+  });
+
+  test('a connector change with a bad name and a setting the card does not show is refused for the name', () => {
+    refusedFirstBy('-tools', '{"command":"node","timeout":1}', CONNECTOR_NAME_REFUSED);
+  });
+
+  test('after a setting the card does not show is refused, the entry without it gets one card and is written on Allow', () => {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-hidden-retry-');
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, '{"mcpServers":{}}');
+      const table = buildDispatch();
+      let w = captureWs();
+      table.save_connector(ctx, w, { name: 'local-tools', content: '{"command":"node","timeout":[1,2]}', conversationId: 'convo-hidden' });
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: hiddenSetting('timeout') }]);
+      assert.strictEqual(card.asked.length, 0, 'the refusal asked nobody');
+      table.save_connector(ctx, (w = captureWs()), { name: 'local-tools', content: '{"command":"node"}', conversationId: 'convo-hidden' });
+      assert.strictEqual(card.asked.length, 1, 'the entry without it gets its card');
+      card.answer(0, true);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, { 'local-tools': { command: 'node' } }, 'and is written once allowed');
+    });
+  });
+
+  test('removing a connector that holds a setting the card does not show lists it by name, and Allow removes it', () => {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-hidden-remove-');
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, JSON.stringify({ mcpServers: { 'local-tools': { command: 'node', timeout: 5 } } }));
+      const w = captureWs();
+      buildDispatch().delete_connector(ctx, w, { name: 'local-tools', conversationId: 'convo-hidden' });
+      assert.strictEqual(card.asked.length, 1, 'one card');
+      assert.deepStrictEqual(card.asked[0].toolInput, { name: 'local-tools', action: 'remove', command: 'node', args: [], others: ['timeout'] });
+      card.answer(0, true);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, {}, 'removed once allowed');
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_saved', name: 'local-tools', action: 'removed', takesEffect: 'next agent start' }]);
+    });
+  });
+
+  test('saving over a connector that holds a setting the card does not show is refused, and nobody is asked', () => {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-hidden-replace-');
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, JSON.stringify({ mcpServers: { 'local-tools': { command: 'node', timeout: 5 } } }));
+      const before = fs.readFileSync(file);
+      const w = captureWs();
+      buildDispatch().save_connector(ctx, w, { name: 'local-tools', content: '{"command":"node","args":["new.js"]}', conversationId: 'convo-hidden' });
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: currentUnshown('local-tools') }]);
+      assert.strictEqual(card.asked.length, 0, 'no card is raised');
+      assert.deepStrictEqual(fs.readFileSync(file), before, 'the file is byte-identical');
+    });
   });
 
   test('the same refused connector save sent twice is refused twice, the same way, and asks nobody', () => {
@@ -660,7 +760,7 @@ describe('dispatch table', () => {
       assert.strictEqual(card.asked.length, 0, 'neither refusal asked anybody');
       assert.deepStrictEqual(opened, [], 'or opened the file');
       fs.writeFileSync(file, '{"mcpServers":{}}');
-      table.save_connector(ctx, (w = captureWs()), { name: 'tools', content: '{"command":"node"}' });
+      table.save_connector(ctx, (w = captureWs()), { name: 'tools', content: '{"command":"node"}', conversationId: 'convo-retry' });
       assert.strictEqual(card.asked.length, 1, 'the corrected change gets its card');
       assert.deepStrictEqual(card.asked[0].toolInput, { name: 'tools', action: 'add', command: 'node', args: [] });
       card.answer(0, true);
@@ -708,6 +808,130 @@ describe('dispatch table', () => {
       card.answer(0, true);
       assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, { 'example-beta': { command: 'node' } }, 'gone once allowed, and the other kept');
       assert.deepStrictEqual(w.sent, [{ type: 'connector_saved', name: '_example.alpha-2', action: 'removed', takesEffect: 'next agent start' }]);
+    });
+  });
+
+  // An agent's connector change names the conversation it came from, which the
+  // window adds and the agent can't. One that names none is refused after the
+  // handler's own checks and its read, with nobody asked and nothing written.
+  const CALENDAR = { mcpServers: { calendar: { url: 'https://old.example.com/mcp' } } };
+  function refusedForConversation(sends) {
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-convo-');
+    return inWorkspace(dir, () => {
+      fs.writeFileSync(file, JSON.stringify(CALENDAR));
+      const before = fs.readFileSync(file);
+      const replies = sends.map((send) => {
+        const w = captureWs();
+        send(buildDispatch(), ctx, w);
+        assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: CONNECTOR_NO_CONVERSATION }], 'one message, for the missing conversation');
+        return w.sent;
+      });
+      assert.strictEqual(card.asked.length, 0, 'nobody is asked');
+      assert.deepStrictEqual(fs.readFileSync(file), before, 'the file is byte-identical');
+      return replies;
+    });
+  }
+
+  test('a connector save that names no conversation is refused for it, and nobody is asked', () => {
+    refusedForConversation([(table, ctx, w) => table.save_connector(ctx, w, { name: 'local-tools', content: '{"command":"node"}' })]);
+  });
+
+  test('a connector removal that names no conversation is refused for it, and nobody is asked', () => {
+    refusedForConversation([(table, ctx, w) => table.delete_connector(ctx, w, { name: 'calendar' })]);
+  });
+
+  test('a connector save that says it is Rundock\'s own and names no conversation is refused for the missing conversation', () => {
+    refusedForConversation([(table, ctx, w) => table.save_connector(ctx, w, { name: 'local-tools', content: '{"command":"node"}', source: 'rundock' })]);
+  });
+
+  test('the same connector save with no conversation, sent twice, is refused twice the same way', () => {
+    const send = (table, ctx, w) => table.save_connector(ctx, w, { name: 'local-tools', content: '{"command":"node"}' });
+    const [first, second] = refusedForConversation([send, send]);
+    assert.deepStrictEqual(second, first, 'the second refusal is the first one again');
+  });
+
+  test('a connector removal that says it is Rundock\'s own raises the usual remove card, and the writer is told it is an agent\'s', () => {
+    assert.strictEqual(typeof connectorWrite.proposeConnectorChange, 'function');
+    const real = connectorWrite.proposeConnectorChange;
+    const told = [];
+    connectorWrite.proposeConnectorChange = (c, ws, req) => { told.push(req); return real(c, ws, req); };
+    try {
+      const { dir, file, card, ctx } = connectorWorkspace('proto-connector-source-');
+      inWorkspace(dir, () => {
+        fs.writeFileSync(file, JSON.stringify(CALENDAR));
+        const w = captureWs();
+        buildDispatch().delete_connector(ctx, w, { name: 'calendar', source: 'rundock', conversationId: 'convo-source' });
+        assert.deepStrictEqual(told.map((r) => [r.source, r.change]), [['agent', 'remove']], 'the writer hears an agent asking to remove');
+        assert.strictEqual(card.asked.length, 1, 'one card');
+        assert.strictEqual(card.asked[0].toolName, 'DeleteConnector');
+        assert.deepStrictEqual(card.asked[0].toolInput, { name: 'calendar', action: 'remove', url: 'https://old.example.com/mcp' });
+        card.answer(0, true);
+        assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, {}, 'removed once allowed');
+        assert.deepStrictEqual(w.sent, [{ type: 'connector_saved', name: 'calendar', action: 'removed', takesEffect: 'next agent start' }]);
+      });
+    } finally {
+      connectorWrite.proposeConnectorChange = real;
+    }
+  });
+
+  test('Deny and a timeout on a connector save and on a removal each send their own message and leave the file byte-identical', () => {
+    const sends = [
+      ['save', (table, ctx, w) => table.save_connector(ctx, w, { name: 'local-tools', content: STDIO, conversationId: 'convo-answer' })],
+      ['removal', (table, ctx, w) => table.delete_connector(ctx, w, { name: 'calendar', conversationId: 'convo-answer' })],
+    ];
+    const answers = [[false, 'user', CONNECTOR_NOT_ALLOWED], [false, 'timeout', CONNECTOR_TIMED_OUT]];
+    for (const [said, send] of sends) {
+      for (const [allow, reason, message] of answers) {
+        const { dir, file, card, ctx } = connectorWorkspace('proto-connector-answer-');
+        inWorkspace(dir, () => {
+          fs.writeFileSync(file, JSON.stringify(CALENDAR));
+          const before = fs.readFileSync(file);
+          const w = captureWs();
+          send(buildDispatch(), ctx, w);
+          assert.strictEqual(card.asked.length, 1, `${said}: one card`);
+          card.answer(0, allow, { card: true }, reason);
+          assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], `${said}, ${reason}: its own message`);
+          assert.deepStrictEqual(fs.readFileSync(file), before, 'the file is byte-identical');
+        });
+      }
+    }
+  });
+
+  test('a connector save that says it is an add, for a name already set up, raises a replace card showing the entry it would replace', () => {
+    assert.strictEqual(typeof connectorWrite.proposeConnectorChange, 'function');
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-said-add-');
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, JSON.stringify(CALENDAR));
+      const w = captureWs();
+      buildDispatch().save_connector(ctx, w, { name: 'calendar', change: 'add', content: '{"url":"https://mcp.example.com/mcp"}', conversationId: 'convo-said' });
+      assert.strictEqual(card.asked.length, 1, 'one card');
+      assert.deepStrictEqual(card.asked[0].toolInput, { name: 'calendar', action: 'replace', url: 'https://mcp.example.com/mcp', current: { url: 'https://old.example.com/mcp' } });
+      card.answer(0, true);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, { calendar: { url: 'https://mcp.example.com/mcp' } });
+    });
+  });
+
+  // Two saves for one name that isn't there yet both raise add cards. The one
+  // allowed first writes; the other, allowed after, would replace an entry its
+  // card never showed, so it writes nothing.
+  test('two connector saves for one new name both ask to add it, and the one allowed second is refused, keeping the first', () => {
+    assert.strictEqual(typeof connectorWrite.proposeConnectorChange, 'function');
+    const { dir, file, card, ctx } = connectorWorkspace('proto-connector-two-adds-');
+    inWorkspace(dir, () => {
+      fs.writeFileSync(file, '{"mcpServers":{}}');
+      const table = buildDispatch();
+      const first = captureWs();
+      const second = captureWs();
+      table.save_connector(ctx, first, { name: 'example-alpha', content: '{"url":"https://alpha.example.com/mcp"}', conversationId: 'convo-race' });
+      table.save_connector(ctx, second, { name: 'example-alpha', content: '{"url":"https://beta.example.com/mcp"}', conversationId: 'convo-race' });
+      assert.deepStrictEqual(card.asked.map((r) => r.toolInput.action), ['add', 'add'], 'both cards ask to add it');
+      card.answer(1, true);
+      assert.deepStrictEqual(second.sent, [{ type: 'connector_saved', name: 'example-alpha', action: 'saved', takesEffect: 'next agent start' }]);
+      const written = fs.readFileSync(file);
+      card.answer(0, true);
+      assert.deepStrictEqual(first.sent, [{ type: 'connector_error', message: CONNECTOR_ALREADY_SET_UP('example-alpha') }], 'the later Allow is refused');
+      assert.deepStrictEqual(fs.readFileSync(file), written, 'and the entry allowed first stays, byte for byte');
+      assert.deepStrictEqual(JSON.parse(written).mcpServers, { 'example-alpha': { url: 'https://beta.example.com/mcp' } });
     });
   });
 
