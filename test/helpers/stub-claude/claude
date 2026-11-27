@@ -79,7 +79,9 @@
 // text the write carries.
 // Any rule may give "hooks": [{ "event", "tool", "input", "error", "extra",
 // "untilFile" }] to run Rundock's real permission hook for each call, in
-// order, before its turn: see runHookCalls below.
+// order, before its turn: see runHookCalls below. A Bash or PowerShell call
+// outside the sandbox that the hook allows is then put to the PermissionRequest
+// hooks, as Claude Code does: see askPermissionRequest.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -295,7 +297,10 @@ const SETTINGS = (() => {
   try { return JSON.parse(value.trim().startsWith('{') ? value : fs.readFileSync(value, 'utf8')); } catch (e) { return {}; }
 })();
 function preToolUseHooks(tool) {
-  const entries = (SETTINGS.hooks && Array.isArray(SETTINGS.hooks.PreToolUse)) ? SETTINGS.hooks.PreToolUse : [];
+  return hooksFor('PreToolUse', tool);
+}
+function hooksFor(event, tool) {
+  const entries = (SETTINGS.hooks && Array.isArray(SETTINGS.hooks[event])) ? SETTINGS.hooks[event] : [];
   return entries.filter((e) => {
     const m = e && typeof e.matcher === 'string' ? e.matcher : '';
     if (!m || m === '*') return true;
@@ -531,6 +536,15 @@ function writeEvents(events, then) {
 function buildEnvelopes(rule) {
   const events = [];
   if (!initSent) { events.push(fx.init(SESSION_ID)); initSent = true; }
+  // Each command outside the sandbox the check above was asked about, with
+  // its outcome: the call, then its result or Claude Code's refusal. Its ids
+  // start at 1000, so they never meet a turn's own tool ids.
+  for (const call of SANDBOX_CALLS.splice(0)) {
+    const index = 1000 + (++sandboxCallSeq);
+    events.push(...fx.toolUseFlow(call.tool, call.input, index));
+    if (call.ran) events.push(fx.toolResult(index, 'ran'));
+    else events.push(fx.sandboxOverrideDenied(call.tool, index), fx.toolResult(index, 'Run outside of the sandbox', true));
+  }
   let fullText = '';
   let toolIndex = 1;
   let hadTool = false;
@@ -852,7 +866,8 @@ function runHookCalls(calls, then) {
           pid: process.pid, agent: AGENT, sessionId: SESSION_ID, sentSession: input.session_id || null, subagent: input.agent_id || null, convo: process.env.RUNDOCK_CONVO_ID || null, event, tool: input.tool_name, answer, raw: answer ? undefined : out, ts: Date.now(),
         }) + '\n');
       } catch (e) { /* logging is best-effort */ }
-      next();
+      if (sandboxOffAllowed(event, input, answer)) askPermissionRequest(input.tool_name, input.tool_input, next);
+      else next();
     };
     let child;
     try {
@@ -862,6 +877,59 @@ function runHookCalls(calls, then) {
     child.on('error', () => {});
     child.on('close', () => { let answer = null; try { answer = JSON.parse(out); } catch (e) { /* raw kept */ } log(answer); });
     child.stdin.end(JSON.stringify(input));
+  };
+  next();
+}
+
+// CLAUDE CODE'S OWN CHECK FOR A COMMAND OUTSIDE THE SANDBOX. A Bash or
+// PowerShell call with `dangerouslyDisableSandbox: true` that a PreToolUse
+// hook allowed is put to the PermissionRequest hooks the --settings file
+// names, in order, each with the payload below on stdin. An answer of exactly
+// allow runs it; no decision, or no entry at all, refuses it, and the next turn
+// opens with the call, the `permission_denied` line and the error result the
+// CLI gives in headless mode. Only Rundock's own hook is modelled, run as
+// runHookCalls runs it. Each check is logged to the hook log as a
+// PermissionRequest line with every answer and its `outcome`. Run for no other
+// call, so every other scenario is as it was.
+const ALLOW_ONCE = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
+const SANDBOX_CALLS = [];
+let sandboxCallSeq = 0;
+function sandboxOffAllowed(event, input, answer) {
+  const said = answer && answer.hookSpecificOutput;
+  return event === 'PreToolUse' && (input.tool_name === 'Bash' || input.tool_name === 'PowerShell')
+    && !!input.tool_input && input.tool_input.dangerouslyDisableSandbox === true
+    && !!said && said.permissionDecision === 'allow';
+}
+function askPermissionRequest(tool, toolInput, then) {
+  const hooks = hooksFor('PermissionRequest', tool);
+  const answers = [];
+  const done = () => {
+    const ran = answers.some((a) => JSON.stringify(a) === ALLOW_ONCE);
+    try {
+      fs.appendFileSync(HOOK_LOG, JSON.stringify({
+        pid: process.pid, agent: AGENT, sessionId: SESSION_ID, convo: process.env.RUNDOCK_CONVO_ID || null, event: 'PermissionRequest', tool, command: toolInput.command, answers, outcome: ran ? 'ran' : 'refused', ts: Date.now(),
+      }) + '\n');
+    } catch (e) { /* logging is best-effort */ }
+    SANDBOX_CALLS.push({ tool, input: toolInput, ran });
+    then();
+  };
+  let at = 0;
+  const next = () => {
+    if (at >= hooks.length) { done(); return; }
+    const hook = hooks[at++];
+    if (!String(hook.command).includes('permission-hook')) notModelled('a PermissionRequest hook other than Rundock\'s');
+    let out = '';
+    let child;
+    try {
+      child = require('child_process').spawn(process.execPath, [PERMISSION_HOOK], { env: process.env, stdio: ['pipe', 'pipe', 'ignore'] });
+    } catch (e) { answers.push(null); next(); return; }
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('error', () => {});
+    child.on('close', () => { let a = null; try { a = JSON.parse(out); } catch (e) { /* no answer */ } answers.push(a); next(); });
+    child.stdin.end(JSON.stringify({
+      session_id: SESSION_ID, transcript_path: '', cwd: process.cwd(), permission_mode: argValue('--permission-mode') || 'default',
+      hook_event_name: 'PermissionRequest', tool_name: tool, tool_input: toolInput,
+    }));
   };
   next();
 }

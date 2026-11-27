@@ -92,6 +92,21 @@ function textTurn(text, { sessionId = null, deltaChunks = 2 } = {}) {
   return events;
 }
 
+// Claude Code's own refusal of a command outside the sandbox that no
+// PermissionRequest hook allowed, in headless mode: this line, then the call's
+// error result. Nothing ran.
+function sandboxOverrideDenied(toolName, index = 1) {
+  return {
+    type: 'system', subtype: 'permission_denied', tool_name: toolName, tool_use_id: `toolu_${index}`,
+    decision_reason_type: 'sandboxOverride', decision_reason: 'dangerouslyDisableSandbox', message: 'Run outside of the sandbox',
+  };
+}
+
+// A tool's result, as the user message that carries it.
+function toolResult(index, content, isError = false) {
+  return { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${index}`, content, is_error: isError }] } };
+}
+
 function toLines(events) {
   return events.map(e => JSON.stringify(e)).join('\n') + '\n';
 }
@@ -110,5 +125,5 @@ const MARKERS = {
 module.exports = {
   init, contentBlockStartText, textDelta, contentBlockStop,
   toolUseStart, inputJsonDelta, toolUseFlow, messageDelta, messageStop,
-  assistantMessage, result, textTurn, toLines, MARKERS,
+  assistantMessage, result, textTurn, toLines, MARKERS, sandboxOverrideDenied, toolResult,
 };
