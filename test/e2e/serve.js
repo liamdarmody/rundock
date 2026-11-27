@@ -6,9 +6,11 @@
 const path = require('node:path');
 const { buildFixture } = require('./fixture.js');
 
-// The stub runtime first on PATH, so a spec that presses Run on a routine
-// spawns the stub and never a real agent CLI with permissions skipped.
-process.env.PATH = path.join(__dirname, '..', 'helpers', 'stub-claude') + path.delimiter + process.env.PATH;
+// The stub runtimes first on PATH, so a spec that presses Run on a routine
+// spawns the stub and never a real agent CLI with permissions skipped, and a
+// Codex agent's turn runs the stub app-server and never a real one.
+process.env.PATH = path.join(__dirname, '..', 'helpers', 'stub-claude') + path.delimiter
+  + path.join(__dirname, '..', 'helpers', 'stub-codex') + path.delimiter + process.env.PATH;
 
 const { workspace, home } = buildFixture();
 process.env.HOME = home;
