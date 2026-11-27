@@ -329,6 +329,9 @@ test('with helpers off, Fern\'s helpers leave her reply, her turn and the conver
   assert.strictEqual(helpers().runningCount(convo), 0, 'no helper is counted');
   assert.strictEqual(helpers().stateOf(convo), undefined, 'no helper state for the conversation');
   assert.deepStrictEqual([...appServerCalls('turn/interrupt'), ...appServerCalls('turn/steer')], [], 'no thread was interrupted or steered');
+  const { readConversations } = require('../../lib/store/persistence.js');
+  const kept = readConversations().find((c) => c && c.id === convo) || {};
+  assert.ok(!('helpersNoticed' in kept), 'Fern is not kept as noticed');
 });
 
 // By design this passes before helpers existed too. Its sibling in

@@ -8,7 +8,8 @@
 // never rows. A routine, which nobody watches, never shows rows.
 //
 // The team: Fern leads on Codex; Ash and Rowan (agent name
-// example-research-lead) report to Fern.
+// example-research-lead) report to Fern. Sky, also on Codex, can take over a
+// conversation from Fern.
 const { test, before, after, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -31,6 +32,7 @@ before(async () => {
       fern: agentFile({ name: 'fern', displayName: 'Fern', role: 'Lead', order: 1, runtime: 'codex', body: 'You are Fern.' }),
       ash: agentFile({ name: 'ash', displayName: 'Ash', order: 2, reportsTo: 'fern' }),
       'example-research-lead': agentFile({ name: 'example-research-lead', displayName: 'Rowan', order: 3, reportsTo: 'fern' }),
+      sky: agentFile({ name: 'sky', displayName: 'Sky', order: 4, runtime: 'codex', reportsTo: 'fern', body: 'You are Sky.' }),
     },
     env: { RUNDOCK_PERMISSION_TIMEOUT_MS: '1500' },
   });
@@ -66,11 +68,12 @@ function open(prefix) {
   opened.add(convo);
   return convo;
 }
-const say = (convo, words) => {
+const sayAs = (agent, convo, words) => {
   const since = client.messages.length;
-  client.send({ type: 'chat', conversationId: convo, agent: 'fern', content: words });
+  client.send({ type: 'chat', conversationId: convo, agent, content: words });
   return since;
 };
+const say = (convo, words) => sayAs('fern', convo, words);
 const turnDone = (convo, since) => client.waitForEvent('system', 'done', convo, { since, timeout: 20000 });
 const changes = (convo, since = 0) => client.messages.slice(since).filter((m) => m.type === 'helpers_changed' && m._conversationId === convo);
 const rowNamed = (m, name) => (m.helpers || []).find((r) => r.agent === name);
@@ -100,7 +103,7 @@ test('a helper Fern starts is a row on Fern\'s list, named, counted while it run
     toolUseId: rest.toolUseId, agent: 'rates', kind: 'codex', role: 'worker', task: null,
     state: 'running', step: null, file: null, capped: false,
   });
-  assert.strictEqual(typeof firstBatch, 'boolean');
+  assert.strictEqual(firstBatch, true, 'the first helper Fern starts in the conversation is her first batch');
   assert.strictEqual(helpers().runningCount(convo), 1, 'a running helper is counted');
 
   release(gate);
@@ -528,6 +531,8 @@ test('a sixth helper is stopped: no row or count, then interrupted, its row show
   const { msg } = await rowsWhere(convo, since, stopped('inbox'), 'the inbox row, stopped');
   const inbox = rowNamed(msg, 'inbox');
   assert.deepStrictEqual([inbox.state, inbox.capped], ['killed', true]);
+  assert.deepStrictEqual(msg.helpers.filter((r) => r.capped).map((r) => r.agent), ['inbox'], 'only the inbox is shown stopped');
+  assert.ok(msg.helpers.every((r) => r.firstBatch === true), 'all six are Fern\'s first batch, the stopped one included');
   assert.strictEqual(running(msg.helpers), 5, 'the five run on');
   assert.ok(!changes(convo, since).some((m) => stateOf(m.helpers || [], 'inbox') === 'running'), 'the inbox never ran on the list');
   assert.strictEqual(maxRunning(convo, since), 5, 'never more than five counted');
@@ -698,6 +703,32 @@ test('while five run, a helper given more work is stopped the same way, its row 
   await turnDone(convo, since);
 });
 
+test('a stopped helper given more work while five still run is stopped again, and Fern reads why again', async () => {
+  const convo = open('cxcaptwice');
+  const gate = hold('captwice');
+  const againGate = hold('captwice-more');
+  const leadGate = hold('captwice-lead');
+  h.clearInvocations();
+  h.writeCodexScenario([{ match: { promptIncludes: 'TWICE-ONE' }, text: 'Fern waits.', untilFile: leadGate,
+    helpers: [...fiveOn(gate), { nickname: 'inbox', holdForInterrupt: true, again: { untilFile: againGate, holdForInterrupt: true } }] }]);
+  const since = say(convo, 'TWICE-ONE please');
+  await rowsWhere(convo, since, stopped('inbox'), 'the inbox row, stopped');
+  assert.ok(await h.waitUntil(() => appServer('turn/steer').length === 1), 'Fern was steered');
+  release(againGate);
+  assert.ok(await h.waitUntil(() => appServer('turn/steer').length === 2), 'Fern was steered again');
+  const stops = appServer('turn/interrupt');
+  assert.strictEqual(stops.length, 2, 'interrupted again');
+  assert.strictEqual(stops[1].params.threadId, stops[0].params.threadId, 'the same helper');
+  assert.notStrictEqual(stops[1].params.turnId, stops[0].params.turnId, 'on its new turn');
+  assert.deepStrictEqual(appServer('turn/steer').map((s) => s.params.input[0].text), [CAP_LINE('inbox'), CAP_LINE('inbox')]);
+  assert.ok(await h.waitUntil(() => capEvents(convo).length === 2), 'each refusal recorded');
+  assert.ok(!changes(convo, since).some((m) => stateOf(m.helpers || [], 'inbox') === 'running'), 'the inbox never ran on the list');
+  assert.strictEqual(maxRunning(convo, since), 5);
+  release(gate);
+  release(leadGate);
+  await turnDone(convo, since);
+});
+
 test('a stopped helper\'s approval is declined at once and raises no card', async () => {
   const convo = open('cxcapask');
   const gate = hold('capask');
@@ -714,6 +745,115 @@ test('a stopped helper\'s approval is declined at once and raises no card', asyn
     release(gate);
     await turnDone(convo, since);
   });
+});
+
+// THE FIRST BATCH. Fern starts helpers without asking, so her first helpers
+// in a conversation are marked for the page's notice instead of a card: every
+// helper started in her first turn that starts any. She is then kept on the
+// conversation's record as noticed, and no later batch of hers is marked
+// there, the conversation opened again included.
+const { readConversations, writeConversations } = require('../../lib/store/persistence.js');
+const record = (convo) => readConversations().find((c) => c && c.id === convo);
+const plant = (entry) => writeConversations([entry, ...readConversations()]);
+const pendingIn = (convo) => [...h.internal.pendingPermissionRequests.values()].filter((p) => p.conversationId === convo);
+// Each helper's marks across every list sent from `since` on.
+function marksIn(convo, since) {
+  const out = {};
+  for (const m of changes(convo, since)) for (const r of m.helpers || []) (out[r.agent] = out[r.agent] || new Set()).add(r.firstBatch);
+  return Object.fromEntries(Object.entries(out).map(([name, set]) => [name, [...set]]));
+}
+async function listed() {
+  const since = client.messages.length;
+  client.send({ type: 'get_conversations' });
+  const { msg } = await client.waitFor((m) => m.type === 'conversations', { since, timeout: 10000, label: 'the conversation list' });
+  return msg.conversations;
+}
+// Fern (or `agent`) starts `names` in one turn and waits for them to end.
+async function batch(convo, words, agent = 'fern') {
+  const since = sayAs(agent, convo, words);
+  await turnDone(convo, since);
+  return since;
+}
+const batchRule = (words, names) => ({ match: { promptIncludes: words }, text: 'Done.', awaitHelpers: true, helpers: names.map((nickname) => ({ nickname })) });
+
+test('Fern\'s first batch is every helper started in her first turn that starts any, with no card, and a later turn\'s helpers are not marked', async () => {
+  const convo = open('cxfirst');
+  h.writeCodexScenario([
+    { match: { promptIncludes: 'FIRST-NONE' }, text: 'Nothing to hand on.' },
+    batchRule('FIRST-ONE', ['rates', 'pipeline']),
+    batchRule('FIRST-TWO', ['deck']),
+  ]);
+  await batch(convo, 'FIRST-NONE please');
+  assert.strictEqual((record(convo) || {}).helpersNoticed, undefined, 'a turn that starts none is not the first batch');
+  const one = await batch(convo, 'FIRST-ONE please');
+  assert.deepStrictEqual(marksIn(convo, one), { rates: [true], pipeline: [true] });
+  assert.deepStrictEqual(cards(convo, 0), [], 'no card');
+  assert.deepStrictEqual(pendingIn(convo), [], 'nothing waits for an answer');
+  assert.deepStrictEqual(record(convo).helpersNoticed, ['fern'], 'Fern is kept as noticed');
+  assert.strictEqual(record(convo).helpersAllowed, undefined, 'apart from the leads allowed');
+  const two = await batch(convo, 'FIRST-TWO please');
+  assert.deepStrictEqual(marksIn(convo, two).deck, [false], 'a later turn\'s helper is not marked');
+  assert.deepStrictEqual(record(convo).helpersNoticed, ['fern'], 'kept once');
+});
+
+test('in a conversation opened again, Fern\'s next helpers are not marked', async () => {
+  const convo = open('cxfirstreopen');
+  h.writeCodexScenario([batchRule('REOPEN-ONE', ['rates']), batchRule('REOPEN-TWO', ['deck'])]);
+  const one = await batch(convo, 'REOPEN-ONE please');
+  assert.deepStrictEqual(marksIn(convo, one), { rates: [true] });
+  h.reapConvo(convo);
+  const two = await batch(convo, 'REOPEN-TWO please');
+  assert.deepStrictEqual(marksIn(convo, two).deck, [false]);
+});
+
+test('a conversation whose record keeps Fern as noticed, as after Rundock restarts, is kept when the list loads and marks none of her helpers', async () => {
+  const convo = open('cxfirstrestart');
+  plant({ id: convo, helpersNoticed: ['fern'] });
+  assert.ok(!(await listed()).some((c) => c.id === convo), 'a record holding only the notice is not listed');
+  assert.deepStrictEqual(record(convo), { id: convo, helpersNoticed: ['fern'] }, 'and is kept on disk');
+  h.writeCodexScenario([batchRule('RESTART-ONE', ['rates'])]);
+  const one = await batch(convo, 'RESTART-ONE please');
+  assert.deepStrictEqual(marksIn(convo, one), { rates: [false] });
+});
+
+test('a window that saves helpersNoticed itself changes nothing: Fern\'s first batch is still marked, and the list never sends it', async () => {
+  const convo = open('cxfirstforged');
+  client.send({ type: 'save_conversation', conversation: { id: convo, agentId: 'fern', title: 'Forged', helpersNoticed: ['fern'] } });
+  assert.ok(await h.waitUntil(() => record(convo), { timeout: 5000 }), 'the conversation was saved');
+  assert.strictEqual(record(convo).helpersNoticed, undefined, 'not taken from the window');
+  h.writeCodexScenario([batchRule('FORGED-ONE', ['rates'])]);
+  const one = await batch(convo, 'FORGED-ONE please');
+  assert.deepStrictEqual(marksIn(convo, one), { rates: [true] });
+  assert.deepStrictEqual(record(convo).helpersNoticed, ['fern']);
+  client.send({ type: 'save_conversation', conversation: { id: convo, agentId: 'fern', title: 'Saved again', helpersNoticed: [] } });
+  assert.ok(await h.waitUntil(() => record(convo).title === 'Saved again', { timeout: 5000 }), 'saved again');
+  assert.deepStrictEqual(record(convo).helpersNoticed, ['fern'], 'a later save keeps the server\'s list');
+  const shown = (await listed()).find((c) => c.id === convo);
+  assert.ok(shown, 'the conversation is listed');
+  assert.strictEqual(shown.helpersNoticed, undefined, 'without the list');
+});
+
+test('Fern in the leads allowed helpers alone is still marked: being allowed is not being noticed', async () => {
+  const convo = open('cxfirstallowed');
+  plant({ id: convo, helpersAllowed: ['fern'] });
+  h.writeCodexScenario([batchRule('ALLOWED-ONE', ['rates'])]);
+  const one = await batch(convo, 'ALLOWED-ONE please');
+  assert.deepStrictEqual(marksIn(convo, one), { rates: [true] });
+  assert.deepStrictEqual(record(convo), { id: convo, helpersAllowed: ['fern'], helpersNoticed: ['fern'] });
+});
+
+test('after Sky takes the conversation over from Fern, Sky\'s first batch is marked once', async () => {
+  const convo = open('cxfirstsky');
+  h.writeCodexScenario([batchRule('SKY-FERN', ['rates']), batchRule('SKY-ONE', ['deck']), batchRule('SKY-TWO', ['hooks'])]);
+  const fern = await batch(convo, 'SKY-FERN please');
+  assert.deepStrictEqual(marksIn(convo, fern), { rates: [true] });
+  const one = await batch(convo, 'SKY-ONE please', 'sky');
+  assert.ok(changes(convo, one).every((m) => m.agentId === 'sky'), 'the list is Sky\'s');
+  assert.deepStrictEqual(marksIn(convo, one).deck, [true], 'Sky\'s first batch');
+  const two = await batch(convo, 'SKY-TWO please', 'sky');
+  assert.deepStrictEqual(marksIn(convo, two).hooks, [false], 'once');
+  assert.deepStrictEqual(record(convo).helpersNoticed, ['fern', 'sky']);
+  assert.deepStrictEqual(cards(convo, 0), [], 'no card for either');
 });
 
 test('when the app-server goes, every running helper row fails and the count is zero', async () => {

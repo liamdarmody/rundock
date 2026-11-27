@@ -557,6 +557,26 @@ describe("the cap on a lead's Codex helpers", () => {
     assert.deepStrictEqual(log[2], ['steer', LINE('rates')]);
   });
 
+  test('a stopped helper given more work while five still run is stopped again, and Fern reads why again', async () => {
+    const c = convo();
+    five(c);
+    const inbox = rec('inbox');
+    begin(c, inbox);
+    await settle();
+    inbox.state = 'killed';
+    tell(c, inbox, 'end');
+    log = [];
+    inbox.state = 'running';
+    tell(c, inbox, 'start');
+    assert.deepStrictEqual(log, [], 'no row while it waits to be stopped');
+    inbox.turnId = 'turn-inbox-2';
+    tell(c, inbox, 'turn');
+    await settle();
+    assert.deepStrictEqual(steps(), ['interrupt', 'rows', 'steer', 'event']);
+    assert.deepStrictEqual(log[2], ['steer', LINE('inbox')]);
+    assert.strictEqual(helpers.runningCount(c), 5);
+  });
+
   test('once one of five ends, the next starts and runs', async () => {
     const c = convo();
     const recs = five(c);
@@ -579,5 +599,174 @@ describe("the cap on a lead's Codex helpers", () => {
     assert.strictEqual(steps().filter((s) => s === 'rows').length, 10, 'ten rows shown');
     assert.ok(!steps().includes('interrupt'), 'none stopped');
     assert.deepStrictEqual([helpers.runningCount(a), helpers.runningCount(b)], [5, 5]);
+  });
+});
+
+// THE FIRST BATCH. A Codex lead starts helpers without asking, so its first
+// helpers in a conversation are marked for the page's notice instead of a
+// card: every helper started in the lead's first turn that starts any, a
+// stopped one included. The lead is then kept on the conversation's record as
+// noticed, apart from the leads the person allowed, and nothing is marked
+// again for it there.
+describe("a Codex lead's first batch", () => {
+  const helpers = require('../../lib/delegation/helpers.js');
+  const config = require('../../lib/config.js');
+  const { readConversations, writeConversations } = require('../../lib/store/persistence.js');
+  const { makeWorkspace, agentFile, cleanup } = require('../helpers/workspace.js');
+  let cards = [];
+  let prev;
+  before(() => {
+    prev = { enabled: helpers.HELPERS_ENABLED, workspace: config.getWorkspace() };
+    helpers.HELPERS_ENABLED = true;
+    prev.deps = helpers.wireHelpersDeps({
+      safeSend: () => {},
+      requestServerPermission: (req) => { cards.push(req); req.onDecision(true, null, { card: true }); },
+    });
+    config.setWorkspace(makeWorkspace({ agents: {
+      wren: agentFile({ name: 'wren', displayName: 'Wren', role: 'Lead', order: 1 }),
+      ash: agentFile({ name: 'ash', displayName: 'Ash', order: 2, reportsTo: 'wren' }),
+    } }));
+  });
+  after(() => {
+    helpers.HELPERS_ENABLED = prev.enabled;
+    helpers.wireHelpersDeps(prev.deps);
+    config.setWorkspace(prev.workspace);
+    cleanup();
+  });
+  beforeEach(() => { cards = []; });
+
+  let n = 0;
+  const convo = () => `first-unit-${++n}`;
+  const rec = (c, name, leadTurnId) => ({
+    threadId: `${c}-${name}`, leadThreadId: LEAD, leadTurnId, name, role: null,
+    state: 'running', turnId: `turn-${name}`, step: null, file: null, capped: false,
+  });
+  const ctl = { interrupt: () => Promise.resolve({}), steer: () => Promise.resolve({}), queue: () => {} };
+  function begin(c, r, lead = 'fern') {
+    helpers.codexHelper(c, lead, r, 'start', ctl);
+    helpers.codexHelper(c, lead, r, 'turn', ctl);
+  }
+  const marks = (c) => Object.fromEntries(helpers.helperRows(c).map((r) => [r.agent, r.firstBatch]));
+  const record = (c) => readConversations().find((x) => x && x.id === c);
+  const plant = (entry) => writeConversations([entry, ...readConversations()]);
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  test('every helper a Codex lead starts in its first turn is marked, with no card, and the lead is kept as noticed', () => {
+    const c = convo();
+    begin(c, rec(c, 'rates', 'turn-1'));
+    begin(c, rec(c, 'pipeline', 'turn-1'));
+    assert.deepStrictEqual(marks(c), { rates: true, pipeline: true });
+    assert.deepStrictEqual(cards, [], 'no card');
+    assert.deepStrictEqual(record(c), { id: c, helpersNoticed: ['fern'] }, 'kept apart from the leads allowed');
+  });
+
+  test('a helper the lead starts in a later turn is not marked', () => {
+    const c = convo();
+    begin(c, rec(c, 'rates', 'turn-1'));
+    begin(c, rec(c, 'deck', 'turn-2'));
+    begin(c, rec(c, 'hooks', 'turn-1'));
+    assert.deepStrictEqual(marks(c), { rates: true, deck: false, hooks: true });
+    assert.deepStrictEqual(record(c).helpersNoticed, ['fern'], 'kept once');
+  });
+
+  test('a helper stopped by the cap in the first batch is marked too', async () => {
+    const c = convo();
+    for (const name of ['rates', 'pipeline', 'deck', 'hooks', 'calendar', 'inbox']) begin(c, rec(c, name, 'turn-1'));
+    await settle();
+    const inbox = helpers.helperRows(c).find((r) => r.agent === 'inbox');
+    assert.deepStrictEqual([inbox.capped, inbox.firstBatch], [true, true]);
+    assert.ok(helpers.helperRows(c).every((r) => r.firstBatch === true), 'all six');
+  });
+
+  test('a helper keeps its mark when it is given more work in a later turn', () => {
+    const c = convo();
+    const rates = rec(c, 'rates', 'turn-1');
+    begin(c, rates);
+    rates.state = 'completed';
+    helpers.codexHelper(c, 'fern', rates, 'end', ctl);
+    begin(c, rec(c, 'deck', 'turn-2'));
+    rates.state = 'running';
+    begin(c, rates);
+    assert.deepStrictEqual(marks(c), { rates: true, deck: false });
+  });
+
+  test('a conversation whose record keeps the lead as noticed, as one opened again does, marks nothing', () => {
+    const c = convo();
+    plant({ id: c, helpersNoticed: ['fern'] });
+    begin(c, rec(c, 'rates', 'turn-1'));
+    assert.deepStrictEqual(marks(c), { rates: false });
+    assert.deepStrictEqual(record(c), { id: c, helpersNoticed: ['fern'] });
+  });
+
+  test('a lead the person allowed helpers for is still marked: being allowed is not being noticed', () => {
+    const c = convo();
+    plant({ id: c, helpersAllowed: ['fern'] });
+    begin(c, rec(c, 'rates', 'turn-1'));
+    assert.deepStrictEqual(marks(c), { rates: true });
+    assert.deepStrictEqual(record(c), { id: c, helpersAllowed: ['fern'], helpersNoticed: ['fern'] });
+  });
+
+  test('each Codex lead has its own first batch: after Sky takes over, her first helpers are marked once', () => {
+    const c = convo();
+    begin(c, rec(c, 'rates', 'turn-1'));
+    begin(c, rec(c, 'deck', 'turn-2'), 'sky');
+    begin(c, rec(c, 'hooks', 'turn-3'), 'sky');
+    assert.deepStrictEqual(marks(c), { rates: true, deck: true, hooks: false }, 'Fern\'s helper keeps her mark beside Sky\'s');
+    assert.deepStrictEqual(record(c).helpersNoticed, ['fern', 'sky']);
+  });
+
+  test('a helper with no lead turn known is not marked and leaves the first batch to come', () => {
+    const c = convo();
+    begin(c, rec(c, 'rates', null));
+    assert.strictEqual(record(c), undefined, 'nothing kept');
+    begin(c, rec(c, 'deck', 'turn-1'));
+    assert.deepStrictEqual(marks(c), { rates: false, deck: true });
+  });
+
+  test('when the record cannot be kept, the first batch is still marked', () => {
+    const c = convo();
+    const workspace = config.getWorkspace();
+    const file = require('node:path').join(workspace, '.rundock', 'conversations.json');
+    const fs = require('node:fs');
+    const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : null;
+    fs.rmSync(file, { force: true });
+    fs.mkdirSync(file, { recursive: true });
+    const warn = console.warn;
+    const warned = [];
+    console.warn = (line) => warned.push(line);
+    try {
+      begin(c, rec(c, 'rates', 'turn-1'));
+      begin(c, rec(c, 'pipeline', 'turn-1'));
+    } finally {
+      console.warn = warn;
+      fs.rmSync(file, { recursive: true, force: true });
+      if (before !== null) fs.writeFileSync(file, before);
+    }
+    assert.deepStrictEqual(marks(c), { rates: true, pipeline: true });
+    assert.strictEqual(warned.length, 1, 'said once');
+    assert.match(warned[0], /Could not keep the notice for fern/);
+  });
+
+  test('a Claude Code lead kept as noticed alone still asks with a card before its first teammates start', async () => {
+    const c = convo();
+    plant({ id: c, helpersNoticed: ['wren'] });
+    const calls = [
+      { id: 'toolu_ash_1', input: { subagent_type: 'ash', description: 'Check the rates', prompt: 'Check the rates.' } },
+      { id: 'toolu_explore_1', input: { subagent_type: 'Explore', description: 'Find the notes', prompt: 'Find the notes.' } },
+    ];
+    helpers.placeMessage(c, { agentId: 'wren', process: null }, calls);
+    const answers = await Promise.all(calls.map((call) => helpers.answerAgentRequest({ convoId: c, askedBy: 'wren', data: { tool_use_id: call.id, tool_input: call.input } })));
+    assert.deepStrictEqual(answers, [{ allow: true, card: true }, { allow: true, card: true }]);
+    assert.strictEqual(cards.length, 1, 'the card was raised');
+    assert.deepStrictEqual(record(c), { id: c, helpersNoticed: ['wren'], helpersAllowed: ['wren'] });
+    helpers.leadClosed(c, null);
+  });
+
+  test('with helpers off, nothing is marked and no record is kept', () => {
+    const c = convo();
+    helpers.HELPERS_ENABLED = false;
+    try { begin(c, rec(c, 'rates', 'turn-1')); } finally { helpers.HELPERS_ENABLED = true; }
+    assert.deepStrictEqual(helpers.helperRows(c), []);
+    assert.strictEqual(record(c), undefined);
   });
 });
