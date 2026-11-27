@@ -416,6 +416,7 @@ const MANIFEST = {
     "renderOrgChart",
   ],
   "composer.js": [
+    "addFiles",
     "attachmentsConnectionLost",
     "composersWorkspaceChanged",
     "fileSendAnswered",

@@ -1,20 +1,22 @@
 'use strict';
 // The composer's attached files: the + button beside the message field, the
-// picker it opens, a chip per picked file in a row above the field, and one
-// inline message under it. Same UMD pattern as the other view modules
+// picker it opens, a chip per added file in a row above the field, and the
+// messages under it. Same UMD pattern as the other view modules
 // (node-requireable, window-attached), republishing every function on the
 // root object because the static inline handlers (openAttachPicker,
 // pickFiles), setupChat (showComposerFor) and the delegation header effect in
 // app.js (refreshAttachButton) reach these by bare name.
 //
 // EACH CONVERSATION HAS ITS OWN COMPOSER, as each keeps its own unsent text
-// (switchComposerTo): the files picked and not yet sent and the inline message
+// (switchComposerTo): the files added and not yet sent and the messages
 // showing. The composer on screen is always the one of activeConversation, and
 // showComposerFor draws it whenever setupChat opens a conversation.
 //
-// A PICK IS TAKEN WHOLE OR NOT AT ALL. One that would pass 5 files or
-// 20,000,000 bytes, counting the files already there, adds nothing and says
-// why; the per-file checks are the server's until the composer has its own.
+// A FILE IS CHECKED AS IT IS ADDED. A pick, a paste and a drop all go through
+// addFiles, which reads each file's bytes in the window (attachment-sniff.js)
+// and refuses a file Rundock can't take on its own, saying why, and an add
+// that would pass 5 files or 20,000,000 bytes whole. The server checks every
+// file again before it stores one.
 //
 // A FILE NAME IS TEXT. It reaches the page only through textContent and
 // setAttribute, never through markup.
@@ -22,7 +24,7 @@
 // Shared state reached through the global lexical environment at call time:
 // agents, conversations, activeConversation, getConvoState, ws, addUserMsg,
 // startProcessing, persistConversation, renderConvoList, plus the
-// classic-script globals RundockAttachmentWording and
+// classic-script globals RundockAttachmentWording, RundockAttachmentSniff and
 // RundockConversationState.
 (/** @param {any} root @param {() => object} factory */ function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -32,19 +34,21 @@
   }
 }(typeof self !== 'undefined' ? self : this, function () {
 
-const FILE_LIMIT = 5;
-const BYTE_LIMIT = 20000000;
 const CHIP_TYPES = new Map([['png', 'PNG'], ['jpg', 'JPEG'], ['jpeg', 'JPEG'], ['gif', 'GIF'], ['webp', 'WebP'],
   ['pdf', 'PDF'], ['txt', 'Text'], ['md', 'Markdown'], ['csv', 'CSV']]);
 
-// Conversation id to its composer: `files` (the picked File objects, in
-// chip order), `notice` (the inline message showing, or null), `waiting`
-// (the send awaiting its answer, or null) and `clearText` (a stored send's
-// text still to clear from the field when the conversation is next shown).
+// Conversation id to its composer: `files` (the added File objects, in
+// chip order), `notices` (the messages showing, oldest first), `waiting`
+// (the send awaiting its answer, or null), `clearText` (a stored send's
+// text still to clear from the field when the conversation is next shown),
+// `adds` (the adds not yet drawn) and `queue` (the last of them, which the
+// next one waits for).
 const composers = new Map();
 
 function composerFor(convoId) {
-  if (!composers.has(convoId)) composers.set(convoId, { files: [], notice: null, waiting: null, clearText: false });
+  if (!composers.has(convoId)) {
+    composers.set(convoId, { files: [], notices: [], waiting: null, clearText: false, adds: 0, queue: Promise.resolve() });
+  }
   return composers.get(convoId);
 }
 
@@ -56,10 +60,8 @@ function attachmentWording() {
   return typeof RundockAttachmentWording !== 'undefined' ? RundockAttachmentWording : require('../attachment-wording.js');
 }
 
-// The chip's type, by the name's extension with case ignored.
-function chipType(name) {
-  const dot = name.lastIndexOf('.');
-  return (dot !== -1 && CHIP_TYPES.get(name.slice(dot + 1).toLowerCase())) || 'File';
+function attachmentSniff() {
+  return typeof RundockAttachmentSniff !== 'undefined' ? RundockAttachmentSniff : require('../attachment-sniff.js');
 }
 
 // Drawn for the conversation setupChat opens: its chips, its inline message
@@ -95,20 +97,7 @@ function openAttachPicker() {
 function pickFiles(input) {
   const picked = Array.from(input.files || []);
   input.value = '';
-  const composer = shownComposer();
-  if (!composer || composer.waiting || !picked.length) return;
-  const all = composer.files.concat(picked);
-  const bytes = all.reduce((sum, file) => sum + file.size, 0);
-  const refusal = all.length > FILE_LIMIT ? { code: 'too-many-files', count: all.length, limit: FILE_LIMIT }
-    : bytes > BYTE_LIMIT ? { code: 'too-many-bytes', bytes, limit: BYTE_LIMIT } : null;
-  if (refusal) {
-    if (picked.length === 1) refusal.name = picked[0].name;
-    composer.notice = attachmentWording().refusalWording(refusal, picked.length);
-  } else {
-    composer.files = all;
-    composer.notice = null;
-  }
-  renderComposer(composer);
+  return addFiles(picked, 'pick');
 }
 
 // After a removal, focus goes to the next chip's remove button, or the
@@ -117,7 +106,7 @@ function pickFiles(input) {
 function removeComposerFile(composer, index) {
   if (composer.waiting) return;
   composer.files = composer.files.filter((_, i) => i !== index);
-  composer.notice = null;
+  composer.notices = [];
   renderComposer(composer);
   const buttons = document.querySelectorAll('#composer-chips .composer-chip-remove');
   (buttons[index] || buttons[index - 1] || document.getElementById('msg-input')).focus();
@@ -140,7 +129,7 @@ function chipFor(composer, file, index) {
   name.textContent = file.name;
   const meta = document.createElement('span');
   meta.className = 'composer-chip-meta';
-  meta.textContent = `${chipType(file.name)} · ${attachmentWording().formatSize(file.size)}`;
+  meta.textContent = `${CHIP_TYPES.get((kinds.get(file) || {}).type) || 'File'} · ${attachmentWording().formatSize(file.size)}`;
   text.append(name, meta);
   const remove = document.createElement('button');
   remove.type = 'button';
@@ -153,20 +142,24 @@ function chipFor(composer, file, index) {
   return chip;
 }
 
-// One inline message at a time, a bold title above the text. It is announced
-// by its container and never takes focus.
+// The messages, oldest first, each a bold title above the text. They are
+// announced by their container and never take focus.
 function renderComposerNotice(composer) {
   const box = document.getElementById('composer-notice');
   if (!box) return;
-  box.replaceChildren();
-  if (!composer.notice) return;
+  box.replaceChildren(...composer.notices.map((notice) => noticeFor(composer, notice)));
+}
+
+function noticeFor(composer, notice) {
+  const item = document.createElement('div');
+  item.className = 'composer-notice-item';
   const body = document.createElement('div');
   body.className = 'composer-notice-body';
   const title = document.createElement('strong');
   title.className = 'composer-notice-title';
-  title.textContent = composer.notice.title;
+  title.textContent = notice.title;
   const text = document.createElement('div');
-  text.textContent = composer.notice.text;
+  text.textContent = notice.text;
   body.append(title, text);
   const dismiss = document.createElement('button');
   dismiss.type = 'button';
@@ -174,8 +167,9 @@ function renderComposerNotice(composer) {
   dismiss.setAttribute('aria-label', 'Dismiss');
   dismiss.title = 'Dismiss';
   dismiss.textContent = '×';
-  dismiss.onclick = () => { composer.notice = null; renderComposerNotice(composer); };
-  box.append(body, dismiss);
+  dismiss.onclick = () => { composer.notices = composer.notices.filter((n) => n !== notice); renderComposerNotice(composer); };
+  item.append(body, dismiss);
+  return item;
 }
 
 // Send reads as ready for text or files. Left alone while it is the Stop
@@ -188,7 +182,7 @@ function relightSend() {
 
 function sendReady(text) {
   const composer = shownComposer();
-  if (composer && composer.waiting) return false;
+  if (composer && (composer.waiting || composer.adds)) return false;
   return !!String(text).trim() || (!!composer && composer.files.length > 0);
 }
 
@@ -232,18 +226,18 @@ function base64Of(file) {
 
 // Takes the send when the conversation has chips, and answers false
 // otherwise so the text goes the usual way. Either way the send takes the
-// conversation's inline message away.
+// conversation's messages away.
 function sendWithFiles(convo, text) {
   const composer = composerFor(convo.id);
   if (!composer.files.length) {
-    composer.notice = null;
+    composer.notices = [];
     renderComposerNotice(composer);
     return false;
   }
   const token = {};
   const files = composer.files.slice();
   composer.waiting = token;
-  composer.notice = null;
+  composer.notices = [];
   renderComposer(composer);
   document.getElementById('send-btn').disabled = true;
   document.getElementById('msg-input').readOnly = true;
@@ -264,11 +258,11 @@ function sendWithFiles(convo, text) {
 }
 
 // The wait ends without the message: the text and chips stay, the reason
-// shows, and Send comes back on.
+// shows as the only message, and Send comes back on.
 function endWait(convoId, notice) {
   const composer = composerFor(convoId);
   composer.waiting = null;
-  composer.notice = notice;
+  composer.notices = [{ ...notice }];
   if (!activeConversation || activeConversation.id !== convoId) return;
   renderComposer(composer);
   document.getElementById('send-btn').disabled = false;
@@ -284,7 +278,7 @@ function fileSendAnswered(d) {
   if (d.type === 'chat_refused') { endWait(d.conversationId, { title: d.title, text: d.text }); return; }
   composer.waiting = null;
   composer.files = [];
-  composer.notice = null;
+  composer.notices = [];
   if (typeof RundockSentFiles !== 'undefined') RundockSentFiles.mergeStoredFiles(d.conversationId, d.entry);
   const convo = conversations.find(c => c.id === d.conversationId);
   const onScreen = !!activeConversation && activeConversation.id === d.conversationId;
@@ -321,9 +315,78 @@ function composersWorkspaceChanged() {
   if (field) field.readOnly = false;
 }
 
+// ===== ADDING FILES =====
+//
+// An add is a pick, a paste or a drop, and takes these steps in order:
+//   1. The count: files held plus files added over LIMITS.files refuses the
+//      whole add before any file is read.
+//   2. Each file's bytes are read and checked on its own (checkFile).
+//   3. Each refused file gets its own message.
+//   4. The total: bytes held plus the passing files' bytes over
+//      LIMITS.messageBytes refuses every passing file, with one message.
+//   5. The passing files are appended in the order given.
+// An add that attaches files replaces the messages showing with its own; one
+// that attaches none adds its messages after them. An add belongs to the
+// conversation shown when it began, and adds run one after another, so each
+// counts the files the one before it attached. While one runs Send is off.
+
+// A held File to the kind its bytes were read as.
+const kinds = new WeakMap();
+
+function addFiles(files, source) {
+  const added = Array.from(files || []);
+  const composer = shownComposer();
+  if (!composer || composer.waiting || !added.length) return Promise.resolve();
+  const convoId = activeConversation.id;
+  composer.adds += 1;
+  relightSend();
+  const done = () => {
+    composer.adds -= 1;
+    if (composers.get(convoId) === composer && activeConversation && activeConversation.id === convoId) renderComposer(composer);
+  };
+  const turn = composer.queue.then(() => addInTurn(convoId, composer, added)).finally(done);
+  composer.queue = turn.catch(() => {});
+  return turn;
+}
+
+async function addInTurn(convoId, composer, added) {
+  const live = () => composers.get(convoId) === composer && !composer.waiting;
+  if (!live()) return;
+  const { LIMITS, checkFile } = attachmentSniff();
+  const { refusalWording } = attachmentWording();
+  const one = (list) => (list.length === 1 ? { name: list[0].name } : {});
+  const count = composer.files.length + added.length;
+  if (count > LIMITS.files) {
+    composer.notices = composer.notices.concat(refusalWording({ code: 'too-many-files', count, limit: LIMITS.files, ...one(added) }, added.length));
+    return;
+  }
+  const checked = await Promise.all(added.map((file) => file.arrayBuffer().then(
+    (buffer) => checkFile(new Uint8Array(buffer), file.name),
+    () => ({ code: 'unsupported', name: file.name }))));
+  if (!live()) return;
+  const own = [];
+  const passed = [];
+  added.forEach((file, i) => {
+    if (checked[i].code) own.push(refusalWording(checked[i], 1));
+    else passed.push(file);
+  });
+  const bytes = composer.files.concat(passed).reduce((sum, file) => sum + file.size, 0);
+  if (passed.length && bytes > LIMITS.messageBytes) {
+    own.push(refusalWording({ code: 'too-many-bytes', bytes, limit: LIMITS.messageBytes, ...one(passed) }, passed.length));
+    passed.length = 0;
+  }
+  if (!passed.length) {
+    composer.notices = composer.notices.concat(own);
+    return;
+  }
+  passed.forEach((file) => kinds.set(file, checked[added.indexOf(file)]));
+  composer.files = composer.files.concat(passed);
+  composer.notices = own;
+}
+
 return {
   showComposerFor, refreshAttachButton, openAttachPicker, pickFiles,
   sendReady, sendWaiting, firstAttachedName, sendWithFiles, fileSendAnswered, attachmentsConnectionLost,
-  composersWorkspaceChanged,
+  composersWorkspaceChanged, addFiles,
 };
 }));

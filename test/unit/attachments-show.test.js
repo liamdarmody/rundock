@@ -18,6 +18,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { JSDOM } = require('jsdom');
 const { storedText } = require('../../lib/attachments/receive.js');
+const { typed } = require('../helpers/attachment-bytes.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
@@ -84,7 +85,7 @@ function page() {
   const libs = ['markers.js', 'chat-markup.js', 'conversation-state.js', 'conversation-list.js', 'delegation-restore.js', 'attachment-wording.js'];
   // The new modules load only where they exist, so a tree without them
   // builds the page as it ships and fails on the assertions below.
-  for (const lib of ['attachment-lines.js', 'sent-files.js']) if (exists('public', lib)) libs.push(lib);
+  for (const lib of ['attachment-lines.js', 'sent-files.js', 'attachment-sniff.js']) if (exists('public', lib)) libs.push(lib);
   for (const lib of libs) w.eval(read('public', lib));
   for (const view of ['chat.js', 'conversations.js', 'composer.js']) w.eval(read('public', 'views', view));
   w.renderPendingPermissionCards = () => {};
@@ -191,8 +192,9 @@ describe('a message that names no file draws as before', () => {
   test('a message the server stored with no attached-file line draws as before', async () => {
     const p = page();
     const input = p.$('attach-input');
-    Object.defineProperty(input, 'files', { value: [new p.w.File([new Uint8Array(4)], 'a.png')], configurable: true });
+    Object.defineProperty(input, 'files', { value: [new p.w.File([typed('a.png', 4)], 'a.png')], configurable: true });
     input.dispatchEvent(new p.w.Event('change'));
+    for (let i = 0; i < 500 && !p.doc.querySelector('#composer-chips .composer-chip'); i++) await new Promise(r => setTimeout(r, 2));
     p.$('send-btn').click();
     for (let i = 0; i < 500 && !p.frames().some(f => f.type === 'chat'); i++) await new Promise(r => setTimeout(r, 2));
     assert.ok(p.frames().some(f => f.type === 'chat'), 'the message was sent');
@@ -383,8 +385,9 @@ describe('what the page knows of each file, and where it comes from', () => {
     const p = page();
     sentFiles(p);
     const input = p.$('attach-input');
-    Object.defineProperty(input, 'files', { value: [new p.w.File([new Uint8Array(4)], 'diagram.png')], configurable: true });
+    Object.defineProperty(input, 'files', { value: [new p.w.File([typed('diagram.png', 4)], 'diagram.png')], configurable: true });
     input.dispatchEvent(new p.w.Event('change'));
+    for (let i = 0; i < 500 && !p.doc.querySelector('#composer-chips .composer-chip'); i++) await new Promise(r => setTimeout(r, 2));
     p.$('send-btn').click();
     for (let i = 0; i < 500 && !p.frames().some(f => f.type === 'chat'); i++) await new Promise(r => setTimeout(r, 2));
     assert.ok(p.frames().some(f => f.type === 'chat'), 'the message was sent');
