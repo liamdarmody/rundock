@@ -185,3 +185,96 @@ describe('a reply that ends after the person switches workspace', () => {
     }
   });
 });
+
+// AS BEFORE WHEN NO REPLY IS RUNNING ACROSS A SWITCH.
+//
+// These pass without the fix as well, by design: they pin what a conversation
+// with nothing in flight across a switch already did. Each names the test
+// above that shares its setup and fails without the fix.
+describe('a conversation with no reply running across a switch', () => {
+  const asked = (tag, n) => `ASK-${n}-${tag} where is the plan?`;
+  const answer = (tag, n) => `ANSWER-${n}-${tag}`;
+  const rules = (tag, ...ns) => ns.map((n) => ({ match: { agent: 'chief-of-staff', promptIncludes: `ASK-${n}-${tag}` }, turn: [{ text: answer(tag, n) }] }));
+  const said = (dir, id) => rowsIn(dir, id).map((r) => `${r.role}: ${r.text}`);
+  async function answered(id, content) {
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: id, agent: 'chief-of-staff', content });
+    await client.waitFor((m) => m.type === 'result' && m._conversationId === id, { since, label: 'the reply', timeout: 15000 });
+  }
+
+  // Shares its start with 'a reply that ends after set_workspace writes
+  // nothing into the workspace opened, and is kept in the first', which fails
+  // without the fix.
+  test('a conversation started in a workspace saves there', async () => {
+    const id = h.freshConvoId('stays');
+    const tag = crypto.randomBytes(4).toString('hex');
+    h.writeScenario(rules(tag, 1));
+    try {
+      await answered(id, asked(tag, 1));
+      assert.deepStrictEqual(said(h.workspaceDir, id), [`user: ${asked(tag, 1)}`, `agent: ${answer(tag, 1)}`]);
+    } finally {
+      h.reapConvo(id);
+    }
+  });
+
+  // Shares its switch with 'a reply that ends after set_workspace writes
+  // nothing into the workspace opened, and is kept in the first', which fails
+  // without the fix.
+  test('after a switch with no reply running, a new conversation in the workspace opened saves there, and nothing in the first', async () => {
+    const id = h.freshConvoId('opened');
+    const tag = crypto.randomBytes(4).toString('hex');
+    const second = anotherWorkspace('Second');
+    fs.writeFileSync(path.join(second, 'stub-scenario.json'), JSON.stringify({ rules: rules(tag, 1) }));
+    try {
+      await switchTo({ type: 'set_workspace', path: second }, 'the switch');
+      await answered(id, asked(tag, 1));
+      assert.deepStrictEqual(said(second, id), [`user: ${asked(tag, 1)}`, `agent: ${answer(tag, 1)}`]);
+      assert.strictEqual(fs.existsSync(transcriptFile(h.workspaceDir, id)), false, 'nothing for it in the workspace left');
+    } finally {
+      if (h.internal.getWorkspace() !== h.workspaceDir) await back();
+      h.reapConvo(id);
+    }
+  });
+
+  // Shares its switch and its way back with 'a reply that ends after
+  // set_workspace writes nothing into the workspace opened, and is kept in the
+  // first', which fails without the fix.
+  test('after a switch and back, a follow-up in the first workspace conversation appends to its transcript there', async () => {
+    const id = h.freshConvoId('follow');
+    const tag = crypto.randomBytes(4).toString('hex');
+    const second = anotherWorkspace('Second');
+    h.writeScenario(rules(tag, 1, 2));
+    try {
+      await answered(id, asked(tag, 1));
+      await switchTo({ type: 'set_workspace', path: second }, 'the switch');
+      await back();
+      await answered(id, asked(tag, 2));
+      assert.deepStrictEqual(said(h.workspaceDir, id), [
+        `user: ${asked(tag, 1)}`, `agent: ${answer(tag, 1)}`, `user: ${asked(tag, 2)}`, `agent: ${answer(tag, 2)}`,
+      ]);
+      assert.strictEqual(fs.existsSync(transcriptFile(second, id)), false, 'nothing for it in the workspace visited');
+    } finally {
+      if (h.internal.getWorkspace() !== h.workspaceDir) await back();
+      h.reapConvo(id);
+    }
+  });
+
+  // Shares its held reply and its switch with 'a reply that ends after
+  // set_workspace writes nothing into the workspace opened, and is kept in the
+  // first', which fails without the fix.
+  test('a transcript read after the switch back holds the late reply once', async () => {
+    const id = h.freshConvoId('late-read');
+    const second = anotherWorkspace('Second');
+    try {
+      const held = await heldReply(id);
+      await switchTo({ type: 'set_workspace', path: second }, 'the switch');
+      await replyHandled(id, held);
+      await back();
+      const rows = h.internal.loadTranscript(id);
+      assert.strictEqual(rows.filter((r) => String(r.text || '').includes(held.marks.reply)).length, 1, 'the late reply, once');
+    } finally {
+      if (h.internal.getWorkspace() !== h.workspaceDir) await back();
+      h.reapConvo(id);
+    }
+  });
+});
