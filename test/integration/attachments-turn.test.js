@@ -346,8 +346,10 @@ async function readBy(agent, tags, { fresh = false } = {}) {
 // Text alone, sent as a string in exactly the line it always was.
 function plain(sent, expected) {
   assert.strictEqual(typeof sent.content, 'string', 'text alone is sent as a string');
-  assert.strictEqual(sent.line, lineOf(expected === undefined ? sent.content : expected), 'in the line it always was');
+  assert.strictEqual(sent.line, lineOf(expected), 'in the line it always was');
 }
+// What an agent arriving in the conversation is told of it, turn by turn.
+const arrival = (...turns) => `THE CONVERSATION SO FAR, BEFORE YOU JOINED:\n${turns.join('\n\n')}\n\n`;
 // A deleted file's line, sent as not available, with no path anywhere.
 function noLonger(sent, gone) {
   assert.strictEqual(typeof sent.content, 'string', 'a turn with no files is sent as a string');
@@ -364,6 +366,7 @@ const lineIn = (stored) => stored.content.split('\n').find((l) => l.startsWith('
 describe('each turn the server writes for an agent of its own accord', () => {
   const expired = (id, since) => arrived((m) => m.subtype === 'session_expired' && m._conversationId === id, { since, timeout: 15000 });
   const blocked = (offName, name) => `[SYSTEM: delegation-blocked] Your Agent tool call named "${offName}" (${name}), a workspace agent who is not one of your direct reports, so it was NOT run. No subagent may act as ${offName}. Do not retry the same call. If the task needs ${offName}, tell the user this needs routing through ${offName}'s leader and hand back. Otherwise continue without them.`;
+  const routing = (out, pending) => `[SYSTEM: routing-request] content-lead returned because the request was outside their scope. Here is what they said:\n\n--- content-lead ---\n${out}\n---\n\nThe user's latest request was: "${pending}". Respond with full awareness of what content-lead delivered. Do not re-delegate work already done. Route to the right specialist using the Agent tool.`;
   const routeOn = (who, pending) => `[SYSTEM: ${who} just returned because the user asked for something outside their scope. The user's pending request is: "${pending}"\n\nRoute this request now. Delegate to the right specialist if one fits, or handle it yourself. Do not summarise what the previous specialist did. Do not ask the user to repeat themselves. Respond to their request.]`;
 
   test('a blocked handoff\'s notice is sent as text alone, and a deleted file\'s line in it as not available', async () => {
@@ -425,7 +428,7 @@ describe('each turn the server writes for an agent of its own accord', () => {
         noLonger(sent, gone);
         assert.ok(sent.content.includes(`[DELEGATION BRIEF]\n${swap(brief, gone)}`), 'the brief with its line replaced');
       } else {
-        plain(sent);
+        plain(sent, `${arrival(`USER: ASK-8${half} please`)}[DELEGATION BRIEF]\n${brief}`);
         assert.ok(sent.content.includes(`[DELEGATION BRIEF]\n${brief}`), 'the brief as it was written');
       }
       h.reapConvo(id);
@@ -466,11 +469,12 @@ describe('each turn the server writes for an agent of its own accord', () => {
     h.clearInvocations();
     const since = client.messages.length;
     chat(id, 'ASK-5B see this', [file('screenshot.png', SCREENSHOT)]);
-    assert.ok(await storedFor(id, since) && await resultFor(id, 'DONE-ASK-5B', since), 'the first message is stored and answered');
+    const first = await storedFor(id, since);
+    assert.ok(first && await resultFor(id, 'DONE-ASK-5B', since), 'the first message is stored and answered');
     assert.deepStrictEqual((await readBy('chief-of-staff', 'ASK-5B')).content.slice(1), [imageBlock(SCREENSHOT)], 'the leader was sent the PNG');
     chat(id, 'NEXT-5B no files');
     const sent = await readBy('content-lead', 'BRIEF-5B');
-    plain(sent);
+    plain(sent, `${arrival(`USER: ${first.content}`, 'COS: DONE-ASK-5B', 'USER: NEXT-5B no files')}[DELEGATION BRIEF]\nBRIEF-5B do it`);
     h.reapConvo(id);
   });
 
@@ -519,7 +523,7 @@ describe('each turn the server writes for an agent of its own accord', () => {
         noLonger(sent, gone);
         assert.ok(sent.content.includes(`[DELEGATION BRIEF]\n${swap(brief, gone)}`), 'the brief with its line replaced');
       } else {
-        plain(sent);
+        plain(sent, `${arrival(`USER: ASK-5${half} please`)}[DELEGATION BRIEF]\n${brief}`);
         assert.ok(sent.content.includes(`[DELEGATION BRIEF]\n${brief}`), 'the brief as it was written');
       }
       h.reapConvo(id);
@@ -588,7 +592,7 @@ describe('each turn the server writes for an agent of its own accord', () => {
         noLonger(sent, gone);
         assert.ok(sent.content.includes(`The user's latest request was: "${swap(req, gone)}"`), 'the request with its line replaced');
       } else {
-        plain(sent);
+        plain(sent, arrival(`USER: ${req}`) + routing('Not mine.', req));
         assert.ok(sent.content.includes('[SYSTEM: routing-request] content-lead returned because the request was outside their scope.'), 'the routing request');
         assert.ok(sent.content.includes(`The user's latest request was: "${req}"`), 'with the request as it was written');
       }
@@ -612,7 +616,7 @@ describe('each turn the server writes for an agent of its own accord', () => {
         noLonger(sent, gone);
         assert.ok(sent.content.includes(`The user's latest request was: "${swap(task, gone)}"`), 'the request with its line replaced');
       } else {
-        plain(sent);
+        plain(sent, routing('Not mine.', task));
         assert.ok(sent.content.includes('[SYSTEM: routing-request] content-lead returned because the request was outside their scope.'), 'the routing request');
         assert.ok(sent.content.includes(`The user's latest request was: "${task}"`), 'with the request as it was written');
       }
@@ -649,15 +653,19 @@ describe('each turn the server writes for an agent of its own accord', () => {
 
   // The three prompts a leader started again by its session is sent when a
   // delegate it handed to closes: out of scope, complete, and no marker.
+  const silent = 'Your output for this turn MUST be exactly the literal string <silent> and nothing else. Do not narrate, summarise, or quote the specialist\'s output. Do not invoke any tools. Do not emit any other text. Just output <silent> and stop.';
   const closes = [
     { site: 10, marker: ` ${MARKERS.RETURN}`, reads: 'returned because the request was outside their scope',
       fixed: (out) => [`[SYSTEM: content-lead returned because the request was outside their scope. Here is what they said:\n\n--- content-lead ---\n${out}`],
+      whole: (out, tag) => `[SYSTEM: content-lead returned because the request was outside their scope. Here is what they said:\n\n--- content-lead ---\n${out}\n---\n\nThe user's latest request was: "BRIEF-${tag} go". Respond with full awareness of what content-lead delivered. Do not re-delegate work already done. Route to the right specialist using the Agent tool.]`,
       reply: 'Routing.' },
     { site: 11, marker: ` ${MARKERS.COMPLETE}`, reads: 'has finished the delegated work',
       fixed: (out) => [`[SYSTEM: pipeline-complete] content-lead has finished the delegated work. Here is their final message to the conversation:\n\n--- content-lead ---\n${out}`],
+      whole: (out) => `[SYSTEM: pipeline-complete] content-lead has finished the delegated work. Here is their final message to the conversation:\n\n--- content-lead ---\n${out}\n---\n\n${silent}`,
       reply: '<silent>' },
     { site: 12, marker: '', exitAfterTurn: 0, reads: 'completed their work',
       fixed: (out) => [`[SYSTEM: pipeline-complete] content-lead completed their work. Here is their final message to the conversation:\n\n--- content-lead ---\n${out}`],
+      whole: (out) => `[SYSTEM: pipeline-complete] content-lead completed their work. Here is their final message to the conversation:\n\n--- content-lead ---\n${out}\n---\n\n${silent}`,
       reply: '<silent>' },
   ];
   for (const close of closes) {
@@ -683,7 +691,7 @@ describe('each turn the server writes for an agent of its own accord', () => {
           noLonger(sent, gone);
           for (const part of close.fixed(swap(out, gone))) assert.ok(sent.content.includes(part), 'the output with its line replaced');
         } else {
-          plain(sent);
+          plain(sent, close.whole(out, tag));
           for (const part of close.fixed(out)) assert.ok(sent.content.includes(part), `the prompt holds ${part}`);
           if (close.site === 10) assert.ok(sent.content.includes(`The user's latest request was: "BRIEF-${tag} go"`), 'and the brief as the request');
         }
@@ -742,6 +750,13 @@ describe('each turn a Codex agent is handed', () => {
     assert.ok(init && typeof init._sessionId === 'string', 'the Codex agent is given a thread');
     return init._sessionId;
   }
+  // What a Codex delegate on a fresh thread is sent: its instructions, the
+  // platform prompt and the delegation rules, then the conversation and the brief.
+  const delegated = 'DELEGATION CONTEXT:\nYou have been delegated a task by another agent. Complete the task fully in this single response; you cannot wait for follow-up messages in this session. Prefer sensible defaults over asking questions. When the task is done, post your final summary and output <!-- RUNDOCK:COMPLETE --> at the very end of the response. If you genuinely cannot proceed without an answer from the user, state the question clearly in your response and still output <!-- RUNDOCK:COMPLETE -->; the reply will reach you when the task is re-delegated. Only use <!-- RUNDOCK:RETURN --> if the request is genuinely outside your scope and you cannot help. If your own part is finished but the request still needs something to happen next, for example work that belongs to another specialist, output <!-- RUNDOCK:CONTINUE --> instead of COMPLETE: COMPLETE means nothing remains to be done.';
+  function freshBrief(catchUp, brief) {
+    const agent = h.internal.discoverAgents().find((a) => a.id === 'researcher');
+    return ['You are Ida, the researcher.', h.internal.buildSystemPrompt(agent), delegated, `${catchUp}[DELEGATION BRIEF]\n${brief}`].join('\n\n');
+  }
   // Text alone: one text item on the thread, the input it always was.
   function codexPlain(params, threadId, text) {
     assert.deepStrictEqual(params, { threadId, input: [{ type: 'text', text }] }, 'text alone is the one text item it always was');
@@ -776,7 +791,7 @@ describe('each turn a Codex agent is handed', () => {
         codexNoLonger(params, threadId, gone);
         assert.ok(params.input[0].text.includes(swap(brief, gone)), 'the brief with its line replaced');
       } else {
-        codexPlain(params, threadId, params.input[0].text);
+        codexPlain(params, threadId, freshBrief(arrival(`USER: SETUP-14${half}`, 'COS: Ready.'), brief));
         assert.ok(params.input[0].text.includes(brief), 'the brief as it was written');
       }
       assert.ok(await arrived((m) => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === id
