@@ -9,7 +9,8 @@
 // the test in this file that does not.
 //
 // The team: Wren leads; Ash and Rowan (agent name example-research-lead)
-// report to Wren.
+// report to Wren. Fern leads on Codex, whose turns can start helpers of their
+// own on the app-server.
 const { test, before, after, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -33,6 +34,7 @@ before(async () => {
       wren: agentFile({ name: 'wren', displayName: 'Wren', role: 'Lead', order: 1 }),
       ash: agentFile({ name: 'ash', displayName: 'Ash', order: 2, reportsTo: 'wren' }),
       'example-research-lead': agentFile({ name: 'example-research-lead', displayName: 'Rowan', order: 3, reportsTo: 'wren' }),
+      fern: agentFile({ name: 'fern', displayName: 'Fern', role: 'Lead', order: 4, runtime: 'codex', body: 'You are Fern.' }),
     },
   });
   h.internal.stopScheduler();
@@ -276,4 +278,150 @@ test('with helpers off, no spawn sets a helper depth or refuses SendMessage', as
     const list = at >= 0 ? inv.argv[at + 1] : '';
     assert.ok(!/\bSendMessage\b/.test(list), `${inv.agent}: SendMessage is not refused: ${list}`);
   }
+});
+
+// A CODEX LEAD'S HELPERS WITH HELPERS OFF. Fern's turn on the app-server
+// starts helpers of its own; with the switch off, nothing of theirs reaches
+// Fern's turn, the page or the conversation.
+const { scanMarkers } = require('../../public/markers.js');
+const holds = new Set();
+function hold(tag) {
+  const file = path.join(h.workspaceDir, `hold-off-${tag}-${process.pid}`);
+  holds.add(file);
+  return file;
+}
+afterEach(() => {
+  for (const file of holds) if (!fs.existsSync(file)) fs.writeFileSync(file, 'go');
+  holds.clear();
+});
+const sayFern = (convo, words) => {
+  const since = client.messages.length;
+  client.send({ type: 'chat', conversationId: convo, agent: 'fern', content: words });
+  return since;
+};
+const appServerCalls = (method) => h.readInvocations().filter((i) => i.mode === 'app-server' && i.method === method);
+const fernResult = (convo, since) => client.waitFor((m) => m.type === 'result' && m._conversationId === convo, { since, timeout: 20000, label: 'Fern\'s result' });
+
+// By design this passes before helpers existed too. Its sibling in
+// codex-helpers.test.js, "a helper Fern starts is a row on Fern's list,
+// named, counted while it runs and not once it completes", fails without
+// helpers.
+test('with helpers off, Fern\'s helpers leave her reply, her turn and the conversation as they were', async () => {
+  const convo = open('off-codex');
+  const gate = hold('codex');
+  h.clearInvocations();
+  h.writeCodexScenario([{
+    match: { promptIncludes: 'off codex helpers' }, text: 'FERN-WORDS', untilFile: gate,
+    helpers: [{ nickname: 'rates', text: 'HELPER-WORDS', items: [{ type: 'commandExecution', command: 'ls' }] }, { nickname: 'deck', text: 'HELPER-WORDS', status: 'failed' }],
+  }]);
+  const since = sayFern(convo, 'off codex helpers');
+  assert.ok(await h.waitUntil(() => appServerCalls('turn/start').length === 1, { timeout: 15000 }), 'Fern\'s turn started');
+  await h.delay(400);
+  assert.strictEqual(doneCount(convo, since), 0, 'the helpers ending did not end Fern\'s turn');
+  fs.writeFileSync(gate, 'go');
+  const { msg: result } = await fernResult(convo, since);
+  await turnDone(convo, since);
+  assert.strictEqual(result.result, 'FERN-WORDS', 'Fern\'s reply is her own words');
+  assert.ok(!wrenReplies(convo).includes('HELPER-WORDS'), 'no helper\'s words were kept');
+  assert.ok(!(h.internal.loadTranscript(convo) || []).some((t) => String(t.text || t.content || '').includes('HELPER-WORDS')), 'nor anywhere in the transcript');
+  assert.strictEqual(doneCount(convo, since), 1, 'one done, Fern\'s');
+  assert.deepStrictEqual(helpersChanged(convo), [], 'no helpers_changed was sent');
+  assert.strictEqual(helpers().runningCount(convo), 0, 'no helper is counted');
+  assert.strictEqual(helpers().stateOf(convo), undefined, 'no helper state for the conversation');
+  assert.deepStrictEqual([...appServerCalls('turn/interrupt'), ...appServerCalls('turn/steer')], [], 'no thread was interrupted or steered');
+});
+
+// By design this passes before helpers existed too. Its sibling in
+// codex-helpers.test.js, "a helper Fern starts is a row on Fern's list,
+// named, counted while it runs and not once it completes", fails without
+// helpers.
+test('with helpers off, the page gets the same messages from a Fern turn with helpers as from one without', async () => {
+  const shape = (convo, since) => client.messages.slice(since).filter((m) => m._conversationId === convo).map((m) => {
+    const keep = { type: m.type, subtype: m.subtype || null, agent: m._agent || null };
+    if (m.type === 'result') Object.assign(keep, { result: m.result, tools: (m._toolCalls || []).length });
+    if (typeof m.text === 'string') keep.text = m.text;
+    return keep;
+  });
+  const seen = [];
+  for (const withHelpers of [false, true]) {
+    const convo = open(withHelpers ? 'off-page-h' : 'off-page');
+    h.writeCodexScenario([{
+      match: { promptIncludes: 'off page shape' }, deltas: ['Same ', 'reply.'], text: 'Same reply.', awaitHelpers: withHelpers,
+      helpers: withHelpers ? [{ nickname: 'rates', items: [{ type: 'fileChange', paths: ['notes.md'] }] }, { nickname: 'tidy', source: 'review' }] : [],
+    }]);
+    const since = sayFern(convo, 'off page shape');
+    await turnDone(convo, since);
+    seen.push(shape(convo, since));
+  }
+  assert.ok(seen[0].some((m) => m.type === 'result'), 'the turn reached the page');
+  assert.deepStrictEqual(seen[1], seen[0], 'the same messages, helper events or not');
+});
+
+// WHAT THE WINDOW DOES WITH A FERN REPLY: it scans the reply, sends the first
+// DELEGATE marker back as a delegate message, and the server answers. A Codex
+// turn has already ended by then, so the answer is whatever the server gives
+// a conversation with no live turn; these tests pin that it is the same with
+// helper events as without them.
+async function delegateOutcome(convo, words) {
+  const since = sayFern(convo, words);
+  const { msg: result } = await fernResult(convo, since);
+  await turnDone(convo, since);
+  const { delegation } = scanMarkers(result.result);
+  const after = client.messages.length;
+  client.send({ type: 'delegate', conversationId: convo, targetAgent: delegation.targetAgent, context: delegation.context });
+  await h.waitUntil(() => invocations('ash', convo).length > 0
+    || client.messages.slice(after).some((m) => m._conversationId === convo && m.subtype === 'delegation_error'), { timeout: 15000 });
+  await h.delay(300);
+  return {
+    delegation,
+    ash: invocations('ash', convo).length,
+    rowan: invocations('example-research-lead', convo).length,
+    page: client.messages.slice(after).filter((m) => m._conversationId === convo)
+      .map((m) => [m.type, m.subtype || null, typeof m.content === 'string' ? m.content : null]),
+  };
+}
+const DELEGATE_CASES = [
+  { tag: 'one', brief: 'DELEGATE-ONE brief', reply: 'Bringing in Ash.\n<!-- RUNDOCK:DELEGATE agent=ash -->\nDELEGATE-ONE brief\n<!-- /RUNDOCK:DELEGATE -->' },
+  { tag: 'two', brief: 'DELEGATE-TWO brief', reply: 'Bringing in two.\n<!-- RUNDOCK:DELEGATE agent=ash -->\nDELEGATE-TWO brief\n<!-- /RUNDOCK:DELEGATE -->\n<!-- RUNDOCK:DELEGATE agent=example-research-lead -->\nDELEGATE-TWO other\n<!-- /RUNDOCK:DELEGATE -->' },
+];
+
+// By design this passes before helpers existed too. Its sibling in
+// codex-helpers.test.js, "a helper Fern starts is a row on Fern's list,
+// named, counted while it runs and not once it completes", fails without
+// helpers.
+test('with helpers off, Fern\'s DELEGATE markers name the first agent and get the same answer as a reply with no helpers', async () => {
+  for (const c of DELEGATE_CASES) {
+    const seen = [];
+    for (const withHelpers of [false, true]) {
+      const convo = open(`off-del-${c.tag}${withHelpers ? '-h' : ''}`);
+      h.writeCodexScenario([{
+        match: { promptIncludes: `off delegate ${c.tag}` }, text: c.reply, awaitHelpers: withHelpers,
+        helpers: withHelpers ? [{ nickname: 'ash' }, { nickname: 'rates' }] : [],
+      }]);
+      h.writeScenario([{ match: { agent: 'ash', promptIncludes: c.brief }, turn: [{ text: 'Ash took it.' }] }]);
+      seen.push(await delegateOutcome(convo, `off delegate ${c.tag}`));
+      assert.deepStrictEqual(helpersChanged(convo), [], `${c.tag}: no helpers_changed was sent`);
+    }
+    assert.deepStrictEqual(seen[0].delegation, { targetAgent: 'ash', context: c.brief }, `${c.tag}: the first marker names Ash`);
+    assert.strictEqual(seen[0].rowan, 0, `${c.tag}: Rowan did not start`);
+    assert.deepStrictEqual(seen[1], seen[0], `${c.tag}: the same answer, helper events or not`);
+  }
+});
+
+// By design this passes before helpers existed too. Its sibling in
+// codex-helpers.test.js, "with helpers on, no feature flag or agent setting
+// reaches the app-server", is the same check with the switch on.
+test('with helpers off, no feature flag or agent setting reaches the app-server', async () => {
+  const convo = open('off-flags');
+  h.clearInvocations();
+  h.writeCodexScenario([{ match: { promptIncludes: 'off flags' }, text: 'Plain.', awaitHelpers: true, helpers: [{ nickname: 'rates' }] }]);
+  require('../../lib/runtime/codex-glue.js').shutdownCodexAppServer();
+  const since = sayFern(convo, 'off flags');
+  await turnDone(convo, since);
+  const spawns = h.readInvocations().filter((i) => i.mode === 'app-server' && i.event === 'spawn');
+  assert.ok(spawns.length >= 1, 'the app-server was started in this test');
+  for (const s of spawns) assert.doesNotMatch(JSON.stringify(s.argv), /features|multi_agent|agents/, 'nothing in the argv');
+  const starts = [...appServerCalls('thread/start'), ...appServerCalls('thread/resume')];
+  assert.ok(starts.length >= 1);
+  for (const s of starts) assert.doesNotMatch(JSON.stringify(s.params), /features|multi_agent|"agents"/, 'nothing in the thread params');
 });

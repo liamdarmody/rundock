@@ -165,6 +165,11 @@ class CodexAppServer extends EventEmitter {
     // turn now occupies the thread's slot. Bounded both ways; see
     // _tombstoneTurn.
     this._staleTurns = new Map();  // threadId -> Set of released turnIds
+    // Helper threads a lead's turn started, kept apart from _activeTurns so
+    // a helper's turn never touches its lead's (see _onSubAgentActivity),
+    // and what thread/started said about threads not yet recorded.
+    this._helperThreads = new Map(); // helper threadId -> record
+    this._threadInfo = new Map();    // threadId -> { name, role, upkeep, depth, turnId }
     this._restartAttempt = 0;
     this._restartTimer = null;
     this._readBuffer = '';
@@ -317,6 +322,7 @@ class CodexAppServer extends EventEmitter {
     // Tombstones exist to filter late notifications from THIS process; a
     // fresh process cannot replay them, so they never outlive it.
     this._staleTurns.clear();
+    this._endHelperThreads();
     for (const [, state] of this._activeTurns) {
       if (state.interruptFailsafeTimer) { clearTimeout(state.interruptFailsafeTimer); state.interruptFailsafeTimer = null; }
       if (state.interruptRetryTimer) { clearTimeout(state.interruptRetryTimer); state.interruptRetryTimer = null; }
@@ -515,6 +521,10 @@ class CodexAppServer extends EventEmitter {
       interruptFailsafeTimer: null, // armed by interruptTurn; see _armInterruptFailsafe
       interruptRetryTimer: null,    // one halfway-point interrupt re-send
       compaction: { byItem: new Map(), current: null, activity: false, count: 0 }, // see _onCompaction
+      // Told of this turn's helper threads (see _onSubAgentActivity); kept
+      // out of TURN_OPT_KEYS, so the server never sees it.
+      helpers: typeof perTurnOpts.helpers === 'function' ? perTurnOpts.helpers : null,
+      helperItems: new Set(),
     };
     this._activeTurns.set(threadId, state);
 
@@ -678,7 +688,9 @@ class CodexAppServer extends EventEmitter {
   // (section 10).
   _onNotification(method, params) {
     if (!params || typeof params !== 'object') return;
+    if (method === 'thread/started') { this._onThreadStarted(params.thread); return; }
     const state = params.threadId != null ? this._activeTurns.get(params.threadId) : null;
+    if (!state && params.threadId != null && this._onOtherThread(method, params)) return;
     // Every turn-scoped notification carries its turnId: item/* and
     // thread/tokenUsage/updated and error as params.turnId, turn/started and
     // turn/completed inside params.turn.
@@ -720,6 +732,7 @@ class CodexAppServer extends EventEmitter {
           state.agentItemIds.add(params.item.id);
         }
         if (state && params.item && params.item.type === 'contextCompaction') this._onCompaction(state, 'started', params);
+        if (state && params.item && params.item.type === 'subAgentActivity') this._onSubAgentActivity(state, params.item);
         return;
       }
       case 'item/agentMessage/delta': {
@@ -736,6 +749,7 @@ class CodexAppServer extends EventEmitter {
           this._emitTurnEvent(state, { type: 'text', text: params.item.text || '' });
         }
         if (state && params.item && params.item.type === 'contextCompaction') this._onCompaction(state, 'completed', params);
+        if (state && params.item && params.item.type === 'subAgentActivity') this._onSubAgentActivity(state, params.item);
         return;
       }
       case 'thread/compacted': {
@@ -896,6 +910,122 @@ class CodexAppServer extends EventEmitter {
     const steer = (text) => this.steerTurn(state.threadId, text);
     this._emitTurnEvent(state, { type: 'approval', kind, requestId: id, params, respond, steer });
   }
+
+  // ── Helper threads ───────────────────────────────────────────────────────
+
+  // HELPERS. A lead's turn can start helpers, each a thread of its own that
+  // runs its own turns. The lead's thread records each start as a
+  // subAgentActivity item; the helper's thread announces itself with
+  // thread/started, whose source names a helper, an upkeep thread (a bare
+  // string: review, compact, memory_consolidation) or a helper's own helper
+  // (depth 2). The two arrive in either order. A turn started with a
+  // `helpers` handler is told, with the helper's record:
+  //   'start'      a helper started, or an ended one was given more work
+  //   'turn'       its own turn id is known (rec.turnId)
+  //   'update'     its name, role, step or last file changed
+  //   'end'        its turn ended; rec.state is completed, failed or killed
+  //   'withdrawn'  it proved to be upkeep or a helper's own helper
+  // A turn started without one records nothing.
+  _onThreadStarted(thread) {
+    const sub = thread && thread.source && thread.source.subAgent;
+    if (!sub || typeof thread.id !== 'string') return;
+    const spawn = sub.thread_spawn || {};
+    const info = this._infoOf(thread.id);
+    info.name = thread.agentNickname || spawn.agent_nickname || info.name;
+    info.role = thread.agentRole || spawn.agent_role || info.role;
+    info.upkeep = typeof sub === 'string';
+    info.depth = Number.isInteger(spawn.depth) ? spawn.depth : 1;
+    const rec = this._helperThreads.get(thread.id);
+    if (!rec) return;
+    if (info.upkeep || info.depth > 1) {
+      this._helperThreads.delete(thread.id);
+      this._tellHelper(rec, 'withdrawn');
+      return;
+    }
+    rec.name = info.name || rec.name;
+    rec.role = info.role || rec.role;
+    this._tellHelper(rec, 'update');
+  }
+
+  _infoOf(threadId) {
+    let info = this._threadInfo.get(threadId);
+    if (!info) {
+      if (this._threadInfo.size >= 256) this._threadInfo.delete(this._threadInfo.keys().next().value);
+      info = { name: null, role: null, upkeep: false, depth: 1, turnId: null };
+      this._threadInfo.set(threadId, info);
+    }
+    return info;
+  }
+
+  // The lead's thread recorded a helper starting, being given more work or
+  // being stopped. Only a start records one, once per item.
+  _onSubAgentActivity(state, item) {
+    if (!state.helpers || typeof item.agentThreadId !== 'string') return;
+    const known = this._helperThreads.get(item.agentThreadId);
+    if (item.kind === 'interrupted') {
+      if (known && known.state === 'running') { known.state = 'killed'; this._tellHelper(known, 'end'); }
+      return;
+    }
+    if (item.kind !== 'started' || known || state.helperItems.has(item.id)) return;
+    state.helperItems.add(item.id);
+    const info = this._threadInfo.get(item.agentThreadId) || {};
+    if (info.upkeep || info.depth > 1) return;
+    const rec = {
+      threadId: item.agentThreadId, leadThreadId: state.threadId, leadTurnId: state.turnId,
+      name: info.name || lastPart(item.agentPath) || item.agentThreadId, role: info.role || null,
+      state: 'running', turnId: info.turnId || null, step: null, file: null, capped: false, notify: state.helpers,
+    };
+    for (const [id, old] of this._helperThreads) {
+      if (this._helperThreads.size < 256) break;
+      if (old.state !== 'running') this._helperThreads.delete(id);
+    }
+    this._helperThreads.set(rec.threadId, rec);
+    this._tellHelper(rec, 'start');
+    if (rec.turnId != null) this._tellHelper(rec, 'turn');
+  }
+
+  // A notification on a thread with no active turn of ours. A recorded
+  // helper's turn, items and end are its own; its text, usage and errors go
+  // nowhere. True when the notification was a helper's.
+  _onOtherThread(method, params) {
+    const rec = this._helperThreads.get(params.threadId);
+    const turnId = params.turn && params.turn.id != null ? params.turn.id : null;
+    if (!rec) {
+      if (method === 'turn/started' && turnId != null) this._infoOf(params.threadId).turnId = turnId;
+      return false;
+    }
+    if (method === 'turn/started') {
+      rec.turnId = turnId;
+      if (rec.state !== 'running') { rec.state = 'running'; this._tellHelper(rec, 'start'); }
+      this._tellHelper(rec, 'turn');
+    } else if ((method === 'item/started' || method === 'item/completed') && params.item) {
+      const before = JSON.stringify([rec.step, rec.file]);
+      rec.step = helperStep(params.item);
+      const paths = params.item.type === 'fileChange' && Array.isArray(params.item.changes) ? params.item.changes : [];
+      if (method === 'item/completed' && paths.length) rec.file = paths[paths.length - 1].path;
+      if (JSON.stringify([rec.step, rec.file]) !== before) this._tellHelper(rec, 'update');
+    } else if (method === 'turn/completed' && rec.state === 'running') {
+      const status = (params.turn || {}).status;
+      rec.state = status === 'completed' ? 'completed' : status === 'interrupted' ? 'killed' : 'failed';
+      this._tellHelper(rec, 'end');
+    }
+    return true;
+  }
+
+  _tellHelper(rec, kind) {
+    try { rec.notify(kind, rec); } catch (e) { this._log(`codex app-server: helper ${kind} handling failed: ${e.message}`); }
+  }
+
+  // The process has gone: every running helper failed with it.
+  _endHelperThreads() {
+    for (const [, rec] of this._helperThreads) {
+      if (rec.state !== 'running') continue;
+      rec.state = 'failed';
+      this._tellHelper(rec, 'end');
+    }
+    this._helperThreads.clear();
+    this._threadInfo.clear();
+  }
 }
 
 // THE ANSWER TO item/permissions/requestApproval, the agent asking to widen
@@ -912,6 +1042,21 @@ function permissionsRefusal() {
 
 function createCodexAppServer(opts = {}) {
   return new CodexAppServer(opts);
+}
+
+// What a helper is doing, from its latest item: the command it runs, the
+// first file it changes, the tool it calls or what it searches for.
+function helperStep(item) {
+  const first = Array.isArray(item.changes) && item.changes[0] ? item.changes[0].path : null;
+  const detail = item.type === 'commandExecution' ? (Array.isArray(item.command) ? item.command.join(' ') : item.command)
+    : item.type === 'fileChange' ? first
+      : item.type === 'mcpToolCall' ? (item.server && item.tool ? `${item.server}/${item.tool}` : null)
+        : item.type === 'webSearch' ? item.query : null;
+  return typeof detail === 'string' && detail ? { type: item.type, detail } : null;
+}
+
+function lastPart(agentPath) {
+  return typeof agentPath === 'string' ? agentPath.split('/').filter(Boolean).pop() || null : null;
 }
 
 module.exports = { createCodexAppServer, normalizeErrorKind, parseUserAgentVersion, permissionsRefusal, normalizeUsage, clock };
