@@ -508,6 +508,34 @@ test('a window that saves helpersAllowed itself changes nothing: the first batch
   assert.strictEqual(allowedLeads(convo), undefined);
 });
 
+test('a yes given before the conversation has a transcript or a saved record is kept when the list is loaded, and the next batch has no card', async () => {
+  const m = helpers();
+  const convo = open('helpers-yes-unsaved');
+  // Placed as the engine places a lead's message when it ends. Nothing has
+  // been said in this conversation, so it has no transcript.
+  const first = [agentCall('ash'), agentCall('example-research-lead')];
+  m.placeMessage(convo, { agentId: 'wren' }, first);
+  const since = client.messages.length;
+  const asked = first.map((c) => askAgent(convo, 'wren', c));
+  answerCard(await cardFor(convo, since), true);
+  for (const a of asked) assert.deepStrictEqual((await a.reply).body, { allow: true, card: true });
+  assert.ok(!fs.existsSync(path.join(h.workspaceDir, '.rundock', 'transcripts', `${convo}.json`)), 'no transcript');
+  assert.deepStrictEqual(record(convo), { id: convo, helpersAllowed: ['wren'] }, 'the record holds only the yes');
+
+  const listed = client.messages.length;
+  client.send({ type: 'get_conversations' });
+  await client.waitFor((x) => x.type === 'conversations', { since: listed, label: 'conversations' });
+  assert.deepStrictEqual(allowedLeads(convo), ['wren'], 'loading the list keeps the yes');
+
+  // Opened again: a new lead process, whose batch starts with no card.
+  const later = [agentCall('ash'), agentCall('example-research-lead')];
+  h.writeScenario([messageRule('wren', 'after the list was loaded', later)]);
+  const again = say(convo, 'wren', 'after the list was loaded');
+  assert.deepStrictEqual(await answersOf_(later), [allowed(false), allowed(false)], 'the next batch starts without a card');
+  await turnDone(convo, again);
+  assert.strictEqual(agentCards(convo, since).length, 1, 'only the first batch asked');
+});
+
 test('a saved always-allow for Agent still raises the card for a batch of teammates', async () => {
   const m = helpers();
   const convo = open('helpers-always');
