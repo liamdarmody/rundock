@@ -398,7 +398,7 @@ function setupChat(convo) {
     sendBtn.title = 'Stop agent';
     sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
   } else {
-    sendBtn.disabled = sendWaiting(convo.id);
+    sendBtn.disabled = sendWaiting(convo.id) || sendHeld(convo.id);
     sendBtn.classList.remove('cancel');
     // Reflect any draft already in the field so Send reads as ready.
     sendBtn.classList.toggle('active', sendReady(msgInput.value));
@@ -938,7 +938,7 @@ function openConversation(id, withAnchor) {
     }
   } else {
     document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
-    document.getElementById('send-btn').disabled=false;
+    document.getElementById('send-btn').disabled=sendHeld(id);
     document.getElementById('msg-input').disabled=false;
     document.getElementById('msg-input').focus();
   }

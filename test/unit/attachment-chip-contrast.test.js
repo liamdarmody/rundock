@@ -22,3 +22,10 @@ describe('a chip\'s text and states clear their bar in both themes', () => {
     ['the remove\'s focus ring against --elevated', [`${REMOVE}:focus-visible`, 'outline', '--accent-control'], CHIP, 3],
   ]);
 });
+
+describe('a PDF held for an agent on Codex is edged clear of the field and the chip in both themes', () => {
+  rowsClear(test, CHAT, [
+    ['the Codex outline against --card', ['.composer-chip.warn', 'border-color', '--attention-text'], FIELD, 3],
+    ['the Codex outline against --elevated', ['.composer-chip.warn', 'border-color', '--attention-text'], CHIP, 3],
+  ]);
+});

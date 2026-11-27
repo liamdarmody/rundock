@@ -424,6 +424,7 @@ const MANIFEST = {
     "openAttachPicker",
     "pickFiles",
     "refreshAttachButton",
+    "sendHeld",
     "sendReady",
     "sendWaiting",
     "sendWithFiles",

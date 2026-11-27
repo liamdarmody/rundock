@@ -41,13 +41,14 @@ const CHIP_TYPES = new Map([['png', 'PNG'], ['jpg', 'JPEG'], ['jpeg', 'JPEG'], [
 // chip order), `notices` (the messages showing, oldest first), `waiting`
 // (the send awaiting its answer, or null), `clearText` (a stored send's
 // text still to clear from the field when the conversation is next shown),
-// `adds` (the adds not yet drawn) and `queue` (the last of them, which the
-// next one waits for).
+// `adds` (the adds not yet drawn), `queue` (the last of them, which the
+// next one waits for) and `held` (whether a PDF was held for Codex when the
+// hold was last evaluated).
 const composers = new Map();
 
 function composerFor(convoId) {
   if (!composers.has(convoId)) {
-    composers.set(convoId, { files: [], notices: [], waiting: null, clearText: false, adds: 0, queue: Promise.resolve() });
+    composers.set(convoId, { files: [], notices: [], waiting: null, clearText: false, adds: 0, queue: Promise.resolve(), held: false });
   }
   return composers.get(convoId);
 }
@@ -81,11 +82,14 @@ function showComposerFor(convo) {
 }
 
 // Shown whatever the agent a message would go to runs on: an agent on Codex
-// takes files too, and the server refuses what Codex can't be sent.
+// takes files too, and the server refuses what Codex can't be sent. Called
+// whenever that agent may have changed, so it evaluates the hold again.
 function refreshAttachButton(convo) {
   const button = document.getElementById('attach-btn');
   if (!button || !convo) return;
   button.hidden = false;
+  const composer = composers.get(convo.id);
+  if (composer && settleHold(convo.id, composer) && activeConversation && activeConversation.id === convo.id) renderComposer(composer);
 }
 
 function openAttachPicker() {
@@ -113,6 +117,7 @@ function removeComposerFile(composer, index) {
 }
 
 function renderComposer(composer) {
+  if (activeConversation && composers.get(activeConversation.id) === composer) settleHold(activeConversation.id, composer);
   const row = document.getElementById('composer-chips');
   if (row) row.replaceChildren(...composer.files.map((file, i) => chipFor(composer, file, i)));
   renderComposerNotice(composer);
@@ -122,6 +127,7 @@ function renderComposer(composer) {
 function chipFor(composer, file, index) {
   const chip = document.createElement('div');
   chip.className = 'composer-chip';
+  if (composer.held && (kinds.get(file) || {}).type === 'pdf') chip.classList.add('warn');
   chip.setAttribute('title', file.name);
   const text = document.createElement('div');
   text.className = 'composer-chip-text';
@@ -189,17 +195,19 @@ function noticeFor(composer, notice) {
   return item;
 }
 
-// Send reads as ready for text or files. Left alone while it is the Stop
-// button.
+// Send reads as ready for text or files, and is off while a send waits or a
+// PDF is held for Codex. Left alone while it is the Stop button.
 function relightSend() {
   const button = document.getElementById('send-btn');
   const input = document.getElementById('msg-input');
-  if (button && input && !button.classList.contains('cancel')) button.classList.toggle('active', sendReady(input.value));
+  if (!button || !input || button.classList.contains('cancel')) return;
+  button.classList.toggle('active', sendReady(input.value));
+  if (activeConversation) button.disabled = sendWaiting(activeConversation.id) || sendHeld(activeConversation.id);
 }
 
 function sendReady(text) {
   const composer = shownComposer();
-  if (composer && (composer.waiting || composer.adds)) return false;
+  if (composer && (composer.waiting || composer.adds || sendHeld(activeConversation.id))) return false;
   return !!String(text).trim() || (!!composer && composer.files.length > 0);
 }
 
@@ -275,14 +283,14 @@ function sendWithFiles(convo, text) {
 }
 
 // The wait ends without the message: the text and chips stay, the reason
-// shows as the only message, and Send comes back on.
+// shows as the only message, and Send comes back on unless a PDF is held.
 function endWait(convoId, notice) {
   const composer = composerFor(convoId);
   composer.waiting = null;
   composer.notices = [{ ...notice }];
   if (!activeConversation || activeConversation.id !== convoId) return;
   renderComposer(composer);
-  document.getElementById('send-btn').disabled = false;
+  document.getElementById('send-btn').disabled = sendHeld(convoId);
   document.getElementById('msg-input').readOnly = false;
 }
 
@@ -342,7 +350,8 @@ function composersWorkspaceChanged() {
 //   3. Each refused file gets its own message.
 //   4. The total: bytes held plus the passing files' bytes over
 //      LIMITS.messageBytes refuses every passing file, with one message.
-//   5. The passing files are appended in the order given.
+//   5. The passing files are appended in the order given, and a PDF in a
+//      conversation on Codex gets its message (THE CODEX HOLD).
 // An add that attaches files replaces the messages showing with its own; one
 // that attaches none adds its messages after them. An add belongs to the
 // conversation shown when it began, and adds run one after another, so each
@@ -401,7 +410,10 @@ async function addInTurn(convoId, composer, added, source) {
     return;
   }
   composer.files = composer.files.concat(passed);
-  composer.notices = own;
+  // A hold that begins here explains each PDF it holds; one already on, each
+  // PDF this add brings.
+  composer.notices = own.concat(heldPdfs(convoId, composer.held ? passed : composer.files).map(codexNotice));
+  composer.held = sendHeld(convoId);
 }
 
 // A pasted image under its new name: "Pasted image" while no file held is so
@@ -553,9 +565,57 @@ if (typeof document !== 'undefined') {
   window.addEventListener('dragend', clearDrop);
 }
 
+// ===== THE CODEX HOLD =====
+//
+// An agent on Codex can't read a PDF. While a PDF is held in a conversation
+// whose agent runs on Codex, the PDF stays, its chip is edged, a message
+// names it, and Send is off (sendHeld) everywhere Send is lit or turned on,
+// unless it is the Stop button. The message has any message's lifetime (an
+// attach, a remove or a Dismiss takes it) while the hold stays, and goes when
+// the hold ends: the PDF removed, or the agent changed to one not on Codex.
+// The server refuses a PDF for Codex on Send too.
+
+// The messages saying a PDF is held.
+const codexNotices = new WeakSet();
+
+// The agent a message would go to, as setupChat and sendWithFiles find it.
+function onCodex(convoId) {
+  const convo = conversations.find((c) => c.id === convoId);
+  const agentId = convo && (getConvoState(convoId).activeAgentId || convo.agentId);
+  const agent = agents.find((a) => a.id === agentId);
+  return !!agent && agent.runtime === 'codex';
+}
+
+// Those of `files` a conversation holds back from its agent.
+function heldPdfs(convoId, files) {
+  return onCodex(convoId) ? files.filter((file) => (kinds.get(file) || {}).type === 'pdf') : [];
+}
+
+function sendHeld(convoId) {
+  const composer = composers.get(convoId);
+  return !!composer && heldPdfs(convoId, composer.files).length > 0;
+}
+
+function codexNotice(file) {
+  const notice = attachmentWording().refusalWording({ code: 'codex-pdf', name: file.name }, 1);
+  codexNotices.add(notice);
+  return notice;
+}
+
+// The hold evaluated again. Once it begins, each PDF held gets its message;
+// once it ends, those messages go. Answers whether it changed.
+function settleHold(convoId, composer) {
+  const held = sendHeld(convoId);
+  if (held === composer.held) return false;
+  composer.held = held;
+  composer.notices = held ? composer.notices.concat(heldPdfs(convoId, composer.files).map(codexNotice))
+    : composer.notices.filter((notice) => !codexNotices.has(notice));
+  return true;
+}
+
 return {
   showComposerFor, refreshAttachButton, openAttachPicker, pickFiles,
   sendReady, sendWaiting, firstAttachedName, sendWithFiles, fileSendAnswered, attachmentsConnectionLost,
-  composersWorkspaceChanged, addFiles,
+  composersWorkspaceChanged, addFiles, sendHeld,
 };
 }));

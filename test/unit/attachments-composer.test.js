@@ -54,7 +54,7 @@ function page({ agentId = 'lead', activeAgentId = null } = {}) {
     <div id="chat-convo-status"><span class="state-label"></span><span class="action-label"></span></div>
     ${markup}</div></body></html>`, { runScripts: 'dangerously' });
   const w = dom.window;
-  w.eval(`var agents = ${JSON.stringify(AGENTS)}; var activeConversation = null; var convoState = {};
+  w.eval(`var agents = ${JSON.stringify(AGENTS)}; var conversations = []; var activeConversation = null; var convoState = {};
     function getConvoState(id) { return convoState[id] || (convoState[id] = { isProcessing: false, activeAgentId: null }); }
     function sendMessage() {} function cancelProcessing() {}
     function makeConvo(id, agentId) { return { id, agentId, agent: agents.find(a => a.id === agentId), title: id, status: 'active', messages: [] }; }`);

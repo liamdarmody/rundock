@@ -15,10 +15,12 @@ const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const { JSDOM } = require('jsdom');
 const { typed, png, ftyp, pdf, ascii } = require('../helpers/attachment-bytes.js');
 const { makeTempDir } = require('../helpers/workspace.js');
-const { receiveAttachments } = require('../../lib/attachments/receive.js');
+const config = require('../../lib/config.js');
+const { receiveAttachments, createReceiver, whenReceived } = require('../../lib/attachments/receive.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
@@ -966,5 +968,206 @@ describe('files dropped over the conversation land in the composer, and nothing 
     assert.strictEqual(markers(), 0);
     assert.deepStrictEqual(p.chips(), []);
     board.destroy();
+  });
+});
+
+describe('a PDF held for an agent on Codex holds Send until it goes', () => {
+  const CODEX_PDF = 'This agent runs on Codex, which can\'t read PDFs yet. Attach a screenshot of the page or paste the text.';
+  const HELD = { disabled: true, active: false };
+  const LIT = { disabled: false, active: true };
+  const sendState = (p) => ({ disabled: p.$('send-btn').disabled, active: p.$('send-btn').classList.contains('active') });
+  const warned = (p) => [...p.doc.querySelectorAll('#composer-chips .composer-chip.warn')].map((c) => c.querySelector('.composer-chip-name').textContent);
+  const frames = (p) => Array.from(p.w.ws.sent).filter((raw) => raw.startsWith('{"type":"chat"'));
+  const removeNamed = (p, name) => p.doc.querySelector(`#composer-chips .composer-chip-remove[aria-label="Remove ${name}"]`).click();
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  // The conversation handed to another agent, through the shipped header
+  // effect cut out of public/app.js, as a delegation hands it.
+  function handTo(p, agentId) {
+    if (!p.w.__effects) {
+      p.w.eval(`var __effects = {${between(APP, "'update-chat-header': (convoId, ef) => {", "\n  'start-streaming-bubble'", 'the delegation header effect')}}`);
+    }
+    const convoId = p.w.activeConversation.id;
+    p.w.getConvoState(convoId).activeAgentId = agentId;
+    p.w.__effects['update-chat-header'](convoId, { toAgentId: agentId });
+  }
+
+  test('a PDF added in a Codex conversation is held, outlined and explained', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'));
+    assert.deepStrictEqual(p.chips(), ['report.pdf'], 'the PDF stays');
+    assert.deepStrictEqual(warned(p), ['report.pdf'], 'its chip is edged');
+    assert.deepStrictEqual(p.notices(), [{ title: 'report.pdf', text: CODEX_PDF }]);
+    assert.strictEqual(p.w.sendHeld('c1'), true);
+  });
+
+  test('Send is disabled and not ready', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'));
+    type(p, 'summarise this');
+    assert.deepStrictEqual(sendState(p), HELD);
+    assert.strictEqual(p.w.sendReady('summarise this'), false);
+  });
+
+  test('Enter sends nothing', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'));
+    type(p, 'summarise this');
+    pressEnter(p);
+    p.$('send-btn').click();
+    p.w.sendMessage();
+    await settled();
+    assert.deepStrictEqual(frames(p), [], 'no message went');
+    assert.strictEqual(p.w.sendWaiting('c1'), false);
+    assert.deepStrictEqual([p.chips(), p.$('msg-input').value], [['report.pdf'], 'summarise this'], 'the PDF and the text stay');
+  });
+
+  test('Send stays disabled after endWait, after finishProcessing and after the conversation is shown again', async () => {
+    const p = page();
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'));
+    type(p, 'summarise this');
+    pressEnter(p);
+    assert.strictEqual(p.w.sendWaiting('c1'), true, 'the send waits');
+    // Handed to an agent on Codex while the send waits, which the server
+    // then refuses.
+    handTo(p, 'coder');
+    p.w.fileSendAnswered({ type: 'chat_refused', conversationId: 'c1', code: 'codex-pdf', title: 'report.pdf', name: 'report.pdf', text: CODEX_PDF });
+    assert.strictEqual(p.w.sendWaiting('c1'), false, 'the wait ended');
+    assert.deepStrictEqual(sendState(p), HELD, 'after endWait');
+    p.w.startProcessing('c1');
+    assert.ok(p.$('send-btn').classList.contains('cancel'), 'Send is the Stop button while the agent works');
+    p.w.finishProcessing('c1');
+    assert.deepStrictEqual(sendState(p), HELD, 'after finishProcessing');
+    p.open('c2', 'lead');
+    assert.strictEqual(p.$('send-btn').disabled, false, 'another conversation holds nothing');
+    // What opening a conversation reaches in the rest of the window.
+    p.w.eval(`function closeFindBar() {} function persistLastActiveConversation() {} var pendingMessageAnchor = null;
+      var RundockPermissions = { holdsOpenRequest: () => false }; var pendingPermissionsByConvo = new Map(); unread.clearConvo = () => {};`);
+    p.w.openConversation('c1');
+    assert.deepStrictEqual(p.chips(), ['report.pdf']);
+    assert.deepStrictEqual(sendState(p), HELD, 'after the conversation is shown again');
+  });
+
+  test('the PDF removed lights Send', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'), p.file('notes.txt'));
+    type(p, 'summarise this');
+    assert.deepStrictEqual(sendState(p), HELD);
+    removeNamed(p, 'report.pdf');
+    assert.deepStrictEqual([p.chips(), p.notices()], [['notes.txt'], []]);
+    assert.strictEqual(p.w.sendHeld('c1'), false);
+    assert.deepStrictEqual(sendState(p), LIT);
+  });
+
+  test('the agent changed away from Codex lights Send and removes the message', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'), p.file('photo.heic', ftyp('heic')));
+    type(p, 'summarise this');
+    assert.deepStrictEqual(p.notices(), [{ title: 'photo.heic', text: HEIC }, { title: 'report.pdf', text: CODEX_PDF }]);
+    // An agent with no runtime named runs on Claude.
+    handTo(p, 'helper');
+    assert.deepStrictEqual(p.notices(), [{ title: 'photo.heic', text: HEIC }], 'the other message stays');
+    assert.deepStrictEqual([p.chips(), warned(p)], [['report.pdf'], []]);
+    assert.strictEqual(p.w.sendHeld('c1'), false);
+    assert.deepStrictEqual(sendState(p), LIT);
+  });
+
+  test('a PDF held when the agent changes to Codex is held', async () => {
+    const p = page();
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'));
+    type(p, 'summarise this');
+    assert.deepStrictEqual([p.notices(), sendState(p)], [[], LIT], 'an agent on Claude takes it');
+    handTo(p, 'coder');
+    assert.deepStrictEqual([p.chips(), warned(p)], [['report.pdf'], ['report.pdf']]);
+    assert.deepStrictEqual(p.notices(), [{ title: 'report.pdf', text: CODEX_PDF }]);
+    assert.deepStrictEqual(sendState(p), HELD);
+    // Back, and to Codex again: held again, with one message.
+    handTo(p, 'lead');
+    assert.deepStrictEqual([warned(p), p.notices(), sendState(p)], [[], [], LIT]);
+    handTo(p, 'coder');
+    assert.deepStrictEqual(warned(p), ['report.pdf']);
+    assert.deepStrictEqual(p.notices(), [{ title: 'report.pdf', text: CODEX_PDF }]);
+    assert.deepStrictEqual(sendState(p), HELD);
+  });
+
+  test('two PDFs give two messages', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('a.pdf'), p.file('b.pdf'));
+    const two = [{ title: 'a.pdf', text: CODEX_PDF }, { title: 'b.pdf', text: CODEX_PDF }];
+    assert.deepStrictEqual([p.notices(), warned(p)], [two, ['a.pdf', 'b.pdf']]);
+    // The same two when the hold begins on a change of agent.
+    handTo(p, 'lead');
+    handTo(p, 'coder');
+    assert.deepStrictEqual([p.notices(), warned(p)], [two, ['a.pdf', 'b.pdf']]);
+  });
+
+  test('a Dismiss leaves Send disabled', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'));
+    type(p, 'summarise this');
+    p.doc.querySelector('#composer-notice .composer-notice-dismiss').click();
+    assert.deepStrictEqual(p.notices(), []);
+    assert.deepStrictEqual([warned(p), sendState(p)], [['report.pdf'], HELD]);
+    // Evaluated again with the agent unchanged, the message stays dismissed.
+    p.w.refreshAttachButton(p.w.activeConversation);
+    assert.deepStrictEqual([p.notices(), sendState(p)], [[], HELD]);
+    assert.strictEqual(p.w.sendHeld('c1'), true);
+  });
+
+  test('a PNG in a Codex conversation and a PDF in another conversation are added and light Send', async () => {
+    const p = page({ agentId: 'coder' });
+    await pick(p, p.file('a.png'));
+    type(p, 'see this');
+    assert.deepStrictEqual([p.chips(), p.notices(), warned(p)], [['a.png'], [], []]);
+    assert.deepStrictEqual(sendState(p), LIT);
+    p.open('c2', 'lead');
+    await pick(p, p.file('report.pdf'));
+    type(p, 'summarise this');
+    assert.deepStrictEqual([p.chips(), p.notices(), warned(p)], [['report.pdf'], [], []]);
+    assert.deepStrictEqual(sendState(p), LIT);
+  });
+
+  test('with the composer\'s check made to pass, the server\'s codex-pdf refusal comes back with the same wording', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    // The page's list says the agent runs on Claude, as a list gone stale
+    // would, so the composer holds nothing back.
+    p.w.eval("agents.find((a) => a.id === 'coder').runtime = 'claude';");
+    await pick(p, p.file('report.pdf'));
+    assert.deepStrictEqual([p.notices(), p.w.sendHeld('c1')], [[], false]);
+    type(p, 'summarise this');
+    pressEnter(p);
+    await until(() => frames(p).length === 1, 'the chat frame');
+    const frame = JSON.parse(frames(p)[0]);
+    assert.strictEqual(frame.agent, 'coder');
+    // The server, which knows the agent runs on Codex, takes the message.
+    const workspace = fs.realpathSync(makeTempDir('attach-add-'));
+    const sock = new EventEmitter();
+    Object.assign(sock, { readyState: 1, sent: [], back: [] });
+    sock.send = (raw) => sock.sent.push(JSON.parse(raw));
+    sock.on('message', (raw) => sock.back.push(raw));
+    const was = config.getWorkspace();
+    config.setWorkspace(workspace);
+    try {
+      createReceiver({ clients: new Set([sock]), findAgent: () => ({ runtime: 'codex' }) }).takes(frame, sock, true);
+      await whenReceived('c1');
+    } finally {
+      config.setWorkspace(was);
+    }
+    assert.deepStrictEqual(sock.sent.map((m) => [m.type, m.code]), [['chat_refused', 'codex-pdf']]);
+    assert.deepStrictEqual(sock.back, [], 'nothing went on to the agent');
+    assert.strictEqual(fs.existsSync(path.join(workspace, '.rundock', 'attachments')), false, 'nothing was written');
+    p.w.fileSendAnswered(sock.sent[0]);
+    assert.deepStrictEqual(p.notices(), [{ title: 'report.pdf', text: CODEX_PDF }], 'the page\'s own words for a held PDF');
+    assert.deepStrictEqual([p.chips(), p.$('msg-input').value], [['report.pdf'], 'summarise this'], 'the PDF and the text stay');
   });
 });
