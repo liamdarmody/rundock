@@ -104,12 +104,16 @@ const chipText = (chip) => ({
 const follows = (p, a, b) => !!(a.compareDocumentPosition(b) & p.w.Node.DOCUMENT_POSITION_FOLLOWING);
 
 describe('the + button and its picker', () => {
-  test('the + button sits before the field, is labelled Attach files and opens a hidden picker of several files', () => {
+  test('the + button sits before the field, is labelled Attach files with a tooltip and opens a hidden picker of several files', () => {
     const p = page();
     const button = p.$('attach-btn');
     const input = p.$('attach-input');
     assert.strictEqual(button.getAttribute('aria-label'), 'Attach files');
-    assert.strictEqual(button.getAttribute('title'), 'Attach files');
+    assert.strictEqual(button.getAttribute('title'), null, 'the tooltip names it, in place of a title');
+    const tip = button.querySelector('.att-tip');
+    assert.ok(tip, 'the button holds its tooltip');
+    assert.strictEqual(tip.getAttribute('role'), 'tooltip');
+    assert.strictEqual(tip.textContent, 'Attach files');
     assert.ok(follows(p, button, p.$('msg-input')), 'the button comes before the field');
     assert.strictEqual(input.type, 'file');
     assert.ok(input.multiple && input.hidden);
@@ -165,9 +169,14 @@ describe('a chip per picked file', () => {
     const p = page();
     await pick(p, [p.file('a.txt')]);
     const row = p.w.getComputedStyle(p.$('composer-chips'));
-    const chipHeight = parseFloat(p.w.getComputedStyle(p.chips()[0]).height);
+    const chip = parseFloat(p.w.getComputedStyle(p.chips()[0]).height);
+    const gap = parseFloat(row.rowGap);
+    const above = parseFloat(row.paddingTop);
+    const most = parseFloat(row.maxHeight);
     assert.strictEqual(row.overflowY, 'auto');
-    assert.strictEqual(parseFloat(row.maxHeight), 2 * chipHeight + parseFloat(row.rowGap));
+    assert.strictEqual(chip, 52);
+    assert.ok(2 * chip + gap + above <= most && most <= 128, `two chip lines fit in ${most}px`);
+    assert.ok(3 * chip + 2 * gap + above > most, `three chip lines do not fit in ${most}px`);
   });
 });
 

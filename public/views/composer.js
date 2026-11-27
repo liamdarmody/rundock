@@ -122,6 +122,7 @@ function renderComposer(composer) {
 function chipFor(composer, file, index) {
   const chip = document.createElement('div');
   chip.className = 'composer-chip';
+  chip.setAttribute('title', file.name);
   const text = document.createElement('div');
   text.className = 'composer-chip-text';
   const name = document.createElement('span');
@@ -135,10 +136,9 @@ function chipFor(composer, file, index) {
   remove.type = 'button';
   remove.className = 'composer-chip-remove';
   remove.setAttribute('aria-label', `Remove ${file.name}`);
-  remove.title = `Remove ${file.name}`;
-  remove.textContent = '×';
+  remove.appendChild(iconOf(ICON_CLOSE, '1.8'));
   remove.onclick = () => removeComposerFile(composer, index);
-  chip.append(text, remove);
+  chip.append(tileFor(kinds.get(file)), text, remove);
   return chip;
 }
 
@@ -439,6 +439,11 @@ const noticeElements = new WeakMap();
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const ICON_INFO = [['circle', { cx: '12', cy: '12', r: '10' }], ['path', { d: 'M12 8v4' }], ['path', { d: 'M12 16h.01' }]];
 const ICON_CLOSE = [['path', { d: 'M18 6 6 18' }], ['path', { d: 'm6 6 12 12' }]];
+const ICON_FILE = [['path', { d: 'M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z' }], ['path', { d: 'M14 2v4a2 2 0 0 0 2 2h4' }]];
+const ICON_IMAGE = [['rect', { width: '18', height: '18', x: '3', y: '3', rx: '2' }], ['circle', { cx: '9', cy: '9', r: '2' }],
+  ['path', { d: 'm21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21' }]];
+const ICON_LINES = ICON_FILE.concat([['path', { d: 'M10 9H8' }], ['path', { d: 'M16 13H8' }], ['path', { d: 'M16 17H8' }]]);
+const ICON_TABLE = ICON_FILE.concat([['path', { d: 'M8 13h2' }], ['path', { d: 'M14 13h2' }], ['path', { d: 'M8 17h2' }], ['path', { d: 'M14 17h2' }]]);
 
 // A 24 by 24 icon stroked in the text's color, each shape a tag and its
 // attributes.
@@ -453,6 +458,17 @@ function iconOf(shapes, strokeWidth) {
     svg.appendChild(node);
   }
   return svg;
+}
+
+// A chip's tile, holding its type's icon: an image (whose answer carries its
+// size), a table for CSV, and lines for a PDF, text or Markdown.
+function tileFor(kind) {
+  const tile = document.createElement('span');
+  tile.className = 'composer-chip-tile';
+  tile.setAttribute('aria-hidden', 'true');
+  const { type, width } = kind || {};
+  tile.appendChild(iconOf(width ? ICON_IMAGE : type === 'csv' ? ICON_TABLE : ICON_LINES, '1.8'));
+  return tile;
 }
 
 return {

@@ -660,3 +660,112 @@ describe('a paste adds its files, and a pasted image is named', () => {
     assert.ok(content.startsWith('what is wrong here?\n[Attached: .rundock/attachments/c1/1-Pasted_image.png (PNG image'), content);
   });
 });
+
+describe('the composer is drawn as a field holding the chips, the + button and the text', () => {
+  const rules = (p) => [...p.doc.styleSheets].flatMap((sheet) => [...sheet.cssRules]).filter((r) => r.selectorText);
+  // The declarations of the stylesheet's last rule written for exactly
+  // `selector`, for what jsdom does not compute: a var() color, a state.
+  function declared(p, selector) {
+    const found = rules(p).filter((r) => r.selectorText === selector);
+    assert.ok(found.length, `chat.css has a rule for ${selector}`);
+    return found[found.length - 1].style;
+  }
+  // Whether a rule that shows `el` (display: block) matches it as it stands.
+  const shownBy = (p, el) => rules(p).filter((r) => r.style.display === 'block')
+    .filter((r) => r.selectorText.split(',').some((s) => el.matches(s.trim())));
+  async function refused(p) {
+    await pick(p, p.file('bundle.zip', ZIP));
+    assert.strictEqual(p.doc.querySelectorAll('#composer-notice .composer-notice-item').length, 1, 'a message shows');
+  }
+
+  test('the field holds the chips and the row, and Send and the messages sit outside it', () => {
+    const p = page();
+    const bar = p.doc.querySelector('.chat-input');
+    const field = bar.querySelector(':scope > div.composer-field');
+    assert.ok(field, 'the composer holds a field');
+    assert.deepStrictEqual([...field.children].map((el) => el.id || el.className), ['composer-chips', 'composer-row']);
+    const row = field.querySelector(':scope > div.composer-row');
+    assert.deepStrictEqual([...row.children].map((el) => el.id || el.className), ['attach-btn', 'attach-input', 'msg-input', 'mic-slot']);
+    assert.strictEqual(row.querySelector('.mic-slot').getAttribute('aria-hidden'), 'true');
+    assert.strictEqual(p.$('send-btn').parentElement, bar, 'Send sits beside the field');
+    assert.strictEqual(p.$('composer-notice').parentElement, bar, 'the messages sit under it');
+    const layout = p.w.getComputedStyle(bar);
+    assert.deepStrictEqual([layout.alignItems, layout.flexWrap, layout.rowGap], ['flex-end', 'wrap', '8px']);
+    assert.strictEqual(declared(p, '.composer-field').background, 'var(--card)');
+    assert.strictEqual(p.w.getComputedStyle(p.$('msg-input')).backgroundColor, 'rgba(0, 0, 0, 0)', 'the text is transparent');
+    assert.strictEqual(declared(p, '.composer-field:focus-within').boxShadow, '0 0 0 1px var(--text-2)');
+    assert.ok(!rules(p).some((r) => /textarea:focus\b/.test(r.selectorText) && r.style.boxShadow), 'the ring left the text');
+  });
+
+  test('the + button\'s tooltip says Attach files, is a tooltip and shows on keyboard focus and on hover', () => {
+    const p = page();
+    const button = p.$('attach-btn');
+    const tip = button.querySelector('span.att-tip');
+    assert.ok(tip, 'the + button holds its tooltip');
+    assert.strictEqual(tip.getAttribute('role'), 'tooltip');
+    assert.strictEqual(tip.textContent, 'Attach files');
+    assert.strictEqual(button.getAttribute('aria-label'), 'Attach files');
+    assert.strictEqual(button.getAttribute('title'), null);
+    assert.strictEqual(p.w.getComputedStyle(tip).display, 'none', 'hidden at rest');
+    assert.deepStrictEqual(shownBy(p, tip), [], 'no rule shows it at rest');
+    button.focus();
+    assert.strictEqual(shownBy(p, tip).length, 1, 'a rule shows it on keyboard focus');
+    assert.ok(shownBy(p, tip)[0].selectorText.split(',').map((s) => s.trim()).includes('.attach-btn:hover .att-tip'), 'and on hover');
+    const look = declared(p, '.att-tip');
+    assert.deepStrictEqual([look.color, look.background], ['var(--text-1)', 'var(--surface)']);
+  });
+
+  test('the + button is 32 by 32 px and its focus ring sits 1px off it', () => {
+    const p = page();
+    const size = p.w.getComputedStyle(p.$('attach-btn'));
+    assert.deepStrictEqual([size.width, size.height], ['32px', '32px']);
+    assert.strictEqual(declared(p, '.attach-btn').color, 'var(--text-2-strong)');
+    const hover = declared(p, '.attach-btn:hover');
+    assert.deepStrictEqual([hover.color, hover.background], ['var(--text-1)', 'var(--elevated)']);
+    const ring = declared(p, '.attach-btn:focus-visible');
+    assert.deepStrictEqual([ring.outline, ring.outlineOffset], ['2px solid var(--accent-control)', '1px']);
+  });
+
+  test('a chip is 52px high, on --elevated with a 1px --border edge, and titled with its file\'s name', async () => {
+    const p = page();
+    await pick(p, p.file('report.pdf'));
+    const chip = p.doc.querySelector('#composer-chips .composer-chip');
+    assert.strictEqual(p.w.getComputedStyle(chip).height, '52px');
+    assert.strictEqual(chip.getAttribute('title'), 'report.pdf');
+    const look = declared(p, '.composer-chip');
+    assert.deepStrictEqual([look.background, look.border], ['var(--elevated)', '1px solid var(--border)']);
+    assert.strictEqual(declared(p, '.composer-chip-name').color, 'var(--text-1)');
+    assert.strictEqual(declared(p, '.composer-chip-meta').color, 'var(--text-2-strong)');
+    const remove = p.w.getComputedStyle(chip.querySelector('.composer-chip-remove'));
+    assert.deepStrictEqual([remove.width, remove.height, remove.color], ['24px', '24px', 'var(--text-2-strong)']);
+    const hover = declared(p, '.composer-chip-remove:hover');
+    assert.deepStrictEqual([hover.color, hover.background], ['var(--text-1)', 'var(--card)']);
+    assert.strictEqual(declared(p, '.composer-chip-remove:focus-visible').outlineOffset, '0px');
+  });
+
+  test('a chip\'s tile is 40px on --card, holding its type\'s icon in --text-2-strong', async () => {
+    const p = page();
+    await pick(p, p.file('shot.png'), p.file('report.pdf'), p.file('table.csv'));
+    const tiles = [...p.doc.querySelectorAll('#composer-chips .composer-chip > span.composer-chip-tile')];
+    assert.strictEqual(tiles.length, 3, 'each chip leads with a tile');
+    const size = p.w.getComputedStyle(tiles[0]);
+    assert.deepStrictEqual([size.width, size.height, size.color], ['40px', '40px', 'var(--text-2-strong)']);
+    assert.strictEqual(declared(p, '.composer-chip-tile').background, 'var(--card)');
+    const icons = tiles.map((tile) => tile.querySelector('svg'));
+    assert.ok(icons.every(Boolean), 'each tile holds an icon');
+    assert.strictEqual(new Set(icons.map((svg) => svg.innerHTML)).size, 3, 'an image, a PDF and a CSV each have their own icon');
+  });
+
+  test('the messages are a column 6px apart, 54px short of the right edge, each on --surface', async () => {
+    const p = page();
+    await refused(p);
+    const column = p.w.getComputedStyle(p.$('composer-notice'));
+    assert.deepStrictEqual([column.display, column.flexDirection, column.gap, column.marginRight], ['flex', 'column', '6px', '54px']);
+    const item = declared(p, '.composer-notice-item');
+    assert.deepStrictEqual([item.background, item.border], ['var(--surface)', '1px solid var(--border)']);
+    const title = declared(p, '.composer-notice-title');
+    assert.deepStrictEqual([title.color, title.fontWeight], ['var(--text-1)', '600']);
+    assert.strictEqual(declared(p, '.composer-notice-text').color, 'var(--text-2-strong)');
+    assert.strictEqual(declared(p, '.composer-notice-icon').color, 'var(--attention-text)');
+  });
+});
