@@ -45,7 +45,7 @@
 // Core send helper: pushes a message to server, updates UI, persists metadata
 function dispatchMessage(convo, text) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  addUserMsg(text);
+  addUserMsg(text, true, convo.id);
   convo.messages.push({ role: 'user', content: text, timestamp: new Date().toISOString() });
   // Promote from "Previous" to current session when user sends a message
   if (convo.persisted) {
@@ -296,7 +296,7 @@ function addAgentMsg(text,agentId,anim=true,timestamp=null) {
   d.innerHTML=RundockChatMarkup.agentMessageHtml(a, formatMd(text), RundockChatMarkup.msgTimeHtml(t));
   m.appendChild(d); scrollBottom(); return d;
 }
-function addUserMsg(text,anim=true) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=RundockChatMarkup.userBubbleHtml(esc(text)); m.appendChild(d); scrollBottom(true); }
+function addUserMsg(text,anim=true,conversationId) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg msg-user'; if(!anim)d.style.animation='none'; d.innerHTML=RundockChatMarkup.userBubbleHtml(esc(text)); if (typeof RundockSentFiles !== 'undefined') RundockSentFiles.drawSentFiles(d, text, conversationId); m.appendChild(d); scrollBottom(true); }
 function addSystemMsg(text) { const m=document.getElementById('messages'),d=document.createElement('div'); d.className='msg-system'; d.textContent=text; m.appendChild(d); scrollBottom(); }
 
 // Build a delegation divider element. Used by live agent_switch (the effect
@@ -496,6 +496,7 @@ function createHistoryDivider() {
 function renderSessionHistory(d) {
   const convo = conversations.find(c => c.id === d.conversationId);
   if (!convo) return;
+  if (typeof RundockSentFiles !== 'undefined') RundockSentFiles.mergeSentFiles(d.conversationId, d.files);
   const el = document.getElementById('messages');
   if (!el) return;
   // The reply has come: a later open draws what it holds, or asks again.
@@ -578,6 +579,7 @@ function renderSessionHistory(d) {
     } else if (msg.role === 'user') {
       div.className = 'msg msg-user history-msg';
       div.innerHTML = RundockChatMarkup.userBubbleHtml(esc(msg.content));
+      if (typeof RundockSentFiles !== 'undefined') RundockSentFiles.drawSentFiles(div, msg.content, d.conversationId);
     } else {
       // Use per-message agentId if available (from multi-session merge), fall back to default
       const msgAgent = msg.agentId ? (agents.find(a => a.id === msg.agentId) || defaultAgent) : defaultAgent;

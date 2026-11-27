@@ -832,7 +832,7 @@ function replayConversationInto(el, c) {
   const historyCount = c._historyCount || 0;
   for (let i = 0; i < c.messages.length; i++) {
     const m = c.messages[i];
-    if (m.role === 'user') addUserMsg(m.content, false);
+    if (m.role === 'user') addUserMsg(m.content, false, c.id);
     else if (m.role === 'agent') addAgentMsg(m.content, m.agentId, false, m.timestamp || null);
     else if (m.type === 'compaction') { if (typeof m.key === 'string' && m.key) el.appendChild(createSummarisedDivider({ key: m.key })); }
     else if (m.type === 'delegation') { const n = buildDelegateStoppedNotice(m.content || ''); n.style.animation = 'none'; el.appendChild(n); }
