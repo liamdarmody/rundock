@@ -22,6 +22,7 @@ const path = require('node:path');
 const h = require('../helpers/harness.js');
 const { agentFile } = require('../helpers/workspace.js');
 const fx = require('../fixtures/stream-json.js');
+const { approvalNotice } = require('../../scripts/refusal-notice.js');
 
 const HELPERS = path.join(__dirname, '..', '..', 'lib', 'delegation', 'helpers.js');
 // Asserted before the module is used, so a missing module fails a test on an
@@ -99,6 +100,58 @@ const results = (convo, since = 0) => client.messages.slice(since).filter((m) =>
 const helpersChanged = (convo, since = 0) => client.messages.slice(since).filter((m) => m.type === 'helpers_changed' && m._conversationId === convo);
 const wrenReplies = (convo) => (h.internal.loadTranscript(convo) || []).filter((t) => t.agent === 'wren').map((t) => t.text || t.content || '').join('\n');
 const parentOf = () => `toolu_stream_parent_${++seq}`;
+
+// What the hook told the runtime for the call with this tool_use id, once it has.
+function hookAnswer(id) {
+  const logged = h.readHookAnswers().find((a) => a.toolUseId === id);
+  if (!logged) return null;
+  return logged.answer ? logged.answer.hookSpecificOutput : { unparsed: logged.raw };
+}
+const allowedAnswer = (withCard) => ({
+  hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'Approved in Rundock',
+  ...(withCard ? { additionalContext: approvalNotice('Agent') } : {}),
+});
+const refusedAnswer = (notice) => ({ hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: notice });
+const agentCards = (convo, since = 0) => client.messages.slice(since)
+  .filter((m) => m.type === 'control_request' && m._conversationId === convo && m.request && m.request.tool_name === 'Agent');
+async function cardFor(convo, since) {
+  assert.ok(await h.waitUntil(() => agentCards(convo, since).length > 0, { timeout: 20000 }), `a card was raised in ${convo}`);
+  return agentCards(convo, since)[0];
+}
+const answerCard = (card, allow) => client.send({
+  type: 'permission_response', requestId: card.request_id, conversationId: card._conversationId || '', allow, card: true,
+});
+// The rule for one message of Wren's whose Agent calls are put to the hook.
+// Each allowed helper keeps running until its own file exists.
+const finishFile = (id) => path.join(h.workspaceDir, `finish-${id}`);
+function helpersRule(words, calls, extra = {}) {
+  return {
+    match: { agent: 'wren', promptIncludes: words }, helpers: true, running: true,
+    finishOn: Object.fromEntries(calls.map((c) => [c.id, finishFile(c.id)])),
+    turn: [{ text: 'Starting these.' }, ...calls.map((c) => ({ agentTool: c.input, id: c.id }))],
+    ...extra,
+  };
+}
+const finishHelper = (id) => fs.writeFileSync(finishFile(id), '');
+// The cap's events for a conversation, from the workspace's events file.
+function capEvents(convo) {
+  const dir = path.join(h.workspaceDir, '.rundock', 'state');
+  const out = [];
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => /^events-\d{4}-\d{2}\.jsonl$/.test(f)); } catch (e) { return out; }
+  for (const f of files) {
+    for (const l of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) if (l.trim()) out.push(JSON.parse(l));
+  }
+  return out.filter((e) => e.e === 'helper_cap' && e.conv === convo);
+}
+// Hold `fn` with a different hold at the cap, and put the old one back.
+async function withHold(ms, fn) {
+  const m = helpers();
+  const before = m.HELPER_HOLD_MS;
+  m.HELPER_HOLD_MS = ms;
+  try { return await fn(); } finally { m.HELPER_HOLD_MS = before; }
+}
+const CAP_NOTICE = 'At most five helpers run at once. Wait for these to report back, then start the rest.';
 
 // ---------------------------------------------------------------------------
 // The parent filter
@@ -215,4 +268,53 @@ test('with helpers on, a task_started for a call the lead\'s messages never made
   const last = helpersChanged(convo, since).pop();
   assert.ok(last, 'helpers_changed was sent');
   assert.deepStrictEqual(last.helpers.map((r) => [r.toolUseId, r.state, r.step]), [['toolu_stream_unknown', 'running', 'Glob']]);
+});
+
+// ---------------------------------------------------------------------------
+// The cap, through the hook
+// ---------------------------------------------------------------------------
+
+test('with helpers on, Allow on the card for six teammate calls starts five through the hook and holds the sixth until one finishes', async () => {
+  names('runningCount', 'helperRows');
+  const convo = open('cap-card');
+  const calls = ['ash', 'example-research-lead', 'ash', 'example-research-lead', 'ash', 'example-research-lead'].map((a) => agentCall(a));
+  h.writeScenario([helpersRule('six teammates at once', calls)]);
+  const since = say(convo, 'six teammates at once');
+  answerCard(await cardFor(convo, since), true);
+  const answered = () => calls.filter((c) => hookAnswer(c.id));
+  assert.ok(await h.waitUntil(() => answered().length >= 5, { timeout: 20000 }), 'five were answered');
+  await h.delay(300);
+  assert.strictEqual(answered().length, 5, `the sixth is held: ${JSON.stringify(calls.map((c) => hookAnswer(c.id)))}`);
+  for (const c of answered()) assert.deepStrictEqual(hookAnswer(c.id), allowedAnswer(true));
+  const held = calls.find((c) => !hookAnswer(c.id));
+  assert.strictEqual(helpers().runningCount(convo), 5);
+  const rows = helpersChanged(convo, since).pop().helpers;
+  assert.deepStrictEqual(rows.filter((r) => r.state === 'waiting').map((r) => [r.toolUseId, r.kind]), [[held.id, 'teammate']]);
+  assert.ok(await h.waitUntil(() => capEvents(convo).length >= 1, { timeout: 5000 }), 'the hold is recorded');
+  assert.deepStrictEqual(capEvents(convo).map((e) => [e.agent, e.d]), [['wren', { outcome: 'held' }]]);
+
+  finishHelper(answered()[0].id);
+  assert.ok(await h.waitUntil(() => hookAnswer(held.id), { timeout: 20000 }), 'the held call is answered once one finishes');
+  assert.deepStrictEqual(hookAnswer(held.id), allowedAnswer(true));
+  await client.waitFor((m) => m.type === 'result' && m._conversationId === convo, { since, label: 'result' });
+  assert.strictEqual(helpers().runningCount(convo), 5);
+  assert.ok(await h.waitUntil(() => capEvents(convo).length >= 2, { timeout: 5000 }), 'the start is recorded');
+  assert.deepStrictEqual(capEvents(convo).map((e) => e.d.outcome).sort(), ['held', 'started']);
+});
+
+test('with helpers on, a call held at the cap that no slot frees for is refused through the hook with the cap\'s reason', async () => {
+  names('runningCount', 'helperRows');
+  const convo = open('cap-refused');
+  const calls = Array.from({ length: 6 }, () => agentCall('Explore'));
+  h.writeScenario([helpersRule('six explorers at once', calls)]);
+  await withHold(300, async () => {
+    const since = say(convo, 'six explorers at once');
+    await client.waitFor((m) => m.type === 'result' && m._conversationId === convo, { since, label: 'result' });
+  });
+  const answers = calls.map((c) => hookAnswer(c.id));
+  assert.deepStrictEqual(answers.filter((a) => a.permissionDecision === 'allow'), Array(5).fill(allowedAnswer(false)));
+  assert.deepStrictEqual(answers.filter((a) => a.permissionDecision === 'deny'), [refusedAnswer(CAP_NOTICE)]);
+  assert.strictEqual(helpers().runningCount(convo), 5);
+  assert.ok(await h.waitUntil(() => capEvents(convo).length >= 2, { timeout: 5000 }), 'the hold and refusal are recorded');
+  assert.deepStrictEqual(capEvents(convo).map((e) => e.d.outcome).sort(), ['held', 'refused']);
 });

@@ -40,15 +40,33 @@ const team = {
 
 let sent = [];
 let prevDeps = null;
+let ws = null;
+// The card for a batch that starts teammates: answered Allow unless a test
+// says otherwise. `cards` holds each card raised.
+let cards = [];
+let cardAnswer = (req) => req.onDecision(true, null, { card: true });
+const used = new Set();
 before(() => {
-  srv.setWorkspace(makeWorkspace({ agents: team }));
+  ws = makeWorkspace({ agents: team });
+  srv.setWorkspace(ws);
   if (fs.existsSync(HELPERS)) {
     const m = require(HELPERS);
     m.HELPERS_ENABLED = true;
-    prevDeps = m.wireHelpersDeps({ safeSend: (s) => sent.push(JSON.parse(s)) });
+    prevDeps = m.wireHelpersDeps({
+      safeSend: (s) => sent.push(JSON.parse(s)),
+      requestServerPermission: (req) => { cards.push(req); cardAnswer(req); },
+    });
   }
 });
-afterEach(() => { sent = []; });
+afterEach(() => {
+  sent = [];
+  cards = [];
+  cardAnswer = (req) => req.onDecision(true, null, { card: true });
+  // A call still held at the cap is let go, so no hold outlives its test.
+  const m = require(HELPERS);
+  if (typeof m.leadClosed === 'function') for (const convo of used) m.leadClosed(convo, null);
+  used.clear();
+});
 after(() => {
   if (fs.existsSync(HELPERS)) {
     const m = require(HELPERS);
@@ -59,7 +77,7 @@ after(() => {
 });
 
 let n = 0;
-const freshConvo = () => String(1764000000000 + (++n));
+const freshConvo = () => { const convo = String(1764000000000 + (++n)); used.add(convo); return convo; };
 const lead = { agentId: 'wren', process: null };
 const changes = (convo) => sent.filter((m) => m.type === 'helpers_changed' && m._conversationId === convo);
 const lastRows = (convo) => { const all = changes(convo); return all.length ? all[all.length - 1].helpers : []; };
@@ -271,5 +289,242 @@ describe('another runtime reports its helpers into the same count', () => {
     m.noteEnded(convo, 'c1', 'killed');
     assert.strictEqual(m.runningCount(convo), 0);
     assert.strictEqual(lastRows(convo)[0].state, 'killed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The cap: at most five helpers at once in a conversation
+// ---------------------------------------------------------------------------
+
+const CAP_NOTICE = 'At most five helpers run at once. Wait for these to report back, then start the rest.';
+const tick = (ms) => new Promise((r) => setTimeout(r, ms));
+// Whether an answer has come back yet, without waiting for one that hasn't.
+const settled = (answer) => Promise.race([answer.then(() => 'answered'), tick(30).then(() => 'open')]);
+// One lead message with these calls, each put to the hook. Returns each
+// call's answer as it comes, so a test can see which are still open.
+function ask(convo, calls, entry = lead) {
+  const m = names('runningCount', 'helperRows');
+  m.placeMessage(convo, entry, calls);
+  return calls.map((c) => m.answerAgentRequest({ convoId: convo, askedBy: entry.agentId, data: { tool_use_id: c.id, tool_input: c.input } }));
+}
+const explores = (count, from = 1) => Array.from({ length: count }, (_, i) => explore(`c${from + i}`, `Part ${from + i}`));
+const teammate = (id, agent) => ({ id, input: { subagent_type: agent, description: `Part for ${agent}`, prompt: 'Draft it.' } });
+const finishTask = (convo, id, status = 'completed') => line(convo, fx.taskNotification({ taskId: `task_${id}`, toolUseId: id, status }));
+const states = (convo) => helpers().helperRows(convo).map((r) => r.state);
+// Hold `fn` with a different hold, and put the old one back.
+async function withHold(ms, fn) {
+  const m = helpers();
+  const before = m.HELPER_HOLD_MS;
+  m.HELPER_HOLD_MS = ms;
+  try { return await fn(); } finally { m.HELPER_HOLD_MS = before; }
+}
+// The cap's events for a conversation, as written to the workspace's events
+// file. The file is appended to without waiting, so a test waits for `count`.
+function capEvents(convo) {
+  const dir = path.join(ws, '.rundock', 'state');
+  const out = [];
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => /^events-\d{4}-\d{2}\.jsonl$/.test(f)); } catch (e) { return out; }
+  for (const f of files) {
+    for (const l of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) if (l.trim()) out.push(JSON.parse(l));
+  }
+  return out.filter((e) => e.e === 'helper_cap' && e.conv === convo);
+}
+async function capEventsAt(convo, count) {
+  for (let i = 0; i < 100 && capEvents(convo).length < count; i++) await tick(10);
+  return capEvents(convo);
+}
+// Each line is appended without waiting for the one before, so lines written
+// close together can land in either order: outcomes are compared sorted, and
+// the order calls start in is read from their answers.
+const outcomes = (events) => events.map((e) => e.d && e.d.outcome).sort();
+
+describe('the cap of five helpers at once', () => {
+  test('five helpers start at once and a call that would make a sixth is held, its request left open', async () => {
+    const m = names('runningCount', 'helperRows');
+    const convo = freshConvo();
+    const answers = ask(convo, explores(6));
+    for (const answer of answers.slice(0, 5)) assert.deepStrictEqual(await answer, { allow: true });
+    assert.strictEqual(await settled(answers[5]), 'open', 'the sixth waits');
+    assert.strictEqual(m.runningCount(convo), 5, 'a held call is not counted');
+    assert.deepStrictEqual(states(convo), ['running', 'running', 'running', 'running', 'running', 'waiting']);
+    assert.strictEqual(lastRows(convo)[5].state, 'waiting', 'the page is shown it waiting');
+    assert.deepStrictEqual(outcomes(await capEventsAt(convo, 1)), ['held']);
+  });
+
+  test('when a helper finishes, the earliest held call starts, is counted, and the start is recorded', async () => {
+    const m = names('runningCount', 'helperRows');
+    const convo = freshConvo();
+    const answers = ask(convo, explores(6));
+    await Promise.all(answers.slice(0, 5));
+    finishTask(convo, 'c2');
+    assert.deepStrictEqual(await answers[5], { allow: true });
+    assert.strictEqual(m.runningCount(convo), 5);
+    assert.deepStrictEqual(states(convo), ['running', 'completed', 'running', 'running', 'running', 'running']);
+    assert.deepStrictEqual(outcomes(await capEventsAt(convo, 2)), ['held', 'started']);
+  });
+
+  test('held calls start in the order they arrived', async () => {
+    const convo = freshConvo();
+    const answers = ask(convo, explores(7));
+    await Promise.all(answers.slice(0, 5));
+    finishTask(convo, 'c1');
+    assert.deepStrictEqual(await answers[5], { allow: true }, 'the first held starts first');
+    assert.strictEqual(await settled(answers[6]), 'open', 'the second still waits');
+    finishTask(convo, 'c3');
+    assert.deepStrictEqual(await answers[6], { allow: true });
+    assert.deepStrictEqual(outcomes(await capEventsAt(convo, 4)), ['held', 'held', 'started', 'started']);
+  });
+
+  test('a held call that no slot frees for within the hold is refused with the cap\'s reason', async () => {
+    const m = names('runningCount', 'helperRows');
+    const convo = freshConvo();
+    await withHold(40, async () => {
+      const answers = ask(convo, explores(6));
+      await Promise.all(answers.slice(0, 5));
+      assert.deepStrictEqual(await answers[5], { allow: false, notice: CAP_NOTICE });
+    });
+    assert.strictEqual(m.runningCount(convo), 5);
+    assert.deepStrictEqual(states(convo), ['running', 'running', 'running', 'running', 'running'], 'the refused call is dropped');
+    assert.strictEqual(lastRows(convo).length, 5, 'and the page is told');
+    assert.deepStrictEqual(outcomes(await capEventsAt(convo, 2)), ['held', 'refused']);
+  });
+
+  test('a held call that starts before its hold runs out is never refused afterwards', async () => {
+    const convo = freshConvo();
+    await withHold(60, async () => {
+      const answers = ask(convo, explores(6));
+      await Promise.all(answers.slice(0, 5));
+      finishTask(convo, 'c4');
+      assert.deepStrictEqual(await answers[5], { allow: true });
+      await tick(120);
+    });
+    assert.deepStrictEqual(outcomes(await capEventsAt(convo, 2)), ['held', 'started']);
+    assert.deepStrictEqual(states(convo).filter((s) => s === 'running').length, 5);
+  });
+
+  test('each cap event names the conversation and the lead, and holds its outcome and nothing else', async () => {
+    const convo = freshConvo();
+    await withHold(40, async () => {
+      const answers = ask(convo, explores(7));
+      await Promise.all(answers.slice(0, 5));
+      finishTask(convo, 'c1');
+      await answers[5];
+      await answers[6];
+    });
+    const events = await capEventsAt(convo, 4);
+    assert.deepStrictEqual(outcomes(events), ['held', 'held', 'refused', 'started']);
+    for (const e of events) {
+      assert.deepStrictEqual(Object.keys(e).sort(), ['agent', 'conv', 'd', 'e', 'ts']);
+      assert.deepStrictEqual([e.conv, e.agent], [convo, 'wren']);
+      assert.deepStrictEqual(Object.keys(e.d), ['outcome']);
+    }
+    assert.ok(!JSON.stringify(events).includes('Part '), 'no task or brief is recorded');
+  });
+
+  test('the cap is per conversation: two conversations each run five at once', async () => {
+    const m = names('runningCount');
+    const one = freshConvo();
+    const two = freshConvo();
+    const first = ask(one, explores(5));
+    const second = ask(two, explores(5));
+    for (const answer of [...first, ...second]) assert.strictEqual(await settled(answer), 'answered');
+    for (const answer of [...first, ...second]) assert.deepStrictEqual(await answer, { allow: true });
+    assert.deepStrictEqual([m.runningCount(one), m.runningCount(two)], [5, 5]);
+    assert.deepStrictEqual(capEvents(one).concat(capEvents(two)), [], 'nothing was held');
+  });
+
+  test('Allow on the card for six teammate calls starts five and holds the sixth', async () => {
+    const m = names('runningCount', 'helperRows');
+    const convo = freshConvo();
+    const calls = ['ash', 'example-research-lead', 'ash', 'example-research-lead', 'ash', 'example-research-lead']
+      .map((agent, i) => teammate(`m${i + 1}`, agent));
+    const answers = ask(convo, calls);
+    for (const answer of answers.slice(0, 5)) assert.deepStrictEqual(await answer, { allow: true, card: true });
+    assert.strictEqual(cards.length, 1, 'one card for the batch');
+    assert.strictEqual(await settled(answers[5]), 'open');
+    assert.strictEqual(m.runningCount(convo), 5);
+    assert.deepStrictEqual(m.helperRows(convo).map((r) => [r.kind, r.state]),
+      [...Array(5).fill(['teammate', 'running']), ['teammate', 'waiting']]);
+    assert.deepStrictEqual(outcomes(await capEventsAt(convo, 1)), ['held']);
+  });
+
+  test('a held call whose lead closes is answered { allow: false } and dropped, and its helpers end', async () => {
+    const m = names('runningCount', 'helperRows', 'leadClosed');
+    const convo = freshConvo();
+    const proc = { pid: 4242 };
+    const answers = ask(convo, explores(6), { agentId: 'wren', process: proc });
+    await Promise.all(answers.slice(0, 5));
+    m.leadClosed(convo, { pid: 4343 });
+    assert.strictEqual(await settled(answers[5]), 'open', 'another process closing leaves it held');
+    m.leadClosed(convo, proc);
+    assert.deepStrictEqual(await answers[5], { allow: false });
+    assert.strictEqual(m.runningCount(convo), 0);
+    assert.deepStrictEqual(lastRows(convo).map((r) => r.state), Array(5).fill('killed'), 'the held call is dropped, the rest ended');
+    assert.deepStrictEqual(outcomes(await capEventsAt(convo, 1)), ['held'], 'no refusal is recorded');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Placement rows 4 and 5: a lone teammate call while helpers work
+// ---------------------------------------------------------------------------
+
+describe('a lone teammate call while helpers work, or after a cap refusal', () => {
+  // By design this passes before the count exists. Its sibling, "while an
+  // Explore helper runs, a lone teammate call is a helper", shares its setup
+  // and fails there.
+  test('with nothing running and no cap refusal in the request, a lone teammate call is a handoff', () => {
+    const m = helpers();
+    const convo = freshConvo();
+    assert.strictEqual(m.placeMessage(convo, lead, [teammate('h1', 'ash')]).kind, 'handoff');
+  });
+
+  test('while an Explore helper runs, a lone teammate call is a helper', async () => {
+    const m = names('runningCount');
+    const convo = freshConvo();
+    await Promise.all(ask(convo, [explore('e1')]));
+    const [answer] = ask(convo, [teammate('h1', 'ash')]);
+    assert.strictEqual(m.stateOf(convo).latest.kind, 'helpers');
+    assert.deepStrictEqual(await answer, { allow: true, card: true });
+    assert.strictEqual(m.runningCount(convo), 2);
+  });
+
+  test('while a teammate helper runs, a lone teammate call is a helper', async () => {
+    const m = names('runningCount');
+    const convo = freshConvo();
+    await Promise.all(ask(convo, [teammate('h1', 'ash'), explore('e1')]));
+    finishTask(convo, 'e1');
+    assert.strictEqual(m.runningCount(convo), 1, 'only Ash runs');
+    const [answer] = ask(convo, [teammate('h2', 'example-research-lead')]);
+    assert.strictEqual(m.stateOf(convo).latest.kind, 'helpers');
+    assert.deepStrictEqual(await answer, { allow: true });
+    assert.strictEqual(m.runningCount(convo), 2);
+  });
+
+  test('after a cap refusal in the request, with the others finished, a lone teammate call is a helper', async () => {
+    const m = names('runningCount');
+    const convo = freshConvo();
+    await withHold(40, async () => {
+      const answers = ask(convo, explores(6));
+      await Promise.all(answers.slice(0, 5));
+      assert.deepStrictEqual(await answers[5], { allow: false, notice: CAP_NOTICE });
+    });
+    for (const id of ['c1', 'c2', 'c3', 'c4', 'c5']) finishTask(convo, id);
+    assert.strictEqual(m.runningCount(convo), 0);
+    const [answer] = ask(convo, [teammate('h1', 'ash')]);
+    assert.strictEqual(m.stateOf(convo).latest.kind, 'helpers');
+    assert.deepStrictEqual(await answer, { allow: true, card: true });
+    assert.strictEqual(m.runningCount(convo), 1);
+  });
+
+  // By design this passes before the count exists. Its sibling, "while an
+  // Explore helper runs, a lone teammate call is a helper", shares its setup
+  // and fails there.
+  test('once every helper has finished, with no cap refusal, a lone teammate call is a handoff again', async () => {
+    const m = helpers();
+    const convo = freshConvo();
+    await Promise.all(ask(convo, [explore('e1')]));
+    finishTask(convo, 'e1');
+    assert.strictEqual(m.placeMessage(convo, lead, [teammate('h1', 'ash')]).kind, 'handoff');
   });
 });
