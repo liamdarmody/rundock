@@ -13,8 +13,9 @@
 // a message's Agent calls to Rundock's real hook once the message has ended,
 // as the runtime does, and starts each call the hook allows with task_started.
 //
-// The team: Wren leads; Ash and Rowan (agent name example-research-lead)
-// report to Wren.
+// The team runs three handoffs deep: Sky orchestrates, Wren reports to Sky,
+// Ash to Wren, and Rowan (agent name example-research-lead) to Ash, with four
+// reviewers (Birch, Elm, Fern and Moss) reporting to Rowan.
 const { test, before, after, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -43,9 +44,12 @@ let client;
 before(async () => {
   await h.boot({
     agents: {
-      wren: agentFile({ name: 'wren', displayName: 'Wren', role: 'Lead', order: 1 }),
+      sky: agentFile({ name: 'sky', displayName: 'Sky', role: 'Orchestrator', type: 'orchestrator', order: 0 }),
+      wren: agentFile({ name: 'wren', displayName: 'Wren', role: 'Lead', order: 1, reportsTo: 'sky' }),
       ash: agentFile({ name: 'ash', displayName: 'Ash', order: 2, reportsTo: 'wren' }),
-      'example-research-lead': agentFile({ name: 'example-research-lead', displayName: 'Rowan', order: 3, reportsTo: 'wren' }),
+      'example-research-lead': agentFile({ name: 'example-research-lead', displayName: 'Rowan', order: 3, reportsTo: 'ash' }),
+      ...Object.fromEntries(['birch', 'elm', 'fern', 'moss'].map((n, i) => [n,
+        agentFile({ name: n, displayName: n[0].toUpperCase() + n.slice(1), order: 4 + i, reportsTo: 'example-research-lead' })])),
     },
   });
   h.internal.stopScheduler();
@@ -277,7 +281,7 @@ test('with helpers on, a task_started for a call the lead\'s messages never made
 test('with helpers on, Allow on the card for six teammate calls starts five through the hook and holds the sixth until one finishes', async () => {
   names('runningCount', 'helperRows');
   const convo = open('cap-card');
-  const calls = ['ash', 'example-research-lead', 'ash', 'example-research-lead', 'ash', 'example-research-lead'].map((a) => agentCall(a));
+  const calls = Array.from({ length: 6 }, () => agentCall('ash'));
   h.writeScenario([helpersRule('six teammates at once', calls)]);
   const since = say(convo, 'six teammates at once');
   answerCard(await cardFor(convo, since), true);
@@ -317,4 +321,447 @@ test('with helpers on, a call held at the cap that no slot frees for is refused 
   assert.strictEqual(helpers().runningCount(convo), 5);
   assert.ok(await h.waitUntil(() => capEvents(convo).length >= 2, { timeout: 5000 }), 'the hold and refusal are recorded');
   assert.deepStrictEqual(capEvents(convo).map((e) => e.d.outcome).sort(), ['held', 'refused']);
+});
+
+// ---------------------------------------------------------------------------
+// The open request: a result while helpers run ends a turn, not the request
+// ---------------------------------------------------------------------------
+
+// A helper's end, as Claude Code reports it, and the file that lets the stub
+// write it with the lead's next turn.
+const wakeFile = (name) => path.join(h.workspaceDir, `wake-${name}`);
+const wake = (name) => fs.writeFileSync(wakeFile(name), '');
+const ended = (call, status = 'completed') => fx.taskNotification({ taskId: `task_${call.id}`, toolUseId: call.id, status });
+async function nthResult(convo, since, n) {
+  assert.ok(await h.waitUntil(() => results(convo, since).length >= n, { timeout: 20000 }), `result ${n} arrived in ${convo}`);
+  return results(convo, since)[n - 1];
+}
+async function requestDone(convo, since) {
+  assert.ok(await h.waitUntil(() => doneCount(convo, since) >= 1, { timeout: 20000 }), `the request in ${convo} ended with done`);
+}
+const entryOf = (convo) => h.internal.chatProcesses.get(convo);
+const usage = (out) => ({ input_tokens: 1000 + out, output_tokens: out, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
+const steps = (r) => (r._toolCalls || []).map((t) => t.tool);
+
+test('with helpers on, the lead\'s result while a helper runs sends no done and leaves it busy, and the first result after the helper ends sends done', async () => {
+  names('runningCount', 'helping');
+  const convo = open('open-request');
+  const call = agentCall('Explore');
+  h.writeScenario([helpersRule('one explorer then a wake', [call], {
+    finishOn: {},
+    then: [{ untilFile: wakeFile(call.id), lines: [ended(call)], turn: [{ text: 'The explorer reported back.' }] }],
+  })]);
+  const since = say(convo, 'one explorer then a wake');
+  await nthResult(convo, since, 1);
+  await h.delay(300);
+  assert.strictEqual(doneCount(convo, since), 0, 'no done while the helper runs');
+  const entry = entryOf(convo);
+  assert.ok(entry && !entry.exited && h.pidAlive(entry.process.pid), 'the lead is alive');
+  assert.strictEqual(entry.idle, false, 'the lead stays busy');
+  assert.strictEqual(helpers().runningCount(convo), 1);
+
+  wake(call.id);
+  await requestDone(convo, since);
+  assert.deepStrictEqual(results(convo, since).map((r) => r.result), ['Starting these.', 'The explorer reported back.']);
+  await h.delay(200);
+  assert.strictEqual(doneCount(convo, since), 1, 'one done, for the request');
+  assert.strictEqual(entryOf(convo).idle, true, 'the lead is idle once the request ends');
+  assert.strictEqual(helpers().helping(convo), false);
+});
+
+test('with helpers on, each helper that ends wakes the lead for a turn with its own time, usage and steps', async () => {
+  names('runningCount', 'helping');
+  const convo = open('open-wakes');
+  const calls = [agentCall('Explore'), agentCall('Explore')];
+  h.writeScenario([helpersRule('two explorers then two wakes', calls, {
+    finishOn: {},
+    resultExtra: { duration_ms: 24600, usage: usage(1200) },
+    then: [
+      { untilFile: wakeFile(calls[0].id), lines: [ended(calls[0])], turn: [{ tool: { name: 'Read', input: { file_path: 'notes.md' } } }, { text: 'The first one is back.' }], resultExtra: { duration_ms: 4300, usage: usage(300) } },
+      { untilFile: wakeFile(calls[1].id), lines: [ended(calls[1])], turn: [{ tool: { name: 'Grep', input: { pattern: 'todo' } } }, { text: 'The second one is back.' }], resultExtra: { duration_ms: 3100, usage: usage(200) } },
+    ],
+  })]);
+  const since = say(convo, 'two explorers then two wakes');
+  await nthResult(convo, since, 1);
+  await h.delay(50);
+  wake(calls[0].id);
+  await nthResult(convo, since, 2);
+  await h.delay(50);
+  assert.strictEqual(doneCount(convo, since), 0, 'no done while the second helper runs');
+  wake(calls[1].id);
+  await requestDone(convo, since);
+  const all = results(convo, since);
+  assert.deepStrictEqual(all.map((r) => r.duration_ms), [24600, 4300, 3100], 'each turn\'s time is forwarded untouched');
+  assert.deepStrictEqual(all.map((r) => r.usage), [usage(1200), usage(300), usage(200)], 'each turn\'s usage is forwarded untouched');
+  assert.deepStrictEqual(all.map(steps), [['Agent', 'Agent'], ['Read'], ['Grep']], 'each turn holds only its own steps');
+  assert.ok(all[1]._turnStartTime > all[0]._turnStartTime && all[2]._turnStartTime > all[1]._turnStartTime,
+    `each turn starts later than the one before: ${all.map((r) => r._turnStartTime)}`);
+  await h.delay(200);
+  assert.strictEqual(doneCount(convo, since), 1, 'one done, for the request');
+});
+
+test('with helpers on, a message the person sends while only helpers work reaches the lead and starts a turn, and the helper carries on', async () => {
+  names('runningCount', 'helping');
+  const convo = open('open-person');
+  const call = agentCall('Explore');
+  h.writeScenario([
+    helpersRule('one explorer and a note', [call], {
+      finishOn: {},
+      then: [{ untilFile: wakeFile(call.id), lines: [ended(call)], turn: [{ text: 'The explorer reported back.' }] }],
+    }),
+    { match: { agent: 'wren', promptIncludes: 'a note while it works' }, turn: [{ tool: { name: 'Glob', input: { pattern: '*.md' } } }, { text: 'Noted.' }] },
+  ]);
+  const since = say(convo, 'one explorer and a note');
+  const first = await nthResult(convo, since, 1);
+  const entry = entryOf(convo);
+  const pid = entry.process.pid;
+  say(convo, 'a note while it works');
+  const second = await nthResult(convo, since, 2);
+  assert.ok(h.promptsFor('wren').some((p) => p.includes('a note while it works')), 'the message reached the lead');
+  assert.strictEqual(entryOf(convo), entry, 'the same lead served it');
+  assert.strictEqual(entryOf(convo).process.pid, pid);
+  assert.strictEqual(second.result, 'Noted.');
+  assert.deepStrictEqual(steps(second), ['Glob'], 'the person\'s turn holds only its own steps');
+  assert.ok(second._turnStartTime > first._turnStartTime, 'the person\'s turn starts later');
+  assert.strictEqual(helpers().runningCount(convo), 1, 'the helper carries on');
+  await h.delay(200);
+  assert.strictEqual(doneCount(convo, since), 0, 'the request is still open');
+
+  wake(call.id);
+  await requestDone(convo, since);
+  assert.deepStrictEqual(results(convo, since).map((r) => r.result), ['Starting these.', 'Noted.', 'The explorer reported back.']);
+  await h.delay(200);
+  assert.strictEqual(doneCount(convo, since), 1);
+});
+
+test('with helpers on, after a cap refusal a later lone teammate call in the same request is a helper', async () => {
+  names('runningCount', 'stateOf');
+  const convo = open('open-retry');
+  const calls = Array.from({ length: 6 }, () => agentCall('Explore'));
+  const lone = agentCall('ash');
+  h.writeScenario([
+    helpersRule('six explorers then a retry', calls),
+    { match: { agent: 'wren', promptIncludes: 'now start ash' }, helpers: true, turn: [{ agentTool: lone.input, id: lone.id }] },
+  ]);
+  const since = say(convo, 'six explorers then a retry');
+  await withHold(300, () => nthResult(convo, since, 1));
+  const allowed = calls.filter((c) => hookAnswer(c.id) && hookAnswer(c.id).permissionDecision === 'allow');
+  assert.strictEqual(allowed.length, 5);
+  for (const c of allowed) finishHelper(c.id);
+  assert.ok(await h.waitUntil(() => helpers().runningCount(convo) === 0, { timeout: 20000 }), 'the five finished');
+  assert.strictEqual(doneCount(convo, since), 0, 'no result since the count reached zero, so the request is open');
+
+  const later = say(convo, 'now start ash');
+  answerCard(await cardFor(convo, later), true);
+  await requestDone(convo, since);
+  assert.deepStrictEqual(hookAnswer(lone.id), allowedAnswer(true), 'the lone call was allowed as a helper');
+  assert.strictEqual(helpers().stateOf(convo).latest.kind, 'helpers');
+  assert.strictEqual(h.readInvocations().filter((i) => i.agent === 'ash' && i.env.RUNDOCK_CONVO_ID === convo).length, 0, 'nothing was handed over');
+});
+
+test('with helpers on, a helper killed, stopped or failed lowers the count', async () => {
+  names('runningCount', 'helperRows');
+  const convo = open('open-killed');
+  const calls = [agentCall('Explore'), agentCall('Explore'), agentCall('Explore')];
+  h.writeScenario([helpersRule('three explorers that end badly', calls, {
+    finishOn: {},
+    then: [{ untilFile: wakeFile(calls[0].id), lines: [ended(calls[0], 'killed'), ended(calls[1], 'stopped'), ended(calls[2], 'failed')], turn: [{ text: 'None of them finished.' }] }],
+  })]);
+  const since = say(convo, 'three explorers that end badly');
+  await nthResult(convo, since, 1);
+  assert.strictEqual(helpers().runningCount(convo), 3);
+  wake(calls[0].id);
+  await requestDone(convo, since);
+  assert.strictEqual(helpers().runningCount(convo), 0);
+  const rows = helpersChanged(convo, since).pop().helpers;
+  assert.deepStrictEqual(Object.fromEntries(rows.map((r) => [r.toolUseId, r.state])),
+    { [calls[0].id]: 'killed', [calls[1].id]: 'killed', [calls[2].id]: 'failed' });
+});
+
+// ---------------------------------------------------------------------------
+// Holds: while the lead's helpers run, nothing returns, hands back or is killed
+// ---------------------------------------------------------------------------
+
+// Each return to an agent above, as the page is told of it.
+const switches = (convo, since = 0) => client.messages.slice(since)
+  .filter((m) => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === convo && m.returning);
+const switchPairs = (convo, since) => switches(convo, since).map((m) => [m.fromAgent, m.toAgent]);
+async function waitSwitch(convo, since, from, to) {
+  assert.ok(await h.waitUntil(() => switches(convo, since).some((m) => m.fromAgent === from && m.toAgent === to), { timeout: 20000 }),
+    `${from} returned to ${to}: ${JSON.stringify(switchPairs(convo, since))}`);
+}
+async function resultFrom(convo, agent, since) {
+  const { msg } = await client.waitFor((m) => m.type === 'result' && m._conversationId === convo && m._agent === agent,
+    { since, timeout: 20000, label: `${agent}'s result` });
+  return msg;
+}
+// The dones one process sent; a process the lead replaced can send its own late.
+const doneFrom = (convo, processId, since) => client.messages.slice(since)
+  .filter((m) => m.type === 'system' && m.subtype === 'done' && m._conversationId === convo && m._processId === processId).length;
+// Sky is the workspace's default agent, so the page knows it by the id 'default'.
+const SKY = 'default';
+// Sky, handed the conversation back, stays quiet.
+const SKY_SILENT = { match: { agent: 'sky', promptIncludes: '[SYSTEM' }, turn: [{ text: '<silent>' }] };
+// One message of `agent`'s that hands the conversation to `to` with `brief`.
+const handoff = (agent, words, to, brief) => ({
+  match: { agent, promptIncludes: words },
+  turn: [{ agentTool: { subagent_type: to, description: `Over to ${to}`, prompt: brief }, id: `toolu_stream_handoff_${++seq}` }],
+});
+// One message of `agent`'s that starts `calls` as helpers and writes `text`.
+// The helpers end, and the lead wakes, once wake(name) is called.
+function heldRule(agent, words, calls, text, name) {
+  return {
+    match: { agent, promptIncludes: words }, helpers: true, running: true, finishOn: {},
+    turn: [{ text }, ...calls.map((c) => ({ agentTool: c.input, id: c.id }))],
+    then: [{ untilFile: wakeFile(name), lines: calls.map((c) => ended(c)), turn: [{ text: 'They reported back.' }] }],
+  };
+}
+// The lead is alive and busy, nothing has returned and it sent no done.
+function assertHeld(convo, agent, since) {
+  const entry = entryOf(convo);
+  assert.ok(entry && entry.agentId === agent && !entry.exited && h.pidAlive(entry.process.pid), `${agent} is alive: ${entry && entry.agentId}`);
+  assert.deepStrictEqual(switchPairs(convo, since), [], 'nothing returned');
+  assert.strictEqual(doneFrom(convo, entry.processId, since), 0, 'no done');
+  assert.strictEqual(helpers().runningCount(convo) > 0, true, 'its helpers still run');
+  return entry;
+}
+
+test('with helpers on, a return the page asks for while the delegate\'s helpers run waits, and acts at the first result after they end', async () => {
+  names('runningCount', 'helping');
+  const convo = open('hold-marker');
+  const call = agentCall('Explore');
+  h.writeScenario([
+    SKY_SILENT,
+    handoff('sky', 'hold-marker', 'wren', 'wren brief hold-marker'),
+    heldRule('wren', 'wren brief hold-marker', [call], 'Started an explorer.', 'hold-marker'),
+  ]);
+  const since = say(convo, 'hold-marker please', 'sky');
+  await resultFrom(convo, 'wren', since);
+  client.send({ type: 'end_delegation', conversationId: convo });
+  await h.delay(800);
+  const entry = assertHeld(convo, 'wren', since);
+  assert.ok(entry.delegation, 'wren is still the delegate');
+  assert.ok(wrenReplies(convo).includes('Started an explorer.'), 'its reply is stored');
+  wake('hold-marker');
+  await waitSwitch(convo, since, 'wren', SKY);
+});
+
+test('with helpers on, a delegate\'s auto-return waits while its helpers run, and acts at the first result after they end', async () => {
+  names('runningCount', 'helping');
+  const convo = open('hold-auto');
+  const call = agentCall('Explore');
+  h.writeScenario([
+    SKY_SILENT,
+    handoff('sky', 'hold-auto', 'wren', 'wren brief hold-auto'),
+    heldRule('wren', 'wren brief hold-auto', [call], `Started an explorer. ${fx.MARKERS.COMPLETE}`, 'hold-auto'),
+  ]);
+  const since = say(convo, 'hold-auto please', 'sky');
+  await resultFrom(convo, 'wren', since);
+  await h.delay(800);
+  const entry = assertHeld(convo, 'wren', since);
+  assert.strictEqual(entry.pendingKill, true, 'the auto-return is pending');
+  assert.ok(wrenReplies(convo).includes('Started an explorer.'), 'its reply is stored');
+  wake('hold-auto');
+  await waitSwitch(convo, since, 'wren', SKY);
+});
+
+test('with helpers on, a lead started again after a loop guard keeps its handoff marker\'s kill waiting while its helpers run', async () => {
+  names('runningCount', 'helping');
+  const convo = open('hold-respawn');
+  const call = agentCall('Explore');
+  h.writeScenario([
+    SKY_SILENT,
+    heldRule('wren', 'hold-respawn look around now', [call], `Started an explorer. ${fx.MARKERS.COMPLETE}`, 'hold-respawn'),
+    handoff('wren', 'ash returned because the request was outside their scope', 'ash', 'ash brief hold-respawn again'),
+    handoff('wren', 'hold-respawn', 'ash', 'ash brief hold-respawn'),
+    { match: { agent: 'ash', promptIncludes: 'ash brief hold-respawn' }, turn: [{ text: `Not mine. ${fx.MARKERS.RETURN}` }] },
+  ]);
+  const since = say(convo, 'hold-respawn start');
+  await client.waitFor((m) => m.type === 'assistant' && m._conversationId === convo && m.message
+    && typeof m.message.content === 'string' && m.message.content.includes('has already completed this task'), { since, timeout: 20000, label: 'the loop guard' });
+  assert.ok(await h.waitUntil(() => { const e = entryOf(convo); return e && e.agentId === 'wren' && !e.exited; }, { timeout: 10000 }), 'wren was started again');
+  const later = say(convo, 'hold-respawn look around now');
+  await resultFrom(convo, 'wren', later);
+  await h.delay(800);
+  const entry = assertHeld(convo, 'wren', later);
+  assert.strictEqual(entry.scopeReturn, true, 'the marker was seen');
+  assert.strictEqual(entry.pendingKill, true, 'its kill is pending');
+  wake('hold-respawn');
+  await waitSwitch(convo, later, 'wren', SKY);
+});
+
+test('with helpers on, a parent resumed after its delegate hands back keeps its handoff marker\'s kill waiting while its helpers run', async () => {
+  names('runningCount', 'helping');
+  const convo = open('hold-resumed');
+  const call = agentCall('Explore');
+  h.writeScenario([
+    SKY_SILENT,
+    heldRule('wren', '[SYSTEM: work-continues]', [call], `Started an explorer. ${fx.MARKERS.COMPLETE}`, 'hold-resumed'),
+    handoff('wren', 'hold-resumed start', 'ash', 'ash brief hold-resumed'),
+    { match: { agent: 'ash', promptIncludes: 'ash brief hold-resumed' }, turn: [{ text: 'My part is done. <!-- RUNDOCK:CONTINUE -->' }] },
+  ]);
+  const since = say(convo, 'hold-resumed start');
+  const { index } = await client.waitFor((m) => m.type === 'system' && m.subtype === 'agent_switch' && m._conversationId === convo
+    && m.returning && m.fromAgent === 'ash', { since, timeout: 20000, label: 'ash handed back' });
+  const back = index + 1;
+  await resultFrom(convo, 'wren', back);
+  await h.delay(800);
+  const entry = assertHeld(convo, 'wren', back);
+  assert.strictEqual(entry.scopeReturn, true, 'the marker was seen');
+  assert.strictEqual(entry.pendingKill, true, 'its kill is pending');
+  wake('hold-resumed');
+  await waitSwitch(convo, back, 'wren', SKY);
+});
+
+test('with helpers on, a lead the person started keeps its handoff marker\'s kill waiting while its helpers run', async () => {
+  names('runningCount', 'helping');
+  const convo = open('hold-direct');
+  const call = agentCall('Explore');
+  h.writeScenario([SKY_SILENT, heldRule('wren', 'hold-direct please', [call], `Started an explorer. ${fx.MARKERS.COMPLETE}`, 'hold-direct')]);
+  const since = say(convo, 'hold-direct please');
+  await resultFrom(convo, 'wren', since);
+  await h.delay(800);
+  const entry = assertHeld(convo, 'wren', since);
+  assert.strictEqual(entry.scopeReturn, true, 'the marker was seen');
+  assert.strictEqual(entry.pendingKill, true, 'its kill is pending');
+  assert.ok(wrenReplies(convo).includes('Started an explorer.'), 'its reply is stored');
+  wake('hold-direct');
+  await waitSwitch(convo, since, 'wren', SKY);
+  await client.waitFor((m) => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === convo && m._agent === SKY,
+    { since, timeout: 20000, label: 'sky started' });
+});
+
+test('with helpers on, three handoffs deep, nothing in the chain returns while the deepest lead\'s helpers run, and the hand-backs then return one level at a time', async () => {
+  names('runningCount', 'helping');
+  const convo = open('hold-deep');
+  const reviewers = ['birch', 'elm', 'fern', 'moss'].map((n) => agentCall(n));
+  h.writeScenario([
+    SKY_SILENT,
+    { match: { agent: 'ash', promptIncludes: '[SYSTEM: work-continues]' }, turn: [{ text: `All four reviews are in. ${fx.MARKERS.COMPLETE}` }] },
+    handoff('sky', 'hold-deep review', 'wren', 'wren brief hold-deep'),
+    handoff('wren', 'wren brief hold-deep', 'ash', 'ash brief hold-deep'),
+    handoff('ash', 'ash brief hold-deep', 'example-research-lead', 'rowan brief hold-deep'),
+    heldRule('example-research-lead', 'rowan brief hold-deep', reviewers, 'Four reviewers are on it. <!-- RUNDOCK:CONTINUE -->', 'hold-deep'),
+  ]);
+  const since = say(convo, 'hold-deep review', 'sky');
+  answerCard(await cardFor(convo, since), true);
+  assert.ok(await h.waitUntil(() => reviewers.every((c) => hookAnswer(c.id)), { timeout: 20000 }), 'all four were answered');
+  for (const c of reviewers) assert.deepStrictEqual(hookAnswer(c.id), allowedAnswer(true));
+  await resultFrom(convo, 'example-research-lead', since);
+  await h.delay(800);
+  const entry = assertHeld(convo, 'example-research-lead', since);
+  assert.strictEqual(entry.pendingKill, true, 'its auto-return is pending');
+  assert.strictEqual(helpers().runningCount(convo), 4);
+  wake('hold-deep');
+  await waitSwitch(convo, since, 'ash', SKY);
+  assert.deepStrictEqual(switchPairs(convo, since), [['example-research-lead', 'ash'], ['ash', SKY]]);
+});
+
+// A stub that is stopped or killed cannot log the hook's answer for a call
+// still held, so these two read each answer as the server gives it.
+async function withAnswers(fn) {
+  const m = names('answerAgentRequest');
+  const original = m.answerAgentRequest;
+  const answers = new Map();
+  m.answerAgentRequest = async (args) => {
+    const answer = await original(args);
+    answers.set(args.data.tool_use_id, answer);
+    return answer;
+  };
+  try { return await fn(answers); } finally { m.answerAgentRequest = original; }
+}
+async function closeWhileHeld(prefix, close) {
+  const convo = open(prefix);
+  const calls = Array.from({ length: 6 }, () => agentCall('Explore'));
+  h.writeScenario([helpersRule(`six explorers then ${prefix}`, calls)]);
+  await withAnswers(async (answers) => {
+    const since = say(convo, `six explorers then ${prefix}`);
+    assert.ok(await h.waitUntil(() => answers.size >= 5 && capEvents(convo).some((e) => e.d.outcome === 'held'), { timeout: 20000 }),
+      'five started and one is held');
+    const held = calls.find((c) => !answers.has(c.id));
+    const pid = entryOf(convo).process.pid;
+    close(convo);
+    assert.ok(await h.waitUntil(() => answers.has(held.id), { timeout: 10000 }), 'the held call was answered');
+    assert.deepStrictEqual(answers.get(held.id), { allow: false });
+    assert.ok(await h.waitForPidExit(pid), 'the lead ended');
+    assert.strictEqual(helpers().runningCount(convo), 0);
+    assert.deepStrictEqual(helpers().helperRows(convo), []);
+    assert.strictEqual(helpers().helping(convo), false);
+    await requestDone(convo, since);
+    const rows = helpersChanged(convo, since).pop().helpers;
+    assert.deepStrictEqual(rows.map((r) => r.state), Array(5).fill('killed'), 'its helpers ended and the held one is gone');
+  });
+}
+
+test('with helpers on, stopping the conversation refuses the lead\'s held calls, ends its helpers and ends the request', async () => {
+  names('runningCount', 'helperRows', 'helping');
+  await closeWhileHeld('a stop', (convo) => client.send({ type: 'cancel', conversationId: convo }));
+});
+
+test('with helpers on, a lead that crashes refuses its held calls, ends its helpers and ends the request', async () => {
+  names('runningCount', 'helperRows', 'helping');
+  await closeWhileHeld('a crash', (convo) => entryOf(convo).process.kill('SIGKILL'));
+});
+
+test('with helpers on, the reaper keeps a lead whose helpers run, and reaps it once the request ends', async () => {
+  names('runningCount', 'helping');
+  const convo = open('hold-reaper');
+  const call = agentCall('Explore');
+  h.writeScenario([heldRule('wren', 'one explorer for the reaper', [call], 'Started an explorer.', 'hold-reaper')]);
+  const since = say(convo, 'one explorer for the reaper');
+  await resultFrom(convo, 'wren', since);
+  const entry = entryOf(convo);
+  // A busy entry is kept before the count is read, so this one is made idle
+  // and long idle by hand: only the count can keep it.
+  entry.idle = true; entry.idleSince = 1;
+  h.internal.reapIdleAgents(Date.now() + 24 * 60 * 60 * 1000);
+  assert.strictEqual(entryOf(convo), entry, 'the lead is kept');
+  assert.ok(h.pidAlive(entry.process.pid), 'and alive');
+  entry.idle = false; entry.idleSince = null;
+  wake('hold-reaper');
+  await requestDone(convo, since);
+  h.internal.reapIdleAgents(Date.now() + 24 * 60 * 60 * 1000);
+  assert.strictEqual(entryOf(convo), undefined, 'reaped once the count is zero');
+});
+
+test('with helpers on, active_processes gives a lead whose helpers run its helper rows and idle false', async () => {
+  names('runningCount', 'activeRow');
+  const convo = open('hold-active');
+  const call = agentCall('Explore', { description: 'Read the notes' });
+  h.writeScenario([heldRule('wren', 'one explorer to list', [call], 'Started an explorer.', 'hold-active')]);
+  const since = say(convo, 'one explorer to list');
+  await resultFrom(convo, 'wren', since);
+  const entry = entryOf(convo);
+  // The lead is kept busy already, so it is marked idle by hand: only the
+  // count can make the row say otherwise.
+  entry.idle = true;
+  const other = await h.connect();
+  try {
+    const { msg } = await other.waitFor((m) => m.type === 'active_processes', { label: 'active_processes' });
+    const row = msg.processes.find((p) => p.conversationId === convo);
+    assert.ok(row, 'the lead is listed');
+    assert.strictEqual(row.idle, false);
+    assert.deepStrictEqual(row.helpers, [{ toolUseId: call.id, agent: 'Explore', kind: 'builtin', task: 'Read the notes', state: 'running', step: null }]);
+  } finally {
+    other.close();
+    entry.idle = false;
+  }
+  wake('hold-active');
+  await requestDone(convo, since);
+});
+
+// Passes on a server without helpers too, by design: the probe reads the
+// process map, and a lead whose helpers run stays in it. The sibling that
+// fails there is the reaper test above.
+test('the idle probe reports the conversation busy while the lead\'s helpers run', async () => {
+  const convo = open('hold-probe');
+  const call = agentCall('Explore');
+  h.writeScenario([heldRule('wren', 'one explorer for the probe', [call], 'Started an explorer.', 'hold-probe')]);
+  const since = say(convo, 'one explorer for the probe');
+  await resultFrom(convo, 'wren', since);
+  await h.delay(200);
+  assert.ok(h.internal.chatProcesses.has(convo), 'the lead is in the process map');
+  assert.notStrictEqual(h.internal.chatProcesses.size, 0, 'so the probe sees work running');
+  wake('hold-probe');
+  await requestDone(convo, since);
 });
