@@ -78,6 +78,16 @@
     };
   }
 
+  // What a result says its turn used, passed to the page as it came: the view
+  // checks each value before drawing it. Codex results say they are Codex's.
+  function turnUsed(message) {
+    return {
+      durationMs: message.duration_ms,
+      usage: message.usage,
+      runtime: message._runtime === 'codex' ? 'codex' : 'claude',
+    };
+  }
+
   // The activeProcessId acceptance rule: a message with no _processId is
   // never stale; otherwise it must match the active process (when one is
   // tracked). Exported so the glue can gate BEFORE its marker/WS side
@@ -219,6 +229,7 @@
           type: 'add-cancelled-badge',
           toolCalls: message._toolCalls || [],
           turnStartTime: message._turnStartTime || null,
+          durationMs: message.duration_ms,
         },
         { type: 'clear-streaming-bubble' },
         { type: 'notice', content: 'Agent stopped by user.' },
@@ -648,6 +659,7 @@
           text: responseText,
           toolCalls: message._toolCalls || [],
           turnStartTime: message._turnStartTime || null,
+          ...turnUsed(message),
         });
       } else if (responseText) {
         // No streaming happened (e.g. a very short response): render now.
@@ -657,6 +669,7 @@
           agentId,
           toolCalls: message._toolCalls || [],
           turnStartTime: message._turnStartTime || null,
+          ...turnUsed(message),
         });
       }
     }
