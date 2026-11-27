@@ -460,12 +460,18 @@ describe('buildTurn: a Claude Code turn carries its entry\'s images and PDFs', (
     assert.deepStrictEqual(turnFor(ws, ALL_THREE, { entryId: 'no-such-entry' }), { content: ALL_THREE, extraItems: [] });
   });
 
-  test('a Codex runtime is given the checked text, a string, whatever the entry holds', async () => {
+  test("a Codex runtime is given a string, each of the entry's files in a form Codex can take", async () => {
     readyTurn();
     const { ws, entry, png } = await stored();
     fs.rmSync(png);
-    const sent = turn.buildTurn({ workspace: ws, conversationId: ID, runtime: 'codex', text: `just this ${PNG_LINE}`, entryId: entry.id });
-    assert.deepStrictEqual(sent, { content: `just this ${GONE('1-screenshot.png')}`, extraItems: [] });
+    const sent = turn.buildTurn({ workspace: ws, conversationId: ID, runtime: 'codex', text: `just this ${PNG_LINE}`, entryId: entry.id, session: 'thread-1' });
+    assert.ok(sent.sent, 'buildTurn answers sent');
+    const pdfForm = "[Attached PDF you can't read on Codex: 3-report.pdf. Tell the person you can't open PDFs, and ask for a screenshot of the page or its text.]";
+    assert.deepStrictEqual(sent, {
+      content: [`just this ${GONE('1-screenshot.png')}`, NOTES_LINE, pdfForm].join('\n'),
+      extraItems: [{ type: 'text', text: '[Text of attached file 2-notes.txt]\nfirst line\nsecond line\n' }],
+    });
+    assert.deepStrictEqual(sent.sent, { files: [], bytes: 0, images: 0 }, 'an inline text file is no native copy');
   });
 });
 
