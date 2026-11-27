@@ -476,6 +476,27 @@ function sparse(file, size) {
   try { fs.ftruncateSync(fd, size); } finally { fs.closeSync(fd); }
 }
 
+// A record of `messages`, each file `{ file, size, width?, height? }` written
+// as `size` zero bytes, sparse, and described with its true fingerprint, so
+// each file is present and matches.
+const TEN_MB = 10000000;
+const zeroSums = new Map();
+const zeroSum = (size) => zeroSums.get(size) || zeroSums.set(size, sha256(Buffer.alloc(size))).get(size);
+function sparseRecord(ws, messages, id = ID) {
+  fs.mkdirSync(folderOf(ws, id), { recursive: true });
+  const described = messages.map((message) => ({
+    id: message.id,
+    files: message.files.map((f) => {
+      sparse(path.join(folderOf(ws, id), f.file), f.size);
+      const one = { file: f.file, name: f.file, type: f.file.slice(f.file.lastIndexOf('.') + 1), bytes: f.size, sha256: zeroSum(f.size) };
+      if (f.width !== undefined) Object.assign(one, { width: f.width, height: f.height });
+      return one;
+    }),
+  }));
+  fs.writeFileSync(recordOf(ws, id), JSON.stringify({ messages: described, sent: {} }));
+  return described;
+}
+
 // The bytes read from each file while the test runs, by path, through a
 // descriptor or by name, and every path opened.
 function countReads(t) {
@@ -565,29 +586,17 @@ describe('buildTurn: what a turn reads is bounded', () => {
     assert.deepStrictEqual(kept(answers), [['1-a.pdf', 'present', false], ['2-b.pdf', 'present', false], ['3-c.png', 'present', false]]);
   });
 
-  test('a turn reads at most 100,000,000 bytes of files, its entry\'s first, and a line past that is not available', (t) => {
+  test('a text quoting eleven earlier 10 MB PDFs keeps every line, each file read no further than its recorded size', (t) => {
     readyTurn();
     const ws = workspace();
-    const SIZE = 10000000;
-    const zeros = sha256(Buffer.alloc(SIZE));
-    fs.mkdirSync(folderOf(ws), { recursive: true });
-    const earlier = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => {
-      const file = `${n}-report.pdf`;
-      sparse(path.join(folderOf(ws), file), SIZE);
-      return { id: `entry-${n}`, files: [{ file, name: file, type: 'pdf', bytes: SIZE, sha256: zeros }] };
-    });
-    const png = pngBytes();
-    const shot = '11-screenshot.png';
-    fs.writeFileSync(path.join(folderOf(ws), shot), png);
-    const last = { id: 'entry-11', files: [{ file: shot, name: shot, type: 'png', bytes: png.length, sha256: sha256(png), width: 640, height: 480 }] };
-    fs.writeFileSync(recordOf(ws), JSON.stringify({ messages: [...earlier, last], sent: {} }));
-    const quoted = earlier.map(({ files: [f] }) => lineOf(f.file, 'PDF document, 10 MB'));
-    const shotLine = lineOf(shot, 'PNG image, 1 KB');
+    const earlier = sparseRecord(ws, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => ({ id: `entry-${n}`, files: [{ file: `${n}-report.pdf`, size: TEN_MB }] })));
+    const text = ['the brief', ...earlier.map(({ files: [f] }) => lineOf(f.file, 'PDF document, 10 MB'))].join('\n');
     const reads = countReads(t);
-    const { content } = turnFor(ws, [...quoted, shotLine].join('\n'), { entryId: 'entry-11' });
-    assert.deepStrictEqual(content, [textItem([...quoted.slice(0, 9), GONE('10-report.pdf'), shotLine].join('\n')), imageBlock('image/png', png)]);
-    const total = [...earlier.map(({ files: [f] }) => f.file), shot].reduce((sum, file) => sum + reads.from(path.join(folderOf(ws), file)), 0);
-    assert.ok(total <= 100000000, `read ${total} bytes`);
-    assert.strictEqual(reads.opened(path.join(folderOf(ws), '10-report.pdf')), false, 'the line past the budget opens nothing');
+    const { content } = turnFor(ws, text);
+    assert.strictEqual(content, text, 'each present file keeps the line the record writes');
+    for (const { files: [f] } of earlier) {
+      const read = reads.from(path.join(folderOf(ws), f.file));
+      assert.ok(read <= f.bytes + 1, `${f.file}: read ${read} bytes`);
+    }
   });
 });

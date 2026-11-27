@@ -79,7 +79,6 @@ const MUTATIONS = [
     "    if (stat.size !== described.bytes) return { state: 'changed', described };\n"
       + '    // One byte past the recorded size, so a file grown since the stat shows.\n'
       + '    const read = readAtMost(fd, described.bytes + 1, keep);\n'
-      + '    budget.left -= read.length;\n'
       + "    if (read.length !== described.bytes) return { state: 'changed', described };\n",
     '    const read = readAtMost(fd, described.bytes, keep);\n'],
   [STORE, 'the fingerprint goes unchecked, so a file rewritten at the same size reads as present',
@@ -96,8 +95,8 @@ const MUTATIONS = [
     'if (id !== conversationId) return notAvailable(file);',
     'if (id !== conversationId) return lineFor(id, file, store.readRecordedFile(workspace, id, file));'],
   [TURN, 'the turn reads a file by its path after the store has checked it',
-    '      let read = store.readRecordedFile(workspace, conversationId, file, { keep: keep.has(file), budget });\n',
-    '      let read = store.readRecordedFile(workspace, conversationId, file, { keep: keep.has(file), budget });\n'
+    '      let read = store.readRecordedFile(workspace, conversationId, file, { keep: keep.has(file) });\n',
+    '      let read = store.readRecordedFile(workspace, conversationId, file, { keep: keep.has(file) });\n'
       + "      const fs = require('node:fs');\n"
       + "      if (read.state === 'present') read = { ...read, bytes: fs.readFileSync(require('node:path').join(workspace, '.rundock', 'attachments', conversationId, file)) };\n"],
 
@@ -106,6 +105,13 @@ const MUTATIONS = [
     "  const files = runtime === 'codex' ? [] : entryFiles(workspace, conversationId, entryId);\n",
     '  const listed = readRecord(workspace, conversationId).messages.flatMap((m) => m.files);\n'
       + '  const files = [...text.matchAll(LINE)].map((m) => listed.find((f) => f.file === m.groups.file)).filter(Boolean);\n'],
+
+  // ===== WHAT A TURN READS IS BOUNDED PER FILE AND BY WHAT IT NAMES =====
+  [TURN, 'a turn-wide cap is put back, so a present file past 100,000,000 bytes read in the turn is not available',
+    '      reads.set(file, read);\n',
+    "      reads.spent = (reads.spent || 0) + (read.state === 'present' ? read.described.bytes : 0);\n"
+      + "      if (reads.spent > 100000000) read = { state: 'missing', described: undefined };\n"
+      + '      reads.set(file, read);\n'],
 
   // ===== EACH PROCESS ENTRY CARRIES THE RECORD ENTRY OF THE MESSAGE ITS TURN ANSWERS =====
   [only(ENGINE, "a delegate's brief is sent as text alone, and a deleted file's line in it as not available"), "a delegate's first turn is written as the brief, never through the check",
