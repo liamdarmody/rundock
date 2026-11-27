@@ -2807,7 +2807,7 @@ function requestServerPermission({ convoId, agentId, toolName, toolInput, onDeci
   console.log(`[Permission] Server request: ${toolName} convo=${convoId} requestId=${requestId}`);
 }
 // The one card a lead's first batch of helpers waits on is raised here too.
-require('./lib/delegation/helpers.js').wireHelpersDeps({ requestServerPermission });
+require('./lib/delegation/helpers.js').wireHelpersDeps({ requestServerPermission, safeSend });
 
 // Graceful shutdown: kill children on exit signals.
 // SIGTERM/SIGINT: graceful (SIGTERM to children, then exit).
