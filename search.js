@@ -349,6 +349,7 @@ function extractIndexableMessage(obj) {
     if (role !== 'user' && role !== 'assistant') return null;
     const parts = (Array.isArray(obj.payload.content) ? obj.payload.content : [])
       .filter(b => b && typeof b.text === 'string' && b.text.trim())
+      .filter(b => role !== 'user' || !isInlineFileText(b.text))
       .map(b => b.text);
     if (!parts.length) return null;
     const text = parts.join('\n\n').trim();
@@ -358,6 +359,13 @@ function extractIndexableMessage(obj) {
     return { role: role === 'user' ? 'user' : 'agent', text, tsMs };
   }
   return null;
+}
+
+// A text file Rundock sent with a Codex turn, as the part after the person's
+// text (lib/attachments/turn.js). It is the file's contents, never what was
+// typed, so a search never finds a conversation by it.
+function isInlineFileText(text) {
+  return text.startsWith('[Text of attached file ');
 }
 
 class SearchIndex {

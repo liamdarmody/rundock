@@ -23,6 +23,7 @@ const load = (file) => {
 };
 const turn = load('../../lib/attachments/turn.js');
 const receive = load('../../lib/attachments/receive.js');
+const search = load('../../search.js');
 const readyTurn = () => assert.strictEqual(typeof (turn && turn.buildTurn), 'function', 'turn.js loads and exports buildTurn');
 
 const ID = '1764000000000';
@@ -301,5 +302,33 @@ describe('buildTurn: a Codex turn names an image only with the image', () => {
     assert.strictEqual(answer.content, text);
     assert.deepStrictEqual(answer.extraItems, []);
     assert.deepStrictEqual(answer.sent, { files: [], bytes: 0, images: 0 });
+  });
+});
+
+describe('search: a Codex turn is found by what the person typed', () => {
+  const probe = search && search.probeSqlite ? search.probeSqlite() : { available: false };
+  const noSqlite = { skip: !probe.available && 'no node:sqlite on this runtime' };
+
+  test('a Codex session line is found by its typed text and never by its inline text', noSqlite, () => {
+    assert.strictEqual(typeof (search && search.createSearchIndex), 'function');
+    const dir = fs.realpathSync(makeTempDir('attach-codex-search-'));
+    const rollout = path.join(dir, 'rollout.jsonl');
+    const typed = `what does WOMBAT mean here?\n[Attached: .rundock/attachments/${ID}/2-notes.md (Markdown file, 1 KB)]`;
+    fs.writeFileSync(rollout, JSON.stringify({
+      timestamp: '2026-07-14T10:00:00.000Z',
+      type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: typed }, { type: 'input_text', text: '[Text of attached file 2-notes.md]\nNUMBAT notes' }] },
+    }) + '\n');
+    const idx = search.createSearchIndex({ dbPath: path.join(dir, 'search-index.db'), DatabaseSync: probe.DatabaseSync });
+    idx.open();
+    try {
+      idx.reconcileConversations([{ conversationId: ID, sessions: [{ sessionId: THREAD, agentId: 'helper', filePath: rollout }] }]);
+      assert.strictEqual(idx.searchMessages('NUMBAT', { collapse: false }).length, 0, 'the inline text is never found');
+      const hits = idx.searchMessages('WOMBAT', { collapse: false });
+      assert.strictEqual(hits.length, 1, 'the typed text is found');
+      assert.strictEqual(hits[0].conversationId, ID);
+    } finally {
+      idx.close();
+    }
   });
 });
