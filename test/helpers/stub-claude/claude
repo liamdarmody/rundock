@@ -60,6 +60,8 @@
 // run keeps it, under the session id the run reports, with its lines stamped
 // at the time they are written.
 // Any rule may give "exitAfterTurn": n to exit with code n after its turn.
+// Any rule may give "resultExtra": {...} to add fields to its turn's result,
+// as Claude Code adds duration_ms and usage.
 // Any rule may give "untilFile": "<path>" to hold its turn until that file
 // exists, so a test decides the moment a run ends rather than racing a delay.
 // Any rule may give "holdAfterText": "<path>" to stream its turn's text and
@@ -571,7 +573,7 @@ function buildEnvelopes(rule) {
   events.push(fx.messageDelta(hadTool ? 'tool_use' : 'end_turn'));
   events.push(fx.messageStop());
   if (!rule.realStream) events.push(fx.assistantMessage(fullText));
-  events.push(fx.result({ text: fullText, isError: !!rule.isError, sessionId: SESSION_ID }));
+  events.push(fx.result({ text: fullText, isError: !!rule.isError, sessionId: SESSION_ID, extra: rule.resultExtra || {} }));
   return events;
 }
 
