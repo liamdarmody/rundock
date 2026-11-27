@@ -63,7 +63,7 @@ function chipType(name) {
 }
 
 // Drawn for the conversation setupChat opens: its chips, its inline message
-// and whether its agent can take files.
+// and the + button.
 function showComposerFor(convo) {
   const composer = composerFor(convo.id);
   if (composer.clearText) {
@@ -78,14 +78,12 @@ function showComposerFor(convo) {
   refreshAttachButton(convo);
 }
 
-// Hidden while the agent a message would go to, the one dispatchMessage
-// resolves, runs on Codex: it can't open attached files yet.
+// Shown whatever the agent a message would go to runs on: an agent on Codex
+// takes files too, and the server refuses what Codex can't be sent.
 function refreshAttachButton(convo) {
   const button = document.getElementById('attach-btn');
   if (!button || !convo) return;
-  const agentId = getConvoState(convo.id).activeAgentId || convo.agentId;
-  const agent = agents.find(a => a.id === agentId);
-  button.hidden = !!agent && agent.runtime === 'codex';
+  button.hidden = false;
 }
 
 function openAttachPicker() {
