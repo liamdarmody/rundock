@@ -259,3 +259,80 @@ describe('buildTurn: what a session was sent bounds what it is sent again', () =
     assert.deepStrictEqual(notes.sent, { files: [], bytes: 0, images: 0 });
   });
 });
+
+describe('a Claude Code process: what it was sent before and after it reports its session', () => {
+  // A process entry as the server keeps one, its process started with `args`.
+  const entryFor = (args = []) => ({ process: { spawnargs: ['claude', '--print', ...args] } });
+  const claude = () => {
+    assert.strictEqual(typeof (turn && turn.claudeSessionReported), 'function', 'turn.js exports claudeSessionReported');
+    return turn;
+  };
+  const sentOf = (ws) => readJson(recordOf(ws)).sent;
+  const turnOf = (ws, text, entry) => turnFor(ws, text, { session: undefined, ...claude().claudeSession(entry) });
+  const sentChart = { sent: { files: ['2-chart.png'], bytes: 41, images: 1 } };
+
+  test('what a new process is sent is held until init, counted for its later sends, then recorded under the reported ID', () => {
+    const ws = withRecord();
+    const entry = entryFor();
+    const first = turnOf(ws, 'look', entry);
+    assert.strictEqual(blocksOf(first).length, 1, 'the first turn carries the block');
+    claude().claudeSent(ws, ID, entry, first);
+    assert.deepStrictEqual(sentOf(ws), {}, 'nothing is recorded before init');
+    assert.strictEqual(turnOf(ws, 'look again', entry).content, `look again\n${lineOf(ws, '1-diagram.png')}`, 'the held copy counts');
+    turn.claudeSessionReported(ws, ID, entry, 'session-new');
+    assert.deepStrictEqual(sentOf(ws), { 'session-new': { files: ['1-diagram.png'], bytes: 33, images: 1 } });
+    assert.deepStrictEqual(turn.claudeSession(entry), { session: 'session-new', unrecorded: undefined });
+    turn.claudeSent(ws, ID, entry, sentChart);
+    assert.deepStrictEqual(sentOf(ws), { 'session-new': { files: ['1-diagram.png', '2-chart.png'], bytes: 74, images: 2 } }, 'later sends record at once');
+  });
+
+  test('a resume reported under a new ID starts it from the resumed session and what was held, and one reported as itself adds to it', () => {
+    const resumed = { 'session-old': { files: ['1-diagram.png'], bytes: 33, images: 1 } };
+    const ws = withFiles({ '1-diagram.png': DIAGRAM, '2-chart.png': pngBytes(41) }, resumed);
+    const entry = entryFor(['--resume', 'session-old']);
+    const both = turnOf(ws, 'both', entry);
+    assert.deepStrictEqual(both.sent, { files: ['2-chart.png'], bytes: 41, images: 1 }, 'before init the session is the resumed one');
+    claude().claudeSent(ws, ID, entry, both);
+    turn.claudeSessionReported(ws, ID, entry, 'session-new');
+    assert.deepStrictEqual(sentOf(ws), { ...resumed, 'session-new': { files: ['1-diagram.png', '2-chart.png'], bytes: 74, images: 2 } });
+
+    const same = withFiles({ '1-diagram.png': DIAGRAM, '2-chart.png': pngBytes(41) }, resumed);
+    const again = entryFor(['--resume', 'session-old']);
+    turn.claudeSent(same, ID, again, sentChart);
+    turn.claudeSessionReported(same, ID, again, 'session-old');
+    assert.deepStrictEqual(sentOf(same), { 'session-old': { files: ['1-diagram.png', '2-chart.png'], bytes: 74, images: 2 } });
+  });
+
+  test('a resumed session whose entry is malformed starts the new ID at the whole budget', () => {
+    const ws = withRecord({ 'session-old': { files: 'all', bytes: 0, images: 0 } });
+    const entry = entryFor(['--resume', 'session-old']);
+    assert.deepStrictEqual(turnOf(ws, 'look', entry).sent, { files: [], bytes: 0, images: 0 }, 'the resumed session is sent no copy');
+    claude().claudeSessionReported(ws, ID, entry, 'session-new');
+    assert.deepStrictEqual(sentOf(ws)['session-new'], { files: [], bytes: 10000000, images: 20 });
+    assert.deepStrictEqual(turnFor(ws, 'look', { session: 'session-new' }).sent, { files: [], bytes: 0, images: 0 }, 'nor is the new ID');
+  });
+
+  test('a process replaced in its entry before init records nothing, and the next one is sent the file again', () => {
+    const ws = withRecord();
+    const entry = entryFor();
+    claude().claudeSent(ws, ID, entry, turnOf(ws, 'look', entry));
+    entry.process = { spawnargs: ['claude', '--print'] };
+    const next = turnOf(ws, 'look', entry);
+    assert.strictEqual(blocksOf(next).length, 1, 'what the replaced process held is not counted');
+    turn.claudeSessionReported(ws, ID, entry, 'session-2');
+    assert.deepStrictEqual(sentOf(ws), {}, 'nor recorded');
+  });
+
+  test('a session reported again by the same process changes nothing', () => {
+    const resumed = { 'session-old': { files: ['1-diagram.png'], bytes: 33, images: 1 } };
+    const ws = withRecord(resumed);
+    const entry = entryFor(['--resume', 'session-old']);
+    claude().claudeSessionReported(ws, ID, entry, 'session-new');
+    turn.claudeSent(ws, ID, entry, sentChart);
+    const once = sentOf(ws);
+    assert.deepStrictEqual(once['session-new'], { files: ['1-diagram.png', '2-chart.png'], bytes: 74, images: 2 });
+    turn.claudeSessionReported(ws, ID, entry, 'session-new');
+    turn.claudeSessionReported(ws, ID, entry, 'session-other');
+    assert.deepStrictEqual(sentOf(ws), once);
+  });
+});

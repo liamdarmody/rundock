@@ -1,6 +1,8 @@
 'use strict';
 // Integration: what a Codex agent is sent for a turn that names attached
 // files, at the two places the server starts one, and what each send records.
+// The last describe is Claude Code's side of the record: what a process was
+// sent before it reported its session, recorded under the ID it reports.
 //
 // A Codex turn is a text item, then an item for each file the agent can take:
 // a `localImage` naming an image's stored copy, or a text file's own text.
@@ -77,8 +79,8 @@ const DIAGRAM = png();
 const NOTES = Buffer.from('# Notes\nTwo suppliers.\n');
 const REPORT = pdf();
 
-function scenario(rules) {
-  fs.writeFileSync(path.join(h.workspaceDir, 'stub-scenario.json'), JSON.stringify({ rules, deadSessions: [] }));
+function scenario(rules, deadSessions = [], extra = {}) {
+  fs.writeFileSync(path.join(h.workspaceDir, 'stub-scenario.json'), JSON.stringify({ ...extra, rules, deadSessions }));
 }
 // Each tag answered `DONE-<tag>` by the Codex agent.
 const codexAnswers = (tags, extra) => h.writeCodexScenario(tags.map((tag) => ({ match: { promptIncludes: tag }, text: `DONE-${tag}` })), extra);
@@ -474,6 +476,133 @@ describe('a thread resumed on another app-server process is sent its images agai
     const { instance, ...rest } = entryOf(id, threadId) || {};
     assert.deepStrictEqual(rest, { files: [stored[0]], bytes: DIAGRAM.length, images: 1 }, 'this turn\'s copy alone');
     assert.match(String(instance), /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'with the instance it was sent through');
+    h.reapConvo(id);
+  });
+});
+
+describe('what a Claude Code session is recorded as sent', () => {
+  // Each tag answered `DONE-<tag>` by the stub Claude.
+  const claudeAnswers = (tags, dead = [], extra = {}) => scenario(tags.map((tag) => ({ match: { promptIncludes: tag }, turn: [{ text: `DONE-${tag}` }] })), dead, extra);
+  const storedFor = (id, since) => arrived((m) => m.type === 'chat_stored' && m.conversationId === id, { since });
+  const spawnsFor = (id) => h.readInvocations().filter((i) => i.env && i.env.RUNDOCK_CONVO_ID === id);
+  const blockOf = (bytes) => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: bytes.toString('base64') } });
+  const filesOf = (stored) => stored.entry.files.map((f) => f.file);
+  // The session the conversation's process reported at init.
+  async function sessionOf(id, since) {
+    const init = await arrived((m) => m.type === 'system' && m.subtype === 'init' && m._conversationId === id, { since });
+    assert.ok(init && typeof init._sessionId === 'string', 'the process reports its session');
+    return init._sessionId;
+  }
+  // The one stdin line read for a turn whose text holds `tag`, its content
+  // parsed.
+  async function readWith(tag) {
+    const pick = () => h.readPrompts().filter((p) => p.line !== undefined && p.prompt.includes(tag));
+    assert.ok(await h.waitUntil(() => pick().length > 0, { timeout: 15000 }), `a turn with ${tag} is read`);
+    const found = pick();
+    assert.strictEqual(found.length, 1, `one turn with ${tag}`);
+    return { resume: found[0].resume || null, content: JSON.parse(found[0].line).message.content };
+  }
+  // A Claude Code conversation's earlier message holding the diagram, which
+  // `session` was sent, and the conversation listed as resuming it.
+  async function sentBefore(id, tag, session) {
+    const first = await receiveAttachments(h.workspaceDir, { conversationId: id, content: `${tag} the diagram`, attachments: [file('diagram.png', DIAGRAM)] });
+    assert.strictEqual(store.recordSent(h.workspaceDir, id, session, { files: filesOf(first), bytes: DIAGRAM.length, images: 1 }), true);
+    seedRecord(id, { agentId: 'chief-of-staff', sessionId: session, sessionIds: [{ agentId: 'chief-of-staff', sessionId: session }] });
+    return first;
+  }
+
+  test('a new process records what it was sent under the ID init reports, and a later send at once', async () => {
+    needsRecording();
+    const id = h.freshConvoId('claude-new');
+    claudeAnswers(['NEW-C1', 'NEW-C2']);
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'NEW-C1 have a look', [file('diagram.png', DIAGRAM)]);
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is stored');
+    const session = await sessionOf(id, since);
+    assert.ok(await resultFor(id, 'DONE-NEW-C1', since), 'the first turn is answered');
+    assert.deepStrictEqual((await readWith('NEW-C1')).content.slice(1), [blockOf(DIAGRAM)], 'the first turn carries the block');
+    assert.deepStrictEqual(entryOf(id, session), { files: filesOf(stored), bytes: DIAGRAM.length, images: 1 }, 'recorded under the reported ID');
+    const chart = png(800, 600, 50);
+    const next = client.messages.length;
+    chat(id, 'NEW-C2 and this', [file('chart.png', chart)], { sessionId: session });
+    const more = await storedFor(id, next);
+    assert.ok(await resultFor(id, 'DONE-NEW-C2', next), 'the follow-up is answered');
+    assert.deepStrictEqual(entryOf(id, session), { files: [...filesOf(stored), ...filesOf(more)], bytes: DIAGRAM.length + chart.length, images: 2 });
+    h.reapConvo(id);
+  });
+
+  test('a resume reported under a new ID starts it from the resumed session\'s totals and files', async () => {
+    needsRecording();
+    const id = h.freshConvoId('claude-resumed');
+    const resumed = 'live-resume-c';
+    const first = await sentBefore(id, 'RES-C0', resumed);
+    claudeAnswers(['RES-C1', 'RES-C2'], [], { newSessionOnResume: true });
+    h.clearInvocations();
+    const chart = png(800, 600, 50);
+    const since = client.messages.length;
+    chat(id, 'RES-C1 and this', [file('chart.png', chart)], { sessionId: resumed });
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is stored');
+    const session = await sessionOf(id, since);
+    assert.notStrictEqual(session, resumed, 'the resume is reported under a new ID');
+    assert.ok(await resultFor(id, 'DONE-RES-C1', since), 'the resumed turn is answered');
+    assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), [resumed], 'started to resume');
+    assert.deepStrictEqual((await readWith('RES-C1')).content.slice(1), [blockOf(chart)], 'the new file\'s block alone');
+    assert.deepStrictEqual(entryOf(id, session), { files: [...filesOf(first), ...filesOf(stored)], bytes: DIAGRAM.length + chart.length, images: 2 },
+      'the resumed totals and files, then this turn\'s');
+    assert.deepStrictEqual(entryOf(id, resumed), { files: filesOf(first), bytes: DIAGRAM.length, images: 1 }, 'the resumed entry as it was');
+    const again = `RES-C2 that first one again\n${lineIn(first.content)}`;
+    const next = client.messages.length;
+    chat(id, again, undefined, { sessionId: session, attachmentEntry: first.entry.id });
+    assert.ok(await resultFor(id, 'DONE-RES-C2', next), 'the follow-up is answered');
+    assert.strictEqual((await readWith('RES-C2')).content, again, 'its line alone');
+    h.reapConvo(id);
+  });
+
+  test('a process that exits before init records nothing, and the next one is sent the file again', async () => {
+    needsRecording();
+    const id = h.freshConvoId('claude-exited');
+    scenario([
+      { match: { promptIncludes: 'GONE-C1' }, crash: 1 },
+      { match: { promptIncludes: 'GONE-C2' }, turn: [{ text: 'DONE-GONE-C2' }] },
+    ]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'GONE-C1 have a look', [file('diagram.png', DIAGRAM)]);
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is stored');
+    await doneAfter(id, since);
+    assert.ok(!client.messages.slice(since).some((m) => m.subtype === 'init' && m._conversationId === id), 'no session is reported');
+    assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).sent, {}, 'nothing is recorded');
+    const again = `GONE-C2 again\n${lineIn(stored.content)}`;
+    const next = client.messages.length;
+    chat(id, again, undefined, { attachmentEntry: stored.entry.id });
+    const session = await sessionOf(id, next);
+    assert.ok(await resultFor(id, 'DONE-GONE-C2', next), 'the next process answers');
+    assert.deepStrictEqual((await readWith('GONE-C2')).content, [{ type: 'text', text: again }, blockOf(DIAGRAM)], 'sent the block again');
+    assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).sent, { [session]: { files: filesOf(stored), bytes: DIAGRAM.length, images: 1 } });
+    h.reapConvo(id);
+  });
+
+  test('a session started fresh after a lost one has no entry of its own, so it is sent the files the lost one was', async () => {
+    needsRecording();
+    const id = h.freshConvoId('claude-lost');
+    const lost = 'dead-lost-c';
+    const first = await sentBefore(id, 'LOST-C0', lost);
+    claudeAnswers(['LOST-C1'], [lost]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, `LOST-C1 that one again\n${lineIn(first.content)}`, undefined, { sessionId: lost, attachmentEntry: first.entry.id });
+    const session = await sessionOf(id, since);
+    assert.ok(await resultFor(id, 'DONE-LOST-C1', since), 'the fresh start answers');
+    assert.deepStrictEqual(spawnsFor(id).map((i) => i.resume), [lost, null], 'refused, then started fresh');
+    const sent = await readWith('LOST-C1');
+    assert.strictEqual(sent.resume, null, 'read by the fresh start');
+    assert.deepStrictEqual(sent.content.slice(1), [blockOf(DIAGRAM)], 'sent the block the lost session was');
+    const once = { files: filesOf(first), bytes: DIAGRAM.length, images: 1 };
+    assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).sent, { [lost]: once, [session]: once });
     h.reapConvo(id);
   });
 });
