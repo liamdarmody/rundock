@@ -606,3 +606,167 @@ describe('what a Claude Code session is recorded as sent', () => {
     h.reapConvo(id);
   });
 });
+
+describe('what the server stores and refuses for an agent on Codex', () => {
+  const PDF_TEXT = 'This agent runs on Codex, which can\'t read PDFs yet. Attach a screenshot of the page or paste the text.';
+  const IMAGES_TEXT = 'This agent runs on Codex, and Rundock sends a Codex agent at most 20 images or 10 MB of images in one conversation. Remove an image or start a new conversation.';
+  const folderOf = (id) => path.join(h.workspaceDir, '.rundock', 'attachments', id);
+  // Each file in the conversation's folder by name, with its bytes; null when
+  // there is no folder.
+  function bytesIn(id) {
+    let names;
+    try { names = fs.readdirSync(folderOf(id)).sort(); } catch (e) { return null; }
+    return Object.fromEntries(names.map((n) => [n, fs.readFileSync(path.join(folderOf(id), n))]));
+  }
+  const turnStarts = () => h.readInvocations().filter((i) => i.mode === 'app-server' && i.method === 'turn/start').length;
+  const shots = (n, size = 33, from = 1) => Array.from({ length: n }, (_, i) => file(`shot-${from + i}.png`, png(10, 10, size)));
+  const toResearcher = (id, content, attachments, extra = {}) => chat(id, content, attachments, { agent: 'researcher', ...extra });
+  const storedFor = (id, since) => arrived((m) => m.type === 'chat_stored' && m.conversationId === id, { since });
+  // A message sent to the researcher with `attachments`, stored and answered.
+  // Returns its chat_stored and the thread it went to.
+  async function storedAndAnswered(id, tag, attachments, extra = {}) {
+    const since = client.messages.length;
+    toResearcher(id, `${tag} have a look`, attachments, extra);
+    const stored = await storedFor(id, since);
+    assert.ok(stored, `${tag} is stored`);
+    const threadId = extra.sessionId || await threadOf(id, since);
+    assert.ok(await resultFor(id, `DONE-${tag}`, since), `${tag} is answered`);
+    await doneAfter(id, since);
+    return { stored, threadId };
+  }
+  // Twenty small images over four turns on one thread, each turn answered.
+  async function twentyOver4Turns(id, tag) {
+    const tags = [1, 2, 3, 4].map((n) => `${tag}-${n}`);
+    codexAnswers(tags);
+    const first = await storedAndAnswered(id, tags[0], shots(5, 33, 1));
+    for (const [i, t] of tags.slice(1).entries()) {
+      await storedAndAnswered(id, t, shots(5, 33, 6 + i * 5), { sessionId: first.threadId });
+    }
+    return first.threadId;
+  }
+  // `msg` refused with `wording` and `code`: one chat_refused, no chat_stored,
+  // the folder and record byte for byte as before, and no turn/start.
+  async function refusedAsBefore(msg, { code, title, text }) {
+    const before = bytesIn(msg.conversationId);
+    const turns = turnStarts();
+    const since = client.messages.length;
+    client.send({ type: 'chat', ...msg });
+    const got = await arrived((m) => m.type === 'chat_refused' && m.conversationId === msg.conversationId, { since });
+    assert.ok(got, 'the message is answered with chat_refused');
+    await h.delay(300);
+    const answered = client.messages.slice(since).filter((m) => m.conversationId === msg.conversationId);
+    assert.strictEqual(answered.filter((m) => m.type === 'chat_refused').length, 1, 'one chat_refused');
+    assert.ok(!answered.some((m) => m.type === 'chat_stored'), 'and no chat_stored');
+    assert.deepStrictEqual({ code: got.code, title: got.title, text: got.text }, { code, title, text });
+    assert.deepStrictEqual(bytesIn(msg.conversationId), before, 'the folder and record byte for byte as before');
+    assert.strictEqual(turnStarts(), turns, 'no turn/start');
+    return got;
+  }
+
+  test('a PDF for an agent on Codex is refused codex-pdf, naming it', async () => {
+    const id = h.freshConvoId('codex-pdf');
+    const got = await refusedAsBefore({ conversationId: id, agent: 'researcher', content: 'PDF-S read this', attachments: [file('report.pdf', REPORT)] },
+      { code: 'codex-pdf', title: 'report.pdf', text: PDF_TEXT });
+    assert.strictEqual(got.name, 'report.pdf');
+    h.reapConvo(id);
+  });
+
+  test('a PDF with two PNGs is refused codex-pdf, naming the PDF, and sent again without it is stored once', async () => {
+    const id = h.freshConvoId('codex-pdf-pngs');
+    const attachments = [file('diagram.png', DIAGRAM), file('report.pdf', REPORT), file('chart.png', png(800, 600, 50))];
+    await refusedAsBefore({ conversationId: id, agent: 'researcher', content: 'RETRY-S look', attachments },
+      { code: 'codex-pdf', title: 'report.pdf', text: PDF_TEXT });
+    codexAnswers(['RETRY-S']);
+    const since = client.messages.length;
+    const { stored } = await storedAndAnswered(id, 'RETRY-S', [attachments[0], attachments[2]]);
+    assert.strictEqual(client.messages.slice(since).filter((m) => m.type === 'chat_stored' && m.conversationId === id).length, 1, 'one chat_stored');
+    assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).messages, [stored.entry], 'one record entry');
+    assert.deepStrictEqual(Object.keys(bytesIn(id)), ['1-diagram.png', '2-chart.png', 'record.json']);
+    h.reapConvo(id);
+  });
+
+  test('a PNG for an agent on Codex is stored with one chat_stored, and its turn/start carries the localImage item', async () => {
+    const id = h.freshConvoId('codex-png-stored');
+    codexAnswers(['STORED-S']);
+    h.clearInvocations();
+    const since = client.messages.length;
+    const { stored } = await storedAndAnswered(id, 'STORED-S', [file('diagram.png', DIAGRAM)]);
+    assert.strictEqual(client.messages.slice(since).filter((m) => m.type === 'chat_stored' && m.conversationId === id).length, 1, 'one chat_stored');
+    textThen(await turnStartWith('STORED-S'), [localImage(id, stored.entry.files[0].file)]);
+    h.reapConvo(id);
+  });
+
+  test('a Markdown file for an agent on Codex is stored and sent as its text', async () => {
+    const id = h.freshConvoId('codex-md');
+    codexAnswers(['MD-S']);
+    h.clearInvocations();
+    await storedAndAnswered(id, 'MD-S', [file('notes.md', NOTES)]);
+    textThen(await turnStartWith('MD-S'), [{ type: 'text', text: `[Text of attached file 1-notes.md]\n${NOTES.toString('utf8')}` }]);
+    h.reapConvo(id);
+  });
+
+  test('a PDF for a Claude Code agent is stored and given its block', async () => {
+    const id = h.freshConvoId('claude-pdf');
+    scenario([{ match: { promptIncludes: 'CLAUDE-PDF-S' }, turn: [{ text: 'DONE-CLAUDE-PDF-S' }] }]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'CLAUDE-PDF-S read this', [file('report.pdf', REPORT)]);
+    assert.ok(await storedFor(id, since), 'the PDF is stored');
+    assert.ok(await resultFor(id, 'DONE-CLAUDE-PDF-S', since), 'the message is answered');
+    const pick = () => h.readPrompts().filter((p) => p.line !== undefined && p.prompt.includes('CLAUDE-PDF-S'));
+    assert.ok(await h.waitUntil(() => pick().length === 1, { timeout: 15000 }), 'one turn read');
+    assert.deepStrictEqual(JSON.parse(pick()[0].line).message.content.slice(1),
+      [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: REPORT.toString('base64') } }]);
+    h.reapConvo(id);
+  });
+
+  test('exactly 20 images over four turns are each stored', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-twenty');
+    const threadId = await twentyOver4Turns(id, 'TWENTY-S');
+    const { instance, ...entry } = entryOf(id, threadId);
+    assert.strictEqual(entry.images, 20, 'the thread was sent 20 images');
+    assert.strictEqual(store.readRecord(h.workspaceDir, id).messages.length, 4, 'four entries');
+    h.reapConvo(id);
+  });
+
+  test('a 21st image after 20 over four turns is refused codex-images', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-21st');
+    const threadId = await twentyOver4Turns(id, 'MORE-S');
+    await refusedAsBefore({ conversationId: id, agent: 'researcher', sessionId: threadId, content: 'MORE-S-5 one more', attachments: shots(1, 33, 21) },
+      { code: 'codex-images', title: 'Message not sent', text: IMAGES_TEXT });
+    h.reapConvo(id);
+  });
+
+  test('three images of 3,500,000 bytes in one message are refused codex-images', async () => {
+    const id = h.freshConvoId('codex-big');
+    await refusedAsBefore({ conversationId: id, agent: 'researcher', content: 'BIG-S look', attachments: shots(3, 3500000) },
+      { code: 'codex-images', title: 'Message not sent', text: IMAGES_TEXT });
+    h.reapConvo(id);
+  });
+
+  test('images reaching exactly 10,000,000 bytes are stored', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-ten-mb');
+    codexAnswers(['TENMB-S']);
+    const attachments = [...shots(2, 3500000), file('shot-3.png', png(10, 10, 3000000))];
+    const { threadId } = await storedAndAnswered(id, 'TENMB-S', attachments);
+    assert.strictEqual(entryOf(id, threadId).bytes, 10000000, 'the thread was sent 10,000,000 bytes');
+    h.reapConvo(id);
+  });
+
+  test('a malformed entry for the thread refuses one image codex-images', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-malformed');
+    codexAnswers(['BAD-S']);
+    const { threadId } = await storedAndAnswered(id, 'BAD-S', [file('diagram.png', DIAGRAM)]);
+    const recordFile = path.join(folderOf(id), 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    record.sent[threadId] = { ...record.sent[threadId], files: 'not a list' };
+    fs.writeFileSync(recordFile, JSON.stringify(record));
+    await refusedAsBefore({ conversationId: id, agent: 'researcher', sessionId: threadId, content: 'BAD-S-2 and this', attachments: [file('chart.png', png(800, 600, 50))] },
+      { code: 'codex-images', title: 'Message not sent', text: IMAGES_TEXT });
+    h.reapConvo(id);
+  });
+});
