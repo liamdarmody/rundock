@@ -86,6 +86,12 @@
 // call outside the sandbox that the hook allows is then put to the
 // PermissionRequest hooks the --settings file names, as Claude Code does: see
 // askPermissionRequest.
+// An agentTool block may give "id", its tool_use id (toolu_<n> by default),
+// and "extra", fields its hook payload adds (agent_id and agent_type for a
+// call a subagent makes). A rule may give "helpers": true to put each Agent
+// call of its message to the PreToolUse hook once the message has ended, all
+// at once, with its tool_use_id, and to answer each refused call with an
+// error tool result before the rest of the turn: see askAgentHooks below.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -563,7 +569,7 @@ function buildEnvelopes(rule) {
       fullText += (fullText ? '\n' : '') + text;
     } else if (block.agentTool) {
       hadTool = true;
-      events.push(...fx.toolUseFlow('Agent', block.agentTool, toolIndex++));
+      events.push(...fx.toolUseFlow('Agent', block.agentTool, toolIndex++, block.id));
     } else if (block.tool) {
       hadTool = true;
       events.push(...fx.toolUseFlow(block.tool.name, block.tool.input || {}, toolIndex++));
@@ -702,6 +708,17 @@ function emitTurn(rule, prompt) {
   // other and fills like any other, and a scenario that can only reach it by
   // crashing cannot exercise that at all.
   if (rule.stderr) writeErr(String(rule.stderr));
+  if (rule.helpers) {
+    const at = events.findIndex((e) => e.type === 'stream_event' && e.event && e.event.type === 'message_stop') + 1;
+    for (const e of events.slice(0, at)) writeOut(JSON.stringify(e) + '\n');
+    askAgentHooks(agentCallsOf(rule), (refused) => {
+      for (const r of refused) writeOut(JSON.stringify(toolError(r.id, r.said)) + '\n');
+      for (const e of events.slice(at)) writeOut(JSON.stringify(e) + '\n');
+      if (rule.exitAfterTurn != null) exitWhenWritten(Number(rule.exitAfterTurn));
+      else if (PRINT) exitWhenWritten(0);
+    });
+    return;
+  }
   if (rule.holdAfterText) {
     const at = events.findIndex((e) => e.type === 'stream_event' && e.event && e.event.type === 'message_delta');
     for (const e of events.slice(0, at)) writeOut(JSON.stringify(e) + '\n');
@@ -874,39 +891,82 @@ function runHookCalls(calls, then) {
       askPermissionRequest(call.tool || 'Bash', call.input || {}, next);
       return;
     }
-    const event = call.event || 'PreToolUse';
-    const input = {
-      session_id: SESSION_ID, hook_event_name: event, tool_name: call.tool || 'Bash', tool_input: hookView(call.input || {}), cwd: process.cwd(),
-      ...(call.error != null ? { error: String(call.error) } : {}),
-      ...(call.extra && typeof call.extra === 'object' ? call.extra : {}),
-    };
-    for (const k of Object.keys(input)) if (input[k] === null) delete input[k];
-    let out = '';
-    const log = (answer) => {
-      try {
-        fs.appendFileSync(HOOK_LOG, JSON.stringify({
-          pid: process.pid, agent: AGENT, sessionId: SESSION_ID, sentSession: input.session_id || null, subagent: input.agent_id || null, convo: process.env.RUNDOCK_CONVO_ID || null, event, tool: input.tool_name, answer, raw: answer ? undefined : out, ts: Date.now(),
-        }) + '\n');
-      } catch (e) { /* logging is best-effort */ }
-      if (sandboxOffAllowed(event, input, answer)) askPermissionRequest(input.tool_name, call.input || {}, next);
+    askPermissionHook(call, (answer, input) => {
+      if (sandboxOffAllowed(call.event || 'PreToolUse', input, answer)) askPermissionRequest(input.tool_name, call.input || {}, next);
       else next();
-    };
+    }, { namedHooks: true });
+  };
+  next();
+}
+// One call put to the hook (or, with `namedHooks`, the one hook the --settings
+// file names for it when that is not Rundock's), its answer logged, then
+// `done(answer, input)` with the payload it was given.
+function askPermissionHook(call, done, options = {}) {
+  const event = call.event || 'PreToolUse';
+  const input = {
+    session_id: SESSION_ID, hook_event_name: event, tool_name: call.tool || 'Bash', tool_input: hookView(call.input || {}), cwd: process.cwd(),
+    ...(call.error != null ? { error: String(call.error) } : {}),
+    ...(call.extra && typeof call.extra === 'object' ? call.extra : {}),
+  };
+  for (const k of Object.keys(input)) if (input[k] === null) delete input[k];
+  let out = '';
+  const log = (answer) => {
+    try {
+      fs.appendFileSync(HOOK_LOG, JSON.stringify({
+        pid: process.pid, agent: AGENT, sessionId: SESSION_ID, sentSession: input.session_id || null, subagent: input.agent_id || null, convo: process.env.RUNDOCK_CONVO_ID || null, event, tool: input.tool_name, toolUseId: input.tool_use_id || null, answer, raw: answer ? undefined : out, ts: Date.now(),
+      }) + '\n');
+    } catch (e) { /* logging is best-effort */ }
+    done(answer, input);
+  };
+  if (options.namedHooks) {
     const named = hooksFor(event, input.tool_name);
     if (named.length > 0 && !named.some(isRundockHook)) {
       if (named.length > 1) notModelled('more than one hook named for one call');
       runNamedHook(named[0], input, (answer, raw) => { out = raw; log(answer); });
       return;
     }
-    let child;
-    try {
-      child = require('child_process').spawn(process.execPath, [PERMISSION_HOOK], { env: process.env, stdio: ['pipe', 'pipe', 'ignore'] });
-    } catch (e) { log(null); return; }
-    child.stdout.on('data', (d) => { out += d; });
-    child.on('error', () => {});
-    child.on('close', () => { let answer = null; try { answer = JSON.parse(out); } catch (e) { /* raw kept */ } log(answer); });
-    child.stdin.end(JSON.stringify(input));
-  };
-  next();
+  }
+  let child;
+  try {
+    child = require('child_process').spawn(process.execPath, [PERMISSION_HOOK], { env: process.env, stdio: ['pipe', 'pipe', 'ignore'] });
+  } catch (e) { log(null); return; }
+  child.stdout.on('data', (d) => { out += d; });
+  child.on('error', () => {});
+  child.on('close', () => { let answer = null; try { answer = JSON.parse(out); } catch (e) { /* raw kept */ } log(answer); });
+  child.stdin.end(JSON.stringify(input));
+}
+
+// A MESSAGE'S AGENT CALLS, PUT TO THE HOOK AS THE RUNTIME PUTS THEM: once the
+// message has ended, every call at once, each with its tool_use_id (and the
+// subagent's agent_id and agent_type for a call one of them made), and only
+// when the --settings file names a hook for Agent. Each call the hook refuses
+// is named, with what the runtime says back for it, in `then(refused)`, once
+// every answer is in.
+function agentCallsOf(rule) {
+  const calls = [];
+  let toolIndex = 1;
+  for (const block of rule.turn || []) {
+    if (block.agentTool) {
+      const index = toolIndex++;
+      calls.push({ id: block.id || `toolu_${index}`, input: block.agentTool, extra: block.extra });
+    } else if (block.tool) toolIndex++;
+  }
+  return calls;
+}
+function askAgentHooks(calls, then) {
+  const refused = [];
+  let left = calls.length;
+  if (!left || !preToolUseHooks('Agent').length) { then(refused); return; }
+  for (const call of calls) {
+    askPermissionHook({ tool: 'Agent', input: call.input, extra: { tool_use_id: call.id, ...(call.extra || {}) } }, (answer) => {
+      const said = answer && answer.hookSpecificOutput ? answer.hookSpecificOutput : {};
+      if (said.permissionDecision === 'deny') refused.push({ id: call.id, said: `PreToolUse:Agent hook error: ${said.permissionDecisionReason || ''}` });
+      if (--left === 0) then(refused);
+    });
+  }
+}
+function toolError(id, said) {
+  return { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: said }] } };
 }
 
 // CLAUDE CODE'S OWN CHECK FOR A COMMAND OUTSIDE THE SANDBOX. A Bash or

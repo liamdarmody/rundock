@@ -5090,7 +5090,10 @@ fetchAgentNotice((agentNotice) => {
   // A line that reads or changes the Keychain: asked every time, with no folder
   // or rule to remember, and refused when nobody can be asked.
   const keychain = !!(verdict && verdict.reason === 'keychain');
-  if (codeMode
+  // A lead's Agent call is never approved here: Rundock decides whether that
+  // helper starts, in Code mode as in any other.
+  const agentCall = data.tool_name === 'Agent';
+  if (codeMode && !agentCall
       && !(access && (access.where === 'outside' || access.answerFile || access.credential))
       && (!verdict || verdict.verdict === 'runs')) {
     writeDecision(({
@@ -5144,6 +5147,12 @@ fetchAgentNotice((agentNotice) => {
     tool_input: data.tool_input || {},
     session_id: data.session_id,
     conversation_id: convoId,
+    // The runtime's id for this call, and for a call a subagent makes, which
+    // subagent made it: how Rundock matches an Agent request to the lead's
+    // message and tells a helper's own calls from the lead's.
+    ...(typeof data.tool_use_id === 'string' ? { tool_use_id: data.tool_use_id } : {}),
+    ...(typeof data.agent_id === 'string' ? { agent_id: data.agent_id } : {}),
+    ...(typeof data.agent_type === 'string' ? { agent_type: data.agent_type } : {}),
     ...(advisory.length ? { advisory_outside_paths: advisory } : {}),
     // THE VERDICT, under its own name: Code mode, and a Keychain line in Notes
     // mode. The server relays it by name and the browser draws the card from
@@ -5266,7 +5275,8 @@ fetchAgentNotice((agentNotice) => {
   // read refused for another reason as well still says what it reached.
   const credentialAccess = credentialReads.size > 0 || !!(access && access.credential)
     || boundaryCrossingsFor(access).some(c => c && c.secret && !c.write);
-  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;
+  // AND A LEAD'S AGENT CALL: a helper that Rundock could not check never starts.
+  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess || agentCall;
   function unanswered(reason) {
     let why;
     if (credentialAccess) why = 'This reads a sign-in credential, and it is never done without asking, so it was refused rather than approved on your behalf.';
@@ -5277,6 +5287,7 @@ fetchAgentNotice((agentNotice) => {
     else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
     else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';
     else if (connectorAlwaysAsks) why = 'A connector action that sends, replies, forwards, deletes or archives is never done without asking, so with no way to ask it was refused rather than approved on your behalf.';
+    else if (agentCall) why = "Rundock couldn't check this helper, so it didn't start. Do this part yourself.";
     writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -5308,7 +5319,10 @@ fetchAgentNotice((agentNotice) => {
         // purpose and what to do next (scripts/refusal-notice.js): stop and
         // ask in a conversation, carry on or say it failed in a routine. The
         // old wording for a timeout invited the retry this exists to prevent.
-        const reason = result.allow ? 'Approved in Rundock'
+        // An Agent call Rundock refused with words of its own is given those
+        // words exactly: they name the helper and what to do instead.
+        const reason = agentCall && typeof result.notice === 'string' ? result.notice
+          : result.allow ? 'Approved in Rundock'
           : refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name, { unattended: unattendedRun() });
         // An approval a person gave on a card is told to the agent too. The
         // runtime never shows the model an allow's reason, so without this an
