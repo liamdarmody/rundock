@@ -636,6 +636,48 @@ test('a request for an id from an earlier message is refused as unmatched; one t
   await assertUnmatched(convo, askAgent(convo, 'wren', earlier).reply, since);
 });
 
+// The stub opens no message with message_start; Claude Code does, and these
+// tests write it where Claude Code would.
+const messageBegins = { raw: { type: 'stream_event', event: { type: 'message_start', message: { role: 'assistant' } } } };
+
+test('once the lead begins another message with no Agent calls, a request for a call from the message before is refused as unmatched', async () => {
+  helpers();
+  const convo = open('match-after-words');
+  const earlier = agentCall('Explore');
+  h.writeScenario([
+    { match: { agent: 'wren', promptIncludes: 'a call nobody asks for' }, turn: [messageBegins, { text: 'On it.' }, { agentTool: earlier.input, id: earlier.id }] },
+    { match: { agent: 'wren', promptIncludes: 'just words now' }, turn: [messageBegins, { text: 'Nothing to hand out.' }] },
+  ]);
+  const since = say(convo, 'wren', 'a call nobody asks for');
+  await turnDone(convo, since);
+  const next = say(convo, 'wren', 'just words now');
+  await turnDone(convo, next);
+  await assertUnmatched(convo, askAgent(convo, 'wren', earlier).reply, since);
+});
+
+test('once the lead begins another message with Agent calls, a request for a call from the message before is refused as unmatched before that message ends', async () => {
+  helpers();
+  const convo = open('match-after-calls');
+  const earlier = agentCall('Explore');
+  const later = agentCall('Plan');
+  const hold = path.join(h.workspaceDir, `release-${++seq}`);
+  h.writeScenario([
+    { match: { agent: 'wren', promptIncludes: 'first call, never asked' }, turn: [messageBegins, { text: 'On it.' }, { agentTool: earlier.input, id: earlier.id }] },
+    { match: { agent: 'wren', promptIncludes: 'second call, held' }, turn: [messageBegins, { text: 'Starting the next part.' }, { agentTool: later.input, id: later.id }, { holdUntil: hold }] },
+  ]);
+  const since = say(convo, 'wren', 'first call, never asked');
+  await turnDone(convo, since);
+  const next = say(convo, 'wren', 'second call, held');
+  await client.waitFor((m) => m.type === 'stream_event' && m._conversationId === convo && m.event && m.event.type === 'content_block_delta',
+    { since: next, label: 'the second message has begun' });
+  try {
+    await assertUnmatched(convo, askAgent(convo, 'wren', earlier).reply, since);
+  } finally {
+    fs.writeFileSync(hold, '');
+  }
+  await turnDone(convo, next);
+});
+
 // ---------------------------------------------------------------------------
 // Routines, and calls made inside a helper
 // ---------------------------------------------------------------------------
