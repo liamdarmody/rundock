@@ -72,7 +72,7 @@ function writeAnswer(output, turnOver = false) {
 }
 function allows(output) {
   const own = output && output.hookSpecificOutput;
-  return Boolean(own) && own.permissionDecision === 'allow';
+  return Boolean(own) && (own.permissionDecision === 'allow' || Boolean(own.decision && own.decision.behavior === 'allow'));
 }
 // The end of a call whose answer may be an allow waiting for its turn.
 function endCall() {
@@ -4677,7 +4677,7 @@ function keychainPlatform(env = process.env, versions = process.versions) {
 }
 
 // The token Rundock started this agent with, bound to its conversation. The
-// server's two hook routes accept nothing else, and act only for the
+// server's hook routes accept nothing else, and act only for the
 // conversation it names (lib/auth).
 
 function hookTokenHeader() {
@@ -4715,6 +4715,52 @@ function fetchAgentNotice(done, { check = false } = {}) {
   req.on('error', () => finish(null));
   req.on('timeout', () => { req.destroy(); finish(null); });
   req.end();
+}
+
+// CLAUDE CODE'S OWN QUESTION ABOUT A COMMAND OUTSIDE THE SANDBOX. A Bash or
+// PowerShell call with `dangerouslyDisableSandbox: true` that the PreToolUse
+// answer allowed is put to the PermissionRequest hooks as well, and runs only
+// if one of them answers allow. This one answers allow only when Rundock spends
+// a grant for exactly this call, which a person's click on its card recorded
+// (lib/runtime/sandbox-grants.js), and otherwise gives no decision, `{}`, so
+// the call is refused as it would be with no hook. It never denies, never
+// changes the call, raises no card and leaves the line Rundock left for the
+// agent to the next answer. A throw is answered by refuseUnanswered, which
+// gives no decision for this event.
+const SANDBOX_OVERRIDE_ALLOW = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
+const SANDBOX_GRANT_WAIT_MS = 5000;
+function answerSandboxOverride(request) {
+  const input = request.tool_input;
+  const askable = Boolean(process.env.RUNDOCK) && Boolean(process.env.RUNDOCK_CONVO_ID)
+    && SHELL_TOOLS.has(request.tool_name)
+    && Boolean(input) && typeof input === 'object' && input.dangerouslyDisableSandbox === true
+    && typeof input.command === 'string' && input.command !== '';
+  let answered = false;
+  const finish = (spent) => {
+    if (answered) return;
+    answered = true;
+    writeAnswer(spent ? SANDBOX_OVERRIDE_ALLOW : {});
+    endCall();
+  };
+  if (!askable) { finish(false); return; }
+  const body = JSON.stringify({ tool_name: request.tool_name, tool_input: input });
+  const req = http.request({
+    hostname: '127.0.0.1', port: process.env.RUNDOCK_PORT || 3000, path: '/api/sandbox-grant', method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), ...hookTokenHeader() },
+  }, (res) => {
+    let text = '';
+    res.on('data', (c) => { text += c; if (text.length > 8192) { req.destroy(); finish(false); } });
+    res.on('end', () => {
+      let reply = null;
+      try { reply = JSON.parse(text); } catch (e) { /* no decision */ }
+      finish(res.statusCode === 200 && Boolean(reply) && typeof reply === 'object' && reply.spent === true);
+    });
+    // A reply cut short never reaches `end`.
+    res.on('close', () => finish(false));
+  });
+  setTimeout(() => { req.destroy(); finish(false); }, SANDBOX_GRANT_WAIT_MS);
+  req.on('error', () => finish(false));
+  req.end(body);
 }
 
 // WHETHER THIS HOOK CAN JUDGE A REQUEST AT ALL: a tool name that is a string
@@ -4758,6 +4804,10 @@ if (hookEvent === 'PostToolUse' || hookEvent === 'PostToolUseFailure') {
   }, { check: true });
   return;
 }
+// A COMMAND OUTSIDE THE SANDBOX THAT CLAUDE CODE ASKS ABOUT ITSELF
+// (PermissionRequest). Answered only with an allow Rundock grants, and
+// otherwise with no decision; see answerSandboxOverride.
+if (hookEvent === 'PermissionRequest') { answerSandboxOverride(finished); return; }
 // INPUT THIS HOOK CANNOT READ IS REFUSED, inside Rundock, in the words of any
 // request it could not check (refuseUnanswered, at the top), a routine's
 // included. Input that is not JSON, is empty, is cut off, or is JSON but not an
@@ -5040,7 +5090,10 @@ fetchAgentNotice((agentNotice) => {
   // A line that reads or changes the Keychain: asked every time, with no folder
   // or rule to remember, and refused when nobody can be asked.
   const keychain = !!(verdict && verdict.reason === 'keychain');
-  if (codeMode
+  // A lead's Agent call is never approved here: Rundock decides whether that
+  // helper starts, in Code mode as in any other.
+  const agentCall = data.tool_name === 'Agent';
+  if (codeMode && !agentCall
       && !(access && (access.where === 'outside' || access.answerFile || access.credential))
       && (!verdict || verdict.verdict === 'runs')) {
     writeDecision(({
@@ -5094,6 +5147,12 @@ fetchAgentNotice((agentNotice) => {
     tool_input: data.tool_input || {},
     session_id: data.session_id,
     conversation_id: convoId,
+    // The runtime's id for this call, and for a call a subagent makes, which
+    // subagent made it: how Rundock matches an Agent request to the lead's
+    // message and tells a helper's own calls from the lead's.
+    ...(typeof data.tool_use_id === 'string' ? { tool_use_id: data.tool_use_id } : {}),
+    ...(typeof data.agent_id === 'string' ? { agent_id: data.agent_id } : {}),
+    ...(typeof data.agent_type === 'string' ? { agent_type: data.agent_type } : {}),
     ...(advisory.length ? { advisory_outside_paths: advisory } : {}),
     // THE VERDICT, under its own name: Code mode, and a Keychain line in Notes
     // mode. The server relays it by name and the browser draws the card from
@@ -5216,7 +5275,8 @@ fetchAgentNotice((agentNotice) => {
   // read refused for another reason as well still says what it reached.
   const credentialAccess = credentialReads.size > 0 || !!(access && access.credential)
     || boundaryCrossingsFor(access).some(c => c && c.secret && !c.write);
-  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess;
+  // AND A LEAD'S AGENT CALL: a helper that Rundock could not check never starts.
+  const failClosed = answerFile || destructive || asksOnce || alwaysAsks || crossingAlwaysAsks || connectorAlwaysAsks || credentialAccess || agentCall;
   function unanswered(reason) {
     let why;
     if (credentialAccess) why = 'This reads a sign-in credential, and it is never done without asking, so it was refused rather than approved on your behalf.';
@@ -5227,6 +5287,7 @@ fetchAgentNotice((agentNotice) => {
     else if (asksOnce) why = 'This command was held for your approval and Rundock could not ask, so it was refused rather than approved on your behalf.';
     else if (crossingAlwaysAsks) why = 'This reaches a place Rundock asks about every time, and it is never done without asking, so it was refused rather than approved on your behalf.';
     else if (connectorAlwaysAsks) why = 'A connector action that sends, replies, forwards, deletes or archives is never done without asking, so with no way to ask it was refused rather than approved on your behalf.';
+    else if (agentCall) why = "Rundock couldn't check this helper, so it didn't start. Do this part yourself.";
     writeDecision(({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -5258,7 +5319,10 @@ fetchAgentNotice((agentNotice) => {
         // purpose and what to do next (scripts/refusal-notice.js): stop and
         // ask in a conversation, carry on or say it failed in a routine. The
         // old wording for a timeout invited the retry this exists to prevent.
-        const reason = result.allow ? 'Approved in Rundock'
+        // An Agent call Rundock refused with words of its own is given those
+        // words exactly: they name the helper and what to do instead.
+        const reason = agentCall && typeof result.notice === 'string' ? result.notice
+          : result.allow ? 'Approved in Rundock'
           : refusalNotice(result.reason === 'timeout' ? 'timeout' : 'denied', data.tool_name, { unattended: unattendedRun() });
         // An approval a person gave on a card is told to the agent too. The
         // runtime never shows the model an allow's reason, so without this an

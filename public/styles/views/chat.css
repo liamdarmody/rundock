@@ -87,17 +87,17 @@
 .msg-tool { align-self: flex-start; max-width: 85%; padding: 7px 12px 7px 8px; background: var(--card); border-radius: var(--radius-lg); font-size: var(--caption); color: var(--text-2); display: flex; align-items: center; gap: 8px; animation: fadeIn var(--duration-slow) ease; }
 .msg-tool-icon { width: 16px; height: 16px; border-radius: var(--radius-circle); border: 1.5px solid var(--working); color: var(--working); display: flex; align-items: center; justify-content: center; font-size: 8.5px; flex-shrink: 0; background: transparent; }
 .msg-tool.done .msg-tool-icon { border-color: var(--success); color: var(--success); }
-/* Activity summary */
 .activity-summary { margin-top: 8px; font-size: var(--caption); color: var(--text-2); }
-.activity-summary summary { cursor: pointer; user-select: none; padding: 4px 0; list-style: none; opacity: 0.6; transition: opacity var(--duration-base) ease; }
-.activity-summary summary::-webkit-details-marker { display: none; }
-.activity-summary summary:hover { opacity: 1; }
-.activity-summary summary::before { content: '\25B8  '; }
-.activity-summary[open] summary::before { content: '\25BE  '; }
+.turn-used-line { color: var(--text-2-strong); font-variant-numeric: tabular-nums; }
+.turn-details { font-size: var(--caption); font-weight: 600; line-height: inherit; color: var(--text-2-strong); text-decoration: underline; text-underline-offset: 2px; padding: 4px; margin: -4px -4px -4px 6px; border-radius: var(--radius-sm); }
+.turn-details:hover, .turn-details[aria-expanded="true"] { color: var(--text-1); }
+.turn-details:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+.turn-tokens[hidden] { display: none; }
+.turn-tokens-line { color: var(--text-2-strong); font-size: var(--label); line-height: 1.5; padding: 4px 0 2px; }
 .activity-list { padding: 6px 0 2px; display: flex; flex-direction: column; gap: 2px; }
 .activity-row { display: flex; align-items: baseline; gap: 10px; font-size: var(--label); line-height: 1.5; }
-.activity-time { color: var(--text-2); min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; opacity: 0.5; }
-.activity-tool { color: var(--text-1); font-weight: 500; opacity: 0.7; }
+.activity-time { color: var(--text-2-strong); min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+.activity-tool { color: var(--text-1); font-weight: 500; }
 /* Permission prompt cards */
 .msg-permission { align-self: flex-start; max-width: 85%; animation: fadeIn var(--duration-slow) ease; }
 /* THE TEXT COLUMN, declared once. The header is a 16px icon plus an 8px gap,

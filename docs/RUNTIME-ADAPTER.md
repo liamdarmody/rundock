@@ -39,7 +39,8 @@ server already speaks. Whatever the wire format, a turn must produce:
 | session | the runtime's resumable thread/session id | `system/init` envelope; the client returns the id on the next turn |
 | streamed text | incremental reply text | `stream_event` text deltas (live streaming) |
 | final text | the authoritative full reply | `result` message + transcript |
-| usage | token counts (subscription units, never dollars) | usage on the `result` |
+| usage | token counts the runtime reported for the turn (subscription units, never dollars); a count it didn't report is left out, never zero | usage on the `result` |
+| time worked | how long the turn ran in milliseconds, as the runtime reported it or, when it didn't, as the server measured it | `duration_ms` on the `result` |
 | done | turn ended (completed / interrupted / failed) | `system/done` envelope, exactly once |
 | error | classified failure (auth / quota / model / context / unknown) | guidance or error card with the exact fix |
 

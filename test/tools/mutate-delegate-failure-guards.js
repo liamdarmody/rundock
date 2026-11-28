@@ -4,7 +4,10 @@
 // one, in turn, and report which tests notice (lib/delegation/engine.js, the
 // follow-up path in server.js, lib/delegation/stopped-line.js, the reducers
 // in public/conversation-state.js, the notice in public/views/chat.js, the
-// history handler and the catch-up in lib/store/transcripts.js).
+// history handler and the catch-up in lib/store/transcripts.js), and the rule
+// that a transcript is saved to the workspace its conversation belongs to, so
+// a reply that ends after a workspace switch stays where it began
+// (lib/store/transcripts.js).
 //
 // Each rule can go with most conversations still looking fine: a delegate
 // that finishes never needs the stopped line, and one that stops on its first
@@ -51,7 +54,13 @@ const DISPATCH = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/d
 // The stored line: handed back in the history, left out of the catch-up.
 const STORE = 'test/unit/delegate-stopped-store.test.js';
 const HISTORY = { src: path.join(ROOT, 'lib', 'protocol', 'handlers', 'history.js'), suite: STORE };
-const CATCH_UP = { src: path.join(ROOT, 'lib', 'store', 'transcripts.js'), suite: STORE };
+const TRANSCRIPTS_SRC = path.join(ROOT, 'lib', 'store', 'transcripts.js');
+const CATCH_UP = { src: TRANSCRIPTS_SRC, suite: STORE };
+// A transcript's own workspace: through the store with no server, and end to
+// end with a reply that ends after a switch.
+const OWN_ROOT = { src: TRANSCRIPTS_SRC, suite: 'test/unit/transcripts-workspace.test.js' };
+const LATE_REPLY = { src: TRANSCRIPTS_SRC, suite: 'test/integration/workspace-switch-late-reply.test.js' };
+const LATE_AFTER_SET = 'a reply that ends after set_workspace writes nothing into the workspace opened, and is kept in the first';
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. Such a row names the
 // test that proves it (`suite#test name`) and only that test runs. A name
@@ -66,6 +75,9 @@ function only(target, testName) {
 }
 
 const HELD_CARD_SENT = '    if (heldCard && !failed) heldCard.send();\n';
+const SAVED_TO_OWN_ROOT = '  const root = transcriptRoots.get(keepRoot(transcript));\n';
+const KEPT_ONCE = '  if (root && !transcriptRoots.has(transcript)) transcriptRoots.set(transcript, root);\n';
+const FOLDER_CHECK = "  try { fs.mkdirSync(path.join(root, '.rundock')); } catch (e) {\n";
 const DRAWS = '!message.failed && (isReturn || !message.silent)';
 
 const MUTATIONS = [
@@ -154,6 +166,43 @@ const MUTATIONS = [
     'a held Codex card is dropped on a close that draws no line',
     HELD_CARD_SENT,
     ''],
+  // ===== A TRANSCRIPT'S OWN WORKSPACE =====
+  // Saved to whichever workspace is open, a reply that ends after a switch
+  // takes its whole conversation into the workspace just opened.
+  [OWN_ROOT, 'a transcript is saved to the open workspace, through the store',
+    SAVED_TO_OWN_ROOT,
+    '  const root = getWorkspace();\n'],
+  [only(LATE_REPLY, LATE_AFTER_SET), 'a transcript is saved to the open workspace, end to end',
+    SAVED_TO_OWN_ROOT,
+    '  const root = getWorkspace();\n'],
+  // Taken again at every save, the root follows the switch all the same.
+  [only(LATE_REPLY, LATE_AFTER_SET), 'a transcript takes the open workspace at every save',
+    KEPT_ONCE,
+    '  if (root) transcriptRoots.set(transcript, root);\n'],
+  // Never kept, a conversation is saved nowhere at all.
+  [only(LATE_REPLY, 'a conversation started in a workspace saves there'), 'a transcript never keeps its workspace',
+    KEPT_ONCE,
+    '  if (root && !transcriptRoots.has(transcript)) {}\n'],
+  // Made again on the way to the file, a removed workspace comes back holding
+  // the conversation.
+  [OWN_ROOT, 'a removed workspace folder is made again',
+    FOLDER_CHECK,
+    "  try { fs.mkdirSync(path.join(root, '.rundock'), { recursive: true }); } catch (e) {\n"],
+  // The workspace folder is what has to exist, not its .rundock folder, which
+  // a workspace that has never saved anything does not have yet.
+  [OWN_ROOT, 'a workspace with no .rundock folder yet is passed over',
+    FOLDER_CHECK,
+    "  if (!fs.existsSync(path.join(root, '.rundock'))) return;\n" + FOLDER_CHECK],
+  // Read from disk with no root of its own, a transcript takes the workspace
+  // open at its next save.
+  [OWN_ROOT, 'a transcript read from disk keeps no workspace',
+    '    const data = keepRoot(JSON.parse(raw));\n',
+    '    const data = JSON.parse(raw);\n'],
+  // A new conversation's empty transcript, read with no root of its own, takes
+  // the workspace open at its first save.
+  [OWN_ROOT, 'a new transcript keeps no workspace until its first save',
+    '    const empty = keepRoot([]);\n',
+    '    const empty = [];\n'],
 ];
 
 // The reporter is named explicitly rather than left to the default, which

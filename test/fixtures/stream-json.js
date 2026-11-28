@@ -28,8 +28,9 @@ function contentBlockStop(index = 0) {
 }
 
 // Tool use block (Agent, Read, Bash, ...) streamed as start -> input_json_delta -> stop.
-function toolUseStart(name, index = 1) {
-  return { type: 'stream_event', event: { type: 'content_block_start', index, content_block: { type: 'tool_use', id: `toolu_${index}`, name } } };
+// `id` is the block's tool_use id; by default it is made from the index.
+function toolUseStart(name, index = 1, id = `toolu_${index}`) {
+  return { type: 'stream_event', event: { type: 'content_block_start', index, content_block: { type: 'tool_use', id, name } } };
 }
 
 function inputJsonDelta(partialJson, index = 1) {
@@ -51,11 +52,11 @@ function messageStop() {
 }
 
 // Full tool_use flow with the input JSON split into two deltas.
-function toolUseFlow(name, input, index = 1) {
+function toolUseFlow(name, input, index = 1, id = undefined) {
   const json = JSON.stringify(input);
   const mid = Math.max(1, Math.floor(json.length / 2));
   return [
-    toolUseStart(name, index),
+    toolUseStart(name, index, id),
     inputJsonDelta(json.slice(0, mid), index),
     inputJsonDelta(json.slice(mid), index),
     contentBlockStop(index),
@@ -92,6 +93,23 @@ function textTurn(text, { sessionId = null, deltaChunks = 2 } = {}) {
   return events;
 }
 
+// Claude Code's own refusal of a command outside the sandbox that no
+// PermissionRequest hook allowed, in headless mode: this line, then the call's
+// error result. Nothing ran. The line carries the session's id and an id of
+// its own, as the CLI's does (test/fixtures/claude-cli-sandbox-override.json).
+function sandboxOverrideDenied(toolName, index = 1, sessionId = 'stub-session') {
+  return {
+    type: 'system', subtype: 'permission_denied', tool_name: toolName, tool_use_id: `toolu_${index}`,
+    decision_reason_type: 'sandboxOverride', decision_reason: 'dangerouslyDisableSandbox', message: 'Run outside of the sandbox',
+    session_id: sessionId, uuid: require('crypto').randomUUID(),
+  };
+}
+
+// A tool's result, as the user message that carries it.
+function toolResult(index, content, isError = false) {
+  return { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${index}`, content, is_error: isError }] } };
+}
+
 function toLines(events) {
   return events.map(e => JSON.stringify(e)).join('\n') + '\n';
 }
@@ -110,5 +128,5 @@ const MARKERS = {
 module.exports = {
   init, contentBlockStartText, textDelta, contentBlockStop,
   toolUseStart, inputJsonDelta, toolUseFlow, messageDelta, messageStop,
-  assistantMessage, result, textTurn, toLines, MARKERS,
+  assistantMessage, result, textTurn, toLines, MARKERS, sandboxOverrideDenied, toolResult,
 };
