@@ -1087,6 +1087,181 @@ describe('what the server stores and refuses for an agent on Codex', () => {
     h.reapConvo(id);
   });
 
+  // The record with the entry `entryId` taken out, as an agent could leave it.
+  function withoutEntry(id, entryId) {
+    const recordFile = path.join(folderOf(id), 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    fs.writeFileSync(recordFile, JSON.stringify({ ...record, messages: record.messages.filter((m) => m.id !== entryId) }));
+  }
+  // Takes a stored message's entry out of the record the moment the server
+  // tells the window it stored it, which is before the message comes back
+  // into the chat handler and its reference is checked. Answers the undo.
+  function entryGoneOnceStored(id) {
+    const sockets = [...h.internal.connectedClients];
+    const sends = sockets.map((sock) => sock.send);
+    for (const [i, sock] of sockets.entries()) {
+      sock.send = function (data, ...rest) {
+        let m = null;
+        try { m = JSON.parse(String(data)); } catch (e) { /* not a message this looks at */ }
+        if (m && m.type === 'chat_stored' && m.conversationId === id) withoutEntry(id, m.entry.id);
+        return sends[i].call(this, data, ...rest);
+      };
+    }
+    return () => { for (const [i, sock] of sockets.entries()) sock.send = sends[i]; };
+  }
+  // Holds the conversation's chats back as a hand-over does. Answers the end,
+  // which lets them through to whatever window is connected.
+  function inTransition(id) {
+    const { transitions } = h.internal.wsHandlerContext;
+    const owner = {};
+    transitions.beginConvoTransition(id, 'restoring', owner);
+    return () => transitions.endConvoTransition(id, owner);
+  }
+  const heldBack = (id) => (h.internal.convoTransitions.get(id) || { queued: [] }).queued.length;
+  // The next one-image message for a thread at 19 images: stored, not
+  // refused, then sent with its image, which takes the thread to 20.
+  async function nextOneIsSent(id, threadId, tag) {
+    const since = client.messages.length;
+    toResearcher(id, `${tag} have a look`, shots(1, 33, 3), { sessionId: threadId });
+    const answer = await arrived((m) => (m.type === 'chat_stored' || m.type === 'chat_refused') && m.conversationId === id, { since });
+    assert.strictEqual(answer && (answer.code || answer.type), 'chat_stored', `${tag} is stored`);
+    assert.ok(await resultFor(id, `DONE-${tag}`, since), `${tag} is answered`);
+    await doneAfter(id, since);
+    textThen(await turnStartWith(tag), [localImage(id, answer.entry.files[0].file)]);
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the thread was sent 20 images');
+  }
+
+  test('a one-image message whose entry an agent takes out of the record before its reference is checked starts no turn and leaves nothing counted, so the next one for a thread at 19 is stored and sent', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-unreferenced');
+    codexAnswers(['GONE-S1', 'GONE-S2', 'GONE-S3']);
+    const threadId = await threadAt(id, 'GONE-S1', 19);
+    h.clearInvocations();
+    const undo = entryGoneOnceStored(id);
+    try {
+      const since = client.messages.length;
+      toResearcher(id, 'GONE-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      assert.ok(await storedFor(id, since), 'the message is stored');
+      const refused = await arrived((m) => m.type === 'chat_refused' && m.conversationId === id, { since });
+      assert.strictEqual(refused && refused.code, 'bad-entry', 'and refused at its reference check');
+    } finally {
+      undo();
+    }
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await nextOneIsSent(id, threadId, 'GONE-S3');
+    assert.deepStrictEqual(startedWith('GONE-S2'), [], 'the refused one never started');
+    h.reapConvo(id);
+  });
+
+  test('a one-image message held back by a hand-over, its entry taken out of the record while it waits, is refused once let through and leaves nothing counted, so the next one for a thread at 19 is stored and sent', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-replay-unreferenced');
+    codexAnswers(['REPLAY-S1', 'REPLAY-S2', 'REPLAY-S3']);
+    const threadId = await threadAt(id, 'REPLAY-S1', 19);
+    h.clearInvocations();
+    const since = client.messages.length;
+    const letThrough = inTransition(id);
+    try {
+      toResearcher(id, 'REPLAY-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      const stored = await storedFor(id, since);
+      assert.ok(stored, 'the message is stored');
+      assert.strictEqual(heldBack(id), 1, 'and held back');
+      withoutEntry(id, stored.entry.id);
+    } finally {
+      letThrough();
+    }
+    const refused = await arrived((m) => m.type === 'chat_refused' && m.conversationId === id, { since });
+    assert.strictEqual(refused && refused.code, 'bad-entry', 'it is refused at its reference check');
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await nextOneIsSent(id, threadId, 'REPLAY-S3');
+    assert.deepStrictEqual(startedWith('REPLAY-S2'), [], 'the refused one never started');
+    h.reapConvo(id);
+  });
+
+  test('a one-image message held back by a hand-over and dropped when no window is connected to let it through leaves nothing counted, so the next one for a thread at 19 is stored and sent', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-dropped');
+    codexAnswers(['DROP-S1', 'DROP-S2', 'DROP-S3']);
+    const threadId = await threadAt(id, 'DROP-S1', 19);
+    h.clearInvocations();
+    const letThrough = inTransition(id);
+    try {
+      const since = client.messages.length;
+      toResearcher(id, 'DROP-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      assert.ok(await storedFor(id, since), 'the message is stored');
+      assert.strictEqual(heldBack(id), 1, 'and held back');
+      client.close();
+      assert.ok(await h.waitUntil(() => h.internal.connectedClients.size === 0), 'no window is connected');
+    } finally {
+      letThrough();
+      if (client.closed) client = await h.connect();
+    }
+    assert.strictEqual(heldBack(id), 0, 'nothing is held back any more');
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await nextOneIsSent(id, threadId, 'DROP-S3');
+    assert.deepStrictEqual(startedWith('DROP-S2'), [], 'the dropped one never started');
+    h.reapConvo(id);
+  });
+
+  test('a one-image message whose way to its turn throws, its conversation\'s transcript file made a folder, leaves nothing counted, so the next one for a thread at 19 is stored and sent', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-thrown');
+    codexAnswers(['THROWN-S1', 'THROWN-S2', 'THROWN-S3']);
+    const threadId = await threadAt(id, 'THROWN-S1', 19);
+    h.clearInvocations();
+    const transcript = path.join(h.workspaceDir, '.rundock', 'transcripts', `${id}.json`);
+    assert.ok(fs.existsSync(transcript), 'the conversation has a transcript file');
+    fs.rmSync(transcript);
+    fs.mkdirSync(transcript);
+    try {
+      const since = client.messages.length;
+      toResearcher(id, 'THROWN-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      assert.ok(await storedFor(id, since), 'the message is stored');
+    } finally {
+      fs.rmSync(transcript, { recursive: true, force: true });
+    }
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await nextOneIsSent(id, threadId, 'THROWN-S3');
+    assert.deepStrictEqual(startedWith('THROWN-S2'), [], 'the one that threw never started');
+    h.reapConvo(id);
+  });
+
+  test('a page\'s message naming a stored message\'s entry, which throws on its way to a turn, leaves that message\'s images held, so the next one for a thread at 19 is refused codex-images', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-page-thrown');
+    codexAnswers(['NAMED-S1', 'NAMED-S2', 'NAMED-S3', 'NAMED-S4']);
+    const threadId = await threadAt(id, 'NAMED-S1', 19);
+    h.clearInvocations();
+    const transcript = path.join(h.workspaceDir, '.rundock', 'transcripts', `${id}.json`);
+    const release = await holdResumes();
+    const since = client.messages.length;
+    try {
+      toResearcher(id, 'NAMED-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      const stored = await storedFor(id, since);
+      assert.ok(stored, 'the message is stored');
+      assert.ok(await arrived(processStarted(id), { since }), 'and its turn begins to open the thread');
+      fs.rmSync(transcript);
+      fs.mkdirSync(transcript);
+      try {
+        toResearcher(id, 'NAMED-S3 about that', undefined, { sessionId: threadId, attachmentEntry: stored.entry.id });
+        const reached = () => (h.internal.convoTranscripts.get(id) || []).some((row) => row.text === 'NAMED-S3 about that');
+        assert.ok(await h.waitUntil(reached), 'the page\'s message reaches the step that throws');
+      } finally {
+        fs.rmSync(transcript, { recursive: true, force: true });
+      }
+      await refusedAsBefore({ conversationId: id, agent: 'researcher', sessionId: threadId, content: 'NAMED-S4 and this', attachments: shots(1, 33, 3) },
+        { code: 'codex-images', title: 'Message not sent', text: IMAGES_TEXT });
+      release();
+      assert.ok(await resultFor(id, 'DONE-NAMED-S2', since), 'the stored one is answered');
+      await doneAfter(id, since);
+    } finally {
+      release();
+    }
+    assert.deepStrictEqual(startedWith('NAMED-S3'), [], 'the page\'s message never started');
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the thread was sent 20 images');
+    h.reapConvo(id);
+  });
+
   test('a malformed entry for the thread refuses one image codex-images', async () => {
     needsRecording();
     const id = h.freshConvoId('codex-malformed');

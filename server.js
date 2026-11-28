@@ -22,7 +22,7 @@ const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES, stripRundockMarkers } 
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const config = require('./lib/config.js');
-const { MAX_PAYLOAD, createReceiver } = require('./lib/attachments/receive.js');
+const { MAX_PAYLOAD, createReceiver, releasePendingImages } = require('./lib/attachments/receive.js');
 const { userTurnText } = require('./lib/attachments/turn-text.js');
 const { buildTurn, claudeSession, claudeSent } = require('./lib/attachments/turn.js');
 const agentsDiscovery = require('./lib/agents/discovery.js');
@@ -1278,6 +1278,9 @@ function endConvoTransition(convoId, owner) {
   const liveWs = [...connectedClients].find(c => c.readyState === 1) || [...connectedClients][0];
   if (!liveWs) {
     console.warn(`[KillWindow] convo=${convoId} no client to replay ${t.queued.length} buffered message(s)`);
+    // Dropped, so none of them starts a turn: the images they hold no longer
+    // count.
+    for (const queued of t.queued) releasePendingImages(queued.attachmentEntry);
     return;
   }
   for (const queued of t.queued) {
@@ -1619,8 +1622,9 @@ wss.on('connection', (ws) => {
   const processes = chatProcesses;
 
   ws.on('message', (data) => {
+    let msg;
     try {
-      const msg = JSON.parse(data.toString());
+      msg = JSON.parse(data.toString());
 
       if (msg.type === 'chat') {
         const convoId = msg.conversationId || 'default';
@@ -2092,6 +2096,9 @@ wss.on('connection', (ws) => {
       if (dispatchHandler) dispatchHandler(wsHandlerContext, ws, msg);
     } catch (e) {
       console.error('Error handling message:', e);
+      // A stored chat that fails on its way to its turn starts none, so the
+      // images it holds no longer count. A page's own frame holds none.
+      if (msg && msg.type === 'chat' && typeof data === 'string') releasePendingImages(msg.attachmentEntry);
     }
   });
 

@@ -199,6 +199,83 @@ describe('createReceiver: how the chat handler hands a message over', () => {
     assert.deepStrictEqual(asked, ['default']);
     assert.deepStrictEqual(sock.sent.map((m) => m.type), ['chat_stored']);
   });
+
+  // A conversation whose record already holds a message, its session
+  // `thread-1` sent `images` images.
+  async function threadAt(images) {
+    const ws = workspace();
+    await receiveAttachments(ws, message({ attachments: [file('notes.txt', Buffer.from('earlier\n'))] }));
+    const recordFile = path.join(folderOf(ws), 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    record.sent['thread-1'] = { files: [], bytes: 0, images };
+    fs.writeFileSync(recordFile, JSON.stringify(record));
+    return ws;
+  }
+  // The record with the entry `entryId` taken out, as an agent could leave it.
+  function withoutEntry(ws, entryId) {
+    const recordFile = path.join(folderOf(ws), 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    fs.writeFileSync(recordFile, JSON.stringify({ ...record, messages: record.messages.filter((m) => m.id !== entryId) }));
+  }
+  // What each answer the socket was sent says: its type, or a refusal's code.
+  const answers = (sock) => sock.sent.map((m) => (m.type === 'chat_refused' ? m.code : m.type));
+  // A receiver for an agent on Codex, and a one-image message for `thread-1`
+  // sent through it from the page and answered. A stored one comes back into
+  // the handler, here sock.back, and waits there as a turn not yet started.
+  function codexReceiver(sock) {
+    const receiver = receive.createReceiver({ clients: new Set([sock]), findAgent: () => ({ runtime: 'codex' }) });
+    const oneImage = () => {
+      receiver.takes(message({ agent: 'gamma', sessionId: 'thread-1', attachments: [file('shot.png', pngBytes())] }), sock, true);
+      return receive.whenReceived('alpha');
+    };
+    return { receiver, oneImage };
+  }
+
+  test('a stored message refused at its reference check, twice over, lets go of its own images and no other message\'s', async () => {
+    ready('createReceiver');
+    const ws = await threadAt(18);
+    const sock = socket();
+    await inWorkspace(ws, async () => {
+      const { receiver, oneImage } = codexReceiver(sock);
+      await oneImage();
+      await oneImage();
+      const [gone] = sock.back;
+      withoutEntry(ws, gone.attachmentEntry);
+      assert.strictEqual(receiver.takes(gone, sock, false), true, 'refused once');
+      assert.strictEqual(receiver.takes(gone, sock, false), true, 'and again');
+      await oneImage();
+      await oneImage();
+    });
+    assert.deepStrictEqual(answers(sock), ['chat_stored', 'chat_stored', 'bad-entry', 'bad-entry', 'chat_stored', 'codex-images'],
+      'with the refused one let go, the second and third reach 20 and a fourth is refused');
+  });
+
+  test('a stored message whose reference still checks out is handed on with its images held, so the next one for a session at 19 is refused codex-images', async () => {
+    ready('createReceiver');
+    const ws = await threadAt(19);
+    const sock = socket();
+    await inWorkspace(ws, async () => {
+      const { receiver, oneImage } = codexReceiver(sock);
+      await oneImage();
+      assert.strictEqual(receiver.takes(sock.back[0], sock, false), false, 'handed on to its turn');
+      await oneImage();
+    });
+    assert.deepStrictEqual(answers(sock), ['chat_stored', 'codex-images']);
+  });
+
+  test('a page\'s message naming a stored message\'s entry, refused at its reference check, leaves that message\'s images held', async () => {
+    ready('createReceiver');
+    const ws = await threadAt(19);
+    const sock = socket();
+    await inWorkspace(ws, async () => {
+      const { receiver, oneImage } = codexReceiver(sock);
+      await oneImage();
+      const named = { type: 'chat', conversationId: 'beta', agent: 'gamma', sessionId: 'thread-1', content: 'and this', attachmentEntry: sock.back[0].attachmentEntry };
+      assert.strictEqual(receiver.takes(named, sock, true), true, 'refused');
+      await oneImage();
+    });
+    assert.deepStrictEqual(answers(sock), ['chat_stored', 'bad-entry', 'codex-images']);
+  });
 });
 
 describe('receiveAttachments refuses the payload in a fixed order, before anything is written', () => {
