@@ -219,6 +219,24 @@ describe('a request that names no conversation, or not in a well-formed id, keep
   });
 });
 
+// A name that is not a string is refused for its name, as always; what is
+// kept of it is no name at all, never the value made into text, which for
+// some values cannot be done and would stop the refusal being kept.
+test('a change whose name is not a string is refused and kept with no name, the save and the removal alike', () => {
+  inWorkspace(ALPHA, (w) => {
+    const name = { toString: 1 };
+    let sent = [];
+    assert.doesNotThrow(() => { sent = [...w.save({ name }), ...w.remove({ name })]; }, 'the refusal is kept without making the name into text');
+    assert.deepStrictEqual(sent, [
+      { type: 'connector_error', message: NAME_REFUSED, conversationId: w.convoId },
+      { type: 'connector_error', message: NAME_REFUSED, conversationId: w.convoId },
+    ]);
+    const refused = { author: null, outcome: 'refused', message: NAME_REFUSED, reason: 'invalid', name: null };
+    assert.deepStrictEqual(w.waiting(), [{ kind: 'save_connector', ...refused }, { kind: 'delete_connector', ...refused }]);
+    assert.deepStrictEqual(w.lines(), [NAME_REFUSED, NAME_REFUSED]);
+  });
+});
+
 // ===== The note names only what Rundock checked =====
 
 const SAVE = 'save_connector';
