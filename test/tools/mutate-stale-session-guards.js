@@ -169,8 +169,8 @@ const MUTATIONS = [
     'sessionIds: (msg.conversation.sessionIds || []).filter(s => !(s && isExpired(s.sessionId))),',
     'sessionIds: msg.conversation.sessionIds || [],'],
   [CLEANUP, 'a conversation with a transcript is kept when no session id is left',
-    'c.sessionId || hasTranscript(c) || allowedHelpers(c) || new Date',
-    'c.sessionId || allowedHelpers(c) || new Date'],
+    'c.sessionId || hasTranscript(c) || allowedHelpers(c) || noticedHelpers(c) || new Date',
+    'c.sessionId || allowedHelpers(c) || noticedHelpers(c) || new Date'],
 
   // ===== THE TURN STARTS AGAIN, FRESH, ONCE =====
   [only(ENGINE, 'once recovered, a session that reappears is not taken back: a stale save cannot restore it'), 'a refused delegation starts again fresh',
