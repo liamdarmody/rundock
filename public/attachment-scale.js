@@ -3,6 +3,20 @@
 // composer reads each image through this module as it is added. Same UMD
 // pattern as attachment-wording.js.
 //
+// THE MODEL READS AN IMAGE AT 2,576 PX ON ITS LONGEST EDGE, and the server
+// refuses one over LIMITS.imageBytes (lib/attachments/detect.js), so
+// `prepareImage` scales a larger image down to that edge, as PNG, which keeps
+// every pixel. One still over the byte limit is stepped down: an opaque one as
+// JPEG at falling quality, one with see-through pixels as PNG at smaller
+// edges, since JPEG keeps no alpha. What still can't fit is refused in the
+// server's words. An image at or under both limits is sent as it came, never
+// decoded. The server checks every image again before it stores one, so this
+// spares a refusal and the server's check stays the guard.
+//
+// `codec` is the one place pixels are touched: it decodes and encodes through
+// a canvas, and is reached only in the browser. Everything else here reads
+// numbers, so tests replace `codec` with a stand-in.
+//
 // AN ANIMATED IMAGE IS SEEN AS ITS FIRST FRAME. `animated` says whether an
 // image holds more than one frame, read from its own bytes by walking its
 // blocks or chunks from the header, so a byte inside image data is never
@@ -87,5 +101,129 @@
     return !!walk && isBytes(bytes) && walk(bytes);
   }
 
-  return { animated };
+  // ===== SCALING =====
+
+  const sniff = typeof RundockAttachmentSniff !== 'undefined' ? RundockAttachmentSniff : require('./attachment-sniff.js');
+  const LIMIT = sniff.LIMITS.imageBytes;
+  const EDGE = 2576;
+  const QUALITIES = [0.9, 0.8, 0.7, 0.6];
+  const EDGES = [2048, 1568];
+  const PNG = 'image/png';
+  const JPEG = 'image/jpeg';
+
+  const asCame = (file) => ({ file, scaledTo: null, refusal: null });
+
+  // Width and height with the longest edge at `edge` and the other in
+  // proportion, rounded to the nearest pixel.
+  function sized(width, height, edge) {
+    const longest = Math.max(width, height);
+    const side = (n) => (n === longest ? edge : Math.max(1, Math.round((n * edge) / longest)));
+    return [side(width), side(height)];
+  }
+
+  // The decoded image's steps, each encoded from the decoded pixels. `edge` is
+  // the longest edge reached and `tried` the size of each step, so a refusal
+  // gives the last; with no step tried, the size the image came at.
+  async function steps(file, { source, width, height, opaque }, codec) {
+    const longest = Math.max(width, height);
+    if (longest <= EDGE && file.size <= LIMIT) return asCame(file);
+    const encode = (to, type, quality) => codec.encode(source, ...sized(width, height, to), type, quality);
+    const sent = (blob, to, type) => ({ file: new File([blob], file.name, { type }), scaledTo: to === longest ? null : to, refusal: null });
+    let edge = longest;
+    if (longest > EDGE) {
+      edge = EDGE;
+      const blob = await encode(EDGE, PNG);
+      if (blob.size <= LIMIT) return sent(blob, EDGE, PNG);
+    }
+    const tried = [];
+    if (opaque) {
+      for (const quality of QUALITIES) {
+        const blob = await encode(edge, JPEG, quality);
+        if (blob.size <= LIMIT) return sent(blob, edge, JPEG);
+        tried.push(blob.size);
+      }
+    } else {
+      for (const to of EDGES) {
+        if (to >= edge) continue;
+        const blob = await encode(to, PNG);
+        if (blob.size <= LIMIT) return sent(blob, to, PNG);
+        tried.push(blob.size);
+      }
+    }
+    const bytes = tried.length ? tried[tried.length - 1] : file.size;
+    return { file, scaledTo: null, refusal: { code: 'image-bytes', name: file.name, bytes, limit: LIMIT } };
+  }
+
+  // `kind` is what detectBytes found for the file's bytes, whose width and
+  // height come from its header. Answers `{ file, scaledTo, refusal }`: the
+  // file to send, under the name it came with; the edge it was scaled to, or
+  // null; and a refusal, or null. An image that can't be decoded or encoded is
+  // refused as unsupported. Never rejects.
+  async function prepareImage(file, kind, codec) {
+    if (Math.max(kind.width, kind.height) <= EDGE && file.size <= LIMIT) return asCame(file);
+    let decoded = null;
+    try {
+      decoded = await codec.decode(file);
+      return await steps(file, decoded, codec);
+    } catch {
+      return { file, scaledTo: null, refusal: { code: 'unsupported', name: file.name } };
+    } finally {
+      // A decoded bitmap holds its pixels until it is closed.
+      if (decoded && decoded.source && typeof decoded.source.close === 'function') decoded.source.close();
+    }
+  }
+
+  // ===== THE CANVAS =====
+
+  // Rows read at a time when looking for a see-through pixel, so a large
+  // image is never copied whole.
+  const BAND = 256;
+
+  function context2d(width, height) {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) throw new Error('the window could not draw the image');
+    return { canvas, context };
+  }
+
+  // Whether no pixel of the decoded image has an alpha below 255.
+  function opaqueAll(source, width, height) {
+    const { context } = context2d(width, Math.min(BAND, height));
+    for (let top = 0; top < height; top += BAND) {
+      const rows = Math.min(BAND, height - top);
+      context.clearRect(0, 0, width, rows);
+      context.drawImage(source, 0, top, width, rows, 0, 0, width, rows);
+      const { data } = context.getImageData(0, 0, width, rows);
+      for (let i = 3; i < data.length; i += 4) if (data[i] < 255) return false;
+    }
+    return true;
+  }
+
+  // The browser's own decoder and encoder. A decoded animated image is its
+  // first frame.
+  const codec = {
+    decode(file) {
+      return createImageBitmap(file).then((source) => {
+        const { width, height } = source;
+        try {
+          return { source, width, height, opaque: opaqueAll(source, width, height) };
+        } catch (e) {
+          source.close();
+          throw e;
+        }
+      });
+    },
+    encode(source, width, height, type, quality) {
+      const { canvas, context } = context2d(width, height);
+      context.imageSmoothingQuality = 'high';
+      context.drawImage(source, 0, 0, width, height);
+      return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('the window could not encode the image'))), type, quality);
+      });
+    },
+  };
+
+  return { animated, prepareImage, codec };
 }));
