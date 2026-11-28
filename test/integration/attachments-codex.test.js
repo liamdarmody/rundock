@@ -723,6 +723,70 @@ describe('what a Claude Code session is recorded as sent', () => {
       'each session recorded under the ID its process reported');
     h.reapConvo(id);
   });
+
+  // A conversation whose delegate's stored session is gone: the leader,
+  // resumed, hands it a brief, its resume is refused, and it starts fresh.
+  function staleDelegate(id, t, ask, brief, extra) {
+    seedRecord(id, { agentId: 'chief-of-staff', sessionId: `live-orch-${t}`,
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: `live-orch-${t}` }, { agentId: 'content-lead', sessionId: `dead-lead-${t}` }] });
+    scenario([
+      { match: { resume: true, promptIncludes: ask, promptExcludes: 'DELEGATION BRIEF' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: brief } }] },
+      { match: { agent: 'content-lead', promptIncludes: brief }, turn: [{ text: 'Handed back.' }] },
+      { match: { agent: 'content-lead', promptIncludes: 'KEPT-' }, turn: [{ text: 'Followed.' }] },
+      { match: { promptIncludes: '[SYSTEM:' }, turn: [{ text: '<silent>' }] },
+    ], [`dead-lead-${t}`], extra);
+  }
+  const delegateSpawns = (id) => spawnsFor(id).filter((i) => i.agent === 'content-lead').map((i) => i.resume);
+  const freshInit = (id, since) => arrived((m) => m.type === 'system' && m.subtype === 'init' && m._conversationId === id && m._agent === 'content-lead', { since });
+  // The one stdin line holding `tag` that the delegate's fresh start read.
+  async function readFresh(tag) {
+    const pick = () => h.readPrompts().filter((p) => p.agent === 'content-lead' && p.resume == null && p.line !== undefined && p.prompt.includes(tag));
+    assert.ok(await h.waitUntil(() => pick().length > 0, { timeout: 15000 }), `the fresh start reads a turn with ${tag}`);
+    assert.strictEqual(pick().length, 1, `one turn with ${tag}`);
+    return JSON.parse(pick()[0].line).message.content;
+  }
+
+  test('a delegate started fresh after its session was refused records what its brief was sent under the ID the fresh process reports', async () => {
+    needsRecording();
+    const id = h.freshConvoId('claude-fresh-brief');
+    staleDelegate(id, 'rc', 'REFUSED-C1', 'BRIEF-RC do it');
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'REFUSED-C1 have a look', [file('diagram.png', DIAGRAM)], { sessionId: 'live-orch-rc' });
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is stored');
+    const fresh = await freshInit(id, since);
+    assert.ok(fresh && typeof fresh._sessionId === 'string', 'the fresh start reports its session');
+    assert.deepStrictEqual((await readFresh('BRIEF-RC do it')).slice(1), [blockOf(DIAGRAM)], 'its brief carries the block');
+    assert.deepStrictEqual(delegateSpawns(id), ['dead-lead-rc', null], 'refused once, then started fresh');
+    const once = { files: filesOf(stored), bytes: DIAGRAM.length, images: 1 };
+    assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).sent, { 'live-orch-rc': once, [fresh._sessionId]: once },
+      'the leader\'s session and the fresh one each recorded, and the refused one not at all');
+    h.reapConvo(id);
+  });
+
+  test('a message kept for a delegate starting fresh records what it was sent under the ID the fresh process reports', async () => {
+    needsRecording();
+    const id = h.freshConvoId('claude-fresh-kept');
+    const chart = png(800, 600, 50);
+    staleDelegate(id, 'kc', 'ASKING-C2', 'BRIEF-KC do it', { refusalExitMs: 1200 });
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'ASKING-C2 please', undefined, { sessionId: 'live-orch-kc' });
+    assert.ok(await arrived((m) => m.subtype === 'session_expired' && m._conversationId === id, { since }), 'the delegate\'s resume is refused and still lingering');
+    const mid = client.messages.length;
+    chat(id, 'KEPT-C2 and this one', [file('chart.png', chart)], { agent: 'content-lead' });
+    const stored = await storedFor(id, mid);
+    assert.ok(stored, 'the message is stored');
+    const fresh = await freshInit(id, since);
+    assert.ok(fresh && typeof fresh._sessionId === 'string', 'the fresh start reports its session');
+    assert.deepStrictEqual(await readFresh('KEPT-C2'), [{ type: 'text', text: stored.content }, blockOf(chart)], 'the kept message with its own block');
+    assert.deepStrictEqual(delegateSpawns(id), ['dead-lead-kc', null], 'one fresh start carries it');
+    assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).sent, { [fresh._sessionId]: { files: filesOf(stored), bytes: chart.length, images: 1 } },
+      'recorded under the fresh ID alone');
+    h.reapConvo(id);
+  });
 });
 
 describe('what the server stores and refuses for an agent on Codex', () => {

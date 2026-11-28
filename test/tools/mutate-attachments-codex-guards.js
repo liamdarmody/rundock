@@ -133,6 +133,14 @@ const MUTATIONS = [
     'a brief handed to a delegate records nothing it was sent',
     '  recordWritten(delegateEntry, convoId);\n',
     ''],
+  [only(HANDOVER_SEND, 'a delegate started fresh after its session was refused records what its brief was sent under the ID the fresh process reports'),
+    'a delegate started fresh records nothing its brief was sent',
+    '    recordWritten(entry, convoId);\n  } else holdFreshCatchUp(entry, freshCatchUp);\n',
+    '  } else holdFreshCatchUp(entry, freshCatchUp);\n'],
+  [only(HANDOVER_SEND, 'a message kept for a delegate starting fresh records what it was sent under the ID the fresh process reports'),
+    'a message kept for a delegate starting fresh records nothing it was sent',
+    '    recordWritten(entry, convoId);\n  }\n  // Still held',
+    '  }\n  // Still held'],
 
   // ===== A THREAD RESUMED ON ANOTHER APP-SERVER PROCESS IS SENT ITS IMAGES AGAIN =====
   [only(RESUME, 'a thread whose entry names another app-server instance is sent its PNG again'),
