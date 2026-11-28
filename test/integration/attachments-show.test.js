@@ -15,6 +15,7 @@ const path = require('node:path');
 
 const h = require('../helpers/harness.js');
 const auth = require('../../lib/auth/index.js');
+const { getWorkspace } = require('../../lib/config.js');
 const store = require('../../lib/attachments/store.js');
 const receive = require('../../lib/attachments/receive.js');
 
@@ -208,11 +209,14 @@ describe('the file route serves a stored file only as its record describes it', 
   test("the bytes served are the ones the record check read, never read again by path", async () => {
     const real = store.readRecordedFile;
     const checked = Buffer.from('bytes the record check read');
-    store.readRecordedFile = (...args) => ({ ...real(...args), state: 'present', bytes: checked });
+    const calls = [];
+    store.readRecordedFile = (...args) => { calls.push(args); return { ...real(...args), state: 'present', bytes: checked }; };
     try {
       const res = await get(fileUrl(storedPath(ID, '1-diagram.png')));
       assert.strictEqual(res.status, 200);
       assert.ok(res.body.equals(checked), 'the body is what the record check answered');
+      assert.deepStrictEqual(calls, [[getWorkspace(), ID, '1-diagram.png', { keep: true }]],
+        'one record check, of this file, asked to keep the bytes it reads');
     } finally {
       store.readRecordedFile = real;
     }

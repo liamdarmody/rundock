@@ -68,6 +68,10 @@ const MUTATIONS = [
     'the route reads the file by path after the record check',
     '    res.end(answer.bytes);\n',
     '    fs.createReadStream(path.join(getWorkspace(), ...segments)).pipe(res);\n'],
+  [only(ROUTE, 'the bytes served are the ones the record check read, never read again by path'),
+    'the route asks the record check without keeping the bytes it reads',
+    'store.readRecordedFile(getWorkspace(), id, file, { keep: true })',
+    'store.readRecordedFile(getWorkspace(), id, file)'],
   [only(ROUTE, 'a stored PNG rewritten at the same size with other bytes is refused'),
     'the folder rule is skipped, so a stored file is served by path',
     '    if (stored) { serveStoredFile(res, stored, inside); return; }\n',
@@ -102,6 +106,9 @@ const MUTATIONS = [
   [LINES, 'the stripper finds a line inside a sentence',
     'const whole = (core) => new RegExp(`^${core}$`);',
     'const whole = (core) => new RegExp(core);'],
+  [LINES, "a line's details may hold a carriage return",
+    '[^)\\\\]\\\\r\\\\n\\\\u2028\\\\u2029]*',
+    '[^)\\\\]\\\\n\\\\u2028\\\\u2029]*'],
 
   // ===== THE BUBBLE DRAWS EACH FILE FROM WHAT THE SERVER SAID OF IT =====
   [PAGE, 'changed draws as present',
