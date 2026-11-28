@@ -1178,6 +1178,99 @@ test('a link swapped in between the read and the write ends write-failed, and no
   }));
 });
 
+// ===== Where the platform has no O_NOFOLLOW =====
+
+// There (Windows) an lstat just before each open refuses a link. Here the
+// writer is told the flag is absent (io.noFollow), and every open the process
+// makes has the flag taken off, so the open and the write beneath the writer
+// follow a link as they would there: only the lstat checks stand between a
+// link and what it leads to. Returns what puts both back.
+const NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
+function withoutNoFollow(t) {
+  assert.strictEqual(typeof (cw.io && cw.io.noFollow), 'function', 'the writer asks for the no-follow flag through its own step');
+  const real = cw.io.noFollow;
+  cw.io.noFollow = () => 0;
+  const open = fs.openSync;
+  const opens = t.mock.method(fs, 'openSync', (p, flags, ...rest) => open.call(fs, p, typeof flags === 'number' ? flags & ~NOFOLLOW : flags, ...rest));
+  return () => { cw.io.noFollow = real; opens.mock.restore(); };
+}
+
+test('where the platform has no O_NOFOLLOW, a connector file that is a link is refused at request time, and what it leads to is untouched', { skip: NO_LINKS }, async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  const putBack = withoutNoFollow(t);
+  try {
+    await inWorkspace(undefined, (s) => elsewhere(async (dir) => {
+      const target = path.join(dir, 'servers.json');
+      fs.writeFileSync(target, OUTSIDE);
+      fs.symlinkSync(target, s.file);
+      await linkRefusedAtRequest(s, target);
+      assert.deepStrictEqual(standing(s.file), { link: target }, 'the link is left as it was');
+    }));
+  } finally { putBack(); }
+});
+
+test('where the platform has no O_NOFOLLOW, a link swapped in at .mcp.json while the card waits is refused at Allow', { skip: NO_LINKS }, async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  const putBack = withoutNoFollow(t);
+  try {
+    await inWorkspace({}, (s) => elsewhere(async (dir) => {
+      const target = path.join(dir, 'servers.json');
+      fs.writeFileSync(target, OUTSIDE);
+      const { w, outcome } = propose(s, s.request());
+      assert.strictEqual(s.asked.length, 1, 'one card');
+      fs.rmSync(s.file);
+      fs.symlinkSync(target, s.file);
+      const warn = console.warn;
+      console.warn = () => {};
+      try { s.answer(0, true); } finally { console.warn = warn; }
+      assert.strictEqual(fs.readFileSync(target, 'utf-8'), OUTSIDE, 'what the link leads to is byte-identical');
+      assert.deepStrictEqual(standing(s.file), { link: target }, 'the link is left as it was');
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: LINK_REFUSED }], 'one message, the refusal\'s, and no save');
+      assert.deepStrictEqual(await outcome, { ok: false, reason: 'unreadable', message: LINK_REFUSED });
+    }));
+  } finally { putBack(); }
+});
+
+test('where the platform has no O_NOFOLLOW, a link swapped in between the read and the write ends write-failed, and nothing is written where it leads', { skip: NO_LINKS }, async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  writesItsOwnWay();
+  const putBack = withoutNoFollow(t);
+  try {
+    await inWorkspace(ALPHA, (s) => elsewhere(async (dir) => {
+      const target = path.join(dir, 'servers.json');
+      fs.writeFileSync(target, OUTSIDE);
+      const { w, outcome } = propose(s, s.request());
+      const real = cw.io.write;
+      cw.io.write = (file, body) => {
+        fs.rmSync(file);
+        fs.symlinkSync(target, file);
+        return real(file, body);
+      };
+      const warn = console.warn;
+      console.warn = () => {};
+      try { s.answer(0, true); } finally { cw.io.write = real; console.warn = warn; }
+      assert.strictEqual(fs.readFileSync(target, 'utf-8'), OUTSIDE, 'what the link leads to is byte-identical');
+      assert.deepStrictEqual(standing(s.file), { link: target });
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: WRITE_FAILED }], 'one message, and no save');
+      assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message: WRITE_FAILED });
+    }));
+  } finally { putBack(); }
+});
+
+test('where the platform has no O_NOFOLLOW, an honest add to a plain connector file is written and confirmed', async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  const putBack = withoutNoFollow(t);
+  try {
+    await inWorkspace(ALPHA, async (s) => {
+      const { w, outcome } = propose(s, s.request());
+      s.answer(0, true);
+      assert.strictEqual(fs.readFileSync(s.file, 'utf-8'), formatted({ mcpServers: { ...ALPHA, ...LOCAL_TOOLS } }));
+      assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+      assert.strictEqual((await outcome).ok, true);
+    });
+  } finally { putBack(); }
+});
+
 test('after a write that failed during a turn, an agent writing the bytes it tried is still put back by the guard', async (t) => {
   assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
   writesItsOwnWay();
