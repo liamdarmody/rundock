@@ -54,8 +54,8 @@ const NEAR_MISSES = {
   'with details holding a closing bracket': CSV_LINE.replace('CSV file', 'CSV ] file'),
   'with details holding a line break': CSV_LINE.replace('CSV file, ', 'CSV file,\n'),
   'with details holding a carriage return': CSV_LINE.replace('CSV file, ', 'CSV file,\r'),
-  'with details holding a line separator': CSV_LINE.replace('CSV file, ', 'CSV file, '),
-  'with details holding a paragraph separator': CSV_LINE.replace('CSV file, ', 'CSV file, '),
+  'with details holding a line separator': CSV_LINE.replace('CSV file, ', 'CSV file,\u2028'),
+  'with details holding a paragraph separator': CSV_LINE.replace('CSV file, ', 'CSV file,\u2029'),
 };
 
 function leftAsText(text) {
