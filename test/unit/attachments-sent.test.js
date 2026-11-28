@@ -250,6 +250,24 @@ describe('buildTurn: what a session was sent bounds what it is sent again', () =
     assert.deepStrictEqual(full.sent, { files: [], bytes: 0, images: 0 });
   });
 
+  test('a session named __proto__ or constructor with no entry of its own is counted from nothing, and an own __proto__ entry is counted', () => {
+    const ws = withRecord();
+    const line = lineOf(ws, '1-diagram.png');
+    const item = { type: 'localImage', path: path.join(folderOf(ws), '1-diagram.png') };
+    for (const session of ['__proto__', 'constructor']) {
+      const claude = turnFor(ws, 'look', { session });
+      assert.strictEqual(blocksOf(claude).length, 1, `${session}: the Claude Code turn carries the block`);
+      assert.deepStrictEqual(claude.sent, { files: ['1-diagram.png'], bytes: 33, images: 1 }, session);
+      const codex = turnFor(ws, 'look', { runtime: 'codex', session, instance: 'server-a', resumed: false });
+      assert.deepStrictEqual([codex.content, codex.extraItems], [`look\n${line}`, [item]], session);
+    }
+    // An entry of its own under that name, as the record's JSON gives one.
+    fs.writeFileSync(recordOf(ws), `{"messages":${JSON.stringify(MESSAGES)},"sent":{"__proto__":{"files":["1-diagram.png"],"bytes":33,"images":1}}}`);
+    const own = turnFor(ws, 'look', { session: '__proto__' });
+    assert.deepStrictEqual([own.content, own.sent], [`look\n${line}`, { files: [], bytes: 0, images: 0 }], 'its own entry is counted');
+    assert.strictEqual(blocksOf(turnFor(ws, 'look', { session: 'constructor' })).length, 1, 'and constructor still has none');
+  });
+
   test('an inline text file is recorded nowhere', () => {
     const ws = withFiles({ '1-diagram.png': DIAGRAM, '2-notes.md': Buffer.from('ten bytes\n') });
     const answer = turnFor(ws, 'both', { runtime: 'codex', session: 'thread-1', instance: 'server-a', resumed: false });

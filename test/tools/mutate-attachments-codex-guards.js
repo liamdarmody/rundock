@@ -61,6 +61,11 @@ const SENT_STORE = { src: STORE_SRC, suite: SENT_UNIT };
 const RECEIVE = { src: path.join(ROOT, 'lib', 'attachments', 'receive.js'), suite: RECEIVE_UNIT };
 // The files checked once the record is written.
 const WRITE = { src: STORE_SRC, suite: RECEIVE_UNIT };
+// A Claude Code send the server writes itself, recorded once it is written.
+const LEGACY_SEND = { src: path.join(ROOT, 'server.js'), suite: CODEX_INTEGRATION };
+const HANDOVER_SEND = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: CODEX_INTEGRATION };
+// The app-server process a Codex thread is opened on.
+const OPENED = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: CODEX_INTEGRATION };
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. The integration
 // suite starts a server and runs for a while unbroken, and a broken guard can
@@ -91,6 +96,18 @@ const MUTATIONS = [
   [SEARCH, 'search reads a text file sent inline as if the person had typed it',
     "      .filter(b => role !== 'user' || !isInlineFileText(b.text))\n",
     ''],
+  [CODEX_TURN, 'an image past the limits Claude Code is sent images under is given its item',
+    "    if (blockable(one.described) && take(budget, file, one.described)) return { line, item: { type: 'localImage', path: path.join(folder, file) } };\n",
+    "    if (take(budget, file, one.described)) return { line, item: { type: 'localImage', path: path.join(folder, file) } };\n"],
+  [CODEX_TURN, 'a missing or changed PDF is given the PDF form',
+    "    if (one.state !== 'present') return { line };\n    const { type } = one.described;\n    if (type === 'pdf') return { line: pdfForm(file) };\n",
+    "    const { type } = one.described || {};\n    if (type === 'pdf') return { line: pdfForm(file) };\n    if (one.state !== 'present') return { line };\n"],
+  [CODEX_TURN, 'a missing or changed text file of the entry is given the read-first suffix',
+    "    if (one.state !== 'present') return { line };\n    const { type } = one.described;\n",
+    "    const { type } = one.described || {};\n    if (one.state !== 'present' && !TEXT_TYPES.has(type)) return { line };\n"],
+  [CODEX_TURN, 'a text file sent inline is read as Latin-1',
+    "const inlineItem = (file, bytes) => ({ type: 'text', text: `[Text of attached file ${file}]\\n${bytes.toString('utf8')}` });\n",
+    "const inlineItem = (file, bytes) => ({ type: 'text', text: `[Text of attached file ${file}]\\n${bytes.toString('latin1')}` });\n"],
 
   // ===== WHAT A SESSION WAS SENT BOUNDS WHAT IT IS SENT AGAIN =====
   [SENT_TURN, 'a file the session was sent is sent to it again',
@@ -105,6 +122,17 @@ const MUTATIONS = [
   [SENT_TURN, 'what a process was sent before init is never recorded under the session it reports',
     '  const held = sends.held || NOTHING_HELD;\n',
     '  const held = NOTHING_HELD;\n'],
+  [SENT_STORE, 'a session named after an inherited property is read as that property',
+    "  if (typeof session !== 'string' || !isObject(sent) || !Object.prototype.hasOwnProperty.call(sent, session)) return NO_ENTRY;\n",
+    "  if (typeof session !== 'string' || !isObject(sent) || sent[session] === undefined) return NO_ENTRY;\n"],
+  [only(LEGACY_SEND, 'a legacy start records what it was sent under the ID its process reports'),
+    'a legacy start records nothing it was sent',
+    '          claudeSent(WORKSPACE, convoId, entry, legacyTurn);\n',
+    ''],
+  [only(HANDOVER_SEND, 'a brief handed to a delegate records what it was sent under the ID the delegate\'s process reports'),
+    'a brief handed to a delegate records nothing it was sent',
+    '  recordWritten(delegateEntry, convoId);\n',
+    ''],
 
   // ===== A THREAD RESUMED ON ANOTHER APP-SERVER PROCESS IS SENT ITS IMAGES AGAIN =====
   [only(RESUME, 'a thread whose entry names another app-server instance is sent its PNG again'),
@@ -115,6 +143,34 @@ const MUTATIONS = [
     'a thread resumed on the same app-server process counts as cold',
     '  return resumed === true && entry.instance !== instance;\n',
     '  return true;\n'],
+  [only(RESUME, 'a thread whose entry names no instance is sent its PNG again'),
+    'a thread whose entry names no instance counts as warm',
+    '  return resumed === true && entry.instance !== instance;\n',
+    "  return resumed === true && typeof entry.instance === 'string' && entry.instance !== instance;\n"],
+  [only(RESUME, 'a thread with no entry is sent nothing again when it is resumed'),
+    'a cold resume sends again every image the conversation lists, not those its thread was sent',
+    '    for (const file of [...new Set(recorded.files)].reverse()) {\n',
+    '    for (const file of [...new Set(store.readRecord(workspace, conversationId).messages.flatMap((m) => m.files.map((f) => f.file)))].reverse()) {\n'],
+  [CODEX_TURN, 'a cold resume counts what the thread was sent on the process before',
+    '  const budget = budgetFor(cold ? NOTHING_HELD : recorded, unrecorded);\n',
+    '  const budget = budgetFor(recorded, unrecorded);\n'],
+  [CODEX_TURN, 'a cold resume sends again an image changed since the thread was sent it',
+    "      if (one.state !== 'present' || !Object.prototype.hasOwnProperty.call(IMAGE_TYPES, one.described.type)) continue;\n",
+    "      if (one.state === 'missing' || !Object.prototype.hasOwnProperty.call(IMAGE_TYPES, one.described.type)) continue;\n"],
+  [CODEX_TURN, 'a cold resume sends again an image the turn already carries',
+    '      if (budget.taken.files.includes(file)) continue;\n',
+    ''],
+  [CODEX_TURN, 'a cold resume sends again an image past the budget',
+    '      if (!blockable(one.described) || !take(budget, file, one.described)) continue;\n',
+    '      if (!blockable(one.described)) continue;\n'],
+  [only(OPENED, 'a Codex turn is recorded with its app-server process\'s instance, the same on a follow-up to that process and a new one once it respawns'),
+    'an opened thread is answered with no instance',
+    '  return { server, threadId, resumed, instance: _codexInstances.get(server) };\n',
+    '  return { server, threadId, resumed };\n'],
+  [only(OPENED, 'a Codex turn is recorded with its app-server process\'s instance, the same on a follow-up to that process and a new one once it respawns'),
+    'a respawned app-server keeps the instance of its first process',
+    '      _codexInstances.set(server, crypto.randomUUID());\n',
+    '      if (!_codexInstances.has(server)) _codexInstances.set(server, crypto.randomUUID());\n'],
 
   // ===== THE SERVER REFUSES WHAT CODEX CAN'T BE SENT, AND CHECKS WHAT IT WROTE =====
   [RECEIVE, 'images for a Codex agent are counted without what its session was already sent',

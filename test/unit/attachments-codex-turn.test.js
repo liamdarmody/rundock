@@ -303,6 +303,124 @@ describe('buildTurn: a Codex turn names an image only with the image', () => {
     assert.deepStrictEqual(answer.extraItems, []);
     assert.deepStrictEqual(answer.sent, { files: [], bytes: 0, images: 0 });
   });
+
+  test('an image over 3,500,000 bytes or 8000 pixels on a side is given the not-shown form and no item, and one at those limits its item', () => {
+    const ws = workspace();
+    const d = recorded(ws, [{ id: 'entry-1', files: [
+      { file: '1-heavy.png', bytes: pngBytes(640, 480, 3500001), ...IMAGE },
+      { file: '2-wide.png', bytes: pngBytes(8001, 10), width: 8001, height: 10 },
+      { file: '3-tall.png', bytes: pngBytes(10, 8001), width: 10, height: 8001 },
+      { file: '4-edge.png', bytes: pngBytes(8000, 8000, 3500000), width: 8000, height: 8000 },
+    ] }]);
+    const text = ['1-heavy.png', '2-wide.png', '3-tall.png', '4-edge.png'].map((f) => lineOf(d[f])).join('\n');
+    const { content, extraItems, sent } = codexTurn(ws, text, { entryId: 'entry-1' });
+    assert.strictEqual(content, [NOT_SHOWN('1-heavy.png'), NOT_SHOWN('2-wide.png'), NOT_SHOWN('3-tall.png'), lineOf(d['4-edge.png'])].join('\n'));
+    assert.deepStrictEqual(extraItems, [imageItem(ws, '4-edge.png')]);
+    assert.deepStrictEqual(sent, { files: ['4-edge.png'], bytes: 3500000, images: 1 });
+  });
+
+  test('a missing PDF and a changed PDF are given the not-available and changed forms, never the PDF form', () => {
+    const ws = workspace();
+    const d = recorded(ws, [{ id: 'entry-1', files: [
+      { file: '1-report.pdf', bytes: pdfBytes() },
+      { file: '2-summary.pdf', bytes: pdfBytes() },
+    ] }]);
+    fs.rmSync(pathOf(ws, '1-report.pdf'));
+    fs.appendFileSync(pathOf(ws, '2-summary.pdf'), 'x');
+    const text = `the reports\n${lineOf(d['1-report.pdf'])}\n${lineOf(d['2-summary.pdf'])}`;
+    const { content, extraItems } = codexTurn(ws, text, { entryId: 'entry-1' });
+    assert.strictEqual(content, `the reports\n${GONE('1-report.pdf')}\n${CHANGED('2-summary.pdf')}`);
+    assert.deepStrictEqual(extraItems, []);
+    assert.ok(!content.includes('.rundock/attachments/'), content);
+  });
+
+  test("a missing text file and a changed one of the entry are given the not-available and changed forms, with no inline text and no read-first suffix", () => {
+    const ws = workspace();
+    const d = recorded(ws, [{ id: 'entry-1', files: [
+      { file: '1-notes.md', bytes: NOTES },
+      { file: '2-data.csv', bytes: Buffer.from('a,b\n1,2\n') },
+    ] }]);
+    fs.rmSync(pathOf(ws, '1-notes.md'));
+    fs.appendFileSync(pathOf(ws, '2-data.csv'), 'x');
+    const forms = `${GONE('1-notes.md')}\n${CHANGED('2-data.csv')}`;
+    const named = codexTurn(ws, `the notes\n${lineOf(d['1-notes.md'])}\n${lineOf(d['2-data.csv'])}`, { entryId: 'entry-1' });
+    assert.strictEqual(named.content, `the notes\n${forms}`);
+    assert.deepStrictEqual(named.extraItems, []);
+    const appended = codexTurn(ws, 'the notes', { entryId: 'entry-1' });
+    assert.strictEqual(appended.content, `the notes\n${forms}`, 'appended in the same forms');
+    assert.deepStrictEqual(appended.extraItems, []);
+  });
+
+  test('a text file of the entry written in UTF-8 is inlined as it was written', () => {
+    const ws = workspace();
+    // "cafe, naive, Tokyo" as written, with its two accents and in kanji.
+    const written = `caf${String.fromCharCode(0xe9)}, na${String.fromCharCode(0xef)}ve, ${String.fromCharCode(0x6771, 0x4eac)}\n`;
+    assert.strictEqual(Buffer.byteLength(written, 'utf8'), written.length + 6, 'two bytes for each accent and three for each kanji');
+    const d = recorded(ws, [{ id: 'entry-1', files: [{ file: '1-notes.md', bytes: Buffer.from(written, 'utf8') }] }]);
+    const text = lineOf(d['1-notes.md']);
+    const { content, extraItems } = codexTurn(ws, text, { entryId: 'entry-1' });
+    assert.strictEqual(content, text);
+    assert.deepStrictEqual(extraItems, [inlineItem('1-notes.md', written)]);
+  });
+});
+
+describe('buildTurn: a thread resumed on another app-server process', () => {
+  const COLD = { resumed: true, instance: 'server-b' };
+
+  test("a line for an image the thread was sent is given its line and its item again, and on the same process the shown-earlier form", () => {
+    const ws = workspace();
+    const d = fourFiles(ws, { sent: { [THREAD]: { files: ['1-diagram.png'], bytes: 33, images: 1, instance: 'server-a' } } });
+    const text = `again ${lineOf(d['1-diagram.png'])}`;
+    const cold = codexTurn(ws, text, COLD);
+    assert.strictEqual(cold.content, text, 'its line, not the shown-earlier form');
+    assert.deepStrictEqual(cold.extraItems, [imageItem(ws, '1-diagram.png')]);
+    assert.deepStrictEqual(cold.sent, { files: ['1-diagram.png'], bytes: 33, images: 1 });
+    const warm = codexTurn(ws, text, { resumed: true, instance: 'server-a' });
+    assert.strictEqual(warm.content, `again ${SHOWN('1-diagram.png')}`);
+    assert.deepStrictEqual(warm.extraItems, []);
+  });
+
+  test('an image changed since the thread was sent it is not sent again, and nothing names it', () => {
+    const ws = workspace();
+    const d = recorded(ws, [{ id: 'entry-1', files: [
+      { file: '1-diagram.png', bytes: pngBytes(), ...IMAGE },
+      { file: '2-photo.png', bytes: pngBytes(320, 240), width: 320, height: 240 },
+    ] }], { sent: { [THREAD]: { files: ['1-diagram.png', '2-photo.png'], bytes: 66, images: 2, instance: 'server-a' } } });
+    fs.appendFileSync(pathOf(ws, '2-photo.png'), 'x');
+    const { content, extraItems, sent } = codexTurn(ws, 'and now?', COLD);
+    assert.strictEqual(content, `and now?\n${lineOf(d['1-diagram.png'])}`);
+    assert.deepStrictEqual(extraItems, [imageItem(ws, '1-diagram.png')]);
+    assert.deepStrictEqual(sent, { files: ['1-diagram.png'], bytes: 33, images: 1 });
+    assert.ok(!content.includes('2-photo.png'), content);
+  });
+
+  test('an image the turn already carries is not sent again', () => {
+    const ws = workspace();
+    const d = recorded(ws, [
+      { id: 'entry-1', files: [{ file: '1-diagram.png', bytes: pngBytes(), ...IMAGE }] },
+      { id: 'entry-2', files: [{ file: '2-chart.png', bytes: pngBytes(800, 600), width: 800, height: 600 }] },
+    ], { sent: { [THREAD]: { files: ['1-diagram.png', '2-chart.png'], bytes: 66, images: 2, instance: 'server-a' } } });
+    const { content, extraItems, sent } = codexTurn(ws, 'compare', { entryId: 'entry-2', ...COLD });
+    assert.strictEqual(content, `compare\n${lineOf(d['2-chart.png'])}\n${lineOf(d['1-diagram.png'])}`, "the entry's chart once, then the diagram sent again");
+    assert.deepStrictEqual(extraItems, [imageItem(ws, '2-chart.png'), imageItem(ws, '1-diagram.png')]);
+    assert.deepStrictEqual(sent, { files: ['2-chart.png', '1-diagram.png'], bytes: 66, images: 2 });
+  });
+
+  test('only the images that fit the budget are sent again, and one after an image that does not fit is still tried', () => {
+    const ws = workspace();
+    const d = recorded(ws, [
+      { id: 'entry-1', files: [
+        { file: '1-small.png', bytes: pngBytes(640, 480, 1000000), ...IMAGE },
+        { file: '2-big.png', bytes: pngBytes(640, 480, 1000001), ...IMAGE },
+      ] },
+      { id: 'entry-2', files: ['3-a.png', '4-b.png', '5-c.png'].map((file) => ({ file, bytes: pngBytes(640, 480, 3000000), ...IMAGE })) },
+    ], { sent: { [THREAD]: { files: ['1-small.png', '2-big.png'], bytes: 2000001, images: 2, instance: 'server-a' } } });
+    const { content, extraItems, sent } = codexTurn(ws, 'compare', { entryId: 'entry-2', ...COLD });
+    const own = ['3-a.png', '4-b.png', '5-c.png'];
+    assert.strictEqual(content, ['compare', ...own.map((f) => lineOf(d[f])), lineOf(d['1-small.png'])].join('\n'), 'the 1,000,001-byte image left out, the 1,000,000-byte one sent again');
+    assert.deepStrictEqual(extraItems, [...own, '1-small.png'].map((f) => imageItem(ws, f)));
+    assert.deepStrictEqual(sent, { files: [...own, '1-small.png'], bytes: 10000000, images: 4 });
+  });
 });
 
 describe('search: a Codex turn is found by what the person typed', () => {
