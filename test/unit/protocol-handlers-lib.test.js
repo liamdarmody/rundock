@@ -181,14 +181,14 @@ describe('dispatch table', () => {
       assert.match(w.sent[0].message, /does not hold an object/);
       assert.strictEqual(fs.readFileSync(file, 'utf-8'), '["not", "an", "object"]', 'untouched');
 
-      // A file whose mcpServers is the wrong shape is repaired rather than
-      // refused: the servers map is what this owns, and an object with no
-      // usable map is an empty one.
+      // A file whose mcpServers is the wrong shape is refused too: emptying it
+      // to make room would drop whatever it was meant to hold, unseen.
       fs.writeFileSync(file, '{"mcpServers": "nonsense"}');
       w = captureWs();
       table.save_connector(ctx, w, { name: 'x', content: '{"url":"https://x"}', conversationId: 'convo-file' });
-      assert.strictEqual(w.sent[0].type, 'connector_saved');
-      assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf-8')).mcpServers, { x: { url: 'https://x' } });
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: 'The connector file\'s "mcpServers" does not hold an object, so nothing was changed.' }]);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), '{"mcpServers": "nonsense"}', 'untouched');
+      fs.writeFileSync(file, JSON.stringify({ mcpServers: { x: { url: 'https://x' } } }));
 
       // A file that exists and cannot be READ. Same precedent as the other
       // unreadable-file tests in this suite.
@@ -205,7 +205,7 @@ describe('dispatch table', () => {
       w = captureWs();
       table.save_connector(ctx, w, { name: 'z', content: '{"url":"https://x"}', conversationId: 'convo-file' });
       fs.chmodSync(file, 0o644);
-      assert.match(w.sent[0].message, /could not be written/);
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: 'Rundock couldn\'t save the connector file, so nothing was changed.' }]);
 
       // Deleting refuses the same ways, and refuses a name that is a path.
       w = captureWs();
