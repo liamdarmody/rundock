@@ -1554,3 +1554,28 @@ test('an agent\'s change whose conversation id is 64 characters is asked about t
     assert.strictEqual((await outcome).ok, true);
   });
 });
+
+// THE ID THE PAGE ITSELF MAKES. A new conversation's id is made by the page
+// (createConversation in public/views/conversations.js), and the window sends
+// it with every connector change. The page's script cannot be required, so the
+// function is lifted out of its source and run as written: an id it makes in
+// a form the check refuses would refuse every agent's connector change.
+test('the id the page makes for a new conversation is one an agent\'s connector change is taken with', () => {
+  assert.strictEqual(typeof cw.askingConversation, 'function');
+  const src = fs.readFileSync(path.join(ROOT, 'public', 'views', 'conversations.js'), 'utf8');
+  const at = src.indexOf('function createConversation(');
+  assert.ok(at > -1, 'the page still makes a new conversation in createConversation');
+  const fnSrc = src.slice(at, src.indexOf('\n}', at) + 2);
+  const page = {
+    agents: [{ id: 'helper', displayName: 'Helper' }],
+    conversations: [],
+    activeConversation: null,
+    renderPendingPermissionCards() {}, renderConvoList() {}, setupChat() {}, switchNav() {}, showView() {},
+    document: { getElementById: () => ({}) },
+  };
+  // eslint-disable-next-line no-new-func
+  const createConversation = new Function('page', `with (page) { ${fnSrc}; return createConversation; }`)(page);
+  const ids = [createConversation('helper').id, createConversation('helper', 'A named conversation').id];
+  assert.deepStrictEqual(page.conversations.map((c) => c.id), ids.slice().reverse(), 'the ids are the ones the page keeps');
+  for (const id of ids) assert.strictEqual(cw.askingConversation(id), id, `the page's id ${JSON.stringify(id)} passes the form check`);
+});
