@@ -1,19 +1,23 @@
 'use strict';
 // The composer's attached files: the + button, its picker, a chip per file in
-// a row above the field, and one inline message under it.
+// a row above the field, and the messages under it.
 //
 // The page here is the shipped composer markup cut out of public/index.html,
 // styled by the shipped public/styles/views/chat.css, running the shipped
-// public/views/composer.js and public/attachment-wording.js with the cut
+// public/views/composer.js, public/attachment-wording.js and
+// public/attachment-sniff.js with the cut
 // setupChat and switchComposerTo from public/views/conversations.js. Files
 // reach the picker as the browser hands them over: on the input's `files`,
-// with a `change` event its inline handler takes. A renamed or missing piece
+// with a `change` event its inline handler takes, holding bytes the detector
+// takes as the type their name says (test/helpers/attachment-bytes.js). A
+// pick is awaited until its add has settled. A renamed or missing piece
 // fails here by name.
 const { test, describe, before } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
+const { typed, png } = require('../helpers/attachment-bytes.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
@@ -28,6 +32,7 @@ function between(src, from, to, label, through = false) {
 }
 
 const COMPOSER = path.join(ROOT, 'public', 'views', 'composer.js');
+const SNIFF = path.join(ROOT, 'public', 'attachment-sniff.js');
 const INDEX = read('public', 'index.html');
 const CONVERSATIONS = read('public', 'views', 'conversations.js');
 const APP = read('public', 'app.js');
@@ -49,12 +54,17 @@ function page({ agentId = 'lead', activeAgentId = null } = {}) {
     <div id="chat-convo-status"><span class="state-label"></span><span class="action-label"></span></div>
     ${markup}</div></body></html>`, { runScripts: 'dangerously' });
   const w = dom.window;
-  w.eval(`var agents = ${JSON.stringify(AGENTS)}; var activeConversation = null; var convoState = {};
+  w.eval(`var agents = ${JSON.stringify(AGENTS)}; var conversations = []; var activeConversation = null; var convoState = {};
     function getConvoState(id) { return convoState[id] || (convoState[id] = { isProcessing: false, activeAgentId: null }); }
     function sendMessage() {} function cancelProcessing() {}
     function makeConvo(id, agentId) { return { id, agentId, agent: agents.find(a => a.id === agentId), title: id, status: 'active', messages: [] }; }`);
   w.eval(read('public', 'attachment-wording.js'));
+  if (fs.existsSync(SNIFF)) w.eval(fs.readFileSync(SNIFF, 'utf-8'));
   w.eval(fs.readFileSync(COMPOSER, 'utf-8'));
+  // The last pick's add, for `pick` to wait on.
+  let lastAdd = Promise.resolve();
+  const pickFiles = w.pickFiles;
+  w.pickFiles = (input) => (lastAdd = Promise.resolve(pickFiles(input)));
   w.eval(`${between(CONVERSATIONS, 'const composerDrafts = new Map();', '\nfunction renameConversation(', 'setupChat')}
     window.__open = (c) => { activeConversation = c; setupChat(c); };`);
   const header = between(APP, "'update-chat-header': (convoId, ef) => {", '\n  },', 'the delegation header effect', true);
@@ -75,14 +85,16 @@ function page({ agentId = 'lead', activeAgentId = null } = {}) {
     const title = box.querySelector('strong');
     return title ? { title: title.textContent, text: title.nextElementSibling.textContent } : null;
   };
-  return { w, doc, $, open, chips, removeButtons, notice, file: (name, size = 10) => new w.File([new Uint8Array(size)], name) };
+  const file = (name, size = 10) => new w.File([typed(name, size)], name);
+  return { w, doc, $, open, chips, removeButtons, notice, file, added: () => lastAdd };
 }
 
 // The browser handing the picker its chosen files.
-function pick(p, files) {
+async function pick(p, files) {
   const input = p.$('attach-input');
   Object.defineProperty(input, 'files', { value: files, configurable: true });
   input.dispatchEvent(new p.w.Event('change'));
+  await p.added();
 }
 
 const chipText = (chip) => ({
@@ -92,12 +104,16 @@ const chipText = (chip) => ({
 const follows = (p, a, b) => !!(a.compareDocumentPosition(b) & p.w.Node.DOCUMENT_POSITION_FOLLOWING);
 
 describe('the + button and its picker', () => {
-  test('the + button sits before the field, is labelled Attach files and opens a hidden picker of several files', () => {
+  test('the + button sits before the field, is labelled Attach files with a tooltip and opens a hidden picker of several files', () => {
     const p = page();
     const button = p.$('attach-btn');
     const input = p.$('attach-input');
     assert.strictEqual(button.getAttribute('aria-label'), 'Attach files');
-    assert.strictEqual(button.getAttribute('title'), 'Attach files');
+    assert.strictEqual(button.getAttribute('title'), null, 'the tooltip names it, in place of a title');
+    const tip = button.querySelector('.att-tip');
+    assert.ok(tip, 'the button holds its tooltip');
+    assert.strictEqual(tip.getAttribute('role'), 'tooltip');
+    assert.strictEqual(tip.textContent, 'Attach files');
     assert.ok(follows(p, button, p.$('msg-input')), 'the button comes before the field');
     assert.strictEqual(input.type, 'file');
     assert.ok(input.multiple && input.hidden);
@@ -114,9 +130,9 @@ describe('the + button and its picker', () => {
 });
 
 describe('a chip per picked file', () => {
-  test('each file picked becomes a chip with its name, then its type and size', () => {
+  test('each file picked becomes a chip with its name, then its type and size', async () => {
     const p = page();
-    pick(p, [p.file('Screen Shot.png', 820000), p.file('notes.md', 1200), p.file('photo.JPEG', 2000)]);
+    await pick(p, [p.file('Screen Shot.png', 820000), p.file('notes.md', 1200), p.file('photo.JPEG', 2000)]);
     assert.deepStrictEqual(p.chips().map(chipText), [
       { name: 'Screen Shot.png', meta: 'PNG · 820 KB' },
       { name: 'notes.md', meta: 'Markdown · 2 KB' },
@@ -125,19 +141,22 @@ describe('a chip per picked file', () => {
     assert.ok(follows(p, p.$('composer-chips'), p.$('msg-input')), 'the chip row sits above the field');
   });
 
-  test('a chip\'s type is read from its extension with case ignored, and any other extension is File', () => {
-    const types = (names) => {
+  test('a chip\'s type is read from the file\'s bytes, whatever its name says', async () => {
+    const types = async (files) => {
       const p = page();
-      pick(p, names.map((n) => p.file(n)));
+      await pick(p, files(p));
       return p.chips().map((c) => chipText(c).meta.split(' · ')[0]);
     };
-    assert.deepStrictEqual(types(['a.jpg', 'b.GIF', 'c.webp', 'd.PDF', 'e.txt']), ['JPEG', 'GIF', 'WebP', 'PDF', 'Text']);
-    assert.deepStrictEqual(types(['f.csv', 'g.zip', 'noextension']), ['CSV', 'File', 'File']);
+    assert.deepStrictEqual(await types((p) => [new p.w.File([Uint8Array.from(png(2, 2))], 'photo.jpeg'), p.file('notes.MD')]),
+      ['PNG', 'Markdown']);
+    assert.deepStrictEqual(await types((p) => ['a.jpg', 'b.GIF', 'c.webp', 'd.PDF', 'e.txt'].map((n) => p.file(n))),
+      ['JPEG', 'GIF', 'WebP', 'PDF', 'Text']);
+    assert.deepStrictEqual(await types((p) => [p.file('f.csv')]), ['CSV']);
   });
 
-  test('each chip has a remove button named for its file, with a target of at least 24 by 24 px', () => {
+  test('each chip has a remove button named for its file, with a target of at least 24 by 24 px', async () => {
     const p = page();
-    pick(p, [p.file('Screen Shot.png')]);
+    await pick(p, [p.file('Screen Shot.png')]);
     const [remove] = p.removeButtons();
     assert.strictEqual(remove.getAttribute('aria-label'), 'Remove Screen Shot.png');
     assert.strictEqual(remove.type, 'button');
@@ -146,41 +165,46 @@ describe('a chip per picked file', () => {
     assert.notStrictEqual(style.display, 'none');
   });
 
-  test('the chip row is at most two chip lines high and scrolls beyond that', () => {
+  test('the chip row is at most two chip lines high and scrolls beyond that', async () => {
     const p = page();
-    pick(p, [p.file('a.txt')]);
+    await pick(p, [p.file('a.txt')]);
     const row = p.w.getComputedStyle(p.$('composer-chips'));
-    const chipHeight = parseFloat(p.w.getComputedStyle(p.chips()[0]).height);
+    const chip = parseFloat(p.w.getComputedStyle(p.chips()[0]).height);
+    const gap = parseFloat(row.rowGap);
+    const above = parseFloat(row.paddingTop);
+    const most = parseFloat(row.maxHeight);
     assert.strictEqual(row.overflowY, 'auto');
-    assert.strictEqual(parseFloat(row.maxHeight), 2 * chipHeight + parseFloat(row.rowGap));
+    assert.strictEqual(chip, 52);
+    assert.ok(2 * chip + gap + above <= most && most <= 128, `two chip lines fit in ${most}px`);
+    assert.ok(3 * chip + 2 * gap + above > most, `three chip lines do not fit in ${most}px`);
   });
 });
 
 describe('removing a chip moves focus to what is left', () => {
-  const three = () => {
+  const three = async () => {
     const p = page();
-    pick(p, [p.file('a.txt'), p.file('b.txt'), p.file('c.txt')]);
+    await pick(p, [p.file('a.txt'), p.file('b.txt'), p.file('c.txt')]);
     return p;
   };
   const names = (p) => p.chips().map((c) => chipText(c).name);
 
-  test('after a removal, focus moves to the next chip\'s remove button', () => {
-    const p = three();
+  test('after a removal, focus moves to the next chip\'s remove button', async () => {
+    const p = await three();
     p.removeButtons()[1].click();
     assert.deepStrictEqual(names(p), ['a.txt', 'c.txt']);
     assert.strictEqual(p.doc.activeElement.getAttribute('aria-label'), 'Remove c.txt');
   });
 
-  test('after removing the last chip, focus moves to the previous chip\'s remove button', () => {
-    const p = three();
+  test('after removing the last chip, focus moves to the previous chip\'s remove button', async () => {
+    const p = await three();
     p.removeButtons()[2].click();
     assert.deepStrictEqual(names(p), ['a.txt', 'b.txt']);
     assert.strictEqual(p.doc.activeElement.getAttribute('aria-label'), 'Remove b.txt');
   });
 
-  test('after removing the only chip, focus moves to the field', () => {
+  test('after removing the only chip, focus moves to the field', async () => {
     const p = page();
-    pick(p, [p.file('a.txt')]);
+    await pick(p, [p.file('a.txt')]);
     p.removeButtons()[0].click();
     assert.strictEqual(p.chips().length, 0);
     assert.strictEqual(p.doc.activeElement, p.$('msg-input'));
@@ -188,57 +212,57 @@ describe('removing a chip moves focus to what is left', () => {
 });
 
 describe('a pick over the limits is refused whole', () => {
-  test('4 chips and a pick of 2 adds nothing and says it would make 6 files', () => {
+  test('4 chips and a pick of 2 adds nothing and says it would make 6 files', async () => {
     const p = page();
-    pick(p, ['a', 'b', 'c', 'd'].map((n) => p.file(`${n}.txt`)));
-    pick(p, [p.file('e.txt'), p.file('f.txt')]);
+    await pick(p, ['a', 'b', 'c', 'd'].map((n) => p.file(`${n}.txt`)));
+    await pick(p, [p.file('e.txt'), p.file('f.txt')]);
     assert.deepStrictEqual(p.chips().map((c) => chipText(c).name), ['a.txt', 'b.txt', 'c.txt', 'd.txt']);
     assert.deepStrictEqual(p.notice(), { title: '2 files not added', text: 'That would make 6 files; the limit is 5 per message' });
   });
 
-  test('5 chips and one more file names that file in the title', () => {
+  test('5 chips and one more file names that file in the title', async () => {
     const p = page();
-    pick(p, ['a', 'b', 'c', 'd', 'e'].map((n) => p.file(`${n}.png`)));
-    pick(p, [p.file('a.txt')]);
+    await pick(p, ['a', 'b', 'c', 'd', 'e'].map((n) => p.file(`${n}.png`)));
+    await pick(p, [p.file('a.txt')]);
     assert.strictEqual(p.chips().length, 5);
     assert.deepStrictEqual(p.notice(), { title: 'a.txt', text: 'That would make 6 files; the limit is 5 per message' });
   });
 
-  test('chips of 19,000,000 bytes and a pick of two files of 600,000 adds nothing and says it would make 21 MB', () => {
+  test('chips of 19,000,000 bytes and a pick of two files of 600,000 adds nothing and says it would make 21 MB', async () => {
     const p = page();
-    pick(p, [p.file('a.pdf', 9500000), p.file('b.pdf', 9500000)]);
-    pick(p, [p.file('e.pdf', 600000), p.file('f.pdf', 600000)]);
+    await pick(p, [p.file('a.pdf', 9500000), p.file('b.pdf', 9500000)]);
+    await pick(p, [p.file('e.pdf', 600000), p.file('f.pdf', 600000)]);
     assert.strictEqual(p.chips().length, 2);
     assert.deepStrictEqual(p.notice(), { title: '2 files not added', text: 'That would make 21 MB; the limit is 20 MB per message' });
   });
 
-  test('exactly 5 files are added', () => {
+  test('exactly 5 files are added', async () => {
     const p = page();
-    pick(p, ['a', 'b', 'c'].map((n) => p.file(`${n}.txt`)));
-    pick(p, [p.file('d.txt'), p.file('e.txt')]);
+    await pick(p, ['a', 'b', 'c'].map((n) => p.file(`${n}.txt`)));
+    await pick(p, [p.file('d.txt'), p.file('e.txt')]);
     assert.strictEqual(p.chips().length, 5);
     assert.strictEqual(p.notice(), null);
   });
 
-  test('exactly 20,000,000 bytes are added', () => {
+  test('exactly 20,000,000 bytes are added', async () => {
     const p = page();
-    pick(p, [p.file('a.pdf', 10000000)]);
-    pick(p, [p.file('b.pdf', 10000000)]);
+    await pick(p, [p.file('a.pdf', 10000000)]);
+    await pick(p, [p.file('b.pdf', 10000000)]);
     assert.strictEqual(p.chips().length, 2);
     assert.strictEqual(p.notice(), null);
   });
 });
 
 describe('the inline message', () => {
-  const refused = () => {
+  const refused = async () => {
     const p = page();
-    pick(p, ['a', 'b', 'c', 'd', 'e'].map((n) => p.file(`${n}.txt`)));
+    await pick(p, ['a', 'b', 'c', 'd', 'e'].map((n) => p.file(`${n}.txt`)));
     return p;
   };
 
-  test('it sits under the field, announced politely, as a bold title above the text with a Dismiss button', () => {
-    const p = refused();
-    pick(p, [p.file('f.txt')]);
+  test('it sits under the field, announced politely, as a bold title above the text with a Dismiss button', async () => {
+    const p = await refused();
+    await pick(p, [p.file('f.txt')]);
     const box = p.$('composer-notice');
     assert.strictEqual(box.getAttribute('aria-live'), 'polite');
     assert.ok(follows(p, p.$('msg-input'), box), 'the message sits under the field');
@@ -247,64 +271,64 @@ describe('the inline message', () => {
     assert.strictEqual(box.querySelectorAll('button[aria-label="Dismiss"]').length, 1);
   });
 
-  test('it never takes focus', () => {
-    const p = refused();
+  test('it never takes focus', async () => {
+    const p = await refused();
     p.$('msg-input').focus();
-    pick(p, [p.file('f.txt')]);
+    await pick(p, [p.file('f.txt')]);
     assert.ok(p.notice());
     assert.strictEqual(p.doc.activeElement, p.$('msg-input'));
   });
 
-  test('one shows at a time, a new one replacing the last', () => {
-    const p = refused();
-    pick(p, [p.file('f.txt')]);
-    pick(p, [p.file('g.txt'), p.file('h.txt')]);
-    assert.strictEqual(p.$('composer-notice').querySelectorAll('strong').length, 1);
-    assert.strictEqual(p.notice().title, '2 files not added');
+  test('two refused picks show two messages, oldest first', async () => {
+    const p = await refused();
+    await pick(p, [p.file('f.txt')]);
+    await pick(p, [p.file('g.txt'), p.file('h.txt')]);
+    assert.deepStrictEqual([...p.$('composer-notice').querySelectorAll('strong')].map((t) => t.textContent),
+      ['f.txt', '2 files not added']);
   });
 
-  test('it goes on Dismiss', () => {
-    const p = refused();
-    pick(p, [p.file('f.txt')]);
+  test('it goes on Dismiss', async () => {
+    const p = await refused();
+    await pick(p, [p.file('f.txt')]);
     p.$('composer-notice').querySelector('button[aria-label="Dismiss"]').click();
     assert.strictEqual(p.notice(), null);
     assert.strictEqual(p.chips().length, 5, 'the chips stay');
   });
 
-  test('it goes on the next pick that adds a chip', () => {
+  test('it goes on the next pick that adds a chip', async () => {
     const p = page();
-    pick(p, ['a', 'b', 'c', 'd'].map((n) => p.file(`${n}.txt`)));
-    pick(p, [p.file('e.txt'), p.file('f.txt')]);
+    await pick(p, ['a', 'b', 'c', 'd'].map((n) => p.file(`${n}.txt`)));
+    await pick(p, [p.file('e.txt'), p.file('f.txt')]);
     assert.ok(p.notice());
-    pick(p, [p.file('e.txt')]);
+    await pick(p, [p.file('e.txt')]);
     assert.strictEqual(p.notice(), null);
     assert.strictEqual(p.chips().length, 5);
   });
 
-  test('it goes on a remove', () => {
-    const p = refused();
-    pick(p, [p.file('f.txt')]);
+  test('it goes on a remove', async () => {
+    const p = await refused();
+    await pick(p, [p.file('f.txt')]);
     p.removeButtons()[0].click();
     assert.strictEqual(p.notice(), null);
   });
 });
 
 describe('each conversation keeps its own chips', () => {
-  test('chips added in one conversation are gone in another and come back on returning', () => {
+  test('chips added in one conversation are gone in another and come back on returning', async () => {
     const p = page();
-    pick(p, [p.file('a.txt'), p.file('b.txt')]);
+    await pick(p, [p.file('a.txt'), p.file('b.txt')]);
     p.open('c2');
     assert.strictEqual(p.chips().length, 0);
-    pick(p, [p.file('c.txt')]);
+    await pick(p, [p.file('c.txt')]);
     p.open('c1');
     assert.deepStrictEqual(p.chips().map((c) => chipText(c).name), ['a.txt', 'b.txt']);
     p.open('c2');
     assert.deepStrictEqual(p.chips().map((c) => chipText(c).name), ['c.txt']);
   });
 
-  test('a conversation\'s inline message stays with it', () => {
+  test('a conversation\'s inline message stays with it', async () => {
     const p = page();
-    pick(p, ['a', 'b', 'c', 'd', 'e', 'f'].map((n) => p.file(`${n}.txt`)));
+    await pick(p, ['a', 'b', 'c', 'd', 'e', 'f'].map((n) => p.file(`${n}.txt`)));
     p.open('c2');
     assert.strictEqual(p.notice(), null);
     p.open('c1');
@@ -346,11 +370,11 @@ describe('the + button and an agent on Codex', () => {
 });
 
 describe('a file name is text', () => {
-  test('a file named as markup creates no element and shows as its name', () => {
+  test('a file named as markup creates no element and shows as its name', async () => {
     const p = page();
     const name = '<img src=x onerror=alert(1)>.png';
-    pick(p, ['a', 'b', 'c', 'd'].map((n) => p.file(`${n}.txt`)).concat(p.file(name)));
-    pick(p, [p.file(name)]);
+    await pick(p, ['a', 'b', 'c', 'd'].map((n) => p.file(`${n}.txt`)).concat(p.file(name)));
+    await pick(p, [p.file(name)]);
     assert.strictEqual(p.doc.querySelectorAll('img').length, 0);
     assert.strictEqual(chipText(p.chips()[4]).name, name);
     assert.strictEqual(p.removeButtons()[4].getAttribute('aria-label'), `Remove ${name}`);

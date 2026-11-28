@@ -193,7 +193,7 @@ function finishProcessing(convoId) {
     const tt=document.getElementById('thinking-indicator'); if(tt) tt.remove();
     document.getElementById('chat-status').textContent=''; document.getElementById('chat-status').classList.remove('working');
     const sendBtn = document.getElementById('send-btn');
-    sendBtn.disabled = false;
+    sendBtn.disabled = sendHeld(convoId);
     sendBtn.classList.remove('cancel');
     sendBtn.onclick = sendMessage;
     sendBtn.title = 'Send message';

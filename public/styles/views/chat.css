@@ -225,7 +225,7 @@ body.light .permission-fields { background: var(--elevated); }
 .repeat-hint-x:hover { color: var(--text-1); background: var(--elevated); }
 .repeat-hint.caution { border-color: color-mix(in srgb, var(--attention) 40%, transparent); }
 .chat-input { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-.chat-input textarea { flex: 1; padding: 12px 16px; background: var(--card); border-radius: var(--radius-lg); font-size: var(--body); border: 1px solid transparent; transition: all var(--duration-slow) ease; resize: none; overflow-y: auto; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
+.chat-input textarea { flex: 1; min-width: 0; padding: 11px 8px 11px 4px; background: transparent; font-size: var(--body); border: none; transition: all var(--duration-slow) ease; resize: none; overflow-y: auto; min-height: 44px; max-height: 200px; line-height: 1.5; font-family: inherit; color: var(--text-1); outline: none; }
 .chat-input textarea::-webkit-scrollbar { display: none; }
 /* Text inputs take the accent on their BORDER, not a 2px offset outline.
    This is not a softer exception invented for the composer: it is the rule
@@ -240,10 +240,10 @@ body.light .permission-fields { background: var(--elevated); }
    error state. The caret is already an unambiguous focus indicator here; the
    border only has to confirm it.
    The design system needs the matching clause; see the drift card. */
-/* Focus shifts weight, not hue: a 1px neutral ring where the border was
-   transparent. The caret is the primary signal; the ring only confirms it. */
-.chat-input textarea:focus { box-shadow: 0 0 0 1px var(--text-2); }
-.chat-input textarea::placeholder { color: var(--text-2); }
+/* Focus shifts weight, not hue: a 1px neutral ring around the field of text, chips
+   and the + button. The caret is the primary signal; the ring only confirms it. */
+.composer-field:focus-within { box-shadow: 0 0 0 1px var(--text-2); }
+.chat-input textarea::placeholder { color: var(--text-2-strong); }
 .chat-input textarea:disabled { opacity: 0.5; }
 .send-btn { width: 42px; height: 42px; background: var(--card); color: var(--text-2); border-radius: var(--radius-circle); display: flex; align-items: center; justify-content: center; transition: all 0.25s ease; flex-shrink: 0; }
 /* Filled, so --accent-action with white: see tokens.css. */
@@ -309,29 +309,60 @@ body.light .stopped-detail { background: var(--elevated); }
 .msg-agent.summarised-continuation:has(.streaming-text:empty):not(:has(.activity-summary)) { display: none; }
 
 
-/* The composer's attached files. The chip row and the inline message each
-   take a whole line of the composer, the row above the field and the message
-   under it, so the composer wraps; an empty one takes no room. The row is at
-   most two chip lines high (two 44px chips and the 6px between) and scrolls
-   beyond that. */
-.chat-input { flex-wrap: wrap; row-gap: 0; }
-.composer-chips { flex-basis: 100%; display: flex; flex-wrap: wrap; row-gap: 6px; column-gap: 6px; max-height: 94px; overflow-y: auto; }
-.composer-chips:not(:empty) { margin-bottom: 8px; }
-.composer-chip { height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; max-width: 240px; padding: 4px 4px 4px 12px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); }
-.composer-chip-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
-.composer-chip-name { font-size: var(--caption); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.composer-chip-meta { font-size: var(--label); color: var(--text-2); white-space: nowrap; }
-.composer-chip-remove, .composer-notice-dismiss { width: 24px; height: 24px; flex-shrink: 0; border-radius: var(--radius-sm); color: var(--text-2); display: flex; align-items: center; justify-content: center; font-size: 16px; line-height: 1; }
-.composer-chip-remove:hover, .composer-notice-dismiss:hover { color: var(--text-1); background: var(--elevated); }
-.composer-chip-remove:focus-visible, .composer-notice-dismiss:focus-visible, .attach-btn:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
-.attach-btn { width: 42px; height: 42px; flex-shrink: 0; background: var(--card); color: var(--text-2); border-radius: var(--radius-circle); display: flex; align-items: center; justify-content: center; }
-.attach-btn:hover { color: var(--text-1); }
+/* The composer: a field holding the chip row above a row of the + button,
+   the text and an empty slot, with Send beside it and the messages under
+   both. The chip row is at most two chip lines high (two 52px chips, the 8px
+   between and the 8px above) and scrolls beyond that; an empty one takes no
+   room. */
+.chat-input { align-items: flex-end; flex-wrap: wrap; row-gap: 8px; }
+.composer-field { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--card); border-radius: var(--radius-lg); outline: 1px solid transparent; outline-offset: -1px; }
+.composer-row { display: flex; align-items: flex-end; }
+.chat-input > .send-btn { margin-bottom: 1px; }
+.mic-slot { width: 32px; height: 32px; margin: 6px 6px 6px 0; flex-shrink: 0; }
+.composer-chips { display: flex; flex-wrap: wrap; row-gap: 8px; column-gap: 8px; padding: 8px 8px 0; max-height: 128px; overflow-y: auto; }
+.composer-chips:empty { display: none; }
+.composer-chip { position: relative; height: 52px; display: flex; align-items: center; gap: 8px; min-width: 0; max-width: min(232px, 100%); padding: 5px 34px 5px 5px; background: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.composer-chip.warn { border-color: var(--attention-text); }
+.composer-chip-tile { width: 40px; height: 40px; flex-shrink: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--card); border-radius: var(--radius-md); color: var(--text-2-strong); }
+.composer-chip-tile svg { width: 18px; height: 18px; }
+.composer-chip-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; line-height: 1.35; }
+.composer-chip-name { font-size: var(--caption); font-weight: 500; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-chip-meta { font-size: var(--label); color: var(--text-2-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-chip-remove { position: absolute; top: 50%; right: 5px; transform: translateY(-50%); width: 24px; height: 24px; border-radius: var(--radius-sm); color: var(--text-2-strong); display: flex; align-items: center; justify-content: center; }
+.composer-chip-remove svg { width: 14px; height: 14px; }
+.composer-chip-remove:hover { color: var(--text-1); background: var(--card); }
+.composer-chip-remove:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 0; }
+.attach-btn { position: relative; width: 32px; height: 32px; margin: 6px 0 6px 6px; flex-shrink: 0; border-radius: var(--radius-md); color: var(--text-2-strong); display: flex; align-items: center; justify-content: center; }
+.attach-btn:hover { color: var(--text-1); background: var(--elevated); }
+.attach-btn:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 1px; }
 .attach-btn[hidden] { display: none; }
 .attach-btn svg { width: 18px; height: 18px; }
-.composer-notice { flex-basis: 100%; }
-.composer-notice:not(:empty) { margin-top: 8px; display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--attention) 40%, transparent); border-radius: var(--radius-lg); font-size: var(--caption); color: var(--text-2); line-height: 1.55; }
+/* The + button's name, shown above it on hover and on keyboard focus. */
+.att-tip { display: none; position: absolute; bottom: calc(100% + 6px); left: 0; padding: 4px 8px; font-size: var(--label); font-weight: 400; color: var(--text-1); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); white-space: nowrap; pointer-events: none; z-index: 5; }
+.attach-btn:hover .att-tip, .attach-btn:focus-visible .att-tip { display: block; }
+/* A drag of files over the conversation: a dashed ring inside the field's
+   edge, and a cover over what it holds saying what a drop takes. Both are
+   drawn inside the field, so it keeps its size. */
+.composer-field.drop { outline: 1.5px dashed var(--accent-control); outline-offset: -1.5px; box-shadow: none; }
+.composer-drop-cover { position: absolute; inset: 0; z-index: 1; background: var(--card); border-radius: inherit; display: flex; align-items: center; justify-content: center; }
+.composer-drop-msg { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; text-align: center; }
+.composer-drop-msg svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--accent-text); }
+.composer-drop-msg b { font-size: var(--body); font-weight: 600; color: var(--text-1); }
+.composer-drop-msg span { font-size: var(--caption); color: var(--text-2-strong); }
+/* The messages, a column under the field, oldest first. Each is an icon, a
+   title above the reason and a Dismiss button. */
+.composer-notice { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; margin-right: 54px; min-width: 0; }
+.composer-notice:empty { display: none; }
+.composer-notice-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 6px 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); font-size: var(--caption); line-height: 1.5; color: var(--text-2-strong); }
+.composer-notice-icon { display: flex; flex-shrink: 0; margin-top: 2px; color: var(--attention-text); }
+.composer-notice-icon svg { width: 14px; height: 14px; }
 .composer-notice-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .composer-notice-title { display: block; color: var(--text-1); font-weight: 600; }
+.composer-notice-text { color: var(--text-2-strong); }
+.composer-notice-dismiss { width: 22px; height: 22px; flex-shrink: 0; margin-top: -1px; border-radius: var(--radius-sm); color: var(--text-2-strong); display: flex; align-items: center; justify-content: center; }
+.composer-notice-dismiss svg { width: 14px; height: 14px; }
+.composer-notice-dismiss:hover { color: var(--text-1); background: var(--card); }
+.composer-notice-dismiss:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 0; }
 
 /* A sent message's files, above its text: a thumbnail for an image, a chip
    for a document, and a dashed chip for a file that isn't there as it was

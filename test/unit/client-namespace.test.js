@@ -416,6 +416,7 @@ const MANIFEST = {
     "renderOrgChart",
   ],
   "composer.js": [
+    "addFiles",
     "attachmentsConnectionLost",
     "composersWorkspaceChanged",
     "fileSendAnswered",
@@ -423,6 +424,7 @@ const MANIFEST = {
     "openAttachPicker",
     "pickFiles",
     "refreshAttachButton",
+    "sendHeld",
     "sendReady",
     "sendWaiting",
     "sendWithFiles",

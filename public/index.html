@@ -60,6 +60,7 @@
 <script src="/routine-editor-model.js"></script>
 <script src="/readable-error.js"></script>
 <script src="/attachment-wording.js"></script>
+<script src="/attachment-sniff.js"></script>
 <script src="/attachment-lines.js"></script>
 <script src="/sent-files.js"></script>
 <script src="/workspace-create-notice.js"></script>
@@ -396,10 +397,15 @@
       </div>
       <div class="messages" id="messages"></div>
       <div class="chat-input">
-        <div class="composer-chips" id="composer-chips"></div>
-        <button class="attach-btn" id="attach-btn" type="button" onclick="openAttachPicker()" aria-label="Attach files" title="Attach files"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-        <input type="file" id="attach-input" multiple accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.txt,.md,.csv" hidden onchange="pickFiles(this)">
-        <textarea id="msg-input" placeholder="Message..." rows="1"></textarea>
+        <div class="composer-field">
+          <div class="composer-chips" id="composer-chips"></div>
+          <div class="composer-row">
+            <button class="attach-btn" id="attach-btn" type="button" onclick="openAttachPicker()" aria-label="Attach files"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg><span class="att-tip" role="tooltip">Attach files</span></button>
+            <input type="file" id="attach-input" multiple accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.txt,.md,.csv" hidden onchange="pickFiles(this)">
+            <textarea id="msg-input" placeholder="Message..." rows="1"></textarea>
+            <div class="mic-slot" aria-hidden="true"></div>
+          </div>
+        </div>
         <button class="send-btn" id="send-btn" onclick="sendMessage()" title="Send message"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></button>
         <div class="composer-notice" id="composer-notice" aria-live="polite"></div>
       </div>

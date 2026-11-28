@@ -7,12 +7,16 @@
 // public/index.html and, cut out of public/app.js, the escaping helpers, the
 // message field's listeners, the line of the message handler that takes the
 // answer and the socket's close handler. The socket is a stand-in that writes
-// down every frame sent. A renamed or missing piece fails here by name.
+// down every frame sent. A picked file holds bytes the detector takes as the
+// type its name says (test/helpers/attachment-bytes.js), and a pick is
+// awaited until its add has settled. A renamed or missing piece fails here by
+// name.
 const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
+const { typed } = require('../helpers/attachment-bytes.js');
 // Loaded so that a tree without the wording fails on an assertion, never on
 // the require.
 const wording = (() => {
@@ -58,7 +62,7 @@ afterEach(() => { while (opened.length) opened.pop().w.close(); });
 function page({ listeners = true } = {}) {
   // The new files are checked before they are read, so a tree without them
   // fails here on an assertion.
-  for (const file of ['attachment-wording.js', 'views/composer.js']) {
+  for (const file of ['attachment-wording.js', 'attachment-sniff.js', 'views/composer.js']) {
     assert.ok(fs.existsSync(path.join(ROOT, 'public', file)), `the page no longer carries public/${file}`);
   }
   const markup = between(INDEX, '<div class="chat-input">', '\n      </div>', 'the composer markup');
@@ -77,11 +81,15 @@ function page({ listeners = true } = {}) {
     function renderPendingPermissionCards() {} function switchNav() {} function showView() {}
     var ws = { readyState: 1, sent: [], send(raw) { this.sent.push(raw); } };
     ${between(APP, 'function esc(t){', '\nfunction stripRundockMarkers', 'the escaping helpers')}`);
-  for (const lib of ['markers.js', 'chat-markup.js', 'conversation-state.js', 'conversation-list.js', 'attachment-wording.js']) w.eval(read('public', lib));
+  for (const lib of ['markers.js', 'chat-markup.js', 'conversation-state.js', 'conversation-list.js', 'attachment-wording.js', 'attachment-sniff.js']) w.eval(read('public', lib));
   for (const view of ['chat.js', 'conversations.js', 'composer.js']) w.eval(read('public', 'views', view));
   for (const fn of ['showComposerFor', 'pickFiles', 'sendWithFiles', 'fileSendAnswered', 'attachmentsConnectionLost']) {
     assert.strictEqual(typeof w[fn], 'function', `the composer has ${fn}`);
   }
+  // The last pick's add, for `pick` to wait on.
+  let lastAdd = Promise.resolve();
+  const pickFiles = w.pickFiles;
+  w.pickFiles = (input) => (lastAdd = Promise.resolve(pickFiles(input)));
   assert.ok(w.document.getElementById('attach-input'), 'the composer markup has the file picker');
   // Permission cards are not part of this page.
   w.renderPendingPermissionCards = () => {};
@@ -105,7 +113,8 @@ function page({ listeners = true } = {}) {
       const title = $('composer-notice').querySelector('strong');
       return title ? { title: title.textContent, text: title.nextElementSibling.textContent } : null;
     },
-    file: (name, bytes) => new w.File([new Uint8Array(bytes)], name),
+    file: (name, bytes) => new w.File([new Uint8Array(typed(name, bytes))], name),
+    added: () => lastAdd,
     raw: () => w.ws.sent.filter(raw => raw.startsWith('{"type":"chat"')),
     frames: () => w.ws.sent.map(raw => JSON.parse(raw)),
     chatFrames: () => p.frames().filter(f => f.type === 'chat'),
@@ -130,10 +139,11 @@ function page({ listeners = true } = {}) {
 }
 
 // The browser handing the picker its chosen files.
-function pick(p, ...files) {
+async function pick(p, ...files) {
   const input = p.$('attach-input');
   Object.defineProperty(input, 'files', { value: files, configurable: true });
   input.dispatchEvent(new p.w.Event('change'));
+  await p.added();
 }
 
 function type(p, text) {
@@ -157,8 +167,8 @@ const bytesOf = (n, seed) => Uint8Array.from({ length: n }, (_, i) => (i * 7 + s
 
 // A message with two files sent from c1, waiting for its answer.
 async function sendTwo(p, text = 'see these') {
-  pick(p, p.file('a.png', bytesOf(40, 1)));
-  pick(p, p.file('b.txt', bytesOf(12, 2)));
+  await pick(p, p.file('a.png', bytesOf(40, 1)));
+  await pick(p, p.file('b.txt', bytesOf(12, 2)));
   type(p, text);
   p.$('send-btn').click();
   await until(() => p.chatFrames().length === 1, 'the frame');
@@ -168,26 +178,26 @@ async function sendTwo(p, text = 'see these') {
 }
 
 describe('Send lights for text or files', () => {
-  test('typing and then clearing the field leaves Send lit while files are attached', () => {
+  test('typing and then clearing the field leaves Send lit while files are attached', async () => {
     const p = page();
-    pick(p, p.file('a.png', 10));
+    await pick(p, p.file('a.png', 10));
     type(p, 'x');
     type(p, '');
     assert.ok(p.$('send-btn').classList.contains('active'));
   });
 
-  test('a conversation opened again with files and no text shows Send lit', () => {
+  test('a conversation opened again with files and no text shows Send lit', async () => {
     const p = page();
-    pick(p, p.file('a.png', 10));
+    await pick(p, p.file('a.png', 10));
     p.open('c2');
     assert.ok(!p.$('send-btn').classList.contains('active'), 'c2 has nothing to send');
     p.open('c1');
     assert.ok(p.$('send-btn').classList.contains('active'));
   });
 
-  test('when the agent finishes, Send is lit for files and no text drafted meanwhile', () => {
+  test('when the agent finishes, Send is lit for files and no text drafted meanwhile', async () => {
     const p = page();
-    pick(p, p.file('a.png', 10));
+    await pick(p, p.file('a.png', 10));
     p.w.startProcessing('c1');
     assert.ok(!p.$('send-btn').classList.contains('active'), 'Send is the Stop button while the agent works');
     p.w.finishProcessing('c1');
@@ -208,7 +218,7 @@ describe('Send lights for text or files', () => {
 describe('a message of files alone', () => {
   test('Send with files and no text sends them', async () => {
     const p = page();
-    pick(p, p.file('a.png', bytesOf(5, 3)));
+    await pick(p, p.file('a.png', bytesOf(5, 3)));
     p.$('send-btn').click();
     await until(() => p.chatFrames().length === 1, 'the frame');
     const frame = p.chatFrames()[0];
@@ -219,7 +229,7 @@ describe('a message of files alone', () => {
   test('a new conversation whose first message is files alone takes the first file\'s name as its title, as text', async () => {
     const p = page();
     const name = '<img src=x onerror=alert(1)>.png';
-    pick(p, p.file(name, 10), p.file('b.txt', 10));
+    await pick(p, p.file(name, 10), p.file('b.txt', 10));
     p.$('send-btn').click();
     assert.strictEqual(p.$('chat-title-input').value, name);
     assert.deepStrictEqual([...p.doc.querySelectorAll('#convo-list .convo-title')].map(t => t.textContent), [name]);
@@ -233,8 +243,8 @@ describe('the frame a message with files puts on the socket', () => {
     p.w.conversations[0].sessionId = 'session-1';
     const first = bytesOf(70000, 5);
     const second = bytesOf(7, 9);
-    pick(p, p.file('first.png', first));
-    pick(p, p.file('second.csv', second));
+    await pick(p, p.file('first.png', first));
+    await pick(p, p.file('second.csv', second));
     type(p, 'see these');
     p.$('send-btn').click();
     await until(() => p.chatFrames().length === 1, 'the frame');
@@ -266,7 +276,7 @@ describe('the frame a message with files puts on the socket', () => {
 
   test('a chip removed before sending is left out of the frame', async () => {
     const p = page();
-    pick(p, p.file('a.png', 3), p.file('b.png', 3), p.file('c.png', 3));
+    await pick(p, p.file('a.png', 3), p.file('b.png', 3), p.file('c.png', 3));
     p.doc.querySelectorAll('#composer-chips .composer-chip-remove')[1].click();
     p.$('send-btn').click();
     await until(() => p.chatFrames().length === 1, 'the frame');
@@ -282,7 +292,7 @@ describe('the page stops a frame over the limit', () => {
 
   test('a frame of exactly 28,000,000 bytes is sent', async () => {
     const p = page();
-    pick(p, hello(p));
+    await pick(p, hello(p));
     type(p, 'a'.repeat(LIMIT - base));
     p.$('send-btn').click();
     await until(() => p.raw().length === 1, 'the frame');
@@ -291,7 +301,7 @@ describe('the page stops a frame over the limit', () => {
 
   test('a frame of 28,000,001 bytes is not sent, and the message says why with the text and files kept', async () => {
     const p = page();
-    pick(p, hello(p));
+    await pick(p, hello(p));
     const text = 'a'.repeat(LIMIT - base + 1);
     type(p, text);
     p.$('send-btn').click();
@@ -306,7 +316,7 @@ describe('the page stops a frame over the limit', () => {
 
   test('a frame over 28,000,000 bytes but under 28,000,000 characters, of multibyte text, is not sent', async () => {
     const p = page();
-    pick(p, hello(p));
+    await pick(p, hello(p));
     const text = 'é'.repeat(14000000);
     assert.ok(frameOf(text).length < LIMIT && Buffer.byteLength(frameOf(text)) > LIMIT);
     type(p, text);
@@ -356,7 +366,7 @@ describe('from the send until the answer', () => {
   test('files cannot be added or removed', async () => {
     const p = page();
     await sendTwo(p);
-    pick(p, p.file('c.png', 3));
+    await pick(p, p.file('c.png', 3));
     p.doc.querySelector('#composer-chips .composer-chip-remove').click();
     assert.deepStrictEqual(p.chips(), ['a.png', 'b.txt']);
   });
@@ -394,7 +404,7 @@ describe('when the message is stored', () => {
     await sendTwo(p);
     p.open('c2');
     type(p, 'a draft in c2');
-    pick(p, p.file('c2.png', 3));
+    await pick(p, p.file('c2.png', 3));
     p.answer({ type: 'chat_stored', conversationId: 'c1', entry: 'one', content: STORED });
     assert.deepStrictEqual(p.bubbles(), []);
     assert.strictEqual(p.$('msg-input').value, 'a draft in c2');
@@ -526,7 +536,7 @@ function switchWorkspace(p) {
 describe('the composer when the workspace changes', () => {
   test('files picked and not sent are gone from the same conversation ID in the next workspace, and a send there carries none', async () => {
     const p = page();
-    pick(p, p.file('a.txt', bytesOf(12, 3)));
+    await pick(p, p.file('a.txt', bytesOf(12, 3)));
     assert.deepStrictEqual(p.chips(), ['a.txt']);
     switchWorkspace(p);
     assert.deepStrictEqual(p.chips(), []);
@@ -538,7 +548,7 @@ describe('the composer when the workspace changes', () => {
 
   test('a send whose files are still being read when the workspace changes puts nothing on the socket', async () => {
     const p = page();
-    pick(p, p.file('a.txt', bytesOf(12, 3)));
+    await pick(p, p.file('a.txt', bytesOf(12, 3)));
     type(p, 'see this');
     p.$('send-btn').click();
     switchWorkspace(p);
@@ -560,9 +570,9 @@ describe('the composer when the workspace changes', () => {
 
   test('the next workspace\'s composer takes its own files and sends only those', async () => {
     const p = page();
-    pick(p, p.file('a.txt', bytesOf(12, 3)));
+    await pick(p, p.file('a.txt', bytesOf(12, 3)));
     switchWorkspace(p);
-    pick(p, p.file('b.txt', bytesOf(5, 4)));
+    await pick(p, p.file('b.txt', bytesOf(5, 4)));
     assert.deepStrictEqual(p.chips(), ['b.txt']);
     type(p, 'see this');
     p.$('send-btn').click();
@@ -596,7 +606,7 @@ describe('when the socket closes first', () => {
   test('a socket already closed at Send keeps everything and says the message was not confirmed', async () => {
     const p = page();
     p.w.ws.readyState = 3;
-    pick(p, p.file('a.png', 3));
+    await pick(p, p.file('a.png', 3));
     type(p, 'see these');
     p.$('send-btn').click();
     await until(() => p.notice(), 'the inline message');
@@ -654,9 +664,9 @@ describe('a text-only send', () => {
   // The inline message goes on a send, a send of text alone included.
   const sixFiles = (p) => Array.from({ length: 6 }, (_, i) => p.file(`f${i}.txt`, bytesOf(3, i)));
 
-  test('takes away the inline message a refused pick left, and it stays gone', () => {
+  test('takes away the inline message a refused pick left, and it stays gone', async () => {
     const p = page();
-    pick(p, ...sixFiles(p));
+    await pick(p, ...sixFiles(p));
     assert.ok(p.notice(), 'the refused pick says why');
     assert.deepStrictEqual(p.chips(), []);
     type(p, 'hello');
@@ -669,10 +679,10 @@ describe('a text-only send', () => {
     assert.strictEqual(p.notice(), null, 'the conversation shown again has no inline message');
   });
 
-  test('takes away only the sending conversation\'s inline message', () => {
+  test('takes away only the sending conversation\'s inline message', async () => {
     const p = page();
     p.open('c2');
-    pick(p, ...sixFiles(p));
+    await pick(p, ...sixFiles(p));
     const c2Notice = p.notice();
     assert.ok(c2Notice, 'c2\'s refused pick says why');
     p.open('c1');
