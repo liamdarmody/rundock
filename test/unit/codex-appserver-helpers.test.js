@@ -1107,4 +1107,38 @@ describe("Codex helpers beside a Claude Code lead's", () => {
     await settle();
     assert.deepStrictEqual(answers[5], { allow: false }, 'Wren\'s close refuses it, as before');
   });
+
+  test("a Claude Code lead's call held while Fern's five Codex helpers run starts as soon as one of them ends, answered allow, shown running and recorded started, with five running", async () => {
+    const c = convo();
+    const events = [];
+    const quiet = signals.recordEvent;
+    signals.recordEvent = (name, fields) => events.push([name, fields]);
+    const wren = proc('wren');
+    try {
+      fernFive(c);
+      const call = { id: 'toolu_beside_held', input: { subagent_type: 'Explore', description: 'Look', prompt: 'Look.' } };
+      helpers.placeMessage(c, { agentId: 'wren', process: wren }, [call]);
+      let answer = null;
+      helpers.answerAgentRequest({ convoId: c, askedBy: 'wren', data: { tool_use_id: call.id, tool_input: call.input } }).then((a) => { answer = a; });
+      await settle();
+      const wrens = () => helpers.helperRows(c).filter((r) => r.kind === 'builtin').map((r) => [r.toolUseId, r.state]);
+      assert.strictEqual(answer, null, 'held at the cap: not answered');
+      assert.deepStrictEqual(wrens(), [[call.id, 'waiting']], 'shown waiting');
+      assert.strictEqual(helpers.runningCount(c), 5, 'Fern\'s five run');
+      const rates = rec(c, 'rates');
+      rates.state = 'completed';
+      codexHelper()(c, 'fern', rates, 'end', ctl);
+      await settle();
+      assert.deepStrictEqual(answer, { allow: true }, 'a slot freed: the held call is answered allow');
+      assert.deepStrictEqual(wrens(), [[call.id, 'running']], 'shown running');
+      assert.deepStrictEqual(events, [
+        ['helper_cap', { conv: c, agent: 'wren', d: { outcome: 'held' } }],
+        ['helper_cap', { conv: c, agent: 'wren', d: { outcome: 'started' } }],
+      ], 'held, then started');
+      assert.strictEqual(helpers.runningCount(c), 5, 'four of Fern\'s and Wren\'s one: five run');
+    } finally {
+      signals.recordEvent = quiet;
+      helpers.leadClosed(c, wren);
+    }
+  });
 });
