@@ -2810,7 +2810,7 @@ function getRuntimeStatus() {
 const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'startup_file', 'put_back', 'helpers'];
 // `agentId` is the agent whose process asked, when the caller knows it from
 // the process it holds; the card is then labelled with it, live and on replay.
-function requestServerPermission({ convoId, agentId, toolName, toolInput, onDecision, grading }) {
+function requestServerPermission({ convoId, agentId, toolName, toolInput, onDecision, grading, helper }) {
   // An id nothing can guess: an answer is matched to its card by this alone.
   const requestId = 'perm-' + require('crypto').randomBytes(16).toString('hex');
   pendingPermissionRequests.set(requestId, {
@@ -2838,6 +2838,8 @@ function requestServerPermission({ convoId, agentId, toolName, toolInput, onDeci
     },
     _conversationId: convoId,
     ...(agentId ? { _agent: agentId } : {}),
+    // A Codex helper's request names the helper, as a Claude helper's does.
+    ...(helper ? { _helper: { agentId: helper.threadId, agentType: helper.name } } : {}),
   }));
   console.log(`[Permission] Server request: ${toolName} convo=${convoId} requestId=${requestId}`);
 }
