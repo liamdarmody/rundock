@@ -169,8 +169,8 @@ const MUTATIONS = [
     'sessionIds: (msg.conversation.sessionIds || []).filter(s => !(s && isExpired(s.sessionId))),',
     'sessionIds: msg.conversation.sessionIds || [],'],
   [CLEANUP, 'a conversation with a transcript is kept when no session id is left',
-    'c.sessionId || hasTranscript(c) || new Date',
-    'c.sessionId || new Date'],
+    'c.sessionId || hasTranscript(c) || allowedHelpers(c) || new Date',
+    'c.sessionId || allowedHelpers(c) || new Date'],
 
   // ===== THE TURN STARTS AGAIN, FRESH, ONCE =====
   [only(ENGINE, 'once recovered, a session that reappears is not taken back: a stale save cannot restore it'), 'a refused delegation starts again fresh',
@@ -375,8 +375,8 @@ const MUTATIONS = [
     '      const kept = convo.sessionIds.filter(s => !(s && s.sessionId === sessionId));',
     '      const kept = convo.sessionIds.slice();'],
   [CLIENT, 'the conversation\'s own agent resumes the primary',
-    '    if (agentId === convo.agentId) return convo.sessionId || null;\n',
-    ''],
+    '    if (agentId === convo.agentId) {',
+    '    if (false) {'],
   [CLIENT, 'another agent never resumes a session that is not its own',
     '    return chain.length ? null : (convo.sessionId || null);',
     '    return convo.sessionId || null;'],
