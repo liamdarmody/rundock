@@ -30,6 +30,7 @@
 const fs = require('fs');
 const path = require('path');
 const { extractLinks } = require('./lib/links.js');
+const { userTurnText } = require('./lib/attachments/turn-text.js');
 
 // Bumping this rebuilds every index on next open. That is the whole migration
 // story: rebuild, never migrate.
@@ -318,8 +319,11 @@ function extractIndexableMessage(obj) {
   if (obj.isCompactSummary === true) return null;
   if (obj.type === 'user' && obj.isSynthetic === true) return null;
   const tsMs = obj.timestamp ? Date.parse(obj.timestamp) || null : null;
-  if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
-    const text = obj.message.content.trim();
+  // A turn sent with images or PDFs is indexed by its text, never the
+  // blocks' data (lib/attachments/turn-text.js).
+  const userText = obj.type === 'user' && obj.message ? userTurnText(obj.message.content) : null;
+  if (userText !== null) {
+    const text = userText.trim();
     if (!text) return null;
     return { role: 'user', text, tsMs };
   }

@@ -62,8 +62,29 @@ describe('what was written into a process before it started its session', () => 
     const entry = {};
     noteUnstartedWrite(entry, 'first');
     noteUnstartedWrite(entry, 'second');
-    assert.deepStrictEqual(takeUnstartedWrites(entry), ['first', 'second']);
+    assert.deepStrictEqual(takeUnstartedWrites(entry), [
+      { content: 'first', attachmentEntry: null },
+      { content: 'second', attachmentEntry: null },
+    ], 'each write, with the record entry it was sent with: none here');
     assert.deepStrictEqual(takeUnstartedWrites(entry), [], 'nothing is handed over twice');
+  });
+
+  test('a write sent with its message\'s record entry is handed over with it', () => {
+    const entry = {};
+    noteUnstartedWrite(entry, 'what is in this screenshot?', '1764000000001');
+    assert.deepStrictEqual(takeUnstartedWrites(entry), [{ content: 'what is in this screenshot?', attachmentEntry: '1764000000001' }]);
+  });
+
+  test('each write keeps its own record entry, and one sent with none is handed over with none', () => {
+    const entry = {};
+    noteUnstartedWrite(entry, 'first, with a screenshot', '1764000000001');
+    noteUnstartedWrite(entry, 'then words alone');
+    noteUnstartedWrite(entry, 'then a report', '1764000000002');
+    assert.deepStrictEqual(takeUnstartedWrites(entry), [
+      { content: 'first, with a screenshot', attachmentEntry: '1764000000001' },
+      { content: 'then words alone', attachmentEntry: null },
+      { content: 'then a report', attachmentEntry: '1764000000002' },
+    ]);
   });
 
   test('is kept past an init, and not once a turn has answered, when no refusal can follow', () => {

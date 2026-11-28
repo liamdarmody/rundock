@@ -35,7 +35,10 @@ function toolId() { return `toolu_fixture_${++seq}`; }
 
 function line(obj) { return JSON.stringify(obj) + '\n'; }
 
-/** The user's prompt: message.content is a STRING here, not an array. */
+/**
+ * The user's prompt: message.content is the string sent, or, for a turn sent
+ * with images or PDFs, the array of text and file blocks it was sent as.
+ */
 function prompt(sessionId, text, at = '2026-08-22T19:15:00.000Z') {
   return line({
     type: 'user', sessionId, timestamp: at, cwd: '/w', userType: 'external',
