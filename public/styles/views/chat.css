@@ -240,9 +240,8 @@ body.light .permission-fields { background: var(--elevated); }
    error state. The caret is already an unambiguous focus indicator here; the
    border only has to confirm it.
    The design system needs the matching clause; see the drift card. */
-/* Focus shifts weight, not hue: a 1px neutral ring around the field that
-   holds the text, the chips and the + button. The caret is the primary
-   signal; the ring only confirms it. */
+/* Focus shifts weight, not hue: a 1px neutral ring around the field of text, chips
+   and the + button. The caret is the primary signal; the ring only confirms it. */
 .composer-field:focus-within { box-shadow: 0 0 0 1px var(--text-2); }
 .chat-input textarea::placeholder { color: var(--text-2-strong); }
 .chat-input textarea:disabled { opacity: 0.5; }
