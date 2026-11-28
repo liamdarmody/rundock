@@ -394,12 +394,12 @@ describe('how the test user is started', () => {
 
   test('through sudo by full path, with env -i and exactly five variables before the command', () => {
     spawned.length = 0;
-    const user = { name: TEST_USER, home: '/fake/users/u', tmp: '/fake/users/u/scratch', bin: '/fake/node/bin' };
+    const user = { name: TEST_USER, home: '/fake/users/u', tmp: '/fake/users/u-scratch', bin: '/fake/node/bin' };
     asTestUser(user, ['cmd', 'arg'], '/fake/users/u/checkout');
     assert.strictEqual(SUDO, '/usr/bin/sudo');
     assert.strictEqual(TEST_USER, 'prove-test');
     assert.deepStrictEqual(spawned.map((s) => [s.cmd, s.args]), [[SUDO, ['-n', '-u', TEST_USER, '--', '/usr/bin/env', '-i',
-      'PATH=/fake/node/bin:/usr/bin:/bin', 'HOME=/fake/users/u', 'TMPDIR=/fake/users/u/scratch', 'LANG=C.UTF-8', 'CI=true', 'cmd', 'arg']]]);
+      'PATH=/fake/node/bin:/usr/bin:/bin', 'HOME=/fake/users/u', 'TMPDIR=/fake/users/u-scratch', 'LANG=C.UTF-8', 'CI=true', 'cmd', 'arg']]]);
     assert.deepStrictEqual(spawned[0].opts, { argv0: 'sudo', cwd: '/fake/users/u/checkout', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: LIMIT });
     assert.strictEqual(LIMIT, 64 * 1024 * 1024);
   });
@@ -414,6 +414,40 @@ describe('how the test user is started', () => {
         if (starts) assert.ok(step.run.includes("spawnSync(SUDO, ['-n', '-u', user.name, '--', '/usr/bin/env', '-i',"), `${job.id}, "${step.name}"`);
       }
     }
+  });
+});
+
+describe("the test user's temporary directory, from its entry in the user database", () => {
+  // The real testUser() text with the user database answering with `home`:
+  // the temporary directory the workflow would give a test user with that home.
+  const tmpFor = (home) => {
+    const fakeRequire = (name) => {
+      if (name === 'node:child_process') return { spawnSync: () => ({ status: 0, stdout: Buffer.from(`prove-test:x:1001:1001::${home}:/usr/sbin/nologin\n`) }) };
+      return name === 'node:path' ? path.posix : require(name);
+    };
+    return loadPiece('test user', ['testUser'], fakeRequire).testUser().tmp;
+  };
+  // Where useradd puts the home, the same with a trailing slash, and elsewhere.
+  const HOMES = ['/home/prove-test', '/srv/prove-test/', '/srv/users/prove-test'];
+  const trimmed = (p) => (p.length > 1 ? p.replace(/\/+$/, '') : p);
+  const within = (a, b) => trimmed(a) === trimmed(b) || trimmed(a).startsWith(`${trimmed(b)}/`);
+
+  test('is not the home and is not inside it', () => {
+    for (const home of HOMES) assert.ok(!within(tmpFor(home), home), `${home} gives ${tmpFor(home)}`);
+  });
+
+  test('does not hold the home', () => {
+    for (const home of HOMES) assert.ok(!within(home, tmpFor(home)), `${home} gives ${tmpFor(home)}`);
+  });
+
+  test('is not under /tmp, /var/tmp or /dev/shm', () => {
+    for (const home of HOMES) {
+      for (const shared of ['/tmp', '/var/tmp', '/dev/shm']) assert.ok(!within(tmpFor(home), shared), `${home} gives ${tmpFor(home)}`);
+    }
+  });
+
+  test('is beside the home, named after it, and taken from the entry alone', () => {
+    assert.deepStrictEqual(HOMES.map(tmpFor), ['/home/prove-test-scratch', '/srv/prove-test-scratch', '/srv/users/prove-test-scratch']);
   });
 });
 

@@ -374,7 +374,7 @@ describe('Rundock\'s own writes of these files stand', () => {
     try {
       glue.guardCodexTurn(entry, 'convo-1');
       scaffold.scaffoldWorkspace(ws, { platform: 'darwin' });
-      team.handleSaveConnector(ctx, { send: (m) => sent.push(JSON.parse(m)) }, { name: 'docs', content: '{"url":"https://example.com/mcp"}' });
+      team.handleSaveConnector(ctx, { send: (m) => sent.push(JSON.parse(m)) }, { name: 'docs', content: '{"url":"https://example.com/mcp"}', conversationId: 'convo-1' });
       glue.releaseCodexTurnGuard(entry);
     } finally { scaffold.wireScaffoldDeps(prevDeps); d.restore(); }
     assert.match(read('.rundock/permission-hook.sh'), /permission-hook\.js/, 'the launcher Rundock wrote is still there');

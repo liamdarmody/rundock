@@ -24,6 +24,7 @@ const h = require('../helpers/harness.js');
 const { agentFile } = require('../helpers/workspace.js');
 const fx = require('../fixtures/stream-json.js');
 const { approvalNotice } = require('../../scripts/refusal-notice.js');
+const { ask } = require('../helpers/permission-route.js');
 
 const HELPERS = path.join(__dirname, '..', '..', 'lib', 'delegation', 'helpers.js');
 // Asserted before the module is used, so a missing module fails a test on an
@@ -41,7 +42,13 @@ function names(...wanted) {
 }
 
 let client;
+// The idle probe server.js registers with the auth module as it loads, kept
+// here as it is handed over: the auth module holds it out of reach.
+let idleProbe = null;
 before(async () => {
+  const auth = require('../../lib/auth/index.js');
+  const setIdleProbe = auth.setIdleProbe;
+  auth.setIdleProbe = (fn) => { idleProbe = fn; setIdleProbe(fn); };
   await h.boot({
     agents: {
       sky: agentFile({ name: 'sky', displayName: 'Sky', role: 'Orchestrator', type: 'orchestrator', order: 0 }),
@@ -52,6 +59,7 @@ before(async () => {
         agentFile({ name: n, displayName: n[0].toUpperCase() + n.slice(1), order: 4 + i, reportsTo: 'example-research-lead' })])),
     },
   });
+  auth.setIdleProbe = setIdleProbe;
   h.internal.stopScheduler();
   if (fs.existsSync(HELPERS)) {
     require(HELPERS).HELPERS_ENABLED = true;
@@ -216,6 +224,25 @@ test('with helpers on, a line with no parent_tool_use_id is the lead\'s', async 
   assert.strictEqual(wrenReplies(convo).trim(), 'the lead with no parent');
 });
 
+// Also sends a helper's line, so on a server without the filter it fails on
+// the reply it checks.
+test('with helpers on, a line and a result whose parent_tool_use_id is empty are the lead\'s', async () => {
+  helpers();
+  const convo = open('parent-empty');
+  const empty = (envelope) => ({ raw: { ...envelope, parent_tool_use_id: '' } });
+  h.writeScenario([{ match: { agent: 'wren', promptIncludes: 'empty parent words' }, resultExtra: { parent_tool_use_id: '' }, turn: [
+    { raw: fx.helperLine(fx.contentBlockStartText(0), parentOf()) },
+    { raw: fx.helperLine(fx.textDelta('a helper aside', 0), `toolu_stream_parent_${seq}`) },
+    empty(fx.contentBlockStartText(0)),
+    empty(fx.textDelta('the lead with an empty parent', 0)),
+    empty(fx.contentBlockStop(0)),
+  ] }]);
+  const since = say(convo, 'empty parent words');
+  assert.ok(await h.waitUntil(() => doneCount(convo, since) >= 1, { timeout: 20000 }), 'the result with an empty parent ended the lead\'s turn');
+  assert.deepStrictEqual(results(convo, since).map((r) => r.parent_tool_use_id), [''], 'it reached the page as the lead\'s result');
+  assert.strictEqual(wrenReplies(convo).trim(), 'the lead with an empty parent');
+});
+
 test('with helpers on, a helper\'s result does not end the lead\'s turn', async () => {
   helpers();
   const convo = open('parent-result');
@@ -321,6 +348,65 @@ test('with helpers on, a call held at the cap that no slot frees for is refused 
   assert.strictEqual(helpers().runningCount(convo), 5);
   assert.ok(await h.waitUntil(() => capEvents(convo).length >= 2, { timeout: 5000 }), 'the hold and refusal are recorded');
   assert.deepStrictEqual(capEvents(convo).map((e) => e.d.outcome).sort(), ['held', 'refused']);
+});
+
+// The count is the server's own. A hook request carries fields a lead's
+// process can write, and a page message is whatever a page sends; neither is
+// read as a helper starting or ending.
+test('with helpers on, nothing in a hook request or a page message changes the count or the rows the page is sent', async () => {
+  const m = names('runningCount', 'helperRows');
+  const convo = open('count-forged');
+  const calls = [agentCall('Explore'), agentCall('Explore'), agentCall('Explore')];
+  const [finished, ...running] = calls;
+  h.writeScenario([helpersRule('three explorers to forge against', calls)]);
+  const since = say(convo, 'three explorers to forge against');
+  await client.waitFor((x) => x.type === 'result' && x._conversationId === convo, { since, label: 'result' });
+  finishHelper(finished.id);
+  assert.ok(await h.waitUntil(() => m.runningCount(convo) === 2, { timeout: 20000 }), 'one of the three finished');
+  const known = m.helperRows(convo);
+  assert.deepStrictEqual(Object.fromEntries(known.map((r) => [r.toolUseId, r.state])),
+    { [finished.id]: 'completed', [running[0].id]: 'running', [running[1].id]: 'running' });
+  assert.deepStrictEqual(helpersChanged(convo, since).pop().helpers, known, 'the page has these rows');
+  async function unchanged(what, from) {
+    await h.delay(200);
+    assert.strictEqual(m.runningCount(convo), 2, `${what}: the count is unchanged`);
+    assert.deepStrictEqual(m.helperRows(convo), known, `${what}: the rows are unchanged`);
+    assert.deepStrictEqual(helpersChanged(convo, from), [], `${what}: no rows were sent to the page`);
+  }
+
+  // Hook requests under the lead's own token. The lead's own requests carry
+  // only the call's id, and the runtime names Agent calls Agent.
+  const forged = [
+    ['a call no message made, as a helper\'s', { tool_input: agentCall('Explore').input, tool_use_id: 'toolu_stream_forged_fresh', agent_id: 'agent-forged', agent_type: 'Explore' }, m.NOTICES.fromHelper],
+    ['a running helper\'s own call, as a helper\'s', { tool_input: running[0].input, tool_use_id: running[0].id, agent_id: 'agent-forged', agent_type: 'Explore' }, m.NOTICES.fromHelper],
+    ['the finished helper\'s call again, naming an agent type', { tool_input: finished.input, tool_use_id: finished.id, agent_type: 'Explore' }, m.NOTICES.unmatched],
+  ];
+  for (const [what, body, notice] of forged) {
+    const from = client.messages.length;
+    const reply = await ask({ tool_name: 'Agent', conversation_id: convo, ...body }, { headers: h.hookHeaders(convo, 'wren') }).reply;
+    await unchanged(what, from);
+    assert.deepStrictEqual(reply.body, { allow: false, notice }, `${what}: refused`);
+  }
+  const from = client.messages.length;
+  const renamed = ask({ tool_name: 'Task', tool_input: agentCall('Explore').input, tool_use_id: 'toolu_stream_forged_task', conversation_id: convo },
+    { headers: h.hookHeaders(convo, 'wren') });
+  const { msg: card } = await client.waitFor((x) => x.type === 'control_request' && x._conversationId === convo && x.request && x.request.tool_name === 'Task',
+    { since: from, label: 'the card for a call under another tool name' });
+  client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convo, allow: true, card: true });
+  assert.deepStrictEqual((await renamed.reply).body, { allow: true, card: true }, 'a call under another tool name is carded as any other tool');
+  await unchanged('a call under another tool name, allowed', from);
+
+  // Page messages over the socket, naming helpers or a count.
+  for (const msg of [
+    { type: 'helpers_changed', conversationId: convo, _conversationId: convo, agentId: 'wren', helpers: [] },
+    { type: 'stop_helper', conversationId: convo, toolUseId: running[0].id },
+    { type: 'task_notification', conversationId: convo, task_id: `task_${running[1].id}`, tool_use_id: running[1].id, status: 'completed' },
+    { type: 'set_helper_count', conversationId: convo, count: 0 },
+  ]) {
+    const at = client.messages.length;
+    client.send(msg);
+    await unchanged(`a page message ${msg.type}`, at);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -631,9 +717,17 @@ test('with helpers on, a lead the person started keeps its handoff marker\'s kil
     { since, timeout: 20000, label: 'sky started' });
 });
 
-test('with helpers on, three handoffs deep, nothing in the chain returns while the deepest lead\'s helpers run, and the hand-backs then return one level at a time', async () => {
+test('with helpers on, three handoffs deep, nothing in the chain returns while the deepest lead\'s helpers run, and the hand-backs then return one level at a time', async (t) => {
   names('runningCount', 'helping');
   const convo = open('hold-deep');
+  // Each lead in the chain, as the server makes it the conversation's process.
+  const leads = [];
+  const processes = h.internal.chatProcesses;
+  processes.set = function set(key, entry) {
+    if (key === convo && !leads.includes(entry)) leads.push(entry);
+    return Map.prototype.set.call(this, key, entry);
+  };
+  t.after(() => { delete processes.set; });
   const reviewers = ['birch', 'elm', 'fern', 'moss'].map((n) => agentCall(n));
   h.writeScenario([
     SKY_SILENT,
@@ -649,12 +743,53 @@ test('with helpers on, three handoffs deep, nothing in the chain returns while t
   for (const c of reviewers) assert.deepStrictEqual(hookAnswer(c.id), allowedAnswer(true));
   await resultFrom(convo, 'example-research-lead', since);
   await h.delay(800);
+  // No kill was scheduled or fired for any lead in the chain while the helpers
+  // run, the wait above being past the kill's 500 ms: Wren and Ash each ended
+  // at its own handoff, as today, with no kill scheduled for it, and neither
+  // was started again; Rowan is alive, and no kill is under way.
+  const ledAs = (id) => leads.filter((e) => e.agentId === id);
+  for (const id of ['wren', 'ash']) {
+    assert.strictEqual(ledAs(id).length, 1, `${id} led once and was not started again`);
+    const [lead] = ledAs(id);
+    assert.ok(lead.exited && !h.pidAlive(lead.process.pid), `${id} ended at its own handoff`);
+    assert.ok(!lead.pendingKill, `no kill was scheduled for ${id}`);
+  }
+  assert.strictEqual(ledAs('example-research-lead').length, 1, 'Rowan led once');
+  const [rowan] = ledAs('example-research-lead');
+  assert.ok(rowan === entryOf(convo) && !rowan.exited && h.pidAlive(rowan.process.pid), 'no kill fired for Rowan');
+  assert.strictEqual(h.internal.convoTransitions.has(convo), false, 'no kill is under way in the conversation');
   const entry = assertHeld(convo, 'example-research-lead', since);
   assert.strictEqual(entry.pendingKill, true, 'its auto-return is pending');
   assert.strictEqual(helpers().runningCount(convo), 4);
   wake('hold-deep');
+  // As on main, a resumed parent's hand-back goes to the orchestrator
+  // (handleScopeReturn): after Rowan's one-level return to Ash, Ash's goes to
+  // Sky. The test below runs the same chain with no helpers and sees the same.
   await waitSwitch(convo, since, 'ash', SKY);
   assert.deepStrictEqual(switchPairs(convo, since), [['example-research-lead', 'ash'], ['ash', SKY]]);
+});
+
+// The chain above with no helpers started: its hand-backs are the chain's own.
+// By design this passes before helpers existed too. Its sibling above, "with
+// helpers on, three handoffs deep, nothing in the chain returns while the
+// deepest lead's helpers run, and the hand-backs then return one level at a
+// time", runs the same chain and fails there.
+test('with no helpers started, the same three-deep chain hands back from Rowan to Ash and then from Ash to Sky', async () => {
+  const convo = open('chain-deep');
+  h.writeScenario([
+    SKY_SILENT,
+    { match: { agent: 'ash', promptIncludes: '[SYSTEM: work-continues]' }, turn: [{ text: `All four reviews are in. ${fx.MARKERS.COMPLETE}` }] },
+    handoff('sky', 'chain-deep review', 'wren', 'wren brief chain-deep'),
+    handoff('wren', 'wren brief chain-deep', 'ash', 'ash brief chain-deep'),
+    handoff('ash', 'ash brief chain-deep', 'example-research-lead', 'rowan brief chain-deep'),
+    { match: { agent: 'example-research-lead', promptIncludes: 'rowan brief chain-deep' }, turn: [{ text: 'Rowan did the four reviews. <!-- RUNDOCK:CONTINUE -->' }] },
+  ]);
+  const since = say(convo, 'chain-deep review', 'sky');
+  await waitSwitch(convo, since, 'ash', SKY);
+  assert.deepStrictEqual(switchPairs(convo, since), [['example-research-lead', 'ash'], ['ash', SKY]]);
+  assert.deepStrictEqual(helpersChanged(convo, since), [], 'no helper rows were sent');
+  assert.deepStrictEqual(client.messages.slice(since).filter((m) => m.type === 'system' && m.subtype === 'task_started' && m._conversationId === convo), [],
+    'no helper started');
 });
 
 // A stub that is stopped or killed cannot log the hook's answer for a call
@@ -688,8 +823,11 @@ async function closeWhileHeld(prefix, close) {
     assert.deepStrictEqual(helpers().helperRows(convo), []);
     assert.strictEqual(helpers().helping(convo), false);
     await requestDone(convo, since);
-    const rows = helpersChanged(convo, since).pop().helpers;
-    assert.deepStrictEqual(rows.map((r) => r.state), Array(5).fill('killed'), 'its helpers ended and the held one is gone');
+    // Stop sends its own done before the lead's process closes, and the rows
+    // its close ends follow, so the last rows are waited for.
+    const lastStates = () => { const all = helpersChanged(convo, since); return all.length ? all[all.length - 1].helpers.map((r) => r.state) : []; };
+    await h.waitUntil(() => lastStates().length === 5 && lastStates().every((s) => s === 'killed'), { timeout: 5000 });
+    assert.deepStrictEqual(lastStates(), Array(5).fill('killed'), 'its helpers ended and the held one is gone');
   });
 }
 
@@ -766,6 +904,33 @@ test('the idle probe reports the conversation busy while the lead\'s helpers run
   await requestDone(convo, since);
 });
 
+// Passes on a server without helpers too, by design: the probe reads the
+// process map, and a lead whose helpers run stays in it. The sibling that
+// fails there is the reaper test above, which shares this setup. The helper's
+// run is read from the stream's own task lines, which both servers forward.
+test('the idle probe server.js registers reports the conversation busy while the lead\'s helpers run, and as it always has once they end', async () => {
+  assert.strictEqual(typeof idleProbe, 'function', 'server.js registered an idle probe');
+  const convo = open('hold-probe-call');
+  const call = agentCall('Explore');
+  h.writeScenario([heldRule('wren', 'one explorer the probe is asked about', [call], 'Started an explorer.', 'hold-probe-call')]);
+  const since = say(convo, 'one explorer the probe is asked about');
+  await resultFrom(convo, 'wren', since);
+  const taskLines = (subtype) => client.messages.slice(since)
+    .filter((m) => m.type === 'system' && m.subtype === subtype && m._conversationId === convo && m.tool_use_id === call.id);
+  assert.ok(await h.waitUntil(() => taskLines('task_started').length === 1, { timeout: 5000 }), 'the helper started');
+  await h.delay(200);
+  assert.deepStrictEqual(taskLines('task_notification'), [], 'and has not ended');
+  assert.strictEqual(idleProbe(), false, 'busy while the helper runs');
+  wake('hold-probe-call');
+  await requestDone(convo, since);
+  await h.delay(200);
+  assert.strictEqual(idleProbe(), false, 'busy while the lead stays after its request, as for any process');
+  h.internal.reapIdleAgents(Date.now() + 24 * 60 * 60 * 1000);
+  assert.strictEqual(entryOf(convo), undefined, 'the lead was reaped');
+  assert.deepStrictEqual([...h.internal.chatProcesses.keys()], [], 'nothing else runs');
+  assert.strictEqual(idleProbe(), true, 'idle once nothing runs');
+});
+
 // ---------------------------------------------------------------------------
 // Spawn settings: the depth limit and SendMessage refused, for conversations only
 // ---------------------------------------------------------------------------
@@ -832,6 +997,76 @@ test('with helpers on, a Code-mode spawn, which refuses nothing else, still refu
     client.send({ type: 'set_workspace_mode', mode: 'notes' });
     await client.waitFor((m) => m.type === 'workspace_mode_changed' && m.mode === 'notes', { since, label: 'back to notes' });
   }
+});
+
+// A HELPER'S OWN AGENT CALL, AS IT REACHES RUNDOCK. Claude Code isn't run in
+// CI, so the call is built from the PreToolUse payload Claude Code 2.1.318 was
+// measured giving a subagent's call (test/fixtures/subagent-hook-payload.json):
+// every field as measured, with only tool_name and tool_input made an Agent
+// call and a tool_use_id of its own. The session is the lead's, as the
+// measured subagent's was its parent's, so the stub gives its own. While the
+// lead's helper runs, the stub writes the call as that helper's lines and puts
+// it to Rundock's real hook from the lead's own process, with the lead's
+// environment and token, as the runtime runs a helper's hooks; a call the
+// hook allowed it would start with task_started.
+const SUBAGENT_PAYLOAD = path.join(__dirname, '..', 'fixtures', 'subagent-hook-payload.json');
+const FROM_HELPER = "Helpers can't start helpers. Do this part yourself, and say in your report what you would have handed on.";
+test('with helpers on, a running helper\'s Agent call, as Claude Code sends a subagent\'s, is refused through the hook and starts nothing', async () => {
+  const m = names('runningCount', 'helperRows');
+  const measured = JSON.parse(fs.readFileSync(SUBAGENT_PAYLOAD, 'utf8'));
+  assert.strictEqual(measured.runtime, 'Claude Code 2.1.318', 'the payload as that runtime gave it');
+  assert.strictEqual(measured.subagent.session_id, measured.parent.session_id, 'a subagent\'s call carries its parent\'s session');
+  const { tool_name: measuredTool, tool_input: measuredInput, tool_use_id: measuredId, session_id: measuredSession, ...fields } = measured.subagent;
+  assert.ok(measuredTool && measuredInput && measuredId && measuredSession, 'the measured call has the fields replaced here');
+  assert.strictEqual(fields.cwd, '<workspace>', 'the measured cwd is the workspace');
+  const extra = { ...fields, cwd: h.workspaceDir };
+  const convo = open('depth-hook');
+  const helper = agentCall(fields.agent_type);
+  const nested = agentCall('ash', { description: 'Draft the summary', prompt: 'Draft it.' });
+  const nestFile = path.join(h.workspaceDir, `nest-${helper.id}`);
+  h.writeScenario([{
+    match: { agent: 'wren', promptIncludes: 'a helper that calls a teammate' }, helpers: true, running: true, finishOn: {},
+    turn: [{ text: 'Started a helper.' }, { agentTool: helper.input, id: helper.id }],
+    then: [
+      {
+        untilFile: nestFile,
+        lines: [...fx.toolUseFlow('Agent', nested.input, 1, nested.id), fx.messageStop()].map((e) => fx.helperLine(e, helper.id)),
+        helperCalls: [{ id: nested.id, input: nested.input, parent: helper.id, extra }],
+      },
+      { untilFile: wakeFile('depth-hook'), lines: [ended(helper)], turn: [{ text: 'The helper reported back.' }] },
+    ],
+  }]);
+  const since = say(convo, 'a helper that calls a teammate');
+  await nthResult(convo, since, 1);
+  const taskStarted = (id) => client.messages.slice(since)
+    .filter((x) => x.type === 'system' && x.subtype === 'task_started' && x._conversationId === convo && x.tool_use_id === id);
+  assert.ok(await h.waitUntil(() => taskStarted(helper.id).length === 1, { timeout: 5000 }), 'the helper started');
+  await h.delay(200);
+  const lead = entryOf(convo);
+  const [spawn] = spawnsOf(convo);
+  assert.strictEqual(spawn.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, '1', 'the lead and its helpers run with the depth limit');
+  assert.strictEqual(m.runningCount(convo), 1, 'one helper runs');
+  const known = m.helperRows(convo);
+  const from = client.messages.length;
+
+  fs.writeFileSync(nestFile, '');
+  assert.ok(await h.waitUntil(() => hookAnswer(nested.id), { timeout: 20000 }), 'the helper\'s call reached the hook');
+  const logged = h.readHookAnswers().find((a) => a.toolUseId === nested.id);
+  assert.strictEqual(logged.pid, lead.process.pid, 'from the lead\'s own process');
+  assert.strictEqual(logged.tool, 'Agent');
+  assert.strictEqual(logged.subagent, fields.agent_id, 'carrying the measured agent_id');
+  assert.deepStrictEqual(hookAnswer(nested.id), refusedAnswer(FROM_HELPER), 'refused with the reason helpers can\'t start helpers');
+  await h.delay(300);
+  assert.strictEqual(m.runningCount(convo), 1, 'the count is unchanged');
+  assert.deepStrictEqual(m.helperRows(convo), known, 'the rows are unchanged');
+  assert.deepStrictEqual(helpersChanged(convo, from), [], 'no rows were sent to the page');
+  assert.deepStrictEqual(taskStarted(nested.id), [], 'no task_started for it');
+  assert.deepStrictEqual(agentCards(convo, since), [], 'no card');
+  assert.strictEqual(spawnsOf(convo).filter((i) => i.agent === 'ash').length, 0, 'nothing was handed over');
+
+  wake('depth-hook');
+  await requestDone(convo, since);
+  assert.strictEqual(m.runningCount(convo), 0);
 });
 
 // Saves a routine on Wren's file, so it runs last.

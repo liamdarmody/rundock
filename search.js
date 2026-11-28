@@ -30,6 +30,7 @@
 const fs = require('fs');
 const path = require('path');
 const { extractLinks } = require('./lib/links.js');
+const { userTurnText } = require('./lib/attachments/turn-text.js');
 
 // Bumping this rebuilds every index on next open. That is the whole migration
 // story: rebuild, never migrate.
@@ -318,8 +319,11 @@ function extractIndexableMessage(obj) {
   if (obj.isCompactSummary === true) return null;
   if (obj.type === 'user' && obj.isSynthetic === true) return null;
   const tsMs = obj.timestamp ? Date.parse(obj.timestamp) || null : null;
-  if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
-    const text = obj.message.content.trim();
+  // A turn sent with images or PDFs is indexed by its text, never the
+  // blocks' data (lib/attachments/turn-text.js).
+  const userText = obj.type === 'user' && obj.message ? userTurnText(obj.message.content) : null;
+  if (userText !== null) {
+    const text = userText.trim();
     if (!text) return null;
     return { role: 'user', text, tsMs };
   }
@@ -345,6 +349,7 @@ function extractIndexableMessage(obj) {
     if (role !== 'user' && role !== 'assistant') return null;
     const parts = (Array.isArray(obj.payload.content) ? obj.payload.content : [])
       .filter(b => b && typeof b.text === 'string' && b.text.trim())
+      .filter(b => role !== 'user' || !isInlineFileText(b.text))
       .map(b => b.text);
     if (!parts.length) return null;
     const text = parts.join('\n\n').trim();
@@ -354,6 +359,13 @@ function extractIndexableMessage(obj) {
     return { role: role === 'user' ? 'user' : 'agent', text, tsMs };
   }
   return null;
+}
+
+// A text file Rundock sent with a Codex turn, as the part after the person's
+// text (lib/attachments/turn.js). It is the file's contents, never what was
+// typed, so a search never finds a conversation by it.
+function isInlineFileText(text) {
+  return text.startsWith('[Text of attached file ');
 }
 
 class SearchIndex {

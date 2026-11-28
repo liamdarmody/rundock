@@ -42,6 +42,7 @@
 
 const { EventEmitter } = require('node:events');
 const { spawn } = require('node:child_process');
+const path = require('node:path');
 
 const { classifyCodexError, resolveCodexBin } = require('./codex.js');
 const { guardChildStdin } = require('./lib/runtime/child-stdin.js');
@@ -487,9 +488,11 @@ class CodexAppServer extends EventEmitter {
   // Start a turn and return its subscription (an EventEmitter emitting the
   // normalised events documented at the top of this file on the 'event'
   // channel). Also exposed: sub.threadId, sub.turnId (populated once known)
-  // and sub.started (a promise resolving to { turnId }).
-  startTurn(threadId, inputText, perTurnOpts = {}) {
+  // and sub.started (a promise resolving to { turnId }). extraItems follow
+  // the text in the turn's input; see checkExtraItems.
+  startTurn(threadId, inputText, perTurnOpts = {}, extraItems = []) {
     if (typeof inputText !== 'string') throw new TypeError('inputText must be a string');
+    checkExtraItems(extraItems);
     if (this._activeTurns.has(threadId)) {
       // The server enforces one active turn per thread (RESEARCH.md section
       // 9); failing fast here keeps the error synchronous and the wire clean.
@@ -499,7 +502,7 @@ class CodexAppServer extends EventEmitter {
     if (sp && sp.type === 'dangerFullAccess') {
       throw new Error('refusing to pass dangerFullAccess: the sandbox invariant is never weakened');
     }
-    const params = { threadId, input: [{ type: 'text', text: inputText }] };
+    const params = { threadId, input: [{ type: 'text', text: inputText }, ...extraItems] };
     for (const key of TURN_OPT_KEYS) {
       if (perTurnOpts[key] !== undefined) params[key] = perTurnOpts[key];
     }
@@ -1062,6 +1065,20 @@ class CodexAppServer extends EventEmitter {
 // experimental API, which Rundock never opts into. So nothing here grants.
 function permissionsRefusal() {
   return { permissions: {}, scope: 'turn' };
+}
+
+// The extra items a turn's input may carry: a local image by absolute path,
+// or more text, each with no other key. Anything else throws before the turn
+// is registered or anything is written, so the thread stays free.
+function checkExtraItems(extraItems) {
+  if (!Array.isArray(extraItems)) throw new TypeError('extraItems must be an array');
+  for (const item of extraItems) {
+    const plain = !!item && typeof item === 'object' && Object.getPrototypeOf(item) === Object.prototype;
+    const keys = plain ? Reflect.ownKeys(item).map(String).sort().join(',') : '';
+    const image = keys === 'path,type' && item.type === 'localImage' && typeof item.path === 'string' && path.isAbsolute(item.path);
+    const text = keys === 'text,type' && item.type === 'text' && typeof item.text === 'string';
+    if (!image && !text) throw new TypeError('each extra item must be { type: \'localImage\', path } with an absolute path, or { type: \'text\', text }');
+  }
 }
 
 function createCodexAppServer(opts = {}) {

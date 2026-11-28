@@ -12,6 +12,7 @@ const { test, describe, before, after, afterEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 
 const { _internal: srv } = require('../../server.js');
 const { makeWorkspace, agentFile, cleanup } = require('../helpers/workspace.js');
@@ -31,6 +32,11 @@ function names(...wanted) {
   for (const name of wanted) assert.strictEqual(typeof m[name], 'function', `helpers.${name} is exported`);
   return m;
 }
+// The hold and the cap as the module ships them, read as this file loads,
+// before any test here patches the hold.
+const SHIPPED = fs.existsSync(HELPERS)
+  ? { holdMs: require(HELPERS).HELPER_HOLD_MS, cap: require(HELPERS).HELPER_CAP }
+  : {};
 
 const team = {
   wren: agentFile({ name: 'wren', displayName: 'Wren', role: 'Lead', order: 1 }),
@@ -340,6 +346,12 @@ async function capEventsAt(convo, count) {
 const outcomes = (events) => events.map((e) => e.d && e.d.outcome).sort();
 
 describe('the cap of five helpers at once', () => {
+  test('as shipped, a held call waits 100 seconds for a slot and at most five helpers run at once', () => {
+    helpers();
+    assert.strictEqual(SHIPPED.holdMs, 100000, 'the hold, before any test patches it');
+    assert.strictEqual(SHIPPED.cap, 5, 'the cap');
+  });
+
   test('five helpers start at once and a call that would make a sixth is held, its request left open', async () => {
     const m = names('runningCount', 'helperRows');
     const convo = freshConvo();
@@ -484,12 +496,12 @@ describe('the cap of five helpers at once', () => {
 // ---------------------------------------------------------------------------
 
 describe('a lone teammate call while helpers work, or after a cap refusal', () => {
-  // By design this passes before the count exists. Its sibling, "while an
-  // Explore helper runs, a lone teammate call is a helper", shares its setup
-  // and fails there.
+  // Its premise, nothing running, is read from the count, so before the count
+  // exists it fails on that name.
   test('with nothing running and no cap refusal in the request, a lone teammate call is a handoff', () => {
-    const m = helpers();
+    const m = names('runningCount');
     const convo = freshConvo();
+    assert.strictEqual(m.runningCount(convo), 0, 'nothing runs');
     assert.strictEqual(m.placeMessage(convo, lead, [teammate('h1', 'ash')]).kind, 'handoff');
   });
 
@@ -531,14 +543,125 @@ describe('a lone teammate call while helpers work, or after a cap refusal', () =
     assert.strictEqual(m.runningCount(convo), 1);
   });
 
-  // By design this passes before the count exists. Its sibling, "while an
-  // Explore helper runs, a lone teammate call is a helper", shares its setup
-  // and fails there.
+  // Its setup starts a helper through the count, so before the count exists
+  // it fails on that name.
   test('once every helper has finished, with no cap refusal, a lone teammate call is a handoff again', async () => {
     const m = helpers();
     const convo = freshConvo();
     await Promise.all(ask(convo, [explore('e1')]));
     finishTask(convo, 'e1');
     assert.strictEqual(m.placeMessage(convo, lead, [teammate('h1', 'ash')]).kind, 'handoff');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The open request's heartbeat
+// ---------------------------------------------------------------------------
+
+// THE PAGE ENDS A TURN IT HAS HEARD NOTHING FROM FOR 90 SECONDS, and a lead
+// whose result is held for its helpers has an open request and nothing to say
+// until a helper reports back. So the heartbeat that keeps a quiet turn alive
+// keeps going while the result is held, and stops when the request ends or the
+// lead's process closes. Driven through the server's own wireProcessHandlers
+// over a fake process, with node:test's mock timers for the clock, as
+// test/unit/claude-turn-keepalive.test.js drives the heartbeat.
+describe('the lead\'s heartbeat while its result is held for its helpers', () => {
+  // The heartbeat's interval as shipped, and four of them with nothing from
+  // the lead: past the page's 90 seconds.
+  const INTERVAL = 25000;
+  const QUIET = 4;
+  // No pid, so nothing real is ever signalled.
+  function fakeProcess() {
+    const p = new EventEmitter();
+    p.stdout = new EventEmitter();
+    p.stderr = new EventEmitter();
+    p.stdin = { writable: true, write() {}, end() {} };
+    p.pid = undefined;
+    p.kill = () => {};
+    return p;
+  }
+  // A lead wired as a spawn wires it, with a page connected to hear it.
+  function wiredLead(t) {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const convo = freshConvo();
+    const said = [];
+    const page = { readyState: 1, send: (raw) => said.push(JSON.parse(raw)) };
+    const proc = fakeProcess();
+    const entry = {
+      process: proc, agentId: 'wren', processId: `p-${convo}`, runtime: 'claude',
+      buffer: '', responseText: '', toolCalls: [], exited: false, pendingAgentTools: [], deliveredTurns: [],
+    };
+    srv.connectedClients.add(page);
+    t.after(() => { srv.connectedClients.delete(page); proc.emit('close', 0); });
+    // What the chat's own onResult does once it has stored the reply: it
+    // parks the entry until its next message.
+    srv.wireProcessHandlers(entry, convo, null, { onResult: (e) => { e.responseText = ''; e.idle = true; e.idleSince = Date.now(); } });
+    const emit = (...objs) => { for (const o of objs) proc.stdout.emit('data', Buffer.from(`${JSON.stringify(o)}\n`)); };
+    const count = (subtype) => said.filter((m) => m.type === 'system' && m.subtype === subtype && m._conversationId === convo).length;
+    return { convo, proc, emit, beats: () => count('keepalive'), dones: () => count('done') };
+  }
+  const startedLine = (id) => fx.taskStarted({ taskId: `task_${id}`, toolUseId: id, description: 'Look around', subagentType: 'Explore' });
+  const endedLine = (id) => fx.taskNotification({ taskId: `task_${id}`, toolUseId: id, status: 'completed' });
+  const turn = (text) => [fx.contentBlockStartText(), fx.textDelta(text), fx.contentBlockStop(), fx.messageDelta(), fx.messageStop(), fx.result({ text })];
+
+  test('a result held while a helper runs keeps the heartbeat going through the helper\'s quiet, past the page\'s 90 seconds', (t) => {
+    const m = names('runningCount', 'helping');
+    const lead = wiredLead(t);
+    lead.emit(startedLine('u1'), ...turn('Started an explorer.'));
+    assert.strictEqual(m.runningCount(lead.convo), 1, 'the helper runs');
+    assert.strictEqual(lead.dones(), 0, 'the result was held: no done');
+    for (let i = 1; i <= QUIET; i++) {
+      t.mock.timers.tick(INTERVAL);
+      assert.strictEqual(lead.beats(), i, `a keepalive in interval ${i} of the helper's quiet`);
+    }
+  });
+
+  test('the first result after the last helper reports back ends the request and stops the heartbeat', (t) => {
+    const m = names('runningCount', 'helping');
+    const lead = wiredLead(t);
+    lead.emit(startedLine('u1'), ...turn('Started an explorer.'));
+    t.mock.timers.tick(INTERVAL);
+    assert.strictEqual(lead.beats(), 1, 'beating while the result is held');
+    lead.emit(endedLine('u1'));
+    assert.strictEqual(m.runningCount(lead.convo), 0, 'the helper reported back');
+    t.mock.timers.tick(INTERVAL);
+    assert.strictEqual(lead.beats(), 2, 'still beating while the lead takes in the report');
+    lead.emit(...turn('The explorer reported back.'));
+    assert.strictEqual(lead.dones(), 1, 'the request ended with done');
+    t.mock.timers.tick(INTERVAL * QUIET);
+    assert.strictEqual(lead.beats(), 2, 'no keepalive once the request has ended');
+  });
+
+  test('the lead\'s process closing while its helpers run stops the heartbeat', (t) => {
+    const m = names('runningCount', 'helping');
+    const lead = wiredLead(t);
+    lead.emit(startedLine('u1'), ...turn('Started an explorer.'));
+    t.mock.timers.tick(INTERVAL);
+    assert.strictEqual(lead.beats(), 1, 'beating while the result is held');
+    lead.proc.emit('close', null, 'SIGKILL');
+    assert.strictEqual(m.helping(lead.convo), false, 'the close ended the helpers');
+    t.mock.timers.tick(INTERVAL * QUIET);
+    assert.strictEqual(lead.beats(), 1, 'no keepalive after the close');
+  });
+
+  // By design this passes before helpers existed too: with the switch off, a
+  // result stops the heartbeat as it always has. Its sibling, "a result held
+  // while a helper runs keeps the heartbeat going through the helper's quiet,
+  // past the page's 90 seconds", shares its setup and fails there.
+  test('with helpers off, a result stops the heartbeat as it always has, a helper running or not', (t) => {
+    const m = helpers();
+    const lead = wiredLead(t);
+    try {
+      m.HELPERS_ENABLED = false;
+      lead.emit(startedLine('u1'));
+      t.mock.timers.tick(INTERVAL);
+      assert.strictEqual(lead.beats(), 1, 'beating while the lead works');
+      lead.emit(...turn('Started an explorer.'));
+      assert.strictEqual(lead.dones(), 1, 'the result sent done');
+      t.mock.timers.tick(INTERVAL * QUIET);
+      assert.strictEqual(lead.beats(), 1, 'no keepalive after the result');
+    } finally {
+      m.HELPERS_ENABLED = true;
+    }
   });
 });

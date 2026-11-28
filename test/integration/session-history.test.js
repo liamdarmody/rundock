@@ -618,7 +618,7 @@ describe('get_session_history: single-session fallback', () => {
     const convoId = 'sh-single-missing-1';
     const res = await getHistory({ conversationId: convoId, sessionId: 'sess-never-existed' });
     assert.deepStrictEqual(res, {
-      type: 'session_history', conversationId: convoId, messages: [], totalCount: 0, hasMore: false,
+      type: 'session_history', conversationId: convoId, messages: [], totalCount: 0, hasMore: false, files: {},
     });
   });
 });

@@ -50,7 +50,8 @@
       case 'too-many-files': return { title: many, text: `That would make ${r.count} files; the limit is ${r.limit} per message` };
       case 'too-many-bytes': return { title: many, text: `That would make ${formatSize(r.bytes)}; the limit is ${formatSize(r.limit)} per message` };
       case 'too-large': return { title: NOT_SENT, text: `This message is too large to send (${formatSize(r.bytes)} with its files; the limit is 28 MB). Remove a file or shorten the text.` };
-      case 'codex-files': return { title: NOT_SENT, text: 'This agent runs on Codex, which can\'t open attached files yet. Remove the files to send your message.' };
+      case 'codex-pdf': return { title: named, text: 'This agent runs on Codex, which can\'t read PDFs yet. Attach a screenshot of the page or paste the text.' };
+      case 'codex-images': return { title: NOT_SENT, text: 'This agent runs on Codex, and Rundock sends a Codex agent at most 20 images or 10 MB of images in one conversation. Remove an image or start a new conversation.' };
       case 'deleted': return { title: NOT_SENT, text: 'This conversation was deleted in another window.' };
       case 'disk-full': return { title: NOT_SENT, text: `Rundock couldn't save ${named} because the disk is full. Your message and files are still here.` };
       default: return { title: NOT_SENT, text: FALLBACK };

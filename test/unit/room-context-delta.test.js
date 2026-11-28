@@ -178,7 +178,10 @@ describe('the delta reaches the delegate', () => {
     assert.match(src, /buildDelegateContext\(\{ missed, brief: msg\.context, arriving \}\)/,
       'the assembled context carries which case this is, so the heading it '
       + 'renders is true of the agent reading it');
-    assert.match(src, /stdin\.write\(JSON\.stringify\(\{ type: 'user', message: \{ role: 'user', content: contextWithHistory \}/,
+    // Every engine write now passes its text through turnContent, which can
+    // only replace an attachment line or add the files it names; the text
+    // itself is still the third argument.
+    assert.match(src, /stdin\.write\(JSON\.stringify\(\{ type: 'user', message: \{ role: 'user', content: turnContent\(delegateEntry, convoId, contextWithHistory, delegateAttachmentEntry\) \}/,
       'and that text is what is written to the delegate');
   });
 });
@@ -420,7 +423,7 @@ describe('every path that resumes an agent gives it the delta', () => {
   });
 
   test('and the mid-level catch-up reaches all three of its prompts', () => {
-    const hits = (src.match(/content: parentCatchUp \+ \w+Prompt/g) || []).length;
+    const hits = (src.match(/content: turnContent\(resumeEntry, convoId, parentCatchUp \+ \w+Prompt\)/g) || []).length;
     assert.strictEqual(hits, 3,
       'resume, complete and normal exit all resume the same parent, so all '
       + 'three must carry what it missed');
@@ -437,7 +440,7 @@ describe('the log says a delta went only when one went', () => {
     // beside the spawn, the line claimed a delta had gone in both cases.
     const at = src.indexOf('prompt sent');
     assert.ok(at > -1, 'the send-site log exists');
-    const write = src.indexOf("content: prompt } }) + '\\n');");
+    const write = src.indexOf("content: turnContent(orchEntry, convoId, prompt) } }) + '\\n');");
     assert.ok(write > -1, 'the scope-return write is still here');
     assert.ok(write < at, 'the log must sit after the write');
     // And nothing that could divert the prompt sits between them.
@@ -998,29 +1001,29 @@ describe('the stored conversation can only reach a delegate through the cap', ()
     const writes = [...src.matchAll(WRITE)].map(m => [m[1], m[2]]);
     assert.deepStrictEqual(writes, [
       // A permission block, answered on the process that asked.
-      ['blockedEntry.process', 'blockPrompt'],
+      ['blockedEntry.process', 'turnContent(blockedEntry, convoId, blockPrompt)'],
       // A turn started again after Claude Code refused its resume. Its callers
       // hand it what a fresh session is owed: a delegate's arrival brief, from
       // the same capped builder, or the handback prompt with no catch-up.
-      ['proc', 'freshPrompt'],
+      ['proc', 'turnContent(entry, convoId, freshPrompt, freshEntryId)'],
       // And after it, each message the person sent while the refused process
       // was starting, which it never read: their own words, as they sent them.
-      ['proc', 'carried'],
+      ['proc', 'turnContent(entry, convoId, carried, kept.attachmentEntry)'],
       // A resumed agent picking its own conversation back up.
-      ['proc', 'prompt'],
+      ['proc', 'turnContent(orchEntry, convoId, prompt)'],
       // THE ONE THAT STARTS A DELEGATE. Everything a delegation hands over
       // arrives through this single write.
-      ['delegateProc', 'contextWithHistory'],
+      ['delegateProc', 'turnContent(delegateEntry, convoId, contextWithHistory, delegateAttachmentEntry)'],
       // An orchestrator taking back control from a sub-delegate.
-      ['orchestratorEntry.process', 'prompt'],
+      ['orchestratorEntry.process', 'turnContent(orchestratorEntry, convoId, prompt)'],
       // A mid-level parent resumed on each of its three exits, each carrying
       // the catch-up it is owed. The third picks its prompt by whether the
       // delegate finished, and both carry the same specialist output block.
-      ['resumeProc', 'parentCatchUp + resumePrompt'],
-      ['resumeProc', 'parentCatchUp + completePrompt'],
-      ['resumeProc', 'parentCatchUp + exitPrompt'],
+      ['resumeProc', 'turnContent(resumeEntry, convoId, parentCatchUp + resumePrompt)'],
+      ['resumeProc', 'turnContent(resumeEntry, convoId, parentCatchUp + completePrompt)'],
+      ['resumeProc', 'turnContent(resumeEntry, convoId, parentCatchUp + exitPrompt)'],
       // The original agent restored after a delegation ends.
-      ['orig.process', 'prompt'],
+      ['orig.process', 'turnContent(orig, convoId, prompt)'],
     ], 'the engine writes into a runtime somewhere this list does not know about. Say what the '
       + 'new write carries and what bounds it, then add it here');
 

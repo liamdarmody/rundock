@@ -1,0 +1,585 @@
+{
+  "about": "What the installed Claude Code did with a Bash call outside its sandbox, measured by test/tools/claude-cli-sandbox-override-probe.js. test/unit/stub-claude-sandbox-override-matches-cli.test.js holds the stub to it.",
+  "claudeCode": "2.1.332",
+  "method": "The real CLI spawned as server.js spawns a conversation (no --print, the prompt on stdin as stream-json, --include-partial-messages, and the permission mode, allowed tools and Notes-mode disallowed tools below), in a fresh empty folder with an empty home folder, with user, project and local settings, plugins and MCP servers kept out (--setting-sources \"\", --strict-mcp-config, --no-chrome, --no-session-persistence), a placeholder API key, and a stand-in for the messages API on 127.0.0.1 that asked for one Bash call, the case's input, under the id toolu_probe_0. No account was used and no model was called. Each case's --settings value held Rundock's Knowledge-mode sandbox block for the case's folders, a PreToolUse entry for the matcher below whose sh hook recorded its payload and printed the PreToolUse answer below, and, where the case names one, a PermissionRequest entry for the same matcher whose sh hook recorded its payload and printed the case's answer. A hook call lists the settings entry that ran it, the payload's event and tool names, the command, the flag as given, and the payload's and tool_input's top-level keys. Results are the tool_result blocks the CLI wrote on stdout; system lines are every stdout line of type system but init, with an id that names a tool call written as whether it is the case's call and other ids left out. markerLines counts the non-empty lines of marker.txt in the case's folder: one per run of the command. The control shows that the command ran in a case without the flag; it does not show that Claude Code's sandbox (Seatbelt) was on while it ran. Paths are relative to the case's folder.",
+  "conversation": {
+    "permissionMode": "acceptEdits",
+    "allowedTools": "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill",
+    "disallowedTools": "Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe),Edit(*.dll),Edit(*.so),NotebookEdit",
+    "args": [
+      "--setting-sources",
+      "",
+      "--strict-mcp-config",
+      "--no-chrome",
+      "--no-session-persistence",
+      "--settings",
+      "<the case's settings>",
+      "--output-format",
+      "stream-json",
+      "--input-format",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+      "--permission-mode",
+      "acceptEdits",
+      "--allowed-tools",
+      "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,ToolSearch,Agent,Skill",
+      "--disallowed-tools",
+      "Write(*.js),Write(*.jsx),Write(*.ts),Write(*.tsx),Write(*.py),Write(*.sh),Write(*.bash),Write(*.rb),Write(*.pl),Write(*.exe),Write(*.dll),Write(*.so),Edit(*.js),Edit(*.jsx),Edit(*.ts),Edit(*.tsx),Edit(*.py),Edit(*.sh),Edit(*.bash),Edit(*.rb),Edit(*.pl),Edit(*.exe),Edit(*.dll),Edit(*.so),NotebookEdit",
+      "--max-turns",
+      "3"
+    ],
+    "how": "permissionMode and allowedTools are read from server.js (getPermissionMode, getAllowedToolsInteractive); disallowedTools is NOTES_DISALLOWED_TOOLS, which server.js passes for a workspace not in Code mode."
+  },
+  "settings": {
+    "matcher": "Bash|PowerShell",
+    "preToolUseAnswer": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"Approved in Rundock\"}}",
+    "sandbox": {
+      "built": "sandboxSettings(<work>, 'darwin', <home>, tempRoots(<tmp>), [], 'knowledge', []) from lib/workspace/scaffold.js, with ZDOTDIR, XDG_CONFIG_HOME and RUNDOCK_ELECTRON unset while it was built; every case passed it as the `sandbox` key of its --settings value, with the case's own folders in place of the tokens. The digest is sha256 over JSON.stringify of the block with its folders written as <work>, <home>, <tmp> and <repo> (the repository root).",
+      "settings": {
+        "enabled": true,
+        "autoAllowBashIfSandboxed": true,
+        "network": {
+          "allowedDomains": [
+            "*"
+          ]
+        }
+      },
+      "filesystemEntries": {
+        "allowWrite": 7,
+        "denyWrite": 36,
+        "denyRead": 5
+      },
+      "sha256": "d1802f60470bf6c988b7dbb4702ff373987a39df73d1e2de79ac0bd62ad99199"
+    }
+  },
+  "cases": [
+    {
+      "name": "a sandbox-off call, no PermissionRequest entry",
+      "input": {
+        "command": "echo ran>>marker.txt",
+        "description": "probe",
+        "dangerouslyDisableSandbox": true
+      },
+      "permissionRequest": null,
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "toolUseIdMatches": true,
+            "refused": true,
+            "text": "Run outside of the sandbox"
+          }
+        ],
+        "resultSentToApi": true,
+        "markerLines": 0,
+        "hooksAsked": [
+          {
+            "entry": "PreToolUse",
+            "event": "PreToolUse",
+            "tool": "Bash",
+            "command": "echo ran>>marker.txt",
+            "flag": {
+              "given": true,
+              "value": true,
+              "type": "boolean"
+            },
+            "keys": [
+              "cwd",
+              "effort",
+              "hook_event_name",
+              "permission_mode",
+              "prompt_id",
+              "session_id",
+              "tool_input",
+              "tool_name",
+              "tool_use_id",
+              "transcript_path"
+            ],
+            "inputKeys": [
+              "command",
+              "dangerouslyDisableSandbox",
+              "description"
+            ]
+          }
+        ],
+        "systemLines": [
+          {
+            "keys": [
+              "session_id",
+              "status",
+              "subtype",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "status",
+              "status": "requesting"
+            }
+          },
+          {
+            "keys": [
+              "decision_reason",
+              "decision_reason_type",
+              "message",
+              "session_id",
+              "subtype",
+              "tool_name",
+              "tool_use_id",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "permission_denied",
+              "tool_name": "Bash",
+              "toolUseIdMatches": true,
+              "decision_reason_type": "sandboxOverride",
+              "decision_reason": "dangerouslyDisableSandbox",
+              "message": "Run outside of the sandbox"
+            }
+          },
+          {
+            "keys": [
+              "session_id",
+              "status",
+              "subtype",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "status",
+              "status": "requesting"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "a sandbox-off call, the PermissionRequest hook answering allow as Rundock's does",
+      "input": {
+        "command": "echo ran>>marker.txt",
+        "description": "probe",
+        "dangerouslyDisableSandbox": true
+      },
+      "permissionRequest": "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}",
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "toolUseIdMatches": true,
+            "refused": false,
+            "text": "(Bash completed with no output)"
+          }
+        ],
+        "resultSentToApi": true,
+        "markerLines": 1,
+        "hooksAsked": [
+          {
+            "entry": "PreToolUse",
+            "event": "PreToolUse",
+            "tool": "Bash",
+            "command": "echo ran>>marker.txt",
+            "flag": {
+              "given": true,
+              "value": true,
+              "type": "boolean"
+            },
+            "keys": [
+              "cwd",
+              "effort",
+              "hook_event_name",
+              "permission_mode",
+              "prompt_id",
+              "session_id",
+              "tool_input",
+              "tool_name",
+              "tool_use_id",
+              "transcript_path"
+            ],
+            "inputKeys": [
+              "command",
+              "dangerouslyDisableSandbox",
+              "description"
+            ]
+          },
+          {
+            "entry": "PermissionRequest",
+            "event": "PermissionRequest",
+            "tool": "Bash",
+            "command": "echo ran>>marker.txt",
+            "flag": {
+              "given": true,
+              "value": true,
+              "type": "boolean"
+            },
+            "keys": [
+              "cwd",
+              "effort",
+              "hook_event_name",
+              "permission_mode",
+              "prompt_id",
+              "session_id",
+              "tool_input",
+              "tool_name",
+              "transcript_path"
+            ],
+            "inputKeys": [
+              "command",
+              "dangerouslyDisableSandbox",
+              "description"
+            ]
+          }
+        ],
+        "systemLines": [
+          {
+            "keys": [
+              "session_id",
+              "status",
+              "subtype",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "status",
+              "status": "requesting"
+            }
+          },
+          {
+            "keys": [
+              "session_id",
+              "status",
+              "subtype",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "status",
+              "status": "requesting"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "a sandbox-off call, the PermissionRequest hook giving no decision",
+      "input": {
+        "command": "echo ran>>marker.txt",
+        "description": "probe",
+        "dangerouslyDisableSandbox": true
+      },
+      "permissionRequest": "{}",
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "toolUseIdMatches": true,
+            "refused": true,
+            "text": "Run outside of the sandbox"
+          }
+        ],
+        "resultSentToApi": true,
+        "markerLines": 0,
+        "hooksAsked": [
+          {
+            "entry": "PreToolUse",
+            "event": "PreToolUse",
+            "tool": "Bash",
+            "command": "echo ran>>marker.txt",
+            "flag": {
+              "given": true,
+              "value": true,
+              "type": "boolean"
+            },
+            "keys": [
+              "cwd",
+              "effort",
+              "hook_event_name",
+              "permission_mode",
+              "prompt_id",
+              "session_id",
+              "tool_input",
+              "tool_name",
+              "tool_use_id",
+              "transcript_path"
+            ],
+            "inputKeys": [
+              "command",
+              "dangerouslyDisableSandbox",
+              "description"
+            ]
+          },
+          {
+            "entry": "PermissionRequest",
+            "event": "PermissionRequest",
+            "tool": "Bash",
+            "command": "echo ran>>marker.txt",
+            "flag": {
+              "given": true,
+              "value": true,
+              "type": "boolean"
+            },
+            "keys": [
+              "cwd",
+              "effort",
+              "hook_event_name",
+              "permission_mode",
+              "prompt_id",
+              "session_id",
+              "tool_input",
+              "tool_name",
+              "transcript_path"
+            ],
+            "inputKeys": [
+              "command",
+              "dangerouslyDisableSandbox",
+              "description"
+            ]
+          }
+        ],
+        "systemLines": [
+          {
+            "keys": [
+              "session_id",
+              "status",
+              "subtype",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "status",
+              "status": "requesting"
+            }
+          },
+          {
+            "keys": [
+              "decision_reason",
+              "decision_reason_type",
+              "message",
+              "session_id",
+              "subtype",
+              "tool_name",
+              "tool_use_id",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "permission_denied",
+              "tool_name": "Bash",
+              "toolUseIdMatches": true,
+              "decision_reason_type": "sandboxOverride",
+              "decision_reason": "dangerouslyDisableSandbox",
+              "message": "Run outside of the sandbox"
+            }
+          },
+          {
+            "keys": [
+              "session_id",
+              "status",
+              "subtype",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "status",
+              "status": "requesting"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "the control: the same call without the flag, inside the sandbox, the PermissionRequest entry present",
+      "input": {
+        "command": "echo ran>>marker.txt",
+        "description": "probe"
+      },
+      "permissionRequest": "{}",
+      "control": true,
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "toolUseIdMatches": true,
+            "refused": false,
+            "text": "(Bash completed with no output)"
+          }
+        ],
+        "resultSentToApi": true,
+        "markerLines": 1,
+        "hooksAsked": [
+          {
+            "entry": "PreToolUse",
+            "event": "PreToolUse",
+            "tool": "Bash",
+            "command": "echo ran>>marker.txt",
+            "flag": {
+              "given": false
+            },
+            "keys": [
+              "cwd",
+              "effort",
+              "hook_event_name",
+              "permission_mode",
+              "prompt_id",
+              "session_id",
+              "tool_input",
+              "tool_name",
+              "tool_use_id",
+              "transcript_path"
+            ],
+            "inputKeys": [
+              "command",
+              "description"
+            ]
+          }
+        ],
+        "systemLines": [
+          {
+            "keys": [
+              "session_id",
+              "status",
+              "subtype",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "status",
+              "status": "requesting"
+            }
+          },
+          {
+            "keys": [
+              "session_id",
+              "status",
+              "subtype",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "status",
+              "status": "requesting"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "the flag given as the string \"true\", the PermissionRequest hook answering allow",
+      "input": {
+        "command": "echo ran>>marker.txt",
+        "description": "probe",
+        "dangerouslyDisableSandbox": "true"
+      },
+      "permissionRequest": "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}",
+      "observed": {
+        "exitCode": 0,
+        "results": [
+          {
+            "toolUseIdMatches": true,
+            "refused": false,
+            "text": "(Bash completed with no output)"
+          }
+        ],
+        "resultSentToApi": true,
+        "markerLines": 1,
+        "hooksAsked": [
+          {
+            "entry": "PreToolUse",
+            "event": "PreToolUse",
+            "tool": "Bash",
+            "command": "echo ran>>marker.txt",
+            "flag": {
+              "given": true,
+              "value": true,
+              "type": "boolean"
+            },
+            "keys": [
+              "cwd",
+              "effort",
+              "hook_event_name",
+              "permission_mode",
+              "prompt_id",
+              "session_id",
+              "tool_input",
+              "tool_name",
+              "tool_use_id",
+              "transcript_path"
+            ],
+            "inputKeys": [
+              "command",
+              "dangerouslyDisableSandbox",
+              "description"
+            ]
+          },
+          {
+            "entry": "PermissionRequest",
+            "event": "PermissionRequest",
+            "tool": "Bash",
+            "command": "echo ran>>marker.txt",
+            "flag": {
+              "given": true,
+              "value": true,
+              "type": "boolean"
+            },
+            "keys": [
+              "cwd",
+              "effort",
+              "hook_event_name",
+              "permission_mode",
+              "prompt_id",
+              "session_id",
+              "tool_input",
+              "tool_name",
+              "transcript_path"
+            ],
+            "inputKeys": [
+              "command",
+              "dangerouslyDisableSandbox",
+              "description"
+            ]
+          }
+        ],
+        "systemLines": [
+          {
+            "keys": [
+              "session_id",
+              "status",
+              "subtype",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "status",
+              "status": "requesting"
+            }
+          },
+          {
+            "keys": [
+              "session_id",
+              "status",
+              "subtype",
+              "type",
+              "uuid"
+            ],
+            "line": {
+              "type": "system",
+              "subtype": "status",
+              "status": "requesting"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

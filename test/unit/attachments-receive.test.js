@@ -32,6 +32,13 @@ const attachmentsOf = (ws) => path.join(ws, '.rundock', 'attachments');
 const folderOf = (ws, id = 'alpha') => path.join(attachmentsOf(ws), id);
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const b64 = (bytes) => bytes.toString('base64');
+const LINKS = { skip: process.platform === 'win32' && 'links need privileges on Windows' };
+// Each file in a folder by name, with its bytes; null when there is no folder.
+function bytesIn(dir) {
+  let names;
+  try { names = fs.readdirSync(dir).sort(); } catch (e) { return null; }
+  return Object.fromEntries(names.map((n) => [n, fs.readFileSync(path.join(dir, n))]));
+}
 
 function pngBytes(width = 10, height = 10, size = 33) {
   const b = Buffer.alloc(size);
@@ -143,17 +150,40 @@ describe('createReceiver: how the chat handler hands a message over', () => {
     });
   });
 
-  test('refuses files for a Codex agent before the payload is looked at', () => {
+  test('stores a PNG for a Codex agent and hands the message back into the handler', async () => {
     ready('createReceiver');
+    const ws = workspace();
     const sock = socket();
     const asked = [];
-    const receiver = receive.createReceiver({ clients: new Set([sock]), findAgent: (slug) => { asked.push(slug); return { runtime: 'codex' }; } });
-    const msg = { type: 'chat', conversationId: '../..', content: 5, agent: 'gamma', attachments: [{ name: 5 }] };
-    assert.strictEqual(receiver.takes(msg, sock, true), true, 'the message is taken');
+    await inWorkspace(ws, async () => {
+      const receiver = receive.createReceiver({ clients: new Set([sock]), findAgent: (slug) => { asked.push(slug); return { runtime: 'codex' }; } });
+      assert.strictEqual(receiver.takes(message({ agent: 'gamma' }), sock, true), true, 'the message is taken');
+      await receive.whenReceived('alpha');
+    });
     assert.deepStrictEqual(asked, ['gamma']);
-    assert.deepStrictEqual(sock.sent, [{ type: 'chat_refused', conversationId: '../..', code: 'codex-files', title: 'Message not sent',
-      text: 'This agent runs on Codex, which can\'t open attached files yet. Remove the files to send your message.' }]);
-    assert.deepStrictEqual(sock.back, [], 'nothing went back into the handler');
+    assert.deepStrictEqual(sock.sent.map((m) => m.type), ['chat_stored']);
+    assert.deepStrictEqual(sock.back.map((m) => m.attachmentEntry), [sock.sent[0].entry.id], 'it came back once, with its entry');
+  });
+
+  test('refuses a PDF for a Codex agent with codex-pdf, naming it, and stores the same PDF for a Claude agent', async () => {
+    ready('createReceiver');
+    const PDF_MESSAGE = () => message({ agent: 'gamma', attachments: [SHOT(), file('report.pdf', pdfBytes())] });
+    for (const [runtime, want] of [['codex', ['chat_refused']], ['claude', ['chat_stored']]]) {
+      const ws = workspace();
+      const sock = socket();
+      await inWorkspace(ws, async () => {
+        const receiver = receive.createReceiver({ clients: new Set([sock]), findAgent: () => ({ runtime }) });
+        receiver.takes(PDF_MESSAGE(), sock, true);
+        await receive.whenReceived('alpha');
+      });
+      assert.deepStrictEqual(sock.sent.map((m) => m.type), want, runtime);
+      if (runtime === 'codex') {
+        assert.deepStrictEqual(sock.sent[0], { type: 'chat_refused', conversationId: 'alpha', code: 'codex-pdf', title: 'report.pdf', name: 'report.pdf',
+          text: 'This agent runs on Codex, which can\'t read PDFs yet. Attach a screenshot of the page or paste the text.' });
+        assert.deepStrictEqual(sock.back, [], 'nothing went back into the handler');
+        assert.strictEqual(fs.existsSync(attachmentsOf(ws)), false, 'nothing written');
+      }
+    }
   });
 
   test('looks up the default agent when the message names none, and lets a Claude agent through', async () => {
@@ -168,6 +198,83 @@ describe('createReceiver: how the chat handler hands a message over', () => {
     });
     assert.deepStrictEqual(asked, ['default']);
     assert.deepStrictEqual(sock.sent.map((m) => m.type), ['chat_stored']);
+  });
+
+  // A conversation whose record already holds a message, its session
+  // `thread-1` sent `images` images.
+  async function threadAt(images) {
+    const ws = workspace();
+    await receiveAttachments(ws, message({ attachments: [file('notes.txt', Buffer.from('earlier\n'))] }));
+    const recordFile = path.join(folderOf(ws), 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    record.sent['thread-1'] = { files: [], bytes: 0, images };
+    fs.writeFileSync(recordFile, JSON.stringify(record));
+    return ws;
+  }
+  // The record with the entry `entryId` taken out, as an agent could leave it.
+  function withoutEntry(ws, entryId) {
+    const recordFile = path.join(folderOf(ws), 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    fs.writeFileSync(recordFile, JSON.stringify({ ...record, messages: record.messages.filter((m) => m.id !== entryId) }));
+  }
+  // What each answer the socket was sent says: its type, or a refusal's code.
+  const answers = (sock) => sock.sent.map((m) => (m.type === 'chat_refused' ? m.code : m.type));
+  // A receiver for an agent on Codex, and a one-image message for `thread-1`
+  // sent through it from the page and answered. A stored one comes back into
+  // the handler, here sock.back, and waits there as a turn not yet started.
+  function codexReceiver(sock) {
+    const receiver = receive.createReceiver({ clients: new Set([sock]), findAgent: () => ({ runtime: 'codex' }) });
+    const oneImage = () => {
+      receiver.takes(message({ agent: 'gamma', sessionId: 'thread-1', attachments: [file('shot.png', pngBytes())] }), sock, true);
+      return receive.whenReceived('alpha');
+    };
+    return { receiver, oneImage };
+  }
+
+  test('a stored message refused at its reference check, twice over, lets go of its own images and no other message\'s', async () => {
+    ready('createReceiver');
+    const ws = await threadAt(18);
+    const sock = socket();
+    await inWorkspace(ws, async () => {
+      const { receiver, oneImage } = codexReceiver(sock);
+      await oneImage();
+      await oneImage();
+      const [gone] = sock.back;
+      withoutEntry(ws, gone.attachmentEntry);
+      assert.strictEqual(receiver.takes(gone, sock, false), true, 'refused once');
+      assert.strictEqual(receiver.takes(gone, sock, false), true, 'and again');
+      await oneImage();
+      await oneImage();
+    });
+    assert.deepStrictEqual(answers(sock), ['chat_stored', 'chat_stored', 'bad-entry', 'bad-entry', 'chat_stored', 'codex-images'],
+      'with the refused one let go, the second and third reach 20 and a fourth is refused');
+  });
+
+  test('a stored message whose reference still checks out is handed on with its images held, so the next one for a session at 19 is refused codex-images', async () => {
+    ready('createReceiver');
+    const ws = await threadAt(19);
+    const sock = socket();
+    await inWorkspace(ws, async () => {
+      const { receiver, oneImage } = codexReceiver(sock);
+      await oneImage();
+      assert.strictEqual(receiver.takes(sock.back[0], sock, false), false, 'handed on to its turn');
+      await oneImage();
+    });
+    assert.deepStrictEqual(answers(sock), ['chat_stored', 'codex-images']);
+  });
+
+  test('a page\'s message naming a stored message\'s entry, refused at its reference check, leaves that message\'s images held', async () => {
+    ready('createReceiver');
+    const ws = await threadAt(19);
+    const sock = socket();
+    await inWorkspace(ws, async () => {
+      const { receiver, oneImage } = codexReceiver(sock);
+      await oneImage();
+      const named = { type: 'chat', conversationId: 'beta', agent: 'gamma', sessionId: 'thread-1', content: 'and this', attachmentEntry: sock.back[0].attachmentEntry };
+      assert.strictEqual(receiver.takes(named, sock, true), true, 'refused');
+      await oneImage();
+    });
+    assert.deepStrictEqual(answers(sock), ['chat_stored', 'bad-entry', 'codex-images']);
   });
 });
 
@@ -306,6 +413,160 @@ describe('all or nothing, through the create seam', () => {
     await assert.rejects(receiveAttachments(ws, message({ attachments: THREE() }), { create }), refused('save-failed'));
     assert.deepStrictEqual(fs.readdirSync(folderOf(ws)), []);
     assert.deepStrictEqual(store.readRecord(ws, 'alpha').messages, []);
+  });
+});
+
+describe('the files checked once the record is written, through the create seam', () => {
+  // A create that writes as the store does, then lets `after` change call
+  // `n`'s file once it is written.
+  const changingOn = (n, after) => {
+    let calls = 0;
+    return (target, bytes) => {
+      calls += 1;
+      writeFileExclusive(target, bytes);
+      if (calls === n) after(target, bytes);
+    };
+  };
+  const TWO = () => [SHOT(), file('report.pdf', pdfBytes())];
+
+  test('a file written with other bytes than it was given is refused save-failed, with the folder and record as before', async () => {
+    ready('receiveAttachments');
+    const ws = workspace();
+    await receiveAttachments(ws, message({ attachments: [file('notes.txt', Buffer.from('earlier\n'))] }));
+    const before = bytesIn(folderOf(ws));
+    const create = changingOn(2, (target, bytes) => fs.writeFileSync(target, Buffer.alloc(bytes.length, 0x41)));
+    await assert.rejects(receiveAttachments(ws, message({ attachments: TWO() }), { create }), refused('save-failed'));
+    assert.deepStrictEqual(bytesIn(folderOf(ws)), before);
+  });
+
+  test('a file replaced by a link once written is refused save-failed, with no record left behind and nothing removed through the link', LINKS, async () => {
+    ready('receiveAttachments');
+    const ws = workspace();
+    const outside = fs.realpathSync(makeTempDir('receive-outside-'));
+    const copy = path.join(outside, 'copy.png');
+    const create = changingOn(1, (target, bytes) => {
+      fs.writeFileSync(copy, bytes);
+      fs.rmSync(target);
+      fs.symlinkSync(copy, target);
+    });
+    await assert.rejects(receiveAttachments(ws, message({ attachments: TWO() }), { create }), refused('save-failed'));
+    assert.deepStrictEqual(fs.readdirSync(folderOf(ws)), [], 'no files and no record');
+    assert.ok(fs.readFileSync(copy).equals(pngBytes(640, 480)), 'what the link named is kept');
+  });
+
+  test('every file present is stored as before, its entry recorded', async () => {
+    ready('receiveAttachments');
+    const ws = workspace();
+    const { entry } = await receiveAttachments(ws, message({ attachments: TWO() }), { create: changingOn(3, () => {}) });
+    assert.deepStrictEqual(store.readRecord(ws, 'alpha').messages, [entry]);
+    for (const f of entry.files) assert.strictEqual(store.checkRecordedFile(ws, 'alpha', f.file), 'present', f.file);
+  });
+});
+
+describe('what a Codex agent is sent, checked before the write', () => {
+  const codex = (ws, over) => receiveAttachments(ws, message(over), { runtime: 'codex' });
+  // A conversation whose record already holds a message, with `entry` as
+  // the `sent` entry of the session `thread-1`.
+  async function withEntry(entry) {
+    const ws = workspace();
+    await receiveAttachments(ws, message({ attachments: [file('notes.txt', Buffer.from('earlier\n'))] }));
+    const recordFile = path.join(folderOf(ws), 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    record.sent['thread-1'] = entry;
+    fs.writeFileSync(recordFile, JSON.stringify(record));
+    return ws;
+  }
+  async function refusedAsBefore(ws, over, code, fields) {
+    const before = bytesIn(folderOf(ws));
+    await assert.rejects(codex(ws, over), refused(code, fields));
+    assert.deepStrictEqual(bytesIn(folderOf(ws)), before, 'the folder and record as they were');
+  }
+  const images = (n, size) => Array.from({ length: n }, (_, i) => file(`shot-${i + 1}.png`, pngBytes(10, 10, size)));
+
+  test('a PDF is refused codex-pdf with the first PDF\'s name, and nothing is written', async () => {
+    ready('receiveAttachments');
+    const ws = workspace();
+    const attachments = [SHOT(), file('first.pdf', pdfBytes()), file('second.pdf', pdfBytes())];
+    await assert.rejects(codex(ws, { attachments }), refused('codex-pdf', { name: 'first.pdf' }));
+    assert.strictEqual(fs.existsSync(attachmentsOf(ws)), false, 'no attachments folder');
+  });
+
+  test('every limit is checked before what Codex can be sent', async () => {
+    ready('receiveAttachments');
+    await assert.rejects(codex(workspace(), { attachments: [file('report.pdf', pdfBytes())] }), refused('codex-pdf', { name: 'report.pdf' }));
+    await assert.rejects(codex(workspace(), { attachments: [file('report.pdf', pdfBytes()), file('big.png', pngBytes(10, 10, 3500001))] }),
+      refused('image-bytes', { name: 'big.png' }));
+  });
+
+  test('images that would take the session past either figure are refused codex-images, with the record as it was', async () => {
+    ready('receiveAttachments');
+    await refusedAsBefore(await withEntry({ files: [], bytes: 0, images: 20 }), { sessionId: 'thread-1' }, 'codex-images');
+    await refusedAsBefore(await withEntry({ files: [], bytes: 9999968, images: 1 }), { sessionId: 'thread-1', attachments: images(1, 33) }, 'codex-images');
+    await refusedAsBefore(workspace(), { attachments: images(3, 3500000) }, 'codex-images');
+  });
+
+  test('images reaching either figure exactly are stored, and one image or byte more is refused', async () => {
+    ready('receiveAttachments');
+    const counted = await codex(await withEntry({ files: [], bytes: 0, images: 15 }), { sessionId: 'thread-1', attachments: images(5, 33) });
+    assert.strictEqual(counted.entry.files.length, 5);
+    await refusedAsBefore(await withEntry({ files: [], bytes: 0, images: 16 }), { sessionId: 'thread-1', attachments: images(5, 33) }, 'codex-images');
+    const sized = await codex(await withEntry({ files: [], bytes: 9999967, images: 1 }), { sessionId: 'thread-1', attachments: images(1, 33) });
+    assert.strictEqual(sized.entry.files.length, 1);
+    await refusedAsBefore(await withEntry({ files: [], bytes: 9999968, images: 1 }), { sessionId: 'thread-1', attachments: images(1, 33) }, 'codex-images');
+  });
+
+  test('a malformed entry is spent and refuses one image, and a message with no image is stored', async () => {
+    ready('receiveAttachments');
+    const ws = await withEntry({ files: 'x', bytes: 0, images: 0 });
+    await refusedAsBefore(ws, { sessionId: 'thread-1' }, 'codex-images');
+    const { entry } = await codex(ws, { sessionId: 'thread-1', attachments: [file('notes.md', Buffer.from('# Notes\n'))] });
+    assert.deepStrictEqual(entry.files.map((f) => f.file), ['2-notes.md']);
+  });
+
+  test('a session that names no own entry is counted from nothing, and the one that names it from its entry', async () => {
+    ready('receiveAttachments');
+    await refusedAsBefore(await withEntry({ files: [], bytes: 0, images: 20 }), { sessionId: 'thread-1', attachments: images(5, 33) }, 'codex-images');
+    for (const sessionId of [undefined, 5, '__proto__', 'thread-2']) {
+      const ws = await withEntry({ files: [], bytes: 0, images: 20 });
+      const { entry } = await codex(ws, { sessionId, attachments: images(5, 33) });
+      assert.strictEqual(entry.files.length, 5, String(sessionId));
+    }
+  });
+
+  // Two messages for `thread-1`, received together before either one's turn
+  // starts: the first is stored, and the second is refused with nothing of
+  // it written, the folder and record as the first left them.
+  async function firstOfTwo(ws, attachments) {
+    const before = bytesIn(folderOf(ws));
+    const [first, second] = await Promise.allSettled([1, 2].map(() => codex(ws, { sessionId: 'thread-1', attachments: attachments() })));
+    assert.strictEqual(first.status, 'fulfilled', 'the first is stored');
+    assert.strictEqual(second.status, 'rejected', 'the second is refused');
+    refused('codex-images')(second.reason);
+    const after = bytesIn(folderOf(ws));
+    const stored = first.value.entry.files.map((f) => f.file);
+    assert.deepStrictEqual(Object.keys(after), [...Object.keys(before), ...stored].sort(), 'the first message\'s files alone are added');
+    for (const name of Object.keys(before)) if (name !== 'record.json') assert.ok(after[name].equals(before[name]), name);
+    const record = JSON.parse(before['record.json']);
+    assert.deepStrictEqual(JSON.parse(after['record.json']), { ...record, messages: [...record.messages, first.value.entry] }, 'and its entry alone');
+  }
+
+  test('two one-image messages for a session at 19 images, received before either turn starts, store the first and refuse the second codex-images', async () => {
+    ready('receiveAttachments');
+    await firstOfTwo(await withEntry({ files: [], bytes: 0, images: 19 }), () => images(1, 33));
+  });
+
+  test('two 33-byte images for a session 33 bytes short of 10,000,000, received before either turn starts, store the first and refuse the second codex-images', async () => {
+    ready('receiveAttachments');
+    await firstOfTwo(await withEntry({ files: [], bytes: 9999967, images: 1 }), () => images(1, 33));
+  });
+
+  test('a record that can\'t be read is left to the write, which refuses it save-failed, and a PDF is refused codex-pdf without it', async () => {
+    ready('receiveAttachments');
+    const ws = workspace();
+    fs.mkdirSync(folderOf(ws), { recursive: true });
+    fs.writeFileSync(path.join(folderOf(ws), 'record.json'), 'not json');
+    await refusedAsBefore(ws, { attachments: [file('report.pdf', pdfBytes())] }, 'codex-pdf', { name: 'report.pdf' });
+    await refusedAsBefore(ws, {}, 'save-failed');
   });
 });
 
