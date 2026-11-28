@@ -780,6 +780,31 @@ test('while a turn watches, an allowed add is built on the copy the guard accept
   });
 });
 
+test('while a turn watches, an agent\'s server and key written after the guard\'s check, just before the read, are not built on', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  readsItsOwnWay();
+  await inWorkspace(formatted({ mcpServers: ALPHA }), async (s) => {
+    const t = turnIn(s);
+    try {
+      const { w, outcome } = propose(s, s.request());
+      assert.strictEqual(s.asked.length, 1, 'one card');
+      const agents = formatted({ mcpServers: { ...ALPHA, 'example-beta': { command: 'node' } }, extra: 1 });
+      const real = cw.io.read;
+      let landed = false;
+      cw.io.read = (file) => {
+        if (!landed) { landed = true; fs.writeFileSync(file, agents); }
+        return real(file);
+      };
+      try { s.answer(0, true); } finally { cw.io.read = real; }
+      assert.ok(landed, 'the agent\'s write landed just before the read');
+      assert.deepStrictEqual(t.heard, [], 'after the guard\'s check, which found nothing to put back');
+      assert.strictEqual(fs.readFileSync(s.file, 'utf-8'), formatted({ mcpServers: { ...ALPHA, ...LOCAL_TOOLS } }), 'exactly the accepted copy and the add');
+      assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+      assert.strictEqual((await outcome).ok, true);
+    } finally { t.release(); }
+  });
+});
+
 test('while a turn watches, a replace card shows the accepted entry an agent changed before the save handler read, and Allow writes over it', async () => {
   assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
   const team = require('../../lib/protocol/handlers/team.js');
