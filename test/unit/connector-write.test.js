@@ -29,9 +29,14 @@ function captureWs() {
 // A workspace whose .mcp.json holds `holds` (a servers map, a string written
 // as it is, or no file at all), the context the writer is handed, the cards it
 // raises, held for the test to answer, and each time the file is opened:
-// isInsideWorkspace is the first thing reading it calls.
+// isInsideWorkspace is the first thing reading it calls. It is the open
+// workspace while the test runs, so what a reply keeps in its conversation
+// lands in this folder and goes with it.
+const config = require('../../lib/config.js');
 async function inWorkspace(holds, fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'connector-write-'));
+  const open = config.getWorkspace();
+  config.setWorkspace(dir);
   const file = path.join(dir, '.mcp.json');
   if (typeof holds === 'string') fs.writeFileSync(file, holds);
   else if (holds) fs.writeFileSync(file, JSON.stringify({ mcpServers: holds }, null, 2));
@@ -49,13 +54,18 @@ async function inWorkspace(holds, fn) {
     rewrite: (servers) => fs.writeFileSync(file, JSON.stringify({ mcpServers: servers }, null, 2)),
     request: (fields) => ({ workspace: dir, conversationId: 'convo-write', change: 'add', name: 'local-tools', entry: { command: 'node' }, source: 'agent', ...fields }),
   };
-  try { return await fn(s); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  try { return await fn(s); } finally { config.setWorkspace(open); fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
 function propose(s, req) {
   const w = captureWs();
   return { w, outcome: cw.proposeConnectorChange(s.ctx, w, req) };
 }
+
+// The conversation every agent's change in this suite comes from, which each
+// reply to it carries; a reply to a request without it carries none.
+const ASKED_IN = 'convo-write';
+const answered = (req, payload) => (req && req.conversationId === ASKED_IN ? { ...payload, conversationId: ASKED_IN } : payload);
 
 // A change refused before any card: nobody asked, the file's bytes as they
 // were, one message, the refusal's, and the outcome naming why.
@@ -64,7 +74,7 @@ async function refusedAtRequest(s, req, reason, message) {
   const { w, outcome } = propose(s, req);
   assert.strictEqual(s.asked.length, 0, 'no card is raised');
   assert.deepStrictEqual(s.bytes(), before, 'the file is byte-identical');
-  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'one message, the refusal\'s');
+  assert.deepStrictEqual(w.sent, [answered(req, { type: 'connector_error', message })], 'one message, the refusal\'s');
   assert.deepStrictEqual(await outcome, { ok: false, reason, message });
 }
 
@@ -73,7 +83,8 @@ const NO_CONVERSATION = 'That connector change didn\'t say which conversation it
 const NOT_ALLOWED = 'The change was not allowed, so nothing was changed.';
 const TIMED_OUT = 'Nobody answered the card in time, so nothing was changed.';
 const UNREADABLE = 'The connector file is not valid JSON, so nothing was changed. Fix or remove it first: writing over it now would discard whatever was meant to be there.';
-const SAVED = (name, action) => [{ type: 'connector_saved', name, action, takesEffect: 'next agent start' }];
+const SAVED = (name, action, change = action === 'removed' ? 'remove' : 'add', conversationId = ASKED_IN) =>
+  [{ type: 'connector_saved', name, change, action, takesEffect: 'next agent start', ...(conversationId ? { conversationId } : {}) }];
 
 // ===== One writer =====
 
@@ -250,7 +261,7 @@ async function refusedAtAllow(s, req, meanwhile, reason, message) {
   const atAllow = s.bytes();
   s.answer(0, true);
   assert.deepStrictEqual(s.bytes(), atAllow, 'the file is byte-identical to what it held at the Allow');
-  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'one message, the refusal\'s, and no save');
+  assert.deepStrictEqual(w.sent, [answered(req, { type: 'connector_error', message })], 'one message, the refusal\'s, and no save');
   assert.deepStrictEqual(await outcome, { ok: false, reason, message });
 }
 const STDIO_HELD = { command: 'node', args: ['tools.js', '--stdio'], env: { API_KEY: 'old-secret' } };
@@ -363,7 +374,7 @@ test('Rundock\'s own add of a connector not yet set up needs no conversation, ra
     assert.deepStrictEqual(s.asked[0].toolInput, { name: 'local-tools', action: 'add', command: 'node', args: [] });
     s.answer(0, true);
     assert.deepStrictEqual(s.servers(), { 'local-tools': { command: 'node' } });
-    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved', 'add', null));
     assert.deepStrictEqual(await outcome, { ok: true, change: 'add', name: 'local-tools', takesEffect: 'next agent start' });
   });
 });
@@ -374,7 +385,7 @@ test('a replace allowed while the entry is as the card showed it writes the new 
     const { w, outcome } = propose(s, s.request({ change: 'replace', entry: { command: 'node', args: ['server.js'] } }));
     s.answer(0, true);
     assert.deepStrictEqual(s.servers(), { 'local-tools': { command: 'node', args: ['server.js'] } });
-    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved', 'replace'));
     assert.deepStrictEqual(await outcome, { ok: true, change: 'replace', name: 'local-tools', takesEffect: 'next agent start' });
   });
 });
@@ -386,7 +397,7 @@ test('a replace allowed after the entry was rewritten with the same settings in 
     s.rewrite({ 'local-tools': { env: { API_KEY: 'old-secret' }, args: ['tools.js', '--stdio'], command: 'node' } });
     s.answer(0, true);
     assert.deepStrictEqual(s.servers(), { 'local-tools': { command: 'node', args: ['server.js'] } });
-    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved', 'replace'));
     assert.deepStrictEqual(await outcome, { ok: true, change: 'replace', name: 'local-tools', takesEffect: 'next agent start' });
   });
 });
@@ -511,7 +522,7 @@ for (const [said, holds, fields, toolName] of CHANGES) {
         assert.strictEqual(s.asked[0].convoId, 'convo-write');
         s.asked[0].onDecision(...args);
         assert.deepStrictEqual(s.bytes(), before, 'the file is byte-identical');
-        assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }]);
+        assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message }]);
         assert.deepStrictEqual(await outcome, { ok: false, reason, message });
       });
     });
@@ -547,7 +558,7 @@ test('an allowed change whose write fails says so in one message and resolves wr
     try { s.answer(0, true); } finally { t.mock.restoreAll(); }
     const message = 'Rundock couldn\'t save the connector file, so nothing was changed.';
     assert.deepStrictEqual(s.bytes(), before, 'the file is byte-identical');
-    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }]);
+    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message }]);
     assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message });
     assert.ok(warned.mock.calls.some((c) => String(c.arguments[0]).includes('disk full')), 'the error\'s own words go to the log');
   });
@@ -624,7 +635,7 @@ for (const [cause, makeIt, message, skip] of UNREADABLE_CAUSES) {
         const { w, outcome } = propose(s, s.request());
         assert.strictEqual(s.asked.length, 0, 'no card is raised');
         assert.deepStrictEqual(standing(s.file), before, 'what stands there is as it was');
-        assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'one message, the refusal\'s');
+        assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message }], 'one message, the refusal\'s');
         assert.deepStrictEqual(await outcome, { ok: false, reason: 'unreadable', message });
       } finally { try { fs.chmodSync(s.file, 0o644); } catch (e) { /* not a file */ } }
     });
@@ -642,7 +653,7 @@ for (const [cause, makeIt, message, skip] of UNREADABLE_CAUSES) {
         const atAllow = standing(s.file);
         s.answer(0, true);
         assert.deepStrictEqual(standing(s.file), atAllow, 'what stands there is as it was at the Allow');
-        assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'one message, the refusal\'s, and no save');
+        assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message }], 'one message, the refusal\'s, and no save');
         assert.deepStrictEqual(await outcome, { ok: false, reason: 'unreadable', message });
       } finally { try { fs.chmodSync(s.file, 0o644); } catch (e) { /* not a file */ } }
     });
@@ -656,7 +667,7 @@ async function linkRefusedAtRequest(s, target) {
   const { w, outcome } = propose(s, s.request());
   assert.strictEqual(s.asked.length, 0, 'no card is raised');
   assert.deepStrictEqual(standing(target), before, 'what the link leads to is byte-identical');
-  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: LINK_REFUSED }], 'one message, the refusal\'s, and no save');
+  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message: LINK_REFUSED }], 'one message, the refusal\'s, and no save');
   assert.deepStrictEqual(await outcome, { ok: false, reason: 'unreadable', message: LINK_REFUSED });
 }
 
@@ -703,7 +714,7 @@ test('a link swapped in at .mcp.json while the card waits, no turn watching, is 
     s.answer(0, true);
     assert.strictEqual(fs.readFileSync(target, 'utf-8'), OUTSIDE, 'what the link leads to is byte-identical');
     assert.deepStrictEqual(standing(s.file), { link: target }, 'the link is left as it was');
-    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: LINK_REFUSED }], 'one message, the refusal\'s, and no save');
+    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message: LINK_REFUSED }], 'one message, the refusal\'s, and no save');
     assert.deepStrictEqual(await outcome, { ok: false, reason: 'unreadable', message: LINK_REFUSED });
   }));
 });
@@ -822,7 +833,7 @@ test('while a turn watches, a replace card shows the accepted entry an agent cha
         'the card shows the entry the guard accepted, not the agent\'s');
       s.answer(0, true);
       assert.deepStrictEqual(s.servers(), { calendar: { url: 'https://new.example.com/mcp' } });
-      assert.deepStrictEqual(w.sent, SAVED('calendar', 'saved'));
+      assert.deepStrictEqual(w.sent, SAVED('calendar', 'saved', 'replace'));
     } finally { t.release(); config.setWorkspace(previous); }
   });
 });
@@ -1106,7 +1117,7 @@ const writesItsOwnWay = () => assert.strictEqual(typeof (cw.io && cw.io.write), 
 // An Allow whose write fails: what it sends, what it resolves, and the file.
 async function failedAtAllow(s, outcome, w, message, bytes) {
   assert.deepStrictEqual(s.bytes(), bytes, 'the file holds what it held before');
-  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'one message, and no save');
+  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message }], 'one message, and no save');
   assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message });
 }
 
@@ -1163,7 +1174,7 @@ test('a write that fails and cannot put back what the file held says so in its o
     t.mock.method(console, 'warn', () => {});
     t.mock.method(fs, 'writeSync', failingWrites(Infinity));
     try { s.answer(0, true); } finally { t.mock.restoreAll(); }
-    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: NOT_PUT_BACK }], 'one message, and no save');
+    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message: NOT_PUT_BACK }], 'one message, and no save');
     assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message: NOT_PUT_BACK });
   });
 });
@@ -1198,7 +1209,7 @@ test('a link swapped in between the read and the write ends write-failed, and no
     try { s.answer(0, true); } finally { cw.io.write = real; console.warn = warn; }
     assert.strictEqual(fs.readFileSync(target, 'utf-8'), OUTSIDE, 'what the link leads to is byte-identical');
     assert.deepStrictEqual(standing(s.file), { link: target });
-    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: WRITE_FAILED }], 'one message, and no save');
+    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message: WRITE_FAILED }], 'one message, and no save');
     assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message: WRITE_FAILED });
   }));
 });
@@ -1250,7 +1261,7 @@ test('where the platform has no O_NOFOLLOW, a link swapped in at .mcp.json while
       try { s.answer(0, true); } finally { console.warn = warn; }
       assert.strictEqual(fs.readFileSync(target, 'utf-8'), OUTSIDE, 'what the link leads to is byte-identical');
       assert.deepStrictEqual(standing(s.file), { link: target }, 'the link is left as it was');
-      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: LINK_REFUSED }], 'one message, the refusal\'s, and no save');
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message: LINK_REFUSED }], 'one message, the refusal\'s, and no save');
       assert.deepStrictEqual(await outcome, { ok: false, reason: 'unreadable', message: LINK_REFUSED });
     }));
   } finally { putBack(); }
@@ -1276,7 +1287,7 @@ test('where the platform has no O_NOFOLLOW, a link swapped in between the read a
       try { s.answer(0, true); } finally { cw.io.write = real; console.warn = warn; }
       assert.strictEqual(fs.readFileSync(target, 'utf-8'), OUTSIDE, 'what the link leads to is byte-identical');
       assert.deepStrictEqual(standing(s.file), { link: target });
-      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: WRITE_FAILED }], 'one message, and no save');
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message: WRITE_FAILED }], 'one message, and no save');
       assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message: WRITE_FAILED });
     }));
   } finally { putBack(); }
@@ -1330,7 +1341,7 @@ async function notConfirmed(t, s, readBack) {
   const real = cw.io.readBack;
   cw.io.readBack = (file) => readBack(file, real);
   try { s.answer(0, true); } finally { cw.io.readBack = real; t.mock.restoreAll(); }
-  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: NOT_CONFIRMED }], 'one message, and no save');
+  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', conversationId: ASKED_IN, message: NOT_CONFIRMED }], 'one message, and no save');
   assert.deepStrictEqual(await outcome, { ok: false, reason: 'not-confirmed', message: NOT_CONFIRMED });
   assert.ok(!logged.mock.calls.some((c) => /\[Connector\] saved/.test(String(c.arguments[0]))), 'and no line says it was saved');
 }
@@ -1417,8 +1428,129 @@ test('an honest add, replace and remove with no turn and no guard are written tw
       const { w, outcome } = propose(s, s.request(fields));
       s.answer(0, true);
       assert.strictEqual(fs.readFileSync(s.file, 'utf-8'), `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`);
-      assert.deepStrictEqual(w.sent, SAVED(fields.name || 'local-tools', said));
+      assert.deepStrictEqual(w.sent, SAVED(fields.name || 'local-tools', said, fields.change || 'add'));
       assert.strictEqual((await outcome).ok, true);
     });
   }
+});
+
+// ===== Every reply names the conversation that asked =====
+
+// Each way an agent's change ends in the writer, driven from the request: the
+// file it starts from, and what happens once it is asked. Returns propose's
+// { w, outcome }.
+const allowing = (s, fields, meanwhile = () => {}) => {
+  const asked = propose(s, s.request(fields));
+  meanwhile(s);
+  s.answer(0, true);
+  return asked;
+};
+const ENDINGS = [
+  ['invalid', {}, (s) => propose(s, s.request({ change: 'save' }))],
+  ['exists', LOCAL_TOOLS, (s) => propose(s, s.request())],
+  ['absent', ALPHA, (s) => propose(s, s.request({ change: 'remove', entry: undefined }))],
+  ['changed', { 'local-tools': STDIO_HELD }, (s) => allowing(s, { change: 'replace', entry: { command: 'node', args: ['new.js'] } },
+    () => s.rewrite({ 'local-tools': { ...STDIO_HELD, args: ['other.js'] } }))],
+  ['unreadable', '{ not json', (s) => propose(s, s.request())],
+  ['denied', {}, (s) => { const asked = propose(s, s.request()); s.answer(0, false); return asked; }],
+  ['timeout', {}, (s) => { const asked = propose(s, s.request()); s.answer(0, false, undefined, 'timeout'); return asked; }],
+  ['write-failed', {}, (s, t) => {
+    t.mock.method(console, 'warn', () => {});
+    const asked = propose(s, s.request());
+    t.mock.method(fs, 'writeSync', failingWrites(1));
+    try { s.answer(0, true); } finally { t.mock.restoreAll(); }
+    return asked;
+  }],
+  ['not-confirmed', {}, (s, t) => {
+    t.mock.method(console, 'warn', () => {});
+    const real = cw.io.readBack;
+    cw.io.readBack = () => ({ bytes: Buffer.from('{}\n') });
+    try { return allowing(s, {}); } finally { cw.io.readBack = real; t.mock.restoreAll(); }
+  }],
+];
+
+for (const [reason, holds, end] of ENDINGS) {
+  test(`a change that ends ${reason} answers the conversation that asked, once`, async (t) => {
+    assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+    await inWorkspace(holds, async (s) => {
+      const { w, outcome } = end(s, t);
+      const ended = await outcome;
+      assert.strictEqual(ended.reason, reason);
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: ended.message, conversationId: ASKED_IN }], 'one reply, carrying the id');
+    });
+  });
+}
+
+const DONE = [
+  ['add', {}, {}, 'saved'],
+  ['replace', LOCAL_TOOLS, { change: 'replace', entry: { command: 'node', args: ['new.js'] } }, 'saved'],
+  ['remove', LOCAL_TOOLS, { change: 'remove', entry: undefined }, 'removed'],
+];
+for (const [change, holds, fields, action] of DONE) {
+  test(`an allowed ${change} answers the conversation that asked, once, naming the change`, async () => {
+    assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+    await inWorkspace(holds, async (s) => {
+      const { w, outcome } = allowing(s, fields);
+      assert.strictEqual((await outcome).ok, true);
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_saved', name: 'local-tools', change, action, takesEffect: 'next agent start', conversationId: ASKED_IN }]);
+    });
+  });
+}
+
+// ===== Only a well-formed conversation id is used =====
+
+// Every file under a folder, by its path inside it.
+function filesUnder(dir) {
+  const found = [];
+  const walk = (at) => {
+    let entries = [];
+    try { entries = fs.readdirSync(at, { withFileTypes: true }); } catch (e) { return; }
+    for (const e of entries) {
+      const p = path.join(at, e.name);
+      if (e.isDirectory()) walk(p);
+      else found.push(path.relative(dir, p));
+    }
+  };
+  walk(dir);
+  return found.sort();
+}
+
+const MALFORMED_IDS = [
+  ['../escape', '../escape'],
+  ['an empty string', ''],
+  ['65 characters', 'a'.repeat(65)],
+  ['a number', 7],
+  ['an object', { id: ASKED_IN }],
+  ['a string with a slash', 'convo/write'],
+  ['a string with a newline', 'convo\nwrite'],
+];
+for (const [what, id] of MALFORMED_IDS) {
+  test(`an agent's change whose conversation id is ${what} is refused before any card, writes nothing, and its refusal names no conversation`, async () => {
+    assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+    await inWorkspace(ALPHA, async (s) => {
+      const rundock = path.join(s.dir, '.rundock');
+      const before = s.bytes();
+      const kept = filesUnder(rundock);
+      const { w, outcome } = propose(s, s.request({ conversationId: id }));
+      assert.strictEqual(s.asked.length, 0, 'no card');
+      assert.deepStrictEqual(s.bytes(), before, 'the file is byte-identical');
+      assert.deepStrictEqual(filesUnder(rundock), kept, 'no new file under .rundock/');
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: NO_CONVERSATION }], 'one refusal, with no conversationId');
+      assert.deepStrictEqual(await outcome, { ok: false, reason: 'invalid', message: NO_CONVERSATION });
+    });
+  });
+}
+
+test('an agent\'s change whose conversation id is 64 characters is asked about there, and its reply names it', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  const id = `${'a'.repeat(32)}-${'B'.repeat(29)}_9`;
+  assert.strictEqual(id.length, 64);
+  await inWorkspace({}, async (s) => {
+    const { w, outcome } = propose(s, s.request({ conversationId: id }));
+    assert.strictEqual(s.asked.length, 1, 'one card');
+    assert.strictEqual(s.asked[0].convoId, id, 'raised in that conversation');
+    s.answer(0, true);
+    assert.deepStrictEqual(w.sent, [{ type: 'connector_saved', name: 'local-tools', change: 'add', action: 'saved', takesEffect: 'next agent start', conversationId: id }]);
+    assert.strictEqual((await outcome).ok, true);
+  });
 });
