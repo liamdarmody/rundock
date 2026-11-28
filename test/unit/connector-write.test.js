@@ -935,6 +935,89 @@ test('while a turn watches, a link an agent swaps in is put back as the plain fi
   }));
 });
 
+// ===== A baseline the guard holds with no bytes it could read =====
+
+// While a turn watches, the change is built on the copy the guard accepted.
+// A baseline that is a file this account could not read, or a pipe, held
+// connectors nobody knows, so nothing is built on it, even once a plain file
+// stands there: only a baseline holding no file at all is built on as empty.
+const HELD = formatted({ mcpServers: { ...ALPHA, 'example-beta': { command: 'node', args: ['beta.js'] } } });
+const unreadable = (s) => fs.chmodSync(s.file, 0o000);
+const readable = (s) => fs.chmodSync(s.file, 0o644);
+const piped = (s) => { fs.rmSync(s.file); execFileSync('mkfifo', [s.file]); };
+const plainAgain = (s) => { fs.rmSync(s.file); fs.writeFileSync(s.file, HELD); };
+// `between` changes .mcp.json after a turn has ended, the next turn start
+// takes that as the baseline, and `during` puts a plain file holding
+// connectors there while that turn watches. Returns the turn.
+function overUnreadBaseline(s, between, during) {
+  between(s);
+  const t = turnIn(s);
+  during(s);
+  return t;
+}
+const UNREAD_BASELINES = [
+  ['a file this account could not read, made readable', unreadable, readable, NO_MODES],
+  ['a named pipe, replaced by a plain file', piped, plainAgain, NO_PIPES],
+];
+
+for (const [baseline, between, during, skip] of UNREAD_BASELINES) {
+  test(`while a turn watches over a baseline that is ${baseline}, an add is refused at request time as unreadable, and nobody is asked`, { skip }, async () => {
+    assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+    await inWorkspace(HELD, async (s) => {
+      turnEnded(s);
+      const t = overUnreadBaseline(s, between, during);
+      try {
+        await refusedAtRequest(s, s.request(), 'unreadable', UNREADABLE_FILE);
+      } finally { t.release(); }
+    });
+  });
+
+  test(`while a turn watches over a baseline that is ${baseline}, an add is refused at Allow as unreadable, and nothing is written`, { skip }, async () => {
+    assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+    await inWorkspace(HELD, async (s) => {
+      turnEnded(s);
+      let t = null;
+      try {
+        await refusedAtAllow(s, s.request(), () => { t = overUnreadBaseline(s, between, during); }, 'unreadable', UNREADABLE_FILE);
+      } finally { if (t) t.release(); }
+    });
+  });
+}
+
+test('while a turn watches over a baseline holding no connector file, an add is built on an empty one, and an agent\'s file is not carried in', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(undefined, async (s) => {
+    const t = turnIn(s);
+    try {
+      const { w, outcome } = propose(s, s.request());
+      assert.strictEqual(s.asked.length, 1, 'one card');
+      fs.writeFileSync(s.file, HELD);
+      s.answer(0, true);
+      assert.strictEqual(fs.readFileSync(s.file, 'utf-8'), formatted({ mcpServers: LOCAL_TOOLS }), 'an empty file and the add, nothing of the agent\'s');
+      assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+      assert.strictEqual((await outcome).ok, true);
+    } finally { t.release(); }
+  });
+});
+
+test('after an add is refused over a baseline the guard could not read, the same add asked again in the next turn keeps every connector', { skip: NO_MODES }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(HELD, async (s) => {
+    turnEnded(s);
+    const t = overUnreadBaseline(s, unreadable, readable);
+    try { await refusedAtRequest(s, s.request(), 'unreadable', UNREADABLE_FILE); } finally { t.release(); }
+    const next = turnIn(s);
+    try {
+      const { w, outcome } = propose(s, s.request());
+      assert.strictEqual(s.asked.length, 1, 'the change asked again gets its card');
+      s.answer(0, true);
+      assert.deepStrictEqual(s.servers(), { ...JSON.parse(HELD).mcpServers, ...LOCAL_TOOLS }, 'every connector kept, and the add beside them');
+      assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+      assert.strictEqual((await outcome).ok, true);
+    } finally { next.release(); }
+  });
+});
+
 // ===== Nothing else in the file changes =====
 
 // Every top-level key and every other entry as in the copy built on, in the
