@@ -10,9 +10,13 @@
 // raised on the lead's card only while the lead's turn runs and the helper is
 // not stopped. A sixth is interrupted, its lead is told why in one line, and
 // a lead's first helpers in a conversation are marked once, kept on the
-// conversation's record by the server alone. Each of those can be lost with
-// most tests still green, which is why each is broken on purpose here and a
-// test must go red for it.
+// conversation's record by the server alone, and a thread withdrawn as upkeep
+// gives its mark back. A helper's end is kept whenever it arrives, a helper
+// recorded once is known until the app-server goes, and a running Codex
+// helper holds no agent's turn and ends only on its own, never with a Claude
+// Code lead's process, nor ends anything of one's. Each of those can be lost
+// with most tests still green, which is why each is broken on purpose here
+// and a test must go red for it.
 //
 // A guard whose mutation turns nothing red is reported as a FAILURE rather
 // than passed over. An experiment that changes nothing has not been run.
@@ -123,6 +127,45 @@ const MUTATIONS = [
   [only(CARD, 'a helper\'s approval raises a card on Fern\'s turn naming the helper, and Allow answers accept on the helper\'s request'),
     'a helper\'s card no longer names the helper',
     '    ...(helper ? { _helper: { agentId: helper.threadId, agentType: helper.name } } : {}),\n',
+    ''],
+
+  // ===== A HELPER'S END IS KEPT, WHENEVER IT ARRIVES =====
+  [CLIENT, 'a helper\'s end that arrives before its lead records it is dropped',
+    '        if (info.turnId == null || info.turnId === turnId) info.ended = endState(params.turn.status);',
+    '        if (info.turnId == null || info.turnId === turnId) info.ended = null;'],
+
+  // ===== A HELPER RECORDED ONCE IS KNOWN UNTIL THE APP-SERVER GOES =====
+  [CLIENT, 'an ended helper\'s record is dropped once 256 have started, so more work for it runs unseen',
+    '    this._helperThreads.set(rec.threadId, rec);\n    this._tellHelper(rec, \'start\');',
+    '    for (const [id, old] of this._helperThreads) {\n      if (this._helperThreads.size < 256) break;\n      if (old.state !== \'running\') this._helperThreads.delete(id);\n    }\n'
+      + '    this._helperThreads.set(rec.threadId, rec);\n    this._tellHelper(rec, \'start\');'],
+
+  // ===== A CODEX HELPER HOLDS NOTHING =====
+  [ROWS, 'a running Codex helper holds an agent\'s done, idle, return and kill',
+    '  return !!module.exports.HELPERS_ENABLED && runningCount(convoId) - codexRunning(convoId) > 0;',
+    '  return !!module.exports.HELPERS_ENABLED && runningCount(convoId) > 0;'],
+
+  // ===== A CODEX HELPER ENDS ONLY ON ITS OWN, AND ENDS NOTHING OF A CLAUDE CODE LEAD'S =====
+  [ROWS, 'a Claude Code lead\'s helper starting ends the conversation\'s running Codex helpers',
+    '    leadOf(run, entry.agentId, entry.process);\n',
+    '    leadOf(run, entry.agentId, entry.process);\n'
+      + "    for (const row of (codexRows.get(convoId) || new Map()).values()) if (row.state === 'running') row.state = 'killed';\n"],
+  [ROWS, 'a Claude Code lead\'s process closing ends the conversation\'s running Codex helpers',
+    '  endRows(run);\n  changed(convoId);\n  runs.delete(convoId);\n',
+    '  endRows(run);\n'
+      + "  for (const row of (codexRows.get(convoId) || new Map()).values()) if (row.state === 'running') row.state = 'killed';\n"
+      + '  changed(convoId);\n  runs.delete(convoId);\n'],
+  [ROWS, 'a Claude Code lead\'s request ending drops the conversation\'s Codex helpers',
+    '  runs.delete(convoId);\n  for (const act of run.after) {',
+    '  runs.delete(convoId);\n  codexRows.delete(convoId);\n  for (const act of run.after) {'],
+  [ROWS, 'a Codex helper starting ends a Claude Code lead\'s live helpers and refuses its held calls',
+    '    if (rec.firstBatch === undefined) rec.firstBatch = row ? row.firstBatch : firstBatchOf(convoId, lead, rec);',
+    '    if (runs.get(convoId)) leadOf(runs.get(convoId), lead, null);\n'
+      + '    if (rec.firstBatch === undefined) rec.firstBatch = row ? row.firstBatch : firstBatchOf(convoId, lead, rec);'],
+
+  // ===== A WITHDRAWN THREAD GIVES BACK ITS FIRST-BATCH MARK =====
+  [ROWS, 'a thread withdrawn as upkeep or a helper\'s own helper keeps the lead\'s first batch used up',
+    '    if (rec.firstBatch) unmarkFirstBatch(convoId, lead, rec);\n',
     ''],
 ];
 
