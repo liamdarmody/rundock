@@ -321,6 +321,119 @@ describe('an add belongs to the conversation it began in', () => {
   });
 });
 
+describe('adds to a conversation run one after another', () => {
+  const SIXTH = 'That would make 6 files; the limit is 5 per message';
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const frames = (p) => Array.from(p.w.ws.sent).filter((raw) => raw.startsWith('{"type":"chat"'));
+
+  // Text files named `held` added, then an add of e.txt whose read waits for
+  // `release`, and an add of f.txt begun before it settles, each through the
+  // one handler a pick and a drop both call.
+  async function overlapping(p, held) {
+    await pick(p, ...held.map((n) => p.file(n)));
+    const { file, release } = heldRead(p, 'e.txt');
+    const first = p.w.addFiles([file], 'pick');
+    const extra = p.file('f.txt');
+    const second = p.w.addFiles([extra], 'drop');
+    return { first, second, release, extra, both: () => Promise.all([first, second]) };
+  }
+
+  test('a second add begun before the first settles waits for it, and is refused on the count the first left', async () => {
+    const p = page();
+    needs(p);
+    type(p, 'see these');
+    const { first, second, release, both } = await overlapping(p, ['a.txt', 'b.txt', 'c.txt', 'd.txt']);
+    let secondSettled = false;
+    second.then(() => { secondSettled = true; });
+    // Read the moment the first settles, before the second's turn begins.
+    const atFirst = first.then(() => ({ secondSettled, ready: p.w.sendReady('see these') }));
+    assert.strictEqual(p.w.sendReady('see these'), false, 'not ready while both run');
+    await settled();
+    assert.deepStrictEqual(p.chips(), ['a.txt', 'b.txt', 'c.txt', 'd.txt'], 'the second waits, attaching nothing while the first is read');
+    assert.strictEqual(p.w.sendReady('see these'), false, 'still not ready');
+    release();
+    assert.deepStrictEqual(await atFirst, { secondSettled: false, ready: false }, 'not ready when the first settles, the second still to run');
+    await both();
+    assert.deepStrictEqual(p.chips(), ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt']);
+    assert.deepStrictEqual(p.notices(), [{ title: 'f.txt', text: SIXTH }]);
+    assert.strictEqual(p.w.sendReady('see these'), true, 'ready once both have settled');
+  });
+
+  test('two adds begun together with room for both attach every file, in the order the adds began', async () => {
+    const p = page();
+    needs(p);
+    const { release, both } = await overlapping(p, ['a.txt', 'b.txt', 'c.txt']);
+    await settled();
+    release();
+    await both();
+    assert.deepStrictEqual(p.chips(), ['a.txt', 'b.txt', 'c.txt', 'e.txt', 'f.txt']);
+    assert.deepStrictEqual(p.notices(), []);
+  });
+
+  test('the file a second add brought is taken once a file is removed to make room', async () => {
+    const p = page();
+    needs(p);
+    const { release, both, extra } = await overlapping(p, ['a.txt', 'b.txt', 'c.txt', 'd.txt']);
+    release();
+    await both();
+    assert.deepStrictEqual(p.notices(), [{ title: 'f.txt', text: SIXTH }], 'refused on the count');
+    p.doc.querySelector('#composer-chips .composer-chip-remove').click();
+    await pick(p, extra);
+    assert.deepStrictEqual(p.chips(), ['b.txt', 'c.txt', 'd.txt', 'e.txt', 'f.txt']);
+    assert.deepStrictEqual(p.notices(), []);
+  });
+
+  test('Enter pressed while two adds run sends nothing, and once both settle sends the five files the first left', async () => {
+    const p = page();
+    needs(p);
+    const { release, both } = await overlapping(p, ['a.txt', 'b.txt', 'c.txt', 'd.txt']);
+    type(p, 'see these');
+    pressEnter(p);
+    await settled();
+    assert.deepStrictEqual(frames(p), [], 'nothing went while the adds ran');
+    release();
+    await both();
+    pressEnter(p);
+    await until(() => frames(p).length === 1, 'the chat frame');
+    assert.deepStrictEqual(JSON.parse(frames(p)[0]).attachments.map((a) => a.name), ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt']);
+  });
+
+  test('a sixth file the page lets through in error is refused by the server\'s count on Send', async () => {
+    const p = page();
+    needs(p);
+    // The page's detector swapped whole for a copy whose limits take six
+    // files, as a count gone wrong would; the composer reads it at each add.
+    const sniff = p.w.RundockAttachmentSniff;
+    p.w.RundockAttachmentSniff = { ...sniff, LIMITS: { ...sniff.LIMITS, files: 6 } };
+    const { release, both } = await overlapping(p, ['a.txt', 'b.txt', 'c.txt', 'd.txt']);
+    release();
+    await both();
+    assert.deepStrictEqual([p.chips().length, p.notices()], [6, []], 'the page let a sixth file through');
+    type(p, 'see these');
+    pressEnter(p);
+    await until(() => frames(p).length === 1, 'the chat frame');
+    const workspace = fs.realpathSync(makeTempDir('attach-add-'));
+    const sock = new EventEmitter();
+    Object.assign(sock, { readyState: 1, sent: [], back: [] });
+    sock.send = (raw) => sock.sent.push(JSON.parse(raw));
+    sock.on('message', (raw) => sock.back.push(raw));
+    const was = config.getWorkspace();
+    config.setWorkspace(workspace);
+    try {
+      createReceiver({ clients: new Set([sock]), findAgent: () => ({ runtime: 'claude' }) }).takes(JSON.parse(frames(p)[0]), sock, true);
+      await whenReceived('c1');
+    } finally {
+      config.setWorkspace(was);
+    }
+    assert.deepStrictEqual(sock.sent.map((m) => [m.type, m.code]), [['chat_refused', 'too-many-files']]);
+    assert.deepStrictEqual(sock.back, [], 'nothing went on to the agent');
+    assert.strictEqual(fs.existsSync(path.join(workspace, '.rundock', 'attachments')), false, 'nothing was written');
+    p.w.fileSendAnswered(sock.sent[0]);
+    assert.deepStrictEqual(p.notices(), [{ title: '6 files not added', text: SIXTH }]);
+    assert.deepStrictEqual([p.chips().length, p.$('msg-input').value], [6, 'see these'], 'the files and the text stay');
+  });
+});
+
 describe('a file Rundock can\'t take is refused on its own', () => {
   // One add of one file, which is refused under its name and makes no chip.
   async function refused(p, file) {
