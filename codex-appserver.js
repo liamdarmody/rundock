@@ -170,7 +170,7 @@ class CodexAppServer extends EventEmitter {
     // a helper's turn never touches its lead's (see _onSubAgentActivity),
     // and what thread/started said about threads not yet recorded.
     this._helperThreads = new Map(); // helper threadId -> record
-    this._threadInfo = new Map();    // threadId -> { name, role, upkeep, depth, turnId }
+    this._threadInfo = new Map();    // threadId -> { name, role, upkeep, depth, turnId, ended }
     this._restartAttempt = 0;
     this._restartTimer = null;
     this._readBuffer = '';
@@ -927,7 +927,9 @@ class CodexAppServer extends EventEmitter {
   // string: review, compact, memory_consolidation) or a helper's own helper
   // (depth 2). The two arrive in either order. A turn started with a
   // `helpers` handler is told, with the helper's record:
-  //   'start'      a helper started, or an ended one was given more work
+  //   'start'      a helper started, or an ended one was given more work;
+  //                rec.state is running, or its final state when its turn
+  //                ended before the lead's thread recorded it
   //   'turn'       its own turn id is known (rec.turnId)
   //   'update'     its name, role, step or last file changed
   //   'end'        its turn ended; rec.state is completed, failed or killed
@@ -958,7 +960,7 @@ class CodexAppServer extends EventEmitter {
     let info = this._threadInfo.get(threadId);
     if (!info) {
       if (this._threadInfo.size >= 256) this._threadInfo.delete(this._threadInfo.keys().next().value);
-      info = { name: null, role: null, upkeep: false, depth: 1, turnId: null };
+      info = { name: null, role: null, upkeep: false, depth: 1, turnId: null, ended: null };
       this._threadInfo.set(threadId, info);
     }
     return info;
@@ -980,7 +982,7 @@ class CodexAppServer extends EventEmitter {
     const rec = {
       threadId: item.agentThreadId, leadThreadId: state.threadId, leadTurnId: state.turnId,
       name: info.name || lastPart(item.agentPath) || item.agentThreadId, role: info.role || null,
-      state: 'running', turnId: info.turnId || null, step: null, file: null, capped: false, notify: state.helpers,
+      state: info.ended || 'running', turnId: info.turnId || null, step: null, file: null, capped: false, notify: state.helpers,
     };
     for (const [id, old] of this._helperThreads) {
       if (this._helperThreads.size < 256) break;
@@ -988,7 +990,7 @@ class CodexAppServer extends EventEmitter {
     }
     this._helperThreads.set(rec.threadId, rec);
     this._tellHelper(rec, 'start');
-    if (rec.turnId != null) this._tellHelper(rec, 'turn');
+    if (rec.state === 'running' && rec.turnId != null) this._tellHelper(rec, 'turn');
   }
 
   // A notification on a thread with no active turn of ours. A recorded
@@ -998,7 +1000,13 @@ class CodexAppServer extends EventEmitter {
     const rec = this._helperThreads.get(params.threadId);
     const turnId = params.turn && params.turn.id != null ? params.turn.id : null;
     if (!rec) {
-      if (method === 'turn/started' && turnId != null) this._infoOf(params.threadId).turnId = turnId;
+      // Kept for the record the lead's activity item may make: the turn's id,
+      // and its end when the helper's turn ended first, until a newer turn.
+      if (method === 'turn/started' && turnId != null) Object.assign(this._infoOf(params.threadId), { turnId, ended: null });
+      if (method === 'turn/completed' && turnId != null) {
+        const info = this._infoOf(params.threadId);
+        if (info.turnId == null || info.turnId === turnId) info.ended = endState(params.turn.status);
+      }
       return false;
     }
     if (method === 'turn/started') {
@@ -1012,8 +1020,7 @@ class CodexAppServer extends EventEmitter {
       if (method === 'item/completed' && paths.length) rec.file = paths[paths.length - 1].path;
       if (JSON.stringify([rec.step, rec.file]) !== before) this._tellHelper(rec, 'update');
     } else if (method === 'turn/completed' && rec.state === 'running') {
-      const status = (params.turn || {}).status;
-      rec.state = status === 'completed' ? 'completed' : status === 'interrupted' ? 'killed' : 'failed';
+      rec.state = endState((params.turn || {}).status);
       this._tellHelper(rec, 'end');
     }
     return true;
@@ -1094,6 +1101,11 @@ function helperStep(item) {
       : item.type === 'mcpToolCall' ? (item.server && item.tool ? `${item.server}/${item.tool}` : null)
         : item.type === 'webSearch' ? item.query : null;
   return typeof detail === 'string' && detail ? { type: item.type, detail } : null;
+}
+
+// A helper's final state from its turn's end: interrupted reads as stopped.
+function endState(status) {
+  return status === 'completed' ? 'completed' : status === 'interrupted' ? 'killed' : 'failed';
 }
 
 function lastPart(agentPath) {

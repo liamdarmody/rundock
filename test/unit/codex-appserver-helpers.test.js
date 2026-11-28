@@ -66,6 +66,14 @@ function activity(threadId, { id = `act-${threadId}`, agentPath = `root/${thread
 
 const kinds = (told, threadId) => told.filter((t) => !threadId || t.threadId === threadId).map((t) => t.kind);
 
+// Asserted before each call, so a module without it fails on that assertion,
+// never on a call that throws.
+function codexHelper() {
+  const helpers = require('../../lib/delegation/helpers.js');
+  assert.strictEqual(typeof helpers.codexHelper, 'function', 'helpers.js exports codexHelper');
+  return helpers.codexHelper;
+}
+
 describe('a lead turn with the helpers option', () => {
   test('the helpers option never reaches the wire: turn/start carries no such field', async () => {
     const c = newClient();
@@ -219,6 +227,26 @@ describe('a lead turn with the helpers option', () => {
       ['start', 'running', null], ['turn', 'running', 'turn-1'], ['end', 'completed', 'turn-1'],
       ['start', 'running', 'turn-2'], ['turn', 'running', 'turn-2'],
     ]);
+  });
+
+  test('a helper whose turn ended before the lead recorded it is recorded in that final state, with no turn to stop', async () => {
+    const c = newClient();
+    const { told } = await leadTurn(c);
+    feed(c.server, P.turnStarted('h1', 'turn-h1'), P.turnCompleted('h1', 'turn-h1', 'failed', { message: 'helper failed' }));
+    feed(c.server, P.turnStarted('h2', 'turn-h2'), P.turnCompleted('h2', 'turn-h2', 'completed'));
+    feed(c.server, P.turnStarted('h3', 'turn-h3'), P.turnCompleted('h3', 'turn-h3', 'interrupted'));
+    feed(c.server, ...activity('h1'), ...activity('h2'), ...activity('h3'));
+    assert.deepStrictEqual(told.map((t) => [t.kind, t.threadId, t.state, t.turnId]), [
+      ['start', 'h1', 'failed', 'turn-h1'], ['start', 'h2', 'completed', 'turn-h2'], ['start', 'h3', 'killed', 'turn-h3'],
+    ]);
+  });
+
+  test('a newer turn started before the lead recorded the helper clears the earlier end', async () => {
+    const c = newClient();
+    const { told } = await leadTurn(c);
+    feed(c.server, P.turnStarted('h1', 'turn-1'), P.turnCompleted('h1', 'turn-1', 'completed'), P.turnStarted('h1', 'turn-2'));
+    feed(c.server, ...activity('h1'));
+    assert.deepStrictEqual(told.map((t) => [t.kind, t.state, t.turnId]), [['start', 'running', 'turn-2'], ['turn', 'running', 'turn-2']]);
   });
 
   test('a helper that ends after its lead turn has ended still reports its end', async () => {
@@ -480,6 +508,29 @@ describe("the cap on a lead's Codex helpers", () => {
   const settle = () => new Promise((resolve) => setImmediate(resolve));
   const steps = () => log.map((l) => l[0]);
   const rowOf = (rows, name) => rows.find((r) => r.agent === name);
+  // A lead turn on the client whose helpers are told to conversation `c`'s
+  // rows, as the glue tells them.
+  async function wiredLead(c, k = ctl()) {
+    const client = newClient();
+    const sub = client.server.startTurn(LEAD, 'start some helpers', { helpers: (kind, r) => codexHelper()(c, 'fern', r, kind, k) });
+    await sub.started;
+    return client;
+  }
+
+  test('a helper whose turn ended before Fern recorded it is shown in that final state, never counted and never stopped, beside five that run', async () => {
+    const c = convo();
+    const { server } = await wiredLead(c);
+    for (const name of FIVE) feed(server, ...activity(name), P.turnStarted(name, `turn-${name}`));
+    assert.strictEqual(helpers.runningCount(c), 5);
+    log = [];
+    feed(server, P.turnStarted('inbox', 'turn-inbox'), P.turnCompleted('inbox', 'turn-inbox', 'failed', { message: 'helper failed' }));
+    feed(server, ...activity('inbox'));
+    await settle();
+    assert.deepStrictEqual(steps(), ['rows'], 'shown once, and never interrupted or steered');
+    const shown = rowOf(log[0][1], 'inbox');
+    assert.deepStrictEqual([shown.state, shown.capped], ['failed', false]);
+    assert.strictEqual(helpers.runningCount(c), 5, 'never counted');
+  });
 
   test('a sixth gets no row and no count; once its turn is known it is interrupted, its row shown stopped, Fern steered with one line and the refusal recorded, in that order', async () => {
     const c = convo();
