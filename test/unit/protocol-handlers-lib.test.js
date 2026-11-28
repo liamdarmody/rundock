@@ -205,7 +205,7 @@ describe('dispatch table', () => {
       w = captureWs();
       table.save_connector(ctx, w, { name: 'z', content: '{"url":"https://x"}', conversationId: 'convo-file' });
       fs.chmodSync(file, 0o644);
-      assert.match(w.sent[0].message, /could not be written/);
+      assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: 'Rundock couldn\'t save the connector file, so nothing was changed.' }]);
 
       // Deleting refuses the same ways, and refuses a name that is a path.
       w = captureWs();

@@ -525,21 +525,31 @@ test('a connector file that is not valid JSON is refused with its own message, a
   });
 });
 
-test('an allowed change whose write fails says so in one message and resolves write-failed', async () => {
+// fs.writeSync for the file's own writes, throwing for the first `failures`
+// of them and then writing for real. The standard streams pass straight
+// through.
+function failingWrites(failures, words = 'ENOSPC: no space left on device, write') {
+  const real = fs.writeSync;
+  let calls = 0;
+  return function writeSync(fd, ...rest) {
+    if (fd <= 2 || calls++ >= failures) return real.call(fs, fd, ...rest);
+    throw Object.assign(new Error(words), { code: words.split(':')[0] });
+  };
+}
+
+test('an allowed change whose write fails says so in one message and resolves write-failed', async (t) => {
   assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
   await inWorkspace({}, async (s) => {
     const before = s.bytes();
     const { w, outcome } = propose(s, s.request());
-    const real = fs.writeFileSync;
-    fs.writeFileSync = (file, ...rest) => {
-      if (file === s.file) throw new Error('disk full');
-      return real(file, ...rest);
-    };
-    try { s.answer(0, true); } finally { fs.writeFileSync = real; }
-    const message = 'The connector file could not be written: disk full';
+    const warned = t.mock.method(console, 'warn', () => {});
+    t.mock.method(fs, 'writeSync', failingWrites(1, 'EIO: disk full, write'));
+    try { s.answer(0, true); } finally { t.mock.restoreAll(); }
+    const message = 'Rundock couldn\'t save the connector file, so nothing was changed.';
     assert.deepStrictEqual(s.bytes(), before, 'the file is byte-identical');
     assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }]);
     assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message });
+    assert.ok(warned.mock.calls.some((c) => String(c.arguments[0]).includes('disk full')), 'the error\'s own words go to the log');
   });
 });
 
@@ -976,5 +986,130 @@ test('an own __proto__ entry in the connector file is kept in its place', async 
     assert.deepStrictEqual(Object.keys(servers), ['alpha', '__proto__', 'example-beta', 'local-tools']);
     assert.ok(Object.prototype.hasOwnProperty.call(servers, '__proto__'), 'still an entry of its own');
     assert.deepStrictEqual(Object.getOwnPropertyDescriptor(servers, '__proto__').value, { command: 'node', args: ['proto.js'] });
+  });
+});
+
+// ===== The write: never through a link, and recorded only once it returned =====
+
+const WRITE_FAILED = 'Rundock couldn\'t save the connector file, so nothing was changed.';
+const NOT_PUT_BACK = 'Rundock couldn\'t save the connector file, and couldn\'t put back what it held before. Check Connectors in Settings.';
+const writesItsOwnWay = () => assert.strictEqual(typeof (cw.io && cw.io.write), 'function', 'the writer writes the file through its own no-follow step');
+
+// An Allow whose write fails: what it sends, what it resolves, and the file.
+async function failedAtAllow(s, outcome, w, message, bytes) {
+  assert.deepStrictEqual(s.bytes(), bytes, 'the file holds what it held before');
+  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'one message, and no save');
+  assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message });
+}
+
+test('an allowed change to a read-only connector file ends write-failed, with its bytes intact', { skip: NO_MODES }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(ALPHA, async (s) => {
+    fs.chmodSync(s.file, 0o444);
+    try {
+      const before = s.bytes();
+      const { w, outcome } = propose(s, s.request());
+      s.answer(0, true);
+      await failedAtAllow(s, outcome, w, WRITE_FAILED, before);
+    } finally { fs.chmodSync(s.file, 0o644); }
+  });
+});
+
+test('after write-failed on a read-only connector file, the same change asked again once it is writable is written', { skip: NO_MODES }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(ALPHA, async (s) => {
+    fs.chmodSync(s.file, 0o444);
+    try {
+      const first = propose(s, s.request());
+      s.answer(0, true);
+      assert.strictEqual((await first.outcome).reason, 'write-failed');
+      fs.chmodSync(s.file, 0o644);
+      const again = propose(s, s.request());
+      assert.strictEqual(s.asked.length, 2, 'the change asked again gets its own card');
+      s.answer(1, true);
+      assert.deepStrictEqual(s.servers(), { ...ALPHA, ...LOCAL_TOOLS });
+      assert.deepStrictEqual(again.w.sent, SAVED('local-tools', 'saved'));
+      assert.strictEqual((await again.outcome).ok, true);
+    } finally { fs.chmodSync(s.file, 0o644); }
+  });
+});
+
+test('a write that fails part way puts back what the file held and ends write-failed', async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  writesItsOwnWay();
+  await inWorkspace(ALPHA, async (s) => {
+    const before = s.bytes();
+    const { w, outcome } = propose(s, s.request());
+    t.mock.method(console, 'warn', () => {});
+    t.mock.method(fs, 'writeSync', failingWrites(1));
+    try { s.answer(0, true); } finally { t.mock.restoreAll(); }
+    await failedAtAllow(s, outcome, w, WRITE_FAILED, before);
+  });
+});
+
+test('a write that fails and cannot put back what the file held says so in its own words', async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  writesItsOwnWay();
+  await inWorkspace(ALPHA, async (s) => {
+    const { w, outcome } = propose(s, s.request());
+    t.mock.method(console, 'warn', () => {});
+    t.mock.method(fs, 'writeSync', failingWrites(Infinity));
+    try { s.answer(0, true); } finally { t.mock.restoreAll(); }
+    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: NOT_PUT_BACK }], 'one message, and no save');
+    assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message: NOT_PUT_BACK });
+  });
+});
+
+test('a write that fails on a connector file that was not there leaves no file behind', async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  writesItsOwnWay();
+  await inWorkspace(undefined, async (s) => {
+    const { w, outcome } = propose(s, s.request());
+    t.mock.method(console, 'warn', () => {});
+    t.mock.method(fs, 'writeSync', failingWrites(1));
+    try { s.answer(0, true); } finally { t.mock.restoreAll(); }
+    await failedAtAllow(s, outcome, w, WRITE_FAILED, null);
+  });
+});
+
+test('a link swapped in between the read and the write ends write-failed, and nothing is written where it leads', { skip: NO_LINKS }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  writesItsOwnWay();
+  await inWorkspace(ALPHA, (s) => elsewhere(async (dir) => {
+    const target = path.join(dir, 'servers.json');
+    fs.writeFileSync(target, OUTSIDE);
+    const { w, outcome } = propose(s, s.request());
+    const real = cw.io.write;
+    cw.io.write = (file, body) => {
+      fs.rmSync(file);
+      fs.symlinkSync(target, file);
+      return real(file, body);
+    };
+    const warn = console.warn;
+    console.warn = () => {};
+    try { s.answer(0, true); } finally { cw.io.write = real; console.warn = warn; }
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), OUTSIDE, 'what the link leads to is byte-identical');
+    assert.deepStrictEqual(standing(s.file), { link: target });
+    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: WRITE_FAILED }], 'one message, and no save');
+    assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message: WRITE_FAILED });
+  }));
+});
+
+test('after a write that failed during a turn, an agent writing the bytes it tried is still put back by the guard', async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  writesItsOwnWay();
+  const before = formatted({ mcpServers: ALPHA });
+  await inWorkspace(before, async (s) => {
+    const turn = turnIn(s);
+    try {
+      const { outcome } = propose(s, s.request());
+      t.mock.method(console, 'warn', () => {});
+      t.mock.method(fs, 'writeSync', failingWrites(1));
+      try { s.answer(0, true); } finally { t.mock.restoreAll(); }
+      assert.strictEqual((await outcome).reason, 'write-failed');
+      fs.writeFileSync(s.file, formatted({ mcpServers: { ...ALPHA, ...LOCAL_TOOLS } }));
+      assert.deepStrictEqual(guard.checkAnswerFilesNow(s.dir).map((c) => c.relative), ['.mcp.json'], 'taken as somebody else\'s change');
+      assert.strictEqual(fs.readFileSync(s.file, 'utf-8'), before, 'and put back');
+    } finally { turn.release(); }
   });
 });
