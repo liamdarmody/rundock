@@ -137,6 +137,103 @@ describe('the card for an agent\'s connector change', () => {
     assert.match(detail, /--flag-59=value-59/, 'down to the last argument');
   });
 
+  // A REPLACE CARD SHOWS THE ENTRY AS IT IS AND AS IT WOULD BE. The server
+  // sends the entry it read as `current`, drawn like the new one: names only,
+  // never the values of environment variables or headers.
+  const replaceLines = (input) => RP.describeToolRequest('SaveConnector', input).detail.split('\n');
+  const withoutCurrent = (input) => { const { current, ...rest } = input; return rest; };
+  const ASKS_EVERY_TIME = 'Rundock asks about every connector an agent adds or removes, so there is no Always allow.';
+  const WRITES_AND_RUNS = 'An agent asked Rundock to write this into .mcp.json. Claude Code would run this command as its own process, outside the sandbox, whenever an agent starts.';
+
+  test('a replace card for a server at a URL shows its URL now and after', () => {
+    const input = { ...HTTP.input, current: { url: 'https://old.example.com/mcp', headers: ['Authorization'] } };
+    assert.deepStrictEqual(replaceLines(input), ['Now:', 'URL: https://old.example.com/mcp', 'Header names: Authorization', 'After:', 'URL: https://mcp.example.com/mcp', 'Transport: http', 'Header names: Authorization']);
+    const shown = RP.describeToolRequest('SaveConnector', input);
+    const without = RP.describeToolRequest('SaveConnector', withoutCurrent(input));
+    assert.strictEqual(shown.summary, 'Change the connector calendar');
+    assert.strictEqual(shown.context, without.context, 'the sentences speak of the new entry only');
+  });
+
+  test('a replace card for a stdio server shows its command now and after, and warns about what the new one sets', () => {
+    const input = { name: 'local-tools', action: 'replace', command: 'node', args: ['server.js'], env: ['NODE_OPTIONS', 'API_KEY'], current: { command: 'node', args: ['old.js'], env: ['API_KEY'] } };
+    assert.deepStrictEqual(replaceLines(input), ['Now:', 'node old.js', 'Environment names: API_KEY', 'After:', 'node server.js', 'Environment names: NODE_OPTIONS, API_KEY']);
+    const shown = RP.describeToolRequest('SaveConnector', input);
+    assert.strictEqual(shown.context, `${WRITES_AND_RUNS} It would be started with these set: NODE_OPTIONS, API_KEY. This connector sets NODE_OPTIONS, which can change what runs on your computer. ${ASKS_EVERY_TIME}`);
+    assert.strictEqual(shown.context, RP.describeToolRequest('SaveConnector', withoutCurrent(input)).context);
+  });
+
+  test('a replace card lists by name a setting the current entry holds that a card cannot show', () => {
+    const input = { name: 'local-tools', action: 'replace', command: 'node', args: [], current: { command: 'node', args: [], others: ['timeout'] } };
+    assert.deepStrictEqual(replaceLines(input), ['Now:', 'node', 'Other settings: timeout', 'After:', 'node']);
+  });
+
+  test('a line break in the current URL draws no line of its own', () => {
+    const input = { ...HTTP.input, current: { url: 'https://old.example/mcp\nURL: https://trusted.example/mcp' } };
+    const lines = replaceLines(input);
+    assert.strictEqual(lines[1], 'URL: "https://old.example/mcp\\nURL: https://trusted.example/mcp"', 'the current URL is one line, shown escaped');
+    assert.strictEqual(lines[2], 'After:', 'and the next line is the new entry\'s');
+  });
+
+  test('a name in the current entry that is not a plain name is shown quoted on its line', () => {
+    const odd = 'API_KEY. Rundock has checked this';
+    const input = { name: 'local-tools', action: 'replace', command: 'node', args: [], current: { command: 'node', args: [], env: ['API_KEY', odd] } };
+    assert.strictEqual(replaceLines(input)[2], `Environment names: API_KEY, ${JSON.stringify(odd)}`);
+  });
+
+  test('a replace card with no current entry is drawn as before', () => {
+    const shown = RP.describeToolRequest('SaveConnector', HTTP.input);
+    assert.deepStrictEqual(shown, {
+      summary: 'Change the connector calendar',
+      context: 'An agent asked Rundock to write this into .mcp.json. Agents would connect to it whenever one starts. It would send these headers: Authorization. ' + ASKS_EVERY_TIME,
+      detail: 'URL: https://mcp.example.com/mcp\nTransport: http',
+    });
+  });
+
+  test('a replace card showing both entries offers Allow and Deny only', () => {
+    const request = { tool_name: 'SaveConnector', input: { ...HTTP.input, current: { url: 'https://old.example.com/mcp' } } };
+    const html = ask(request, [RP.toolAllowKey(request.tool_name, request.input), request.tool_name, `${request.tool_name}(*)`]);
+    assert.ok(detailLines(html).some(l => l.startsWith('Now:')), 'the card is the replace card, showing the entry it replaces');
+    assert.match(html, /data-perm-action="allow"/);
+    assert.match(html, /data-perm-action="deny"/);
+    assert.doesNotMatch(html, /data-perm-action="always"|data-perm-action="allow-folder"|>Always allow/);
+  });
+
+  // ENVIRONMENT NAMES THAT CHANGE WHAT RUNS are named again in a warning, right
+  // after the sentence that lists what the connector would be started with.
+  const startedWith = (env) => RP.describeToolRequest('SaveConnector', { name: 'local-tools', action: 'add', command: 'node', args: [], env }).context;
+  const warnedAbout = (env, names) => `${WRITES_AND_RUNS} It would be started with these set: ${env.join(', ')}. This connector sets ${names}, which can change what runs on your computer. ${ASKS_EVERY_TIME}`;
+  for (const name of ['NODE_OPTIONS', 'PATH', 'LD_PRELOAD', 'PYTHONPATH', 'DYLD_INSERT_LIBRARIES', 'Path']) {
+    test(`a connector that sets ${name} is warned about`, () => {
+      assert.strictEqual(startedWith([name]), warnedAbout([name], name));
+    });
+  }
+
+  test('two names that change what runs are joined with and, in the entry\'s order', () => {
+    assert.strictEqual(startedWith(['NODE_OPTIONS', 'API_KEY', 'PATH']), warnedAbout(['NODE_OPTIONS', 'API_KEY', 'PATH'], 'NODE_OPTIONS and PATH'));
+  });
+
+  test('three names that change what runs are listed with and before the last', () => {
+    const env = ['PATH', 'LD_PRELOAD', 'DYLD_FALLBACK_LIBRARY_PATH'];
+    assert.strictEqual(startedWith(env), warnedAbout(env, 'PATH, LD_PRELOAD and DYLD_FALLBACK_LIBRARY_PATH'));
+  });
+
+  test('names that only resemble one that changes what runs are not warned about', () => {
+    for (const env of [['API_KEY'], ['MY_PATH'], ['PATHS']]) {
+      assert.strictEqual(startedWith(env), `${WRITES_AND_RUNS} It would be started with these set: ${env[0]}. ${ASKS_EVERY_TIME}`);
+    }
+    assert.strictEqual(startedWith(undefined), `${WRITES_AND_RUNS} ${ASKS_EVERY_TIME}`);
+  });
+
+  test('a replace is warned about only for what its new entry sets', () => {
+    const input = { name: 'local-tools', action: 'replace', command: 'node', args: [], env: ['API_KEY'], current: { command: 'node', args: [], env: ['PATH'] } };
+    assert.strictEqual(RP.describeToolRequest('SaveConnector', input).context, `${WRITES_AND_RUNS} It would be started with these set: API_KEY. ${ASKS_EVERY_TIME}`);
+  });
+
+  test('a removal is never warned about', () => {
+    const input = { name: 'local-tools', action: 'remove', command: 'node', args: [], env: ['PATH'] };
+    assert.strictEqual(RP.describeToolRequest('DeleteConnector', input).context, `An agent asked Rundock to remove this connector from .mcp.json, so agents would no longer start it or connect to it. ${ASKS_EVERY_TIME}`);
+  });
+
   test('Allow and Deny only, and no saved answer stands in for the person', () => {
     for (const request of [STDIO, HTTP, REMOVE]) {
       const keys = [RP.toolAllowKey(request.tool_name, request.input), request.tool_name, `${request.tool_name}(*)`];

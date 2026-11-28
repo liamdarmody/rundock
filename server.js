@@ -24,6 +24,8 @@ const { createDelegationRecord, attachDelegationRecord } = require('./lib/delega
 const helpers = require('./lib/delegation/helpers.js');
 const config = require('./lib/config.js');
 const { MAX_PAYLOAD, createReceiver } = require('./lib/attachments/receive.js');
+const { userTurnText } = require('./lib/attachments/turn-text.js');
+const { buildTurn } = require('./lib/attachments/turn.js');
 const agentsDiscovery = require('./lib/agents/discovery.js');
 const {
   discoverAgents, readNormalisedFile, extractFrontmatterText, titleCase,
@@ -478,9 +480,11 @@ async function parseSessionHistory(sessionId, limit = 20, offset = 0) {
     try {
       const obj = JSON.parse(line);
       if (isClaudeCodeNote(obj)) continue;
-      // User text messages (not tool results)
-      if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
-        displayable.push({ role: 'user', content: obj.message.content, timestamp: obj.timestamp || null });
+      // User text messages (not tool results), and a turn sent with images
+      // or PDFs as its text (lib/attachments/turn-text.js).
+      const userText = obj.type === 'user' && obj.message ? userTurnText(obj.message.content) : null;
+      if (userText !== null) {
+        displayable.push({ role: 'user', content: userText, timestamp: obj.timestamp || null });
         continue;
       }
       // Assistant messages with text content. Filter out whitespace-only text
@@ -555,12 +559,14 @@ function readSessionMessageCount(filePath) {
     let obj;
     try { obj = JSON.parse(line); } catch (e) { continue; }
     if (isClaudeCodeNote(obj)) continue;
-    // User text turns: tool_result entries have array content and are excluded
-    // by the typeof === 'string' guard.
-    if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
+    // User text turns, and a turn sent with images or PDFs as its text:
+    // tool_result entries have array content and are excluded by
+    // userTurnText, as the history excludes them.
+    const userText = obj.type === 'user' && obj.message ? userTurnText(obj.message.content) : null;
+    if (userText !== null) {
       // Skip Rundock's own prompts: these aren't user-visible bubbles. The one
       // list the history uses too (lib/delegation/rundock-lines.js).
-      if (rundockLines.isRundockPrompt(obj.message.content)) continue;
+      if (rundockLines.isRundockPrompt(userText)) continue;
       count++;
       continue;
     }
@@ -1722,6 +1728,10 @@ wss.on('connection', (ws) => {
             existing.toolCalls = [];
             existing.turnStartTime = Date.now();
             existing.lastUserMessage = msg.content;
+            // The record entry of the message this turn answers, when it has
+            // one; a message with none leaves no earlier one behind.
+            if (msg.attachmentEntry) existing.attachmentEntry = msg.attachmentEntry;
+            else delete existing.attachmentEntry;
             existing.scopeReturnSource = null; // User sent new message, allow re-delegation
             resetAutoResume(convoId); // User spoke, reset circuit breaker
             if (existing.delegation) { existing.receivedFollowUp = true; }
@@ -1730,8 +1740,11 @@ wss.on('connection', (ws) => {
             const followUp = withFreshCatchUp(existing, msg.content);
             // Kept until this process has answered a turn: until then it may
             // yet be refused, and then never reads this.
-            noteUnstartedWrite(existing, followUp);
-            existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUp } }) + '\n');
+            noteUnstartedWrite(existing, followUp, msg.attachmentEntry);
+            // Its stored lines checked against the record, with its own images
+            // and PDFs; text alone goes as written.
+            const followUpTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: existing.runtime, text: followUp, entryId: msg.attachmentEntry });
+            existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUpTurn.content } }) + '\n');
             // A Claude Code turn's heartbeat, until its result.
             if (existing.startTurnKeepalive) existing.startTurnKeepalive();
           } else {
@@ -1791,6 +1804,7 @@ wss.on('connection', (ws) => {
               process: proc, buffer: '', processId, agentId: agentData ? agentData.id : 'default',
               responseText: '', exited: false, resultSent: false,
               lastUserMessage: msg.content,
+              attachmentEntry: msg.attachmentEntry,
               // Agent tool interception state
               pendingAgentTools: null,  // [{ blockIndex, inputJson, complete }]
               toolCalls: [], turnStartTime: Date.now()
@@ -1807,7 +1821,8 @@ wss.on('connection', (ws) => {
             // start held for this agent whose process has since gone (reaped,
             // or the server restarted): given here, once.
             const heldCatchUp = takeStoredCatchUp(convoId, entry.agentId);
-            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: heldCatchUp + msg.content } }) + '\n');
+            const firstTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: entry.runtime, text: heldCatchUp + msg.content, entryId: msg.attachmentEntry });
+            proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: firstTurn.content } }) + '\n');
 
             const stderrRef = wireProcessHandlers(entry, convoId, ws, {
               enableInterception: true,
@@ -1895,8 +1910,12 @@ wss.on('connection', (ws) => {
                 // process that never answered a turn (its first result clears
                 // the list), so it acted on none of it, and dropping it lost
                 // what the person had said.
+                // Each with the record entry it was sent with, or with none:
+                // never the first message's.
+                const keptBase = { ...freshMsg };
+                delete keptBase.attachmentEntry;
                 for (const carried of takeUnstartedWrites(entry)) {
-                  liveWs.emit('message', JSON.stringify({ ...freshMsg, content: carried }));
+                  liveWs.emit('message', JSON.stringify({ ...keptBase, content: carried.content, ...(carried.attachmentEntry ? { attachmentEntry: carried.attachmentEntry } : {}) }));
                 }
                 return;
               }
@@ -1969,13 +1988,15 @@ wss.on('connection', (ws) => {
           }, (err) => handleChatSpawnError(err, convoId));
 
           const entry = { process: proc, buffer: '', processId, agentId: agentData ? agentData.id : 'default', responseText: '', exited: false, resultSent: false, lastUserMessage: msg.content, toolCalls: [], turnStartTime: Date.now() };
+          if (msg.attachmentEntry) entry.attachmentEntry = msg.attachmentEntry;
           processes.set(convoId, entry);
 
           safeSend(JSON.stringify({ type: 'system', subtype: 'process_started', _conversationId: convoId, _processId: processId, _agent: entry.agentId }));
 
           // Behind any catch-up stored for this agent, as on the interactive path.
           const legacyCatchUp = takeStoredCatchUp(convoId, entry.agentId);
-          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: legacyCatchUp + msg.content } }) + '\n');
+          const legacyTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: entry.runtime, text: legacyCatchUp + msg.content, entryId: msg.attachmentEntry });
+          proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: legacyTurn.content } }) + '\n');
 
           // Legacy mode: no interception, no transcript, no idle tracking
           const legacyStderrRef = wireProcessHandlers(entry, convoId, ws, {
@@ -3382,10 +3403,11 @@ async function grepSearchTranscripts(query, convos) {
           // marked as its session file marks it or as its output stream does.
           if (obj.isCompactSummary === true) continue;
           if (obj.type === 'user' && obj.isSynthetic === true) continue;
-          if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
-            if (obj.message.content.toLowerCase().includes(q)) {
+          const userText = obj.type === 'user' && obj.message ? userTurnText(obj.message.content) : null;
+          if (userText !== null) {
+            if (userText.toLowerCase().includes(q)) {
               rl.close();
-              return { ...c, matchType: 'content', snippet: extractSnippet(obj.message.content, q) };
+              return { ...c, matchType: 'content', snippet: extractSnippet(userText, q) };
             }
           }
           if (obj.message && obj.message.role === 'assistant' && Array.isArray(obj.message.content)) {
