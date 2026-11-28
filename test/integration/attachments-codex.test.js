@@ -938,6 +938,134 @@ describe('what the server stores and refuses for an agent on Codex', () => {
     h.reapConvo(id);
   });
 
+  // The thread's record entry put at `images` images of 33 bytes, its files
+  // and instance kept, as if earlier turns had sent it them.
+  function sentSoFar(id, threadId, images) {
+    const recordFile = path.join(folderOf(id), 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    record.sent[threadId] = { ...record.sent[threadId], bytes: images * 33, images };
+    fs.writeFileSync(recordFile, JSON.stringify(record));
+  }
+  // A thread of the researcher's opened by a one-image message, then put at
+  // `images` images sent.
+  async function threadAt(id, tag, images) {
+    const { threadId } = await storedAndAnswered(id, tag, shots(1, 33, 1));
+    sentSoFar(id, threadId, images);
+    return threadId;
+  }
+  // Holds every thread the app-server is asked to resume until the answer is
+  // called, so no turn on one starts before the test lets it.
+  async function holdResumes() {
+    const server = await glue.getCodexAppServer();
+    const resumeThread = server.resumeThread;
+    let open;
+    const gate = new Promise((resolve) => { open = resolve; });
+    server.resumeThread = async function (...args) {
+      await gate;
+      return resumeThread.apply(this, args);
+    };
+    return () => {
+      open();
+      server.resumeThread = resumeThread;
+    };
+  }
+  const startedWith = (tag) => h.readInvocations().filter((i) => i.method === 'turn/start' && JSON.stringify(i.params).includes(tag));
+  const processStarted = (id) => (m) => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === id;
+
+  test('a second one-image message for a thread at 19 images, sent before the first one\'s turn starts, is refused codex-images and never started', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-race');
+    codexAnswers(['RACE-S1', 'RACE-S2', 'RACE-S3']);
+    const threadId = await threadAt(id, 'RACE-S1', 19);
+    h.clearInvocations();
+    const release = await holdResumes();
+    let stored;
+    const since = client.messages.length;
+    try {
+      toResearcher(id, 'RACE-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      stored = await storedFor(id, since);
+      assert.ok(stored, 'the first is stored');
+      await refusedAsBefore({ conversationId: id, agent: 'researcher', sessionId: threadId, content: 'RACE-S3 and this', attachments: shots(1, 33, 3) },
+        { code: 'codex-images', title: 'Message not sent', text: IMAGES_TEXT });
+      release();
+      assert.ok(await resultFor(id, 'DONE-RACE-S2', since), 'the first is answered');
+      await doneAfter(id, since);
+    } finally {
+      release();
+    }
+    textThen(await turnStartWith('RACE-S2'), [localImage(id, stored.entry.files[0].file)]);
+    assert.deepStrictEqual(startedWith('RACE-S3'), [], 'the second is never started');
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the thread was sent 20 images');
+    h.reapConvo(id);
+  });
+
+  test('once each message\'s send is recorded its images count from the record alone, so a thread at 17 is sent three more one at a time', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-recorded');
+    const tags = ['FREED-S1', 'FREED-S2', 'FREED-S3', 'FREED-S4'];
+    codexAnswers(tags);
+    const threadId = await threadAt(id, tags[0], 17);
+    for (const [i, tag] of tags.slice(1).entries()) {
+      await storedAndAnswered(id, tag, shots(1, 33, 2 + i), { sessionId: threadId });
+    }
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the thread was sent 20 images');
+    h.reapConvo(id);
+  });
+
+  test('a one-image message whose turn fails to start leaves nothing counted, so the next one for a thread at 19 is stored', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-unstarted');
+    codexAnswers(['UNSTARTED-S1', 'UNSTARTED-S2', 'UNSTARTED-S3']);
+    const threadId = await threadAt(id, 'UNSTARTED-S1', 19);
+    const server = await glue.getCodexAppServer();
+    const startTurn = server.startTurn;
+    // A bad item after the turn's own, so startTurn's check throws.
+    server.startTurn = function (thread, text, opts, items) {
+      return startTurn.call(this, thread, text, opts, [...items, { type: 'localImage', path: 'diagram.png' }]);
+    };
+    try {
+      const since = client.messages.length;
+      toResearcher(id, 'UNSTARTED-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      assert.ok(await storedFor(id, since), 'the message is stored');
+      assert.ok(await arrived((m) => m.type === 'system' && m.subtype === 'codex_error' && m._conversationId === id, { since }), 'its turn fails to start');
+      await doneAfter(id, since);
+    } finally {
+      server.startTurn = startTurn;
+    }
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await storedAndAnswered(id, 'UNSTARTED-S3', shots(1, 33, 3), { sessionId: threadId });
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the next one is sent');
+    h.reapConvo(id);
+  });
+
+  test('a one-image message whose turn a newer message takes over before it starts leaves nothing counted, so the next one for a thread at 19 is stored', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-superseded');
+    codexAnswers(['OVER-S1', 'OVER-S2', 'OVER-S3', 'OVER-S4']);
+    const threadId = await threadAt(id, 'OVER-S1', 19);
+    h.clearInvocations();
+    const release = await holdResumes();
+    try {
+      let since = client.messages.length;
+      toResearcher(id, 'OVER-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      assert.ok(await storedFor(id, since), 'the message is stored');
+      assert.ok(await arrived(processStarted(id), { since }), 'and its turn begins to open the thread');
+      since = client.messages.length;
+      toResearcher(id, 'OVER-S3 never mind', undefined, { sessionId: threadId });
+      assert.ok(await arrived(processStarted(id), { since }), 'a newer message takes over');
+      release();
+      assert.ok(await resultFor(id, 'DONE-OVER-S3', since), 'the newer message is answered');
+      await doneAfter(id, since);
+    } finally {
+      release();
+    }
+    assert.deepStrictEqual(startedWith('OVER-S2'), [], 'the earlier turn never started');
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await storedAndAnswered(id, 'OVER-S4', shots(1, 33, 3), { sessionId: threadId });
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the next one is sent');
+    h.reapConvo(id);
+  });
+
   test('a malformed entry for the thread refuses one image codex-images', async () => {
     needsRecording();
     const id = h.freshConvoId('codex-malformed');

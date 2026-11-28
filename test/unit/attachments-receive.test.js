@@ -456,6 +456,33 @@ describe('what a Codex agent is sent, checked before the write', () => {
     }
   });
 
+  // Two messages for `thread-1`, received together before either one's turn
+  // starts: the first is stored, and the second is refused with nothing of
+  // it written, the folder and record as the first left them.
+  async function firstOfTwo(ws, attachments) {
+    const before = bytesIn(folderOf(ws));
+    const [first, second] = await Promise.allSettled([1, 2].map(() => codex(ws, { sessionId: 'thread-1', attachments: attachments() })));
+    assert.strictEqual(first.status, 'fulfilled', 'the first is stored');
+    assert.strictEqual(second.status, 'rejected', 'the second is refused');
+    refused('codex-images')(second.reason);
+    const after = bytesIn(folderOf(ws));
+    const stored = first.value.entry.files.map((f) => f.file);
+    assert.deepStrictEqual(Object.keys(after), [...Object.keys(before), ...stored].sort(), 'the first message\'s files alone are added');
+    for (const name of Object.keys(before)) if (name !== 'record.json') assert.ok(after[name].equals(before[name]), name);
+    const record = JSON.parse(before['record.json']);
+    assert.deepStrictEqual(JSON.parse(after['record.json']), { ...record, messages: [...record.messages, first.value.entry] }, 'and its entry alone');
+  }
+
+  test('two one-image messages for a session at 19 images, received before either turn starts, store the first and refuse the second codex-images', async () => {
+    ready('receiveAttachments');
+    await firstOfTwo(await withEntry({ files: [], bytes: 0, images: 19 }), () => images(1, 33));
+  });
+
+  test('two 33-byte images for a session 33 bytes short of 10,000,000, received before either turn starts, store the first and refuse the second codex-images', async () => {
+    ready('receiveAttachments');
+    await firstOfTwo(await withEntry({ files: [], bytes: 9999967, images: 1 }), () => images(1, 33));
+  });
+
   test('a record that can\'t be read is left to the write, which refuses it save-failed, and a PDF is refused codex-pdf without it', async () => {
     ready('receiveAttachments');
     const ws = workspace();
