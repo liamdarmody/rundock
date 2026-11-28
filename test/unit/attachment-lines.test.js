@@ -63,6 +63,29 @@ function leftAsText(text) {
   assert.deepStrictEqual(answer, { text, files: [] });
 }
 
+// A whole line of each form, and the characters that, put after it, make it
+// no longer the whole line: JavaScript reads each as a line terminator, but a
+// line ends only at a line break, so each is part of the line. The two
+// separators are built from their code points, so this file stays ASCII.
+const FORMS = {
+  'an attached-file line': CSV_LINE,
+  'the not-available form': '[Attached file not available: 1-diagram.png]',
+  'the changed form': "[Attached file changed since it was attached, so it isn't shown: 2-report.pdf]",
+};
+const CARRIAGE_RETURN = String.fromCharCode(0x0d);
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
+
+// Each form followed by `character`, as a message of its own and between two
+// other lines, stays in the text as it was, and names no file.
+function eachFormFollowedBy(character) {
+  for (const [form, line] of Object.entries(FORMS)) {
+    for (const text of [line + character, `top\n${line}${character}\nbottom`]) {
+      assert.deepStrictEqual(split(text), { text, files: [] }, `${form} followed by the character, in ${JSON.stringify(text)}`);
+    }
+  }
+}
+
 const pngBytes = () => {
   const b = Buffer.alloc(33);
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
@@ -105,6 +128,9 @@ describe('the attached-file lines in a message', () => {
   test('a line whose details hold a carriage return is left as text', () => leftAsText(NEAR_MISSES['with details holding a carriage return']));
   test('a line whose details hold a line separator is left as text', () => leftAsText(NEAR_MISSES['with details holding a line separator']));
   test('a line whose details hold a paragraph separator is left as text', () => leftAsText(NEAR_MISSES['with details holding a paragraph separator']));
+  test('a whole line of each form followed by a carriage return is left as text', () => eachFormFollowedBy(CARRIAGE_RETURN));
+  test('a whole line of each form followed by a line separator is left as text', () => eachFormFollowedBy(LINE_SEPARATOR));
+  test('a whole line of each form followed by a paragraph separator is left as text', () => eachFormFollowedBy(PARAGRAPH_SEPARATOR));
 
   test('the form for a file that is not available is found with its kind and no id', () => {
     assert.deepStrictEqual(split('Look at this\n[Attached file not available: 1-diagram.png]'),

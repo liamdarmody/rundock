@@ -363,6 +363,27 @@ describe('the history reply says which of its named files are there', () => {
     assert.deepStrictEqual(res.files, {});
   });
 
+  // JavaScript reads each of these as a line terminator, but a line ends only
+  // at a line break, so a line with one after it is not the whole line. The
+  // row is handed to the history by its session reader, which a session file
+  // can't do for the two separators: the reader splits its lines at them. The
+  // two are built from their code points, so this file stays ASCII.
+  test('a line followed by a carriage return, a line separator or a paragraph separator gives no key', async () => {
+    const after = {
+      'a carriage return': String.fromCharCode(0x0d),
+      'a line separator': String.fromCharCode(0x2028),
+      'a paragraph separator': String.fromCharCode(0x2029),
+    };
+    for (const [label, character] of Object.entries(after)) {
+      const text = sent('Here is the diagram', entry.files[0]) + character;
+      const row = { role: 'user', content: text, timestamp: null };
+      const res = await withReader(async () => ({ messages: [row], totalCount: 1, hasMore: false }),
+        () => history({ conversationId: ID, sessionId: 'sess-files-reader' }));
+      assert.deepStrictEqual(res.messages, [row], `the row holds the line and ${label} as written`);
+      assert.deepStrictEqual(res.files, {}, `a line followed by ${label} names no file`);
+    }
+  });
+
   test('a file named in two messages is one key, read once', async () => {
     const sessionId = session([said(sent('First', entry.files[0])), answered('Seen'), said(sent('Again', entry.files[0], entry.files[0]))]);
     const { res, reads } = await counted(() => history({ conversationId: ID, sessionId }));
