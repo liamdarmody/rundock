@@ -434,11 +434,14 @@ describe("a helper's approval requests", () => {
 
   test("a helper stopped by the cap has its approval declined at once and raised nowhere", async () => {
     const c = newClient();
-    const sub = c.server.startTurn(LEAD, 'start some helpers', { helpers: (kind, rec) => { if (kind === 'start') rec.capped = true; } });
+    const told = [];
+    const sub = c.server.startTurn(LEAD, 'start some helpers', { helpers: (kind, rec) => { told.push(kind); if (kind === 'start') rec.capped = true; } });
     const events = [];
     sub.on('event', (e) => events.push(e));
     await sub.started;
-    feed(c.server, P.subAgentThreadStarted('h6', { nickname: 'inbox' }), ...activity('h6'), P.turnStarted('h6', 'turn-h6'), ask(7, 'h6'));
+    feed(c.server, P.subAgentThreadStarted('h6', { nickname: 'inbox' }), ...activity('h6'), P.turnStarted('h6', 'turn-h6'));
+    assert.deepStrictEqual(told, ['start', 'turn'], 'the helper was recorded, and the cap stopped it');
+    feed(c.server, ask(7, 'h6'));
     assert.deepStrictEqual(answers(c), [[7, 'decline']]);
     assert.deepStrictEqual(approvalsOf(events), []);
   });
@@ -493,7 +496,7 @@ describe("the cap on a lead's Codex helpers", () => {
       queue: (text) => log.push(['queue', text]),
     };
   }
-  const tell = (c, r, kind, k = ctl()) => helpers.codexHelper(c, 'fern', r, kind, k);
+  const tell = (c, r, kind, k = ctl()) => codexHelper()(c, 'fern', r, kind, k);
   function begin(c, r, k) {
     tell(c, r, 'start', k);
     r.turnId = `turn-${r.name}`;
@@ -735,8 +738,8 @@ describe("a Codex lead's first batch", () => {
   });
   const ctl = { interrupt: () => Promise.resolve({}), steer: () => Promise.resolve({}), queue: () => {} };
   function begin(c, r, lead = 'fern') {
-    helpers.codexHelper(c, lead, r, 'start', ctl);
-    helpers.codexHelper(c, lead, r, 'turn', ctl);
+    codexHelper()(c, lead, r, 'start', ctl);
+    codexHelper()(c, lead, r, 'turn', ctl);
   }
   const marks = (c) => Object.fromEntries(helpers.helperRows(c).map((r) => [r.agent, r.firstBatch]));
   const record = (c) => readConversations().find((x) => x && x.id === c);
@@ -775,7 +778,7 @@ describe("a Codex lead's first batch", () => {
     const rates = rec(c, 'rates', 'turn-1');
     begin(c, rates);
     rates.state = 'completed';
-    helpers.codexHelper(c, 'fern', rates, 'end', ctl);
+    codexHelper()(c, 'fern', rates, 'end', ctl);
     begin(c, rec(c, 'deck', 'turn-2'));
     rates.state = 'running';
     begin(c, rates);
@@ -886,6 +889,12 @@ describe("a Codex lead's first batch", () => {
     assert.deepStrictEqual(answers, [{ allow: true, card: true }, { allow: true, card: true }]);
     assert.strictEqual(cards.length, 1, 'the card was raised');
     assert.deepStrictEqual(record(c), { id: c, helpersNoticed: ['wren'], helpersAllowed: ['wren'] });
+    // Beside it, a Codex lead's first helper in the same conversation is
+    // marked and raises no card.
+    begin(c, rec(c, 'rates', 'turn-1'));
+    assert.strictEqual(marks(c).rates, true, 'Fern\'s first helper is marked');
+    assert.strictEqual(cards.length, 1, 'with no card of its own');
+    assert.deepStrictEqual(record(c).helpersNoticed, ['wren', 'fern']);
     helpers.leadClosed(c, null);
   });
 

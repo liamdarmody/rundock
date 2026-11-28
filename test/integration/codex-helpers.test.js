@@ -77,10 +77,11 @@ const say = (convo, words) => sayAs('fern', convo, words);
 const turnDone = (convo, since) => client.waitForEvent('system', 'done', convo, { since, timeout: 20000 });
 const changes = (convo, since = 0) => client.messages.slice(since).filter((m) => m.type === 'helpers_changed' && m._conversationId === convo);
 const rowNamed = (m, name) => (m.helpers || []).find((r) => r.agent === name);
-// The first helpers_changed from `since` on whose rows pass `pred`.
+// The first helpers_changed from `since` on whose rows pass `pred`. One that
+// never comes fails the test on an assertion.
 const rowsWhere = (convo, since, pred, label) => client.waitFor(
   (m) => m.type === 'helpers_changed' && m._conversationId === convo && pred(m.helpers || [], m),
-  { since, timeout: 15000, label });
+  { since, timeout: 15000, label }).catch((e) => assert.fail(e.message));
 const stateOf = (rows, name) => (rows.find((r) => r.agent === name) || {}).state;
 
 test('a helper Fern starts is a row on Fern\'s list, named, counted while it runs and not once it completes', async () => {
@@ -137,6 +138,7 @@ test('a helper still running when Fern\'s turn ends keeps its row and count, and
   const since = say(convo, 'LATE-ONE please');
   await turnDone(convo, since);
   const last = changes(convo, since).pop();
+  assert.ok(last, 'the deck row was listed');
   assert.strictEqual(stateOf(last.helpers, 'deck'), 'running', 'the row still runs after Fern\'s turn');
   assert.strictEqual(helpers().runningCount(convo), 1);
   release(gate);
@@ -203,6 +205,7 @@ test('helpers nicknamed like teammates stay Codex helpers and hand nothing over'
   assert.strictEqual(msg._agent, 'fern', 'Fern answers');
   await turnDone(convo, since);
   const last = changes(convo, since).pop();
+  assert.ok(last, 'the helpers were listed');
   for (const name of ['ash', 'example-research-lead']) {
     const row = rowNamed(last, name);
     assert.ok(row, `a row named ${name}`);
@@ -292,10 +295,14 @@ test('with helpers on, no feature flag or agent setting reaches the app-server',
   for (const s of starts) assert.doesNotMatch(JSON.stringify(s.params), /features|multi_agent|"agents"/, 'nothing in the thread params');
 });
 
-// WHAT THE WINDOW DOES WITH A FERN REPLY: it scans the reply, sends the first
-// DELEGATE marker back as a delegate message, and the server answers. These
-// tests pin that the answer is the same with helper events as without them.
+// WHAT THE WINDOW DOES WITH A FERN REPLY: it scans the reply and sends the
+// first DELEGATE marker back as a delegate message (public/markers.js, the
+// only reader of that marker). A Codex turn has ended by the time its reply
+// reaches the window, so the server answers as it always has: there is no
+// live process to hand over from, and nobody is started. These tests pin that
+// answer, and that it is the same with helper events as without them.
 const { scanMarkers } = require('../../public/markers.js');
+const NO_LIVE_PROCESS = 'No active process to delegate from';
 const invocations = (agent, convo) => h.readInvocations().filter((i) => i.agent === agent && i.env && i.env.RUNDOCK_CONVO_ID === convo);
 async function delegateOutcome(convo, words) {
   const since = say(convo, words);
@@ -304,13 +311,15 @@ async function delegateOutcome(convo, words) {
   const { delegation } = scanMarkers(result.result);
   const after = client.messages.length;
   client.send({ type: 'delegate', conversationId: convo, targetAgent: delegation.targetAgent, context: delegation.context });
-  await h.waitUntil(() => invocations('ash', convo).length > 0
-    || client.messages.slice(after).some((m) => m._conversationId === convo && m.subtype === 'delegation_error'), { timeout: 15000 });
+  const answered = () => invocations('ash', convo).length > 0
+    || client.messages.slice(after).some((m) => m._conversationId === convo && (m.subtype === 'delegation_error' || m.subtype === 'agent_switch'));
+  assert.ok(await h.waitUntil(answered, { timeout: 15000 }), 'the server answered the delegate message');
   await h.delay(300);
   return {
     delegation,
     ash: invocations('ash', convo).length,
     rowan: invocations('example-research-lead', convo).length,
+    errors: client.messages.slice(after).filter((m) => m._conversationId === convo && m.subtype === 'delegation_error').map((m) => m.content),
     page: client.messages.slice(after).filter((m) => m._conversationId === convo && m.type !== 'helpers_changed')
       .map((m) => [m.type, m.subtype || null, typeof m.content === 'string' ? m.content : null]),
   };
@@ -335,8 +344,9 @@ test('with helpers on, Fern\'s DELEGATE markers name the first agent and get the
       h.writeScenario([{ match: { agent: 'ash', promptIncludes: c.brief }, turn: [{ text: 'Ash took it.' }] }]);
       seen.push(await delegateOutcome(convo, `on delegate ${c.tag}`));
     }
-    assert.deepStrictEqual(seen[0].delegation, { targetAgent: 'ash', context: c.brief }, `${c.tag}: the first marker names Ash`);
-    assert.strictEqual(seen[0].rowan, 0, `${c.tag}: Rowan did not start`);
+    assert.deepStrictEqual(seen[0].delegation, { targetAgent: 'ash', context: c.brief }, `${c.tag}: the first marker names Ash, with its own brief`);
+    assert.deepStrictEqual(seen[0].errors, [NO_LIVE_PROCESS], `${c.tag}: the server's answer, once, word for word`);
+    assert.deepStrictEqual([seen[0].ash, seen[0].rowan], [0, 0], `${c.tag}: nobody was started`);
     assert.deepStrictEqual(seen[1], seen[0], `${c.tag}: the same answer, helper events or not`);
   }
 });
@@ -350,7 +360,8 @@ const decisions = () => h.readInvocations().filter((i) => i.approvalDecision != 
 const appServer = (method) => h.readInvocations().filter((i) => i.mode === 'app-server' && i.method === method);
 const fernThread = () => appServer('turn/start')[0].params.threadId;
 const cards = (convo, since) => client.messages.slice(since).filter((m) => m.type === 'control_request' && m._conversationId === convo);
-const cardAfter = (convo, since) => client.waitFor((m) => m.type === 'control_request' && m._conversationId === convo, { since, timeout: 15000, label: 'a card' });
+const cardAfter = (convo, since) => client.waitFor((m) => m.type === 'control_request' && m._conversationId === convo, { since, timeout: 15000, label: 'a card' })
+  .catch((e) => assert.fail(e.message));
 const answer = (convo, card, allow, extra = {}) => client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convo, allow, ...extra });
 async function decidedOn(threadId, n = 1) {
   await h.waitUntil(() => decisions().filter((d) => d.threadId === threadId).length >= n, { timeout: 15000 });
@@ -839,6 +850,7 @@ test('a stopped helper\'s approval is declined at once and raises no card', asyn
     const since = say(convo, 'CAPASK-ONE please');
     assert.ok(await h.waitUntil(() => decisions().length === 1), 'the inbox asked');
     assert.deepStrictEqual(decisions().map((d) => d.approvalDecision), ['decline']);
+    assert.strictEqual(appServer('turn/interrupt').length, 1, 'the inbox was interrupted');
     assert.strictEqual(decisions()[0].threadId, appServer('turn/interrupt')[0].params.threadId, 'the stopped helper');
     assert.deepStrictEqual(cards(convo, since), [], 'no card');
     await rowsWhere(convo, since, (rows) => !!rowNamed({ helpers: rows }, 'inbox'), 'the inbox row once the request times out');

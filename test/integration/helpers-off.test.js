@@ -437,11 +437,13 @@ test('with helpers off, the page gets the same messages from a Fern turn with he
   assert.deepStrictEqual(seen[1], seen[0], 'the same messages, helper events or not');
 });
 
-// WHAT THE WINDOW DOES WITH A FERN REPLY: it scans the reply, sends the first
-// DELEGATE marker back as a delegate message, and the server answers. A Codex
-// turn has already ended by then, so the answer is whatever the server gives
-// a conversation with no live turn; these tests pin that it is the same with
-// helper events as without them.
+// WHAT THE WINDOW DOES WITH A FERN REPLY: it scans the reply and sends the
+// first DELEGATE marker back as a delegate message (public/markers.js, the
+// only reader of that marker). A Codex turn has already ended by then, so the
+// server answers as it always has: there is no live process to hand over
+// from, and nobody is started. These tests pin that answer, and that it is the
+// same with helper events as without them.
+const NO_LIVE_PROCESS = 'No active process to delegate from';
 async function delegateOutcome(convo, words) {
   const since = sayFern(convo, words);
   const { msg: result } = await fernResult(convo, since);
@@ -449,13 +451,15 @@ async function delegateOutcome(convo, words) {
   const { delegation } = scanMarkers(result.result);
   const after = client.messages.length;
   client.send({ type: 'delegate', conversationId: convo, targetAgent: delegation.targetAgent, context: delegation.context });
-  await h.waitUntil(() => invocations('ash', convo).length > 0
-    || client.messages.slice(after).some((m) => m._conversationId === convo && m.subtype === 'delegation_error'), { timeout: 15000 });
+  const answered = () => invocations('ash', convo).length > 0
+    || client.messages.slice(after).some((m) => m._conversationId === convo && (m.subtype === 'delegation_error' || m.subtype === 'agent_switch'));
+  assert.ok(await h.waitUntil(answered, { timeout: 15000 }), 'the server answered the delegate message');
   await h.delay(300);
   return {
     delegation,
     ash: invocations('ash', convo).length,
     rowan: invocations('example-research-lead', convo).length,
+    errors: client.messages.slice(after).filter((m) => m._conversationId === convo && m.subtype === 'delegation_error').map((m) => m.content),
     page: client.messages.slice(after).filter((m) => m._conversationId === convo)
       .map((m) => [m.type, m.subtype || null, typeof m.content === 'string' ? m.content : null]),
   };
@@ -482,10 +486,51 @@ test('with helpers off, Fern\'s DELEGATE markers name the first agent and get th
       seen.push(await delegateOutcome(convo, `off delegate ${c.tag}`));
       assert.deepStrictEqual(helpersChanged(convo), [], `${c.tag}: no helpers_changed was sent`);
     }
-    assert.deepStrictEqual(seen[0].delegation, { targetAgent: 'ash', context: c.brief }, `${c.tag}: the first marker names Ash`);
-    assert.strictEqual(seen[0].rowan, 0, `${c.tag}: Rowan did not start`);
+    assert.deepStrictEqual(seen[0].delegation, { targetAgent: 'ash', context: c.brief }, `${c.tag}: the first marker names Ash, with its own brief`);
+    assert.deepStrictEqual(seen[0].errors, [NO_LIVE_PROCESS], `${c.tag}: the server's answer, once, word for word`);
+    assert.deepStrictEqual([seen[0].ash, seen[0].rowan], [0, 0], `${c.tag}: nobody was started`);
     assert.deepStrictEqual(seen[1], seen[0], `${c.tag}: the same answer, helper events or not`);
   }
+});
+
+// The cap's events for a conversation, from the workspace's events file.
+function capEvents(convo) {
+  const dir = path.join(h.workspaceDir, '.rundock', 'state');
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => /^events-\d{4}-\d{2}\.jsonl$/.test(f)); } catch (e) { return []; }
+  const out = [];
+  for (const f of files) {
+    for (const l of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) if (l.trim()) out.push(JSON.parse(l));
+  }
+  return out.filter((e) => e.e === 'helper_cap' && e.conv === convo);
+}
+
+// By design this passes before helpers existed too. Its sibling in
+// codex-helpers.test.js, "a sixth helper is stopped: no row or count, then
+// interrupted, its row shown stopped, Fern steered with one line and the
+// refusal recorded, and nothing more reaches the person", fails without
+// helpers.
+test('with helpers off, six of Fern\'s helpers running at once are left to run: none is stopped, Fern is told nothing and no cap event is written', async () => {
+  const convo = open('off-codex-six');
+  const gate = hold('codex-six');
+  h.clearInvocations();
+  h.writeCodexScenario([{
+    match: { promptIncludes: 'off six helpers' }, text: 'Fern waited for six.', awaitHelpers: true,
+    helpers: ['rates', 'pipeline', 'deck', 'hooks', 'calendar', 'inbox'].map((nickname) => ({ nickname, untilFile: gate })),
+  }]);
+  const since = sayFern(convo, 'off six helpers');
+  assert.ok(await h.waitUntil(() => appServerCalls('turn/start').length === 1, { timeout: 15000 }), 'Fern\'s turn started');
+  // All six start and wait on the gate together.
+  await h.delay(600);
+  fs.writeFileSync(gate, 'go');
+  const { msg: result } = await fernResult(convo, since);
+  await turnDone(convo, since);
+  assert.strictEqual(result.result, 'Fern waited for six.', 'Fern\'s turn waited for all six and carried on');
+  await h.delay(200);
+  assert.deepStrictEqual([...appServerCalls('turn/interrupt'), ...appServerCalls('turn/steer')], [], 'none was interrupted and Fern was not steered');
+  assert.deepStrictEqual(capEvents(convo), [], 'no helper_cap event was written');
+  assert.deepStrictEqual(helpersChanged(convo), [], 'no helpers_changed was sent');
+  assert.strictEqual(helpers().runningCount(convo), 0, 'no helper is counted');
 });
 
 // By design this passes before helpers existed too. Its sibling in
