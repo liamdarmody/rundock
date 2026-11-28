@@ -523,3 +523,61 @@ describe('the most common next step: Allow after the turn ended, then the next m
     });
   });
 });
+
+// ===== A card that ends after another workspace is opened =====
+
+// Opening another workspace leaves a waiting card waiting, so it can be
+// allowed, denied or time out with that one open. Its outcome is kept in the
+// workspace the change was asked in, for the conversation that asked, and told
+// there at that conversation's next turn. The workspace open when it ends has
+// a conversation of its own with the same id, left exactly as it was.
+describe('a card that ends after another workspace is opened', () => {
+  const TIMED_OUT_LINE = `- Refused: save connector "${NAME}". Nobody answered the card in time, so nothing was changed.`;
+  const ENDS = [
+    ['allowed', (w) => w.answer(0, true), ADDED(NAME), kept(SAVE, 'saved'), ADDED_LINE],
+    ['denied', (w) => w.answer(0, false), NOT_ALLOWED, kept(SAVE, 'refused', { message: NOT_ALLOWED, reason: 'denied' }), DENIED_LINE],
+    ['timed out', (w) => w.answer(0, false, 'timeout'), TIMED_OUT, kept(SAVE, 'refused', { message: TIMED_OUT, reason: 'timeout' }), TIMED_OUT_LINE],
+  ];
+  for (const [ends, end, line, outcome, told] of ENDS) {
+    test(`${ends}: its line and outcome are kept in the workspace that asked and told once there, and nothing is written in the one open`, () => {
+      inWorkspace({}, (w) => {
+        w.save();
+        const other = fs.mkdtempSync(path.join(os.tmpdir(), 'connector-outcomes-other-'));
+        const theirs = path.join(other, '.rundock', 'conversations.json');
+        const record = JSON.stringify([{ id: w.convoId, title: 'the open workspace\'s own conversation' }]);
+        fs.mkdirSync(path.dirname(theirs));
+        fs.writeFileSync(theirs, record);
+        try {
+          config.setWorkspace(other);
+          const there = processFor(w.convoId);
+          end(w);
+          there.send('hello');
+          assert.deepStrictEqual(there.contents(), ['hello'], 'not told in the open workspace\'s conversation of the same id');
+          assert.strictEqual(fs.readFileSync(theirs, 'utf-8'), record, 'no record and no waiting outcome in the open workspace');
+          assert.deepStrictEqual(fs.readdirSync(path.dirname(theirs)), ['conversations.json'], 'and no history line there');
+          config.setWorkspace(w.dir);
+          assert.deepStrictEqual(w.lines(), [line], 'the line is kept in the workspace that asked');
+          assert.deepStrictEqual(w.waiting(), [outcome], 'with one outcome waiting there');
+          const turn = processFor(w.convoId);
+          turn.send('did it work?');
+          turn.send('and now?');
+          assert.deepStrictEqual(turn.contents(), [`${noteOf(told)}did it work?`, 'and now?'], 'told once, at its next turn there');
+        } finally { fs.rmSync(other, { recursive: true, force: true }); }
+      });
+    });
+  }
+
+  test('after the workspace that asked was removed, nothing is kept: that folder is not made again, and nothing is written in the one open', () => {
+    inWorkspace({}, (w) => {
+      w.save();
+      const other = fs.mkdtempSync(path.join(os.tmpdir(), 'connector-outcomes-other-'));
+      try {
+        config.setWorkspace(other);
+        fs.rmSync(w.dir, { recursive: true, force: true });
+        w.answer(0, false, 'timeout');
+        assert.ok(!fs.existsSync(path.join(other, '.rundock')), 'nothing is written in the open workspace');
+        assert.ok(!fs.existsSync(w.dir), 'and the removed one is not made again');
+      } finally { fs.rmSync(other, { recursive: true, force: true }); }
+    });
+  });
+});
