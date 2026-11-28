@@ -1,5 +1,5 @@
 name: Prove
-run-name: prove ${{ inputs.nonce }} ${{ inputs.blocked }} ${{ inputs.main }} ${{ inputs.head }} ${{ inputs.inputs_sha256 }}
+run-name: prove ${{ inputs.label && format('{0} ', inputs.label) || '' }}${{ inputs.nonce }} ${{ inputs.blocked }} ${{ inputs.main }} ${{ inputs.head }} ${{ inputs.inputs_sha256 }}
 
 # Runs each blocker test at the blocked head and at the fix head, and runs each
 # breakage, every one on a fresh runner, so the run's own record shows whether
@@ -15,6 +15,8 @@ run-name: prove ${{ inputs.nonce }} ${{ inputs.blocked }} ${{ inputs.main }} ${{
 #
 # Started by hand only. Every input reaches a step through env, never as text
 # inside a run block, and `check inputs` checks them all before any is used.
+# The optional label names what the run proves, first in its title, and is
+# checked like every other input.
 # Before `prepare the test user`, nothing from the commits under test runs, and
 # only git reads them. From then on, everything from the commits that runs, the
 # install included, runs as a separate test user, started through one function

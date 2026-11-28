@@ -135,6 +135,86 @@ function rawCopies() {
 const MARKED = /^\s*(?:-\s+)*(?:[^\s#][^:#]*:\s+)?[&*][\w-]/;
 const MERGE = /^\s*(?:-\s+)*<<\s*:/;
 
+// The run-name as it was written before the label, and five values that tell
+// a run apart, each of its length.
+const BEFORE_LABEL = 'run-name: prove ${{ inputs.nonce }} ${{ inputs.blocked }} ${{ inputs.main }} ${{ inputs.head }} ${{ inputs.inputs_sha256 }}';
+const FIVE = {
+  nonce: '0123456789abcdef0123456789abcdef', blocked: 'b'.repeat(40), main: 'c'.repeat(40), head: 'd'.repeat(40), inputs_sha256: 'e'.repeat(64),
+};
+const FIVE_TEXT = [FIVE.nonce, FIVE.blocked, FIVE.main, FIVE.head, FIVE.inputs_sha256].join(' ');
+
+/** The workflow's own run-name line. */
+function runName() {
+  const found = lines.filter((l) => l.startsWith('run-name: '));
+  assert.strictEqual(found.length, 1, 'prove.yml has one run-name');
+  return found[0];
+}
+
+// The first word of 32 lowercase hex characters in a title: the nonce, as the
+// tool that starts a run finds it.
+const firstNonceLike = (title) => title.split(' ').find((w) => /^[0-9a-f]{32}$/.test(w));
+
+/**
+ * One expression of a run-name, evaluated as GitHub evaluates these forms and
+ * no others: an input is its string value, '' is false, a && b is b when a is
+ * true and a otherwise, a || b is a when a is true and b otherwise, and
+ * format('{0} ', x) is x and a space. Any other form throws.
+ */
+function evaluate(expr, inputs) {
+  const tokens = expr.match(/'[^']*'|&&|\|\||[(),]|[A-Za-z_][\w.]*|\S/g) || [];
+  let at = 0;
+  const refuse = (why) => { throw new Error(`the title reader refuses ${why}, in ${JSON.stringify(expr)}`); };
+  const take = (want) => {
+    const token = tokens[at++];
+    if (token === undefined) refuse('an expression that ends early');
+    if (want !== undefined && token !== want) refuse(`${token} where ${want} must stand`);
+    return token;
+  };
+  const truthy = (value) => value !== '';
+  const one = () => {
+    const token = take();
+    if (/^'[^']*'$/.test(token)) return token.slice(1, -1);
+    if (token === 'format') {
+      take('(');
+      take("'{0} '");
+      take(',');
+      const x = either();
+      take(')');
+      return `${x} `;
+    }
+    const input = /^inputs\.(\w+)$/.exec(token);
+    if (input && typeof inputs[input[1]] === 'string') return inputs[input[1]];
+    return refuse(`${token}, a form it does not know`);
+  };
+  const both = () => {
+    let value = one();
+    while (tokens[at] === '&&') {
+      take();
+      const right = one();
+      value = truthy(value) ? right : value;
+    }
+    return value;
+  };
+  const either = () => {
+    let value = both();
+    while (tokens[at] === '||') {
+      take();
+      const right = both();
+      value = truthy(value) ? value : right;
+    }
+    return value;
+  };
+  const value = either();
+  if (at !== tokens.length) refuse(`${tokens[at]} left over`);
+  return value;
+}
+
+/** The title a run-name line gives a run started with these inputs. */
+function titleOf(line, inputs) {
+  assert.ok(line.startsWith('run-name: '), line);
+  return line.slice('run-name: '.length).replace(/\$\{\{(.*?)\}\}/g, (all, expr) => evaluate(expr, inputs));
+}
+
 describe('how the workflow starts and what it may touch', () => {
   test('its top-level keys are the name, run-name, trigger, permissions and jobs, and nothing else', () => {
     const top = lines.filter((l) => /^[\w-]+:/.test(l)).map((l) => l.split(':')[0]);
@@ -160,8 +240,42 @@ describe('how the workflow starts and what it may touch', () => {
     assert.deepStrictEqual(label.slice(1), ['        required: false', '        type: string', "        default: ''"]);
   });
 
-  test('the run-name is prove and the five values that tell the run apart', () => {
-    assert.ok(lines.includes('run-name: prove ${{ inputs.nonce }} ${{ inputs.blocked }} ${{ inputs.main }} ${{ inputs.head }} ${{ inputs.inputs_sha256 }}'));
+  test('the run-name is prove, the label when given, then the five values that tell the run apart', () => {
+    assert.deepStrictEqual(lines.filter((l) => l.startsWith('run-name:')), [
+      "run-name: prove ${{ inputs.label && format('{0} ', inputs.label) || '' }}${{ inputs.nonce }} ${{ inputs.blocked }} ${{ inputs.main }} ${{ inputs.head }} ${{ inputs.inputs_sha256 }}",
+    ]);
+  });
+
+  test('with no label the title is today\'s byte for byte, and with one it comes first', () => {
+    // Sanity: the reader evaluates the forms it knows as GitHub does, and
+    // refuses every other, so it cannot pass a title it does not understand.
+    const knows = "run-name: ${{ inputs.label && format('{0} ', inputs.label) || '' }}x";
+    assert.strictEqual(titleOf(knows, { label: 'a' }), 'a x');
+    assert.strictEqual(titleOf(knows, { label: '' }), 'x');
+    assert.strictEqual(titleOf("run-name: ${{ inputs.label || 'none' }}", { label: '' }), 'none');
+    for (const expr of ['github.token', 'inputs.missing', "format('{0}', inputs.label)", "format('{0} {1}', inputs.label, inputs.label)",
+      'inputs.label == 1', "contains(inputs.label, 'x')", 'inputs.label &&', "'it''s'", '!inputs.label']) {
+      assert.throws(() => titleOf(`run-name: \${{ ${expr} }}`, { label: 'a' }), /^Error: the title reader refuses /, expr);
+    }
+    const today = `prove ${FIVE_TEXT}`;
+    assert.strictEqual(titleOf(BEFORE_LABEL, FIVE), today, 'sanity: the run-name before the label gives today\'s title');
+    assert.strictEqual(titleOf(runName(), { ...FIVE, label: '' }), today);
+    assert.strictEqual(titleOf(runName(), { ...FIVE, label: '#515 c1e6428' }), `prove #515 c1e6428 ${FIVE_TEXT}`);
+    for (const label of ['', '#515 c1e6428']) {
+      assert.strictEqual(firstNonceLike(titleOf(runName(), { ...FIVE, label })), FIVE.nonce, `label ${JSON.stringify(label)}`);
+    }
+  });
+
+  test('a malformed label leads the title as given, then the five values', () => {
+    for (const label of ['#1234567 c1e6428', '${{ github.token }}']) {
+      assert.strictEqual(titleOf(runName(), { ...FIVE, label }), `prove ${label} ${FIVE_TEXT}`, label);
+    }
+  });
+
+  test('a well-formed label and a malformed hex input are both in the title as given', () => {
+    const nonce = 'ABCDEF0123456789abcdef0123456789';
+    assert.strictEqual(titleOf(runName(), { ...FIVE, nonce, label: '#515 c1e6428' }),
+      `prove #515 c1e6428 ${FIVE_TEXT.replace(FIVE.nonce, nonce)}`);
   });
 
   test('it may read the repository contents and nothing else', () => {
@@ -326,6 +440,23 @@ describe('what reaches a run block, and what runs before the test', () => {
       const owner = expanded.slice(0, n).reverse().find((l) => /^ {0,8}\S/.test(l));
       assert.strictEqual(owner, '        env:', `expanded line ${n + 1} is in a step's env`);
     });
+  });
+
+  test('the label reaches only the run-name and the env of check inputs, in each job', () => {
+    const expanded = expandAliases(text, 'prove.yml').split('\n');
+    const where = [];
+    expanded.forEach((line, n) => {
+      if (!line.includes('inputs.label')) return;
+      if (line.startsWith('run-name: ')) {
+        where.push('run-name');
+        return;
+      }
+      const above = expanded.slice(0, n).reverse();
+      const job = above.find((l) => /^ {2}[\w-]+:\s*$/.test(l));
+      const step = above.find((l) => /^ {6}- name: /.test(l));
+      where.push(`${job && job.trim()} ${step && step.trim()} ${line.trim()}`);
+    });
+    assert.deepStrictEqual(where, ['run-name', ...['red', 'green', 'break'].map((job) => `${job}: - name: check inputs LABEL: \${{ inputs.label }}`)]);
   });
 
   test('the only install is npm ci with package scripts off, run as the test user, and no shell step runs anything from the commits', () => {
