@@ -1282,6 +1282,82 @@ describe('a PDF held for an agent on Codex holds Send until it goes', () => {
     assert.strictEqual(p.w.sendHeld('c1'), true);
   });
 
+  test('an attach or a remove beside a held PDF takes the PDF\'s message, and the outline and the hold stay', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'));
+    type(p, 'summarise this');
+    await pick(p, p.file('shot.png'));
+    assert.deepStrictEqual(p.chips(), ['report.pdf', 'shot.png']);
+    assert.deepStrictEqual([p.notices(), warned(p), sendState(p)], [[], ['report.pdf'], HELD], 'after a PNG is added');
+    assert.strictEqual(p.w.sendReady('summarise this'), false);
+    await pick(p, p.file('appendix.pdf'));
+    assert.deepStrictEqual(p.notices(), [{ title: 'appendix.pdf', text: CODEX_PDF }], 'a message for the new PDF only');
+    assert.deepStrictEqual([warned(p), sendState(p)], [['report.pdf', 'appendix.pdf'], HELD]);
+    removeNamed(p, 'shot.png');
+    assert.deepStrictEqual([p.notices(), warned(p), sendState(p)], [[], ['report.pdf', 'appendix.pdf'], HELD], 'after the PNG is removed');
+    removeNamed(p, 'report.pdf');
+    assert.deepStrictEqual([p.chips(), p.notices(), warned(p), sendState(p)], [['appendix.pdf'], [], ['appendix.pdf'], HELD], 'after a PDF is removed');
+    assert.strictEqual(p.w.sendReady('summarise this'), false);
+  });
+
+  test('the held PDF removed after a PNG is added ends the hold and lights Send', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'));
+    await pick(p, p.file('shot.png'));
+    type(p, 'what is wrong here?');
+    removeNamed(p, 'report.pdf');
+    assert.deepStrictEqual([p.chips(), p.notices(), warned(p)], [['shot.png'], [], []]);
+    assert.strictEqual(p.w.sendHeld('c1'), false);
+    assert.deepStrictEqual(sendState(p), LIT);
+  });
+
+  test('a PDF removed beside a PNG and added again is held again, with its own message', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    const pdf = p.file('report.pdf');
+    await pick(p, pdf);
+    await pick(p, p.file('shot.png'));
+    type(p, 'summarise this');
+    removeNamed(p, 'report.pdf');
+    assert.deepStrictEqual(sendState(p), LIT, 'the hold ended');
+    await pick(p, pdf);
+    assert.deepStrictEqual([p.chips(), warned(p)], [['shot.png', 'report.pdf'], ['report.pdf']]);
+    assert.deepStrictEqual(p.notices(), [{ title: 'report.pdf', text: CODEX_PDF }]);
+    assert.deepStrictEqual(sendState(p), HELD);
+  });
+
+  test('a capture pasted beside a held PDF, then the PDF removed, sends the capture alone on Enter', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'));
+    paste(p, [new p.w.File([typed('image.png', 10)], 'image.png', { type: 'image/png' })]);
+    await until(() => p.chips().length === 2, 'the pasted capture');
+    assert.deepStrictEqual([p.chips(), p.notices(), warned(p)], [['report.pdf', 'Pasted image'], [], ['report.pdf']], 'the capture takes the message, and the PDF stays held');
+    type(p, 'what does page 3 say?');
+    removeNamed(p, 'report.pdf');
+    pressEnter(p);
+    await until(() => frames(p).length === 1, 'the chat frame');
+    assert.deepStrictEqual(JSON.parse(frames(p)[0]).attachments.map((a) => a.name), ['Pasted image']);
+  });
+
+  test('with a held PDF\'s message taken by an attach, Enter and Send send nothing', async () => {
+    const p = page({ agentId: 'coder' });
+    needs(p, 'sendHeld');
+    await pick(p, p.file('report.pdf'));
+    await pick(p, p.file('shot.png'));
+    assert.deepStrictEqual(p.notices(), [], 'the attach took the message');
+    type(p, 'summarise this');
+    pressEnter(p);
+    p.$('send-btn').click();
+    p.w.sendMessage();
+    await settled();
+    assert.deepStrictEqual(frames(p), [], 'no message went');
+    assert.strictEqual(p.w.sendWaiting('c1'), false);
+    assert.deepStrictEqual([p.chips(), sendState(p)], [['report.pdf', 'shot.png'], HELD]);
+  });
+
   test('a PNG in a Codex conversation and a PDF in another conversation are added and light Send', async () => {
     const p = page({ agentId: 'coder' });
     await pick(p, p.file('a.png'));
