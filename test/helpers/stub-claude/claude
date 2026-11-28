@@ -100,7 +100,13 @@
 // is written in order after the turn's result, each step held by its own
 // "untilFile": its "lines" as given (a helper's lines, task_* lines), then,
 // if it gives a "turn", a whole turn as a wake writes it, with its own
-// "resultExtra". So one message can bring several results.
+// "resultExtra". So one message can bring several results. A step may give
+// "helperCalls": [{ "id", "input", "parent", "extra" }], Agent calls a running
+// helper makes, put to the PreToolUse hook after its lines as a message's
+// calls are, with "extra" the fields the runtime adds to a subagent's call:
+// one the hook allows starts as any allowed call does, and one it refuses is
+// answered with the runtime's error as a line of the helper ("parent") that
+// made it.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -973,7 +979,7 @@ function askAgentHooks(calls, then, allowed = () => {}) {
   for (const call of calls) {
     askPermissionHook({ tool: 'Agent', input: call.input, extra: { tool_use_id: call.id, ...(call.extra || {}) } }, (answer) => {
       const said = answer && answer.hookSpecificOutput ? answer.hookSpecificOutput : {};
-      if (said.permissionDecision === 'deny') refused.push({ id: call.id, said: `PreToolUse:Agent hook error: ${said.permissionDecisionReason || ''}` });
+      if (said.permissionDecision === 'deny') refused.push({ id: call.id, parent: call.parent, said: `PreToolUse:Agent hook error: ${said.permissionDecisionReason || ''}` });
       else allowed(call);
       if (--left === 0) then(refused);
     });
@@ -991,7 +997,8 @@ function startHelper(rule, call) {
   else if (!rule.running) finish();
 }
 // The steps after a turn's result: each waits for its file, writes its lines,
-// then its turn, if any, as a wake writes it.
+// puts its helpers' own Agent calls to the hook, then writes its turn, if any,
+// as a wake writes it.
 function writeSteps(steps, then) {
   let at = 0;
   const next = () => {
@@ -999,8 +1006,11 @@ function writeSteps(steps, then) {
     const step = steps[at++] || {};
     whenFileExists(step.untilFile, () => {
       for (const line of step.lines || []) writeOut(JSON.stringify(line) + '\n');
-      if (step.turn) for (const e of buildEnvelopes({ turn: step.turn, resultExtra: step.resultExtra })) writeOut(JSON.stringify(e) + '\n');
-      next();
+      askAgentHooks(step.helperCalls || [], (refused) => {
+        for (const r of refused) writeOut(JSON.stringify(fx.helperLine(toolError(r.id, r.said), r.parent)) + '\n');
+        if (step.turn) for (const e of buildEnvelopes({ turn: step.turn, resultExtra: step.resultExtra })) writeOut(JSON.stringify(e) + '\n');
+        next();
+      }, (call) => startHelper({ running: true }, call));
     });
   };
   next();

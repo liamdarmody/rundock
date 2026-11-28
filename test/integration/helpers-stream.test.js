@@ -970,6 +970,76 @@ test('with helpers on, a Code-mode spawn, which refuses nothing else, still refu
   }
 });
 
+// A HELPER'S OWN AGENT CALL, AS IT REACHES RUNDOCK. Claude Code isn't run in
+// CI, so the call is built from the PreToolUse payload Claude Code 2.1.318 was
+// measured giving a subagent's call (test/fixtures/subagent-hook-payload.json):
+// every field as measured, with only tool_name and tool_input made an Agent
+// call and a tool_use_id of its own. The session is the lead's, as the
+// measured subagent's was its parent's, so the stub gives its own. While the
+// lead's helper runs, the stub writes the call as that helper's lines and puts
+// it to Rundock's real hook from the lead's own process, with the lead's
+// environment and token, as the runtime runs a helper's hooks; a call the
+// hook allowed it would start with task_started.
+const SUBAGENT_PAYLOAD = path.join(__dirname, '..', 'fixtures', 'subagent-hook-payload.json');
+const FROM_HELPER = "Helpers can't start helpers. Do this part yourself, and say in your report what you would have handed on.";
+test('with helpers on, a running helper\'s Agent call, as Claude Code sends a subagent\'s, is refused through the hook and starts nothing', async () => {
+  const m = names('runningCount', 'helperRows');
+  const measured = JSON.parse(fs.readFileSync(SUBAGENT_PAYLOAD, 'utf8'));
+  assert.strictEqual(measured.runtime, 'Claude Code 2.1.318', 'the payload as that runtime gave it');
+  assert.strictEqual(measured.subagent.session_id, measured.parent.session_id, 'a subagent\'s call carries its parent\'s session');
+  const { tool_name: measuredTool, tool_input: measuredInput, tool_use_id: measuredId, session_id: measuredSession, ...fields } = measured.subagent;
+  assert.ok(measuredTool && measuredInput && measuredId && measuredSession, 'the measured call has the fields replaced here');
+  assert.strictEqual(fields.cwd, '<workspace>', 'the measured cwd is the workspace');
+  const extra = { ...fields, cwd: h.workspaceDir };
+  const convo = open('depth-hook');
+  const helper = agentCall(fields.agent_type);
+  const nested = agentCall('ash', { description: 'Draft the summary', prompt: 'Draft it.' });
+  const nestFile = path.join(h.workspaceDir, `nest-${helper.id}`);
+  h.writeScenario([{
+    match: { agent: 'wren', promptIncludes: 'a helper that calls a teammate' }, helpers: true, running: true, finishOn: {},
+    turn: [{ text: 'Started a helper.' }, { agentTool: helper.input, id: helper.id }],
+    then: [
+      {
+        untilFile: nestFile,
+        lines: [...fx.toolUseFlow('Agent', nested.input, 1, nested.id), fx.messageStop()].map((e) => fx.helperLine(e, helper.id)),
+        helperCalls: [{ id: nested.id, input: nested.input, parent: helper.id, extra }],
+      },
+      { untilFile: wakeFile('depth-hook'), lines: [ended(helper)], turn: [{ text: 'The helper reported back.' }] },
+    ],
+  }]);
+  const since = say(convo, 'a helper that calls a teammate');
+  await nthResult(convo, since, 1);
+  const taskStarted = (id) => client.messages.slice(since)
+    .filter((x) => x.type === 'system' && x.subtype === 'task_started' && x._conversationId === convo && x.tool_use_id === id);
+  assert.ok(await h.waitUntil(() => taskStarted(helper.id).length === 1, { timeout: 5000 }), 'the helper started');
+  await h.delay(200);
+  const lead = entryOf(convo);
+  const [spawn] = spawnsOf(convo);
+  assert.strictEqual(spawn.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, '1', 'the lead and its helpers run with the depth limit');
+  assert.strictEqual(m.runningCount(convo), 1, 'one helper runs');
+  const known = m.helperRows(convo);
+  const from = client.messages.length;
+
+  fs.writeFileSync(nestFile, '');
+  assert.ok(await h.waitUntil(() => hookAnswer(nested.id), { timeout: 20000 }), 'the helper\'s call reached the hook');
+  const logged = h.readHookAnswers().find((a) => a.toolUseId === nested.id);
+  assert.strictEqual(logged.pid, lead.process.pid, 'from the lead\'s own process');
+  assert.strictEqual(logged.tool, 'Agent');
+  assert.strictEqual(logged.subagent, fields.agent_id, 'carrying the measured agent_id');
+  assert.deepStrictEqual(hookAnswer(nested.id), refusedAnswer(FROM_HELPER), 'refused with the reason helpers can\'t start helpers');
+  await h.delay(300);
+  assert.strictEqual(m.runningCount(convo), 1, 'the count is unchanged');
+  assert.deepStrictEqual(m.helperRows(convo), known, 'the rows are unchanged');
+  assert.deepStrictEqual(helpersChanged(convo, from), [], 'no rows were sent to the page');
+  assert.deepStrictEqual(taskStarted(nested.id), [], 'no task_started for it');
+  assert.deepStrictEqual(agentCards(convo, since), [], 'no card');
+  assert.strictEqual(spawnsOf(convo).filter((i) => i.agent === 'ash').length, 0, 'nothing was handed over');
+
+  wake('depth-hook');
+  await requestDone(convo, since);
+  assert.strictEqual(m.runningCount(convo), 0);
+});
+
 // Saves a routine on Wren's file, so it runs last.
 test('with helpers on, a routine run sets no depth limit and keeps the workspace\'s own list, where a conversation spawn sets the limit', async () => {
   assert.strictEqual(h.internal.getSpawnEnv(h.freshConvoId('spawn-env'), 'wren').CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, '1', 'a conversation spawn has the limit');
