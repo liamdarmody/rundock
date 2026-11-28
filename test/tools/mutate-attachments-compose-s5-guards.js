@@ -73,6 +73,9 @@ const MUTATIONS = [
   [ADD, 'the count takes the files already held',
     '  const count = composer.files.length + added.length;',
     '  const count = added.length;'],
+  [ADD, 'an add waits for the one before it',
+    '  const turn = composer.queue.then(() => addInTurn(convoId, composer, added, source)).finally(done);',
+    '  const turn = addInTurn(convoId, composer, added, source).finally(done);'],
 
   // ===== THE MESSAGES STACK UNTIL AN ADD ATTACHES =====
   [ADD, 'an add that attaches replaces the earlier messages',
@@ -105,6 +108,9 @@ const MUTATIONS = [
   [ADD, 'Send is off while a PDF is held for Codex',
     '  if (activeConversation) button.disabled = sendWaiting(activeConversation.id) || sendHeld(activeConversation.id);',
     '  if (activeConversation) button.disabled = sendWaiting(activeConversation.id);'],
+  [ADD, 'an add beside a held PDF explains only the PDFs it brings',
+    'heldPdfs(convoId, composer.held ? passed : composer.files)',
+    'heldPdfs(convoId, composer.files)'],
 
   // ===== A NAME IS TEXT =====
   [ADD, 'a message\'s title shows its file\'s name as text',
