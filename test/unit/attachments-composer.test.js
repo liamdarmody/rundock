@@ -315,33 +315,33 @@ describe('each conversation keeps its own chips', () => {
 describe('the + button and an agent on Codex', () => {
   const shown = (p) => !p.$('attach-btn').hidden && p.w.getComputedStyle(p.$('attach-btn')).display !== 'none';
 
-  test('the + button is hidden while the conversation\'s agent runs on Codex', () => {
-    assert.strictEqual(shown(page({ agentId: 'coder' })), false);
+  test('the + button is shown while the conversation\'s agent runs on Codex', () => {
+    assert.strictEqual(shown(page({ agentId: 'coder' })), true);
     assert.strictEqual(shown(page({ agentId: 'lead' })), true);
-    assert.strictEqual(shown(page({ agentId: 'helper' })), true, 'an agent with no runtime named is not on Codex');
+    assert.strictEqual(shown(page({ agentId: 'helper' })), true, 'an agent with no runtime named');
   });
 
-  test('the agent a message would go to decides: the active agent before the conversation\'s own', () => {
-    assert.strictEqual(shown(page({ agentId: 'lead', activeAgentId: 'coder' })), false);
+  test('the + button is shown whether the active agent or the conversation\'s own runs on Codex', () => {
+    assert.strictEqual(shown(page({ agentId: 'lead', activeAgentId: 'coder' })), true);
     assert.strictEqual(shown(page({ agentId: 'coder', activeAgentId: 'lead' })), true);
   });
 
-  test('the + button comes back when control passes to an agent not on Codex, and goes when it passes to one', () => {
+  test('the + button stays shown when control passes to an agent not on Codex, and when it passes to one', () => {
     const p = page({ agentId: 'lead', activeAgentId: 'coder' });
     p.w.getConvoState('c1').activeAgentId = 'lead';
     p.w.__header('c1', { toAgentId: 'lead' });
     assert.strictEqual(shown(p), true);
     p.w.getConvoState('c1').activeAgentId = 'coder';
     p.w.__header('c1', { toAgentId: 'coder' });
-    assert.strictEqual(shown(p), false);
+    assert.strictEqual(shown(p), true);
   });
 
-  test('opening another conversation shows the button for its agent', () => {
+  test('opening another conversation, and coming back to one whose agent runs on Codex, shows the button', () => {
     const p = page({ agentId: 'coder' });
     p.open('c2', 'lead');
     assert.strictEqual(shown(p), true);
     p.open('c1');
-    assert.strictEqual(shown(p), false);
+    assert.strictEqual(shown(p), true);
   });
 });
 
@@ -392,11 +392,11 @@ describe('the + button after the history arrives', () => {
     return document.getElementById('attach-btn').hidden;
   };
 
-  test('a history that points the conversation at an agent on Codex hides the + button', () => {
-    assert.strictEqual(arrives({ activeAgentId: 'coder' }), true);
+  test('a history that points the conversation at an agent on Codex shows the + button', () => {
+    assert.strictEqual(arrives({ activeAgentId: 'coder' }), false);
   });
 
-  test('a history that hands the conversation back to an agent not on Codex shows it again', () => {
-    assert.strictEqual(arrives({ activeAgentId: 'coder', delegationReturned: true, wasHidden: true }), false);
+  test('a history that hands the conversation back to its own agent, on Codex, shows it again', () => {
+    assert.strictEqual(arrives({ agentId: 'coder', activeAgentId: 'lead', delegationReturned: true, wasHidden: true }), false);
   });
 });

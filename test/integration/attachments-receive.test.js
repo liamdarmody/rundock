@@ -6,7 +6,7 @@
 // into the transcript row, the runtime's prompt, the runtime's own session
 // file and the history a reload reads. A refused message is answered with one
 // chat_refused and writes, records, appends and dispatches nothing. Files for
-// a Codex agent are refused before anything is decoded. A frame over the limit
+// a Codex agent are stored as any agent's are. A frame over the limit
 // closes only its own socket. A conversation's delete removes its files once
 // the messages with files already on their way are through, and says so when
 // it couldn't.
@@ -186,15 +186,25 @@ async function refusedWith(msg, { code, title, text }) {
 
 // First in the file: nothing before it has written under .rundock.
 describe('files for a Codex agent', () => {
-  const CODEX = 'This agent runs on Codex, which can\'t open attached files yet. Remove the files to send your message.';
-
-  test('are refused codex-files before anything is written, and no Codex turn starts', async () => {
+  test('are stored once, with one chat_stored, and go on to Codex', async () => {
     assert.strictEqual(listing(attachmentsDir()), null, 'no attachments folder before the message');
     const id = h.freshConvoId('codex');
-    await refusedWith({ type: 'chat', conversationId: id, agent: 'researcher', content: 'CODEX-FILES see this', attachments: [file('Screen Shot.png', png())] },
-      { code: 'codex-files', title: NOT_SENT, text: CODEX });
-    assert.strictEqual(listing(attachmentsDir()), null, 'and none after it');
-    assert.deepStrictEqual(h.codexTurnPrompts().filter((p) => p.includes('CODEX-FILES')), [], 'Codex is sent nothing');
+    h.writeCodexScenario([{ match: { promptIncludes: 'CODEX-FILES' }, text: 'DONE-CODEX-FILES' }]);
+    const since = client.messages.length;
+    client.send({ type: 'chat', conversationId: id, agent: 'researcher', content: 'CODEX-FILES see this', attachments: [file('Screen Shot.png', png())] });
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is answered with chat_stored');
+    assert.ok(await h.waitUntil(() => h.codexTurnPrompts().some((p) => p.includes(stored.content)), { timeout: 15000 }),
+      'Codex is sent the stored text');
+    await client.waitForEvent('system', 'done', id);
+    const answered = client.messages.slice(since).filter((m) => m.conversationId === id);
+    assert.strictEqual(answered.filter((m) => m.type === 'chat_stored').length, 1, 'one chat_stored');
+    assert.ok(!answered.some((m) => m.type === 'chat_refused'), 'and no chat_refused');
+    assert.deepStrictEqual(entriesOf(id), [stored.entry], 'one record entry');
+    assert.deepStrictEqual(listing(folderOf(id)), ['1-Screen_Shot.png', 'record.json'], 'one stored copy');
+    h.reapConvo(id);
+    // The next test starts from no attachments folder.
+    fs.rmSync(attachmentsDir(), { recursive: true, force: true });
   });
 
   test('an empty list of files to a Codex agent is a text-only message and goes to Codex', async () => {
