@@ -33,6 +33,7 @@ function between(src, from, to, label, through = false) {
 
 const COMPOSER = path.join(ROOT, 'public', 'views', 'composer.js');
 const SNIFF = path.join(ROOT, 'public', 'attachment-sniff.js');
+const SCALE = path.join(ROOT, 'public', 'attachment-scale.js');
 const INDEX = read('public', 'index.html');
 const CONVERSATIONS = read('public', 'views', 'conversations.js');
 const APP = read('public', 'app.js');
@@ -60,6 +61,7 @@ function page({ agentId = 'lead', activeAgentId = null } = {}) {
     function makeConvo(id, agentId) { return { id, agentId, agent: agents.find(a => a.id === agentId), title: id, status: 'active', messages: [] }; }`);
   w.eval(read('public', 'attachment-wording.js'));
   if (fs.existsSync(SNIFF)) w.eval(fs.readFileSync(SNIFF, 'utf-8'));
+  if (fs.existsSync(SCALE)) w.eval(fs.readFileSync(SCALE, 'utf-8'));
   w.eval(fs.readFileSync(COMPOSER, 'utf-8'));
   // The last pick's add, for `pick` to wait on.
   let lastAdd = Promise.resolve();
@@ -370,12 +372,19 @@ describe('the + button and an agent on Codex', () => {
 });
 
 describe('a file name is text', () => {
-  test('a file named as markup creates no element and shows as its name', async () => {
+  test('a PNG named as markup gives exactly one img, its preview with an empty alt, and shows as its name', async () => {
     const p = page();
+    // URL.createObjectURL and URL.revokeObjectURL, which jsdom lacks.
+    p.w.URL.createObjectURL = () => 'blob:example/1';
+    p.w.URL.revokeObjectURL = () => {};
     const name = '<img src=x onerror=alert(1)>.png';
     await pick(p, ['a', 'b', 'c', 'd'].map((n) => p.file(`${n}.txt`)).concat(p.file(name)));
     await pick(p, [p.file(name)]);
-    assert.strictEqual(p.doc.querySelectorAll('img').length, 0);
+    const imgs = p.doc.querySelectorAll('img');
+    assert.strictEqual(imgs.length, 1, 'one img, the preview');
+    assert.ok(p.chips()[4].querySelector('.composer-chip-tile').contains(imgs[0]), 'in the image chip\'s tile');
+    assert.deepStrictEqual([imgs[0].getAttribute('alt'), imgs[0].getAttribute('src')], ['', 'blob:example/1']);
+    assert.strictEqual(p.doc.querySelectorAll('[onerror]').length, 0, 'no element from the name');
     assert.strictEqual(chipText(p.chips()[4]).name, name);
     assert.strictEqual(p.removeButtons()[4].getAttribute('aria-label'), `Remove ${name}`);
     assert.strictEqual(p.notice().title, name);

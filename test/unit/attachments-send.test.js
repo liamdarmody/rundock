@@ -82,6 +82,7 @@ function page({ listeners = true } = {}) {
     var ws = { readyState: 1, sent: [], send(raw) { this.sent.push(raw); } };
     ${between(APP, 'function esc(t){', '\nfunction stripRundockMarkers', 'the escaping helpers')}`);
   for (const lib of ['markers.js', 'chat-markup.js', 'conversation-state.js', 'conversation-list.js', 'attachment-wording.js', 'attachment-sniff.js']) w.eval(read('public', lib));
+  if (fs.existsSync(path.join(ROOT, 'public', 'attachment-scale.js'))) w.eval(read('public', 'attachment-scale.js'));
   for (const view of ['chat.js', 'conversations.js', 'composer.js']) w.eval(read('public', 'views', view));
   for (const fn of ['showComposerFor', 'pickFiles', 'sendWithFiles', 'fileSendAnswered', 'attachmentsConnectionLost']) {
     assert.strictEqual(typeof w[fn], 'function', `the composer has ${fn}`);

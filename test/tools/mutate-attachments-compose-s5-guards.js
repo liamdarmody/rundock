@@ -17,6 +17,13 @@
 // the field's quieter lines be read are rules too, and are broken the same
 // way.
 //
+// An image is fitted to the limits as it is added: scaled to 2,576 px, then
+// stepped down as JPEG when opaque or as smaller PNG when not, or refused
+// with the size of its last step; one already at or under both limits is
+// never touched. An animated image, told by walking its blocks or chunks, is
+// marked "First frame only", and an image's chip shows a preview whose URL is
+// let go when the image leaves. Each of those is broken here too.
+//
 // A guard whose mutation turns nothing red is reported as a FAILURE rather
 // than passed over. An experiment that changes nothing has not been run.
 //
@@ -51,6 +58,8 @@ const DROP = { src: CHAT_CSS, suite: 'test/unit/composer-field-contrast.test.js'
 // The server's own check of each file's bytes on Send, whatever the page let
 // through.
 const DETECT = { src: path.join(ROOT, 'lib', 'attachments', 'detect.js'), suite: 'test/unit/attachments-add.test.js' };
+// The window's scaling of an image and its check for an animated one.
+const SCALE = { src: path.join(ROOT, 'public', 'attachment-scale.js'), suite: 'test/unit/attachment-scale.test.js' };
 
 // ONE NAMED TEST, FOR A ROW THAT BREAKS THE SERVER. A row that breaks the
 // server's own check, rather than the composer, names the test that proves the
@@ -136,6 +145,63 @@ const MUTATIONS = [
   [DROP, 'the drop\'s line of file types clears 4.5:1',
     '.composer-drop-msg span { font-size: var(--caption); color: var(--text-2-strong); }',
     '.composer-drop-msg span { font-size: var(--caption); color: var(--text-2); }'],
+
+  // ===== AN IMAGE IS FITTED TO THE LIMITS =====
+  [SCALE, 'an opaque image\'s JPEG qualities are tried from 0.9 down',
+    '  const QUALITIES = [0.9, 0.8, 0.7, 0.6];',
+    '  const QUALITIES = [0.6, 0.7, 0.8, 0.9];'],
+  [SCALE, 'an image with see-through pixels is never encoded as JPEG',
+    '    if (opaque) {',
+    '    if (opaque || !opaque) {'],
+  [SCALE, 'a step at or above the image\'s current edge is skipped',
+    '        if (to >= edge) continue;\n',
+    ''],
+  [SCALE, 'a refusal gives the size of the last step tried',
+    'tried[tried.length - 1]',
+    'tried[0]'],
+  [SCALE, 'an image at or under both limits is never decoded',
+    '    if (Math.max(kind.width, kind.height) <= EDGE && file.size <= LIMIT) return asCame(file);\n',
+    ''],
+  [SCALE, 'an image decoded at or under both limits is never encoded',
+    '    if (longest <= EDGE && file.size <= LIMIT) return asCame(file);\n',
+    ''],
+  [ADD, 'the total counts each image at the size it is sent',
+    '    ({ file: added[i], kind: checked[i] } = await fitImage(added[i], checked[i]));',
+    '    ({ kind: checked[i] } = await fitImage(added[i], checked[i]));'],
+
+  // ===== AN ANIMATED IMAGE IS MARKED =====
+  [ADD, 'an animated image is checked for and marked',
+    'animated: scale.animated(bytes, kind.type)',
+    'animated: false'],
+  [SCALE, 'a GIF\'s frames are counted by walking its blocks, never by searching for 0x2c',
+    '  function gifAnimated(b) {\n',
+    '  function gifAnimated(b) {\n    return b.indexOf(0x2c) !== b.lastIndexOf(0x2c);\n'],
+  [SCALE, 'a PNG\'s acTL counts only before its first IDAT',
+    "      if (type === 'IDAT') return false;\n",
+    ''],
+  [ADD, '"First frame only" goes ahead of "Scaled to"',
+    "  const mark = animated ? [ICON_FRAME, 'First frame only'] : scaledTo ? [ICON_SCALED, `Scaled to ${grouped(scaledTo)} px`] : null;",
+    "  const mark = scaledTo ? [ICON_SCALED, `Scaled to ${grouped(scaledTo)} px`] : animated ? [ICON_FRAME, 'First frame only'] : null;"],
+
+  // ===== AN IMAGE'S PREVIEW =====
+  [ADD, 'a remove lets go the removed image\'s preview URL',
+    '  composer.files = composer.files.filter((_, i) => i !== index);\n  releasePreviews(composer);\n',
+    '  composer.files = composer.files.filter((_, i) => i !== index);\n'],
+  [ADD, 'a stored send lets go every preview URL',
+    '  composer.files = [];\n  releasePreviews(composer);\n',
+    '  composer.files = [];\n'],
+  [ADD, 'a change of workspace lets go every preview URL',
+    '  for (const composer of composers.values()) releasePreviews(composer, []);\n',
+    ''],
+  [ADD, 'a preview URL is made once for each image held',
+    '  if (!urls.has(file)) urls.set(file, URL.createObjectURL(file));',
+    '  urls.set(file, URL.createObjectURL(file));'],
+  [CHIP, '"Scaled to" and "First frame only" clear 4.5:1',
+    '.composer-chip-meta.state { display: flex; align-items: center; gap: 4px; color: var(--text-2-strong); }',
+    '.composer-chip-meta.state { display: flex; align-items: center; gap: 4px; color: var(--text-2); }'],
+  [CHIP, 'the icon before "Scaled to" and "First frame only" clears 3:1',
+    '.composer-chip-meta.state svg { width: 11px; height: 11px; flex-shrink: 0; color: var(--text-2-strong); }',
+    '.composer-chip-meta.state svg { width: 11px; height: 11px; flex-shrink: 0; color: var(--text-2); }'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];

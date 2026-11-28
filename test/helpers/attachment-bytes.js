@@ -8,6 +8,9 @@
 // Uint8Array instead of a size, it writes the header over that array's start
 // and hands the same array back, so a test that asserts the exact bytes sent
 // still holds them.
+//
+// The builders after typed() give whole images, still or animated, for the
+// check that counts an image's frames.
 
 const ascii = (s) => [...s].map((c) => c.charCodeAt(0));
 const be16 = (n) => [n >> 8, n & 255];
@@ -58,8 +61,38 @@ function typed(name, sizeOrBytes) {
   return bytes;
 }
 
+// Whole images for the check that reads an image's frames, each built from its
+// blocks or chunks so the frames sit where the format puts them.
+//
+// gifOf(frames) is a GIF89a of 1 by 1 frames on a two-color table, each after
+// its graphic control extension, ending in its trailer; `width` and `height`
+// are its screen's, and `data` is each frame's image data (an LZW code size,
+// then sub-blocks, then an empty one).
+const GIF_FRAME = [0x02, 0x02, 0x44, 0x01, 0x00];
+const gifOf = (frames, { width = 1, height = 1, data = GIF_FRAME } = {}) => [
+  ...ascii('GIF89a'), ...le16(width), ...le16(height), 0x80, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff,
+  ...Array.from({ length: frames }, () => [0x21, 0xf9, 0x04, 0, 0x0a, 0, 0, 0, 0x2c, 0, 0, 0, 0, ...le16(1), ...le16(1), 0, ...data]).flat(),
+  0x3b,
+];
+// pngOf(width, height, chunks) is a PNG of its IHDR, the chunks given as
+// [type, data] in order, and its IEND. Each CRC is left as zeros.
+const chunk = (type, data) => [...be32(data.length), ...ascii(type), ...data, 0, 0, 0, 0];
+const pngOf = (width, height, chunks = []) => [0x89, ...ascii('PNG\r\n\x1a\n'),
+  ...chunk('IHDR', [...be32(width), ...be32(height), 8, 6, 0, 0, 0]),
+  ...chunks.flatMap(([type, data]) => chunk(type, data)), ...chunk('IEND', [])];
+const acTL = (frames) => ['acTL', [...be32(frames), ...be32(0)]];
+const IDAT = ['IDAT', [0x78, 0x9c, 0x63, 0, 0, 0, 0x01, 0, 0x01]];
+// webpOf(chunks) is a WebP of the chunks given as [fourcc, data], each padded
+// to an even length.
+const webpOf = (chunks) => {
+  const body = chunks.flatMap(([fourcc, data]) => [...ascii(fourcc), ...le32(data.length), ...data, ...(data.length % 2 ? [0] : [])]);
+  return [...ascii('RIFF'), ...le32(4 + body.length), ...ascii('WEBP'), ...body];
+};
+const vp8x = (flags, w, h) => ['VP8X', [flags, 0, 0, 0, ...le24(w - 1), ...le24(h - 1)]];
+
 module.exports = {
   ascii, be16, be32, le16, le24, le32,
   png, jpeg, gif, riff, webpLossy, webpLossless, webpExtended, ftyp, pdf, utf8,
   typed,
+  gifOf, pngOf, acTL, IDAT, webpOf, vp8x,
 };

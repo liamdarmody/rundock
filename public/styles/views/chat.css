@@ -332,6 +332,12 @@ body.light .stopped-detail { background: var(--elevated); }
 .composer-chip-remove svg { width: 14px; height: 14px; }
 .composer-chip-remove:hover { color: var(--text-1); background: var(--card); }
 .composer-chip-remove:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 0; }
+/* An image's second line when it says it was scaled, or that an animated
+   image is seen as its first frame only: a small icon before the words. */
+.composer-chip-meta.state { display: flex; align-items: center; gap: 4px; color: var(--text-2-strong); }
+.composer-chip-meta.state svg { width: 11px; height: 11px; flex-shrink: 0; color: var(--text-2-strong); }
+/* An image's tile shows the image itself, filling the tile. */
+.composer-chip-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .attach-btn { position: relative; width: 32px; height: 32px; margin: 6px 0 6px 6px; flex-shrink: 0; border-radius: var(--radius-md); color: var(--text-2-strong); display: flex; align-items: center; justify-content: center; }
 .attach-btn:hover { color: var(--text-1); background: var(--elevated); }
 .attach-btn:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 1px; }

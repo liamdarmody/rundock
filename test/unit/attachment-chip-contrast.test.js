@@ -23,6 +23,15 @@ describe('a chip\'s text and states clear their bar in both themes', () => {
   ]);
 });
 
+// An image's second line saying it was scaled, or that an animated image is
+// seen as its first frame only, and the icon before those words.
+describe('an image\'s "Scaled to" and "First frame only" line and its icon clear their bar in both themes', () => {
+  rowsClear(test, CHAT, [
+    ['"Scaled to" and "First frame only", --text-2-strong on --elevated', ['.composer-chip-meta.state', 'color', '--text-2-strong'], CHIP, 4.5],
+    ['their icon, --text-2-strong on --elevated', ['.composer-chip-meta.state svg', 'color', '--text-2-strong'], CHIP, 3],
+  ]);
+});
+
 describe('a PDF held for an agent on Codex is edged clear of the field and the chip in both themes', () => {
   rowsClear(test, CHAT, [
     ['the Codex outline against --card', ['.composer-chip.warn', 'border-color', '--attention-text'], FIELD, 3],
