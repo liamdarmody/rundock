@@ -496,12 +496,12 @@ describe('the cap of five helpers at once', () => {
 // ---------------------------------------------------------------------------
 
 describe('a lone teammate call while helpers work, or after a cap refusal', () => {
-  // By design this passes before the count exists. Its sibling, "while an
-  // Explore helper runs, a lone teammate call is a helper", shares its setup
-  // and fails there.
+  // Its premise, nothing running, is read from the count, so before the count
+  // exists it fails on that name.
   test('with nothing running and no cap refusal in the request, a lone teammate call is a handoff', () => {
-    const m = helpers();
+    const m = names('runningCount');
     const convo = freshConvo();
+    assert.strictEqual(m.runningCount(convo), 0, 'nothing runs');
     assert.strictEqual(m.placeMessage(convo, lead, [teammate('h1', 'ash')]).kind, 'handoff');
   });
 
@@ -543,9 +543,8 @@ describe('a lone teammate call while helpers work, or after a cap refusal', () =
     assert.strictEqual(m.runningCount(convo), 1);
   });
 
-  // By design this passes before the count exists. Its sibling, "while an
-  // Explore helper runs, a lone teammate call is a helper", shares its setup
-  // and fails there.
+  // Its setup starts a helper through the count, so before the count exists
+  // it fails on that name.
   test('once every helper has finished, with no cap refusal, a lone teammate call is a handoff again', async () => {
     const m = helpers();
     const convo = freshConvo();
