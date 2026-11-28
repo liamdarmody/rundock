@@ -3868,6 +3868,18 @@ const MUTATIONS = [
   [CONNECTOR_WRITE, 'Connector: with no turn watching, a write over a change the guard has not taken is recorded as Rundock\'s own',
     'record: !answerFileChangeUntaken(workspace, file, disk.bytes) };',
     'record: true };'],
+  // Where the platform has no O_NOFOLLOW, an lstat just before each open is
+  // all that refuses a link; and the copy built on is the accepted one even
+  // when the file changes after the guard's check.
+  [CONNECTOR_WRITE, 'Connector: where the platform has no O_NOFOLLOW, the file is read through a link',
+    '    if (!O_NOFOLLOW && fs.lstatSync(file).isSymbolicLink()) return { refused: LINK_REFUSED };\n',
+    ''],
+  [CONNECTOR_WRITE, 'Connector: where the platform has no O_NOFOLLOW, the file is written through a link',
+    "  if (!io.noFollow() && isLink(file)) throw Object.assign(new Error('ELOOP: the connector file is a link'), { code: 'ELOOP' });\n",
+    ''],
+  [CONNECTOR_WRITE, 'Connector: while a turn watches, the change is built on what the disk held after the guard\'s check',
+    '    return { bytes: accepted.bytes, record: true };\n',
+    '    return { bytes: disk.bytes, record: true };\n'],
   [CONNECTOR_ASK, 'Connector: a save checks for a setting the card cannot show only after it reads the file',
     '  const hidden = hiddenSettingRefusal(entry);\n'
     + '  if (hidden) {\n'
