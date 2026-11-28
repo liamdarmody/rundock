@@ -120,6 +120,7 @@ function pickFiles(input) {
 function removeComposerFile(composer, index) {
   if (composer.waiting) return;
   composer.files = composer.files.filter((_, i) => i !== index);
+  releasePreviews(composer);
   composer.notices = [];
   renderComposer(composer);
   const buttons = document.querySelectorAll('#composer-chips .composer-chip-remove');
@@ -156,6 +157,7 @@ function chipFor(composer, file, index) {
   remove.appendChild(iconOf(ICON_CLOSE, '1.8'));
   remove.onclick = () => removeComposerFile(composer, index);
   chip.append(tileFor(kinds.get(file)), text, remove);
+  showPreview(composer, file, chip.firstElementChild);
   return chip;
 }
 
@@ -314,6 +316,7 @@ function fileSendAnswered(d) {
   if (d.type === 'chat_refused') { endWait(d.conversationId, { title: d.title, text: d.text }); return; }
   composer.waiting = null;
   composer.files = [];
+  releasePreviews(composer);
   composer.notices = [];
   if (typeof RundockSentFiles !== 'undefined') RundockSentFiles.mergeStoredFiles(d.conversationId, d.entry);
   const convo = conversations.find(c => c.id === d.conversationId);
@@ -346,6 +349,7 @@ function attachmentsConnectionLost() {
 // messages and the sends still waiting, whose file reads then send nothing.
 function composersWorkspaceChanged() {
   for (const composer of composers.values()) composer.waiting = null;
+  for (const composer of composers.values()) releasePreviews(composer, []);
   composers.clear();
   const field = document.getElementById('msg-input');
   if (field) field.readOnly = false;
@@ -538,6 +542,38 @@ function markImage(meta, kind) {
 // A whole number with its thousands marked by commas, as "2,576".
 function grouped(n) {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// ===== PREVIEWS =====
+//
+// An image's tile shows the image the composer holds, from one URL per file,
+// made the first time its chip is drawn and let go once the composer no
+// longer holds the file: removed, sent and stored, or left behind by a change
+// of workspace. Where the window can't make a URL, the tile keeps its icon.
+
+// A composer to its previews: each held image to the URL its tile shows.
+const previews = new WeakMap();
+
+function showPreview(composer, file, tile) {
+  if (!(kinds.get(file) || {}).width || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return;
+  if (!previews.has(composer)) previews.set(composer, new Map());
+  const urls = previews.get(composer);
+  if (!urls.has(file)) urls.set(file, URL.createObjectURL(file));
+  const preview = document.createElement('img');
+  preview.setAttribute('alt', '');
+  preview.src = urls.get(file);
+  tile.replaceChildren(preview);
+}
+
+// Lets go the URL of each file not among `held`.
+function releasePreviews(composer, held = composer.files) {
+  const urls = previews.get(composer);
+  if (!urls) return;
+  for (const [file, url] of urls) {
+    if (held.includes(file)) continue;
+    URL.revokeObjectURL(url);
+    urls.delete(file);
+  }
 }
 
 // ===== DROP =====

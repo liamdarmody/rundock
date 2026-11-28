@@ -1804,3 +1804,128 @@ describe('the sequences of adding an image', () => {
     assert.deepStrictEqual(files.map((f) => f.name), ['notes.txt']);
   });
 });
+
+// ===== AN IMAGE'S CHIP SHOWS A PREVIEW =====
+
+// URL.createObjectURL and URL.revokeObjectURL, which jsdom lacks, stubbed on
+// the window to record their calls: `made` holds each [file, url] in the
+// order made, and `revoked` each url let go.
+function stubUrls(p) {
+  const made = [];
+  const revoked = [];
+  p.w.URL.createObjectURL = (file) => {
+    const url = `blob:example/${made.length + 1}`;
+    made.push([file, url]);
+    return url;
+  };
+  p.w.URL.revokeObjectURL = (url) => { revoked.push(url); };
+  return { made, revoked };
+}
+
+// What each chip's tile holds: its preview's alt and src, or its icon.
+const tiles = (p) => [...p.doc.querySelectorAll('#composer-chips .composer-chip-tile')].map((tile) => {
+  const imgs = tile.querySelectorAll('img');
+  return imgs.length ? { imgs: imgs.length, alt: imgs[0].getAttribute('alt'), src: imgs[0].getAttribute('src'), icons: tile.querySelectorAll('svg').length }
+    : { imgs: 0, icons: tile.querySelectorAll('svg').length };
+});
+
+describe('an image\'s chip shows a preview', () => {
+  test('an image chip holds one img with an empty alt whose src is the URL made for the file the composer holds', async () => {
+    const p = page();
+    needsScale(p);
+    const urls = stubUrls(p);
+    fakeCodec(p, { width: 4000, height: 3000, sizes: { 2576: 2000000 } });
+    const small = p.file('a.png');
+    await pick(p, small, imageFile(p, 'shot.png', png(4000, 3000), 3000000));
+    assert.deepStrictEqual(tiles(p), [
+      { imgs: 1, alt: '', src: 'blob:example/1', icons: 0 },
+      { imgs: 1, alt: '', src: 'blob:example/2', icons: 0 },
+    ]);
+    assert.strictEqual(urls.made[0][0], small, 'made for the image as it came');
+    assert.deepStrictEqual([urls.made[1][0].name, urls.made[1][0].size], ['shot.png', 2000000], 'made for the scaled image the composer holds');
+  });
+
+  // As on the base, so it needs nothing the base lacks.
+  test('a PDF chip holds no img', async () => {
+    const p = page();
+    const urls = stubUrls(p);
+    await pick(p, p.file('report.pdf'));
+    assert.deepStrictEqual(tiles(p), [{ imgs: 0, icons: 1 }]);
+    assert.deepStrictEqual(urls.made, []);
+  });
+
+  test('a remove revokes that image\'s URL', async () => {
+    const p = page();
+    needs(p);
+    const urls = stubUrls(p);
+    await pick(p, p.file('a.png'), p.file('b.png'));
+    p.doc.querySelector('#composer-chips .composer-chip-remove').click();
+    assert.deepStrictEqual(urls.revoked, ['blob:example/1']);
+    assert.deepStrictEqual(tiles(p), [{ imgs: 1, alt: '', src: 'blob:example/2', icons: 0 }]);
+  });
+
+  test('a stored send revokes every URL', async () => {
+    const p = page();
+    needs(p);
+    const urls = stubUrls(p);
+    await pick(p, p.file('a.png'), p.file('b.png'), p.file('notes.txt'));
+    await sentFiles(p, 'see these');
+    assert.deepStrictEqual(urls.revoked, [], 'none while the send waits');
+    p.w.fileSendAnswered({ type: 'chat_stored', conversationId: 'c1', entry: 'one', content: 'see these' });
+    assert.deepStrictEqual(p.chips(), []);
+    assert.deepStrictEqual(urls.revoked.sort(), ['blob:example/1', 'blob:example/2']);
+  });
+
+  test('a workspace change revokes every URL', async () => {
+    const p = page();
+    needs(p);
+    const urls = stubUrls(p);
+    await pick(p, p.file('a.png'), p.file('b.png'));
+    p.open('c2');
+    await pick(p, p.file('c.png'));
+    p.w.composersWorkspaceChanged();
+    assert.deepStrictEqual(urls.revoked.sort(), ['blob:example/1', 'blob:example/2', 'blob:example/3']);
+  });
+
+  test('drawing the composer again makes no new URL', async () => {
+    const p = page();
+    needs(p);
+    const urls = stubUrls(p);
+    await pick(p, p.file('a.png'));
+    p.open('c2');
+    p.open('c1');
+    await pick(p, p.file('notes.txt'));
+    p.doc.querySelectorAll('#composer-chips .composer-chip-remove')[1].click();
+    assert.deepStrictEqual(urls.made.map(([, url]) => url), ['blob:example/1']);
+    assert.deepStrictEqual(tiles(p), [{ imgs: 1, alt: '', src: 'blob:example/1', icons: 0 }]);
+    assert.deepStrictEqual(urls.revoked, []);
+  });
+});
+
+describe('the sequences of an image\'s preview', () => {
+  // As on the base, so it needs nothing the base lacks.
+  test('a file that isn\'t an image shows its icon, not a preview', async () => {
+    const p = page();
+    const urls = stubUrls(p);
+    await pick(p, p.file('report.pdf'), p.file('notes.txt'), p.file('readme.md'), p.file('table.csv'));
+    assert.deepStrictEqual(tiles(p), Array(4).fill({ imgs: 0, icons: 1 }));
+    assert.deepStrictEqual(urls.made, []);
+  });
+
+  test('removing an image revokes its preview\'s URL and takes its scaled bytes off the total, so a file refused on the total then fits', async () => {
+    const p = page();
+    needsScale(p);
+    const urls = stubUrls(p);
+    fakeCodec(p, { width: 4000, height: 3000, sizes: { 2576: 1500000 } });
+    await pick(p, p.file('a.pdf', 9000000), p.file('b.pdf', 9000000), imageFile(p, 'shot.png', png(4000, 3000), 9000000));
+    assert.deepStrictEqual(p.chips(), ['a.pdf', 'b.pdf', 'shot.png'], '19,500,000 bytes held');
+    const extra = p.file('c.pdf', 1000000);
+    await pick(p, extra);
+    assert.deepStrictEqual(p.notices(), [{ title: 'c.pdf', text: 'That would make 21 MB; the limit is 20 MB per message' }]);
+    p.doc.querySelector('#composer-chips .composer-chip-remove[aria-label="Remove shot.png"]').click();
+    assert.deepStrictEqual(urls.revoked, ['blob:example/1']);
+    await pick(p, extra);
+    assert.deepStrictEqual(p.chips(), ['a.pdf', 'b.pdf', 'c.pdf']);
+    assert.deepStrictEqual(p.notices(), []);
+  });
+});

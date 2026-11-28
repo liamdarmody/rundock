@@ -372,12 +372,19 @@ describe('the + button and an agent on Codex', () => {
 });
 
 describe('a file name is text', () => {
-  test('a file named as markup creates no element and shows as its name', async () => {
+  test('a PNG named as markup gives exactly one img, its preview with an empty alt, and shows as its name', async () => {
     const p = page();
+    // URL.createObjectURL and URL.revokeObjectURL, which jsdom lacks.
+    p.w.URL.createObjectURL = () => 'blob:example/1';
+    p.w.URL.revokeObjectURL = () => {};
     const name = '<img src=x onerror=alert(1)>.png';
     await pick(p, ['a', 'b', 'c', 'd'].map((n) => p.file(`${n}.txt`)).concat(p.file(name)));
     await pick(p, [p.file(name)]);
-    assert.strictEqual(p.doc.querySelectorAll('img').length, 0);
+    const imgs = p.doc.querySelectorAll('img');
+    assert.strictEqual(imgs.length, 1, 'one img, the preview');
+    assert.ok(p.chips()[4].querySelector('.composer-chip-tile').contains(imgs[0]), 'in the image chip\'s tile');
+    assert.deepStrictEqual([imgs[0].getAttribute('alt'), imgs[0].getAttribute('src')], ['', 'blob:example/1']);
+    assert.strictEqual(p.doc.querySelectorAll('[onerror]').length, 0, 'no element from the name');
     assert.strictEqual(chipText(p.chips()[4]).name, name);
     assert.strictEqual(p.removeButtons()[4].getAttribute('aria-label'), `Remove ${name}`);
     assert.strictEqual(p.notice().title, name);
