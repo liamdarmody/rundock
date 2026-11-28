@@ -532,6 +532,26 @@ describe("the cap on a lead's Codex helpers", () => {
     assert.strictEqual(helpers.runningCount(c), 5, 'never counted');
   });
 
+  test('a helper recorded before hundreds of others, given more work while five run, is still recognized and stopped', async () => {
+    const c = convo();
+    const { server } = await wiredLead(c);
+    feed(server, ...activity('early'), P.turnStarted('early', 'turn-early-1'), P.turnCompleted('early', 'turn-early-1', 'completed'));
+    for (let i = 0; i < 300; i++) {
+      const id = `since-${i}`;
+      feed(server, ...activity(id), P.turnStarted(id, `turn-${id}`), P.turnCompleted(id, `turn-${id}`, 'completed'));
+    }
+    for (const name of FIVE) feed(server, ...activity(name), P.turnStarted(name, `turn-${name}`));
+    assert.strictEqual(helpers.runningCount(c), 5);
+    log = [];
+    feed(server, ...activity('early', { id: 'act-early-again', kind: 'interacted' }), P.turnStarted('early', 'turn-early-2'));
+    await settle();
+    assert.deepStrictEqual(steps(), ['interrupt', 'rows', 'steer', 'event'], 'stopped as any sixth is');
+    const shown = rowOf(log[1][1], 'early');
+    assert.deepStrictEqual([shown.state, shown.capped], ['killed', true]);
+    assert.deepStrictEqual(log[2], ['steer', LINE('early')]);
+    assert.strictEqual(helpers.runningCount(c), 5, 'never counted');
+  });
+
   test('a sixth gets no row and no count; once its turn is known it is interrupted, its row shown stopped, Fern steered with one line and the refusal recorded, in that order', async () => {
     const c = convo();
     five(c);

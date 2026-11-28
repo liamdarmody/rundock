@@ -168,7 +168,9 @@ class CodexAppServer extends EventEmitter {
     this._staleTurns = new Map();  // threadId -> Set of released turnIds
     // Helper threads a lead's turn started, kept apart from _activeTurns so
     // a helper's turn never touches its lead's (see _onSubAgentActivity),
-    // and what thread/started said about threads not yet recorded.
+    // and what thread/started said about threads not yet recorded. A helper
+    // is kept until the process goes, however many start after it, so more
+    // work for it is always seen and counted.
     this._helperThreads = new Map(); // helper threadId -> record
     this._threadInfo = new Map();    // threadId -> { name, role, upkeep, depth, turnId, ended }
     this._restartAttempt = 0;
@@ -984,10 +986,6 @@ class CodexAppServer extends EventEmitter {
       name: info.name || lastPart(item.agentPath) || item.agentThreadId, role: info.role || null,
       state: info.ended || 'running', turnId: info.turnId || null, step: null, file: null, capped: false, notify: state.helpers,
     };
-    for (const [id, old] of this._helperThreads) {
-      if (this._helperThreads.size < 256) break;
-      if (old.state !== 'running') this._helperThreads.delete(id);
-    }
     this._helperThreads.set(rec.threadId, rec);
     this._tellHelper(rec, 'start');
     if (rec.state === 'running' && rec.turnId != null) this._tellHelper(rec, 'turn');
