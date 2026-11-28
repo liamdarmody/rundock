@@ -126,7 +126,7 @@ const MUTATIONS = [
   // ===== A HELPER'S CARD NAMES THE HELPER =====
   [only(CARD, 'a helper\'s approval raises a card on Fern\'s turn naming the helper, and Allow answers accept on the helper\'s request'),
     'a helper\'s card no longer names the helper',
-    '    ...(helper ? { _helper: { agentId: helper.threadId, agentType: helper.name } } : {}),\n',
+    '    ...(helperField ? { _helper: helperField } : {}),\n',
     ''],
 
   // ===== A HELPER'S END IS KEPT, WHENEVER IT ARRIVES =====
