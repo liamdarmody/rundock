@@ -30,6 +30,7 @@ const { readConversations } = require('../../lib/store/persistence.js');
 const guard = require('../../lib/workspace/answer-file-guard.js');
 const config = require('../../lib/config.js');
 const auth = require('../../lib/auth/index.js');
+const fx = require('../fixtures/stream-json.js');
 
 const HELPERS = path.join(__dirname, '..', '..', 'lib', 'delegation', 'helpers.js');
 // Asserted before the module is used, so a missing module fails a test on an
@@ -620,9 +621,23 @@ test('a request for an id from an earlier message is refused as unmatched; one t
   const convo = open('match-earlier');
   const earlier = agentCall('Explore');
   const current = agentCall('Plan');
+  // The test asks the hook for the current call itself, so the stub writes
+  // that call as raw lines and asks the hook for nothing. Claude Code starts a
+  // helper only once the hook allows it, and the lead's request ends once the
+  // helper has reported back: here the stub starts and ends it once the test
+  // has seen the answer, and the lead wakes to say so. Without that, an allowed
+  // call that never starts holds the request open whenever its answer lands
+  // before the lead's result.
+  const allowedFile = path.join(h.workspaceDir, `allowed-${current.id}`);
+  const helperLines = [
+    fx.taskStarted({ taskId: `task_${current.id}`, toolUseId: current.id, description: current.input.description, subagentType: 'Plan' }),
+    fx.taskNotification({ taskId: `task_${current.id}`, toolUseId: current.id }),
+  ];
   h.writeScenario([
     messageRule('wren', 'earlier message', [earlier], { asks: false }),
-    messageRule('wren', 'current message', [current], { asks: false }),
+    { match: { agent: 'wren', promptIncludes: 'current message' }, helpers: true,
+      turn: [{ text: 'On it.' }, ...fx.toolUseFlow('Agent', current.input, 1, current.id).map((raw) => ({ raw }))],
+      then: [{ untilFile: allowedFile, lines: helperLines, turn: [{ text: 'The plan is in.' }] }] },
   ]);
   const since = say(convo, 'wren', 'earlier message');
   await turnDone(convo, since);
@@ -631,7 +646,10 @@ test('a request for an id from an earlier message is refused as unmatched; one t
     await h.delay(200);
     const next = say(convo, 'wren', 'current message');
     assert.deepStrictEqual((await early.reply).body, { allow: true }, 'the early request is answered by its message');
-    await turnDone(convo, next);
+    fs.writeFileSync(allowedFile, '');
+    const { index } = await client.waitFor((m) => m.type === 'result' && m._conversationId === convo && m.result === 'The plan is in.',
+      { since: next, timeout: 20000, label: 'the lead woke once its helper reported back' });
+    await turnDone(convo, index);
   });
   await assertUnmatched(convo, askAgent(convo, 'wren', earlier).reply, since);
 });
