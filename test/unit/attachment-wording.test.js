@@ -79,10 +79,21 @@ describe('refusalWording: a refusal about the whole message', () => {
       { title: NOT_SENT, text: 'This message is too large to send (29 MB with its files; the limit is 28 MB). Remove a file or shorten the text.' });
   });
 
-  test('codex-files says the agent cannot open files yet', () => {
+  test('codex-files, a code nothing sends any more, gives the fallback', () => {
     has('refusalWording');
-    assert.deepStrictEqual(wording.refusalWording(refusal('codex-files'), 1),
-      { title: NOT_SENT, text: 'This agent runs on Codex, which can\'t open attached files yet. Remove the files to send your message.' });
+    assert.deepStrictEqual(wording.refusalWording(refusal('codex-files'), 1), FALLBACK);
+  });
+
+  test('codex-pdf names the PDF and asks for a screenshot or the text', () => {
+    has('refusalWording');
+    assert.deepStrictEqual(wording.refusalWording(refusal('codex-pdf', { name: 'Incident-Report-22-Nov.pdf' }), 3),
+      { title: 'Incident-Report-22-Nov.pdf', text: 'This agent runs on Codex, which can\'t read PDFs yet. Attach a screenshot of the page or paste the text.' });
+  });
+
+  test('codex-images gives what a Codex agent is sent in one conversation', () => {
+    has('refusalWording');
+    assert.deepStrictEqual(wording.refusalWording(refusal('codex-images'), 3),
+      { title: NOT_SENT, text: 'This agent runs on Codex, and Rundock sends a Codex agent at most 20 images or 10 MB of images in one conversation. Remove an image or start a new conversation.' });
   });
 
   test('deleted says the conversation went in another window', () => {

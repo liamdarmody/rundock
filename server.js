@@ -23,9 +23,9 @@ const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
 const helpers = require('./lib/delegation/helpers.js');
 const config = require('./lib/config.js');
-const { MAX_PAYLOAD, createReceiver } = require('./lib/attachments/receive.js');
+const { MAX_PAYLOAD, createReceiver, releasePendingImages } = require('./lib/attachments/receive.js');
 const { userTurnText } = require('./lib/attachments/turn-text.js');
-const { buildTurn } = require('./lib/attachments/turn.js');
+const { buildTurn, claudeSession, claudeSent } = require('./lib/attachments/turn.js');
 const agentsDiscovery = require('./lib/agents/discovery.js');
 const {
   discoverAgents, readNormalisedFile, extractFrontmatterText, titleCase,
@@ -1279,6 +1279,9 @@ function endConvoTransition(convoId, owner) {
   const liveWs = [...connectedClients].find(c => c.readyState === 1) || [...connectedClients][0];
   if (!liveWs) {
     console.warn(`[KillWindow] convo=${convoId} no client to replay ${t.queued.length} buffered message(s)`);
+    // Dropped, so none of them starts a turn: the images they hold no longer
+    // count.
+    for (const queued of t.queued) releasePendingImages(queued.attachmentEntry);
     return;
   }
   for (const queued of t.queued) {
@@ -1622,8 +1625,9 @@ wss.on('connection', (ws) => {
   const processes = chatProcesses;
 
   ws.on('message', (data) => {
+    let msg;
     try {
-      const msg = JSON.parse(data.toString());
+      msg = JSON.parse(data.toString());
 
       if (msg.type === 'chat') {
         const convoId = msg.conversationId || 'default';
@@ -1743,8 +1747,9 @@ wss.on('connection', (ws) => {
             noteUnstartedWrite(existing, followUp, msg.attachmentEntry);
             // Its stored lines checked against the record, with its own images
             // and PDFs; text alone goes as written.
-            const followUpTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: existing.runtime, text: followUp, entryId: msg.attachmentEntry });
+            const followUpTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: existing.runtime, text: followUp, entryId: msg.attachmentEntry, ...claudeSession(existing) });
             existing.process.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: followUpTurn.content } }) + '\n');
+            claudeSent(WORKSPACE, convoId, existing, followUpTurn);
             // A Claude Code turn's heartbeat, until its result.
             if (existing.startTurnKeepalive) existing.startTurnKeepalive();
           } else {
@@ -1821,8 +1826,9 @@ wss.on('connection', (ws) => {
             // start held for this agent whose process has since gone (reaped,
             // or the server restarted): given here, once.
             const heldCatchUp = takeStoredCatchUp(convoId, entry.agentId);
-            const firstTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: entry.runtime, text: heldCatchUp + msg.content, entryId: msg.attachmentEntry });
+            const firstTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: entry.runtime, text: heldCatchUp + msg.content, entryId: msg.attachmentEntry, ...claudeSession(entry) });
             proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: firstTurn.content } }) + '\n');
+            claudeSent(WORKSPACE, convoId, entry, firstTurn);
 
             const stderrRef = wireProcessHandlers(entry, convoId, ws, {
               enableInterception: true,
@@ -1995,8 +2001,9 @@ wss.on('connection', (ws) => {
 
           // Behind any catch-up stored for this agent, as on the interactive path.
           const legacyCatchUp = takeStoredCatchUp(convoId, entry.agentId);
-          const legacyTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: entry.runtime, text: legacyCatchUp + msg.content, entryId: msg.attachmentEntry });
+          const legacyTurn = buildTurn({ workspace: WORKSPACE, conversationId: convoId, runtime: entry.runtime, text: legacyCatchUp + msg.content, entryId: msg.attachmentEntry, ...claudeSession(entry) });
           proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: legacyTurn.content } }) + '\n');
+          claudeSent(WORKSPACE, convoId, entry, legacyTurn);
 
           // Legacy mode: no interception, no transcript, no idle tracking
           const legacyStderrRef = wireProcessHandlers(entry, convoId, ws, {
@@ -2092,6 +2099,9 @@ wss.on('connection', (ws) => {
       if (dispatchHandler) dispatchHandler(wsHandlerContext, ws, msg);
     } catch (e) {
       console.error('Error handling message:', e);
+      // A stored chat that fails on its way to its turn starts none, so the
+      // images it holds no longer count. A page's own frame holds none.
+      if (msg && msg.type === 'chat' && typeof data === 'string') releasePendingImages(msg.attachmentEntry);
     }
   });
 

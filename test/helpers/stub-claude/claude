@@ -49,6 +49,8 @@
 //     "refusalPreambleSplitAt": 0,   // write the preamble itself in two pieces,
 //                                    // cut at that character
 //     "refusalAfterInit": false,     // send the init envelope before refusing
+//     "newSessionOnResume": false,   // report a new id at init for a --resume
+//                                    // it does not refuse, as Claude Code may
 //     "loadAgentFiles": false,       // read agent files as Claude Code does, and
 //                                    // refuse an --agent no file loads for
 //                                    // (see AGENT_NOT_LOADED below)
@@ -437,7 +439,9 @@ function exitWhenWritten(code) {
 // real binary is: --session-id fixes the id, and the transcript below is
 // named for it. Only the routine spawn passes it today.
 const FIXED_SESSION = argValue('--session-id');
-const SESSION_ID = FIXED_SESSION || RESUME || `stub-${AGENT || 'default'}-${process.pid}`;
+// `newSessionOnResume` (top level) has a resumed run report a new id instead.
+const RESUMED_AS = RESUME && !scenarioTop().newSessionOnResume ? RESUME : null;
+const SESSION_ID = FIXED_SESSION || RESUMED_AS || `stub-${AGENT || 'default'}-${process.pid}`;
 let initSent = false;
 
 function loadRules() {

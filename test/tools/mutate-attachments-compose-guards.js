@@ -36,7 +36,8 @@ const ROOT = path.join(__dirname, '..', '..');
 const RECEIVE = 'test/integration/attachments-receive.test.js';
 // The socket, and where a chat is handed to the receive.
 const SERVER = { src: path.join(ROOT, 'server.js'), suite: RECEIVE };
-// The receive itself: the checks, the hold for Codex and the reference check.
+// The receive itself: the checks, what a Codex agent can't be sent and the
+// reference check.
 const RECEIVE_SRC = path.join(ROOT, 'lib', 'attachments', 'receive.js');
 const RECEIVER = { src: RECEIVE_SRC, suite: RECEIVE };
 const RECEIVER_UNIT = { src: RECEIVE_SRC, suite: 'test/unit/attachments-receive.test.js' };
@@ -102,9 +103,9 @@ const MUTATIONS = [
   [only(RECEIVER, 'naming an unknown entry is refused'), 'a reference to a record entry is checked against the conversation\'s own record',
     "    if (own(msg, 'attachmentEntry') && !checkReference(getWorkspace(), msg)) {",
     '    if (false) {'],
-  [RECEIVER_UNIT, 'files for a Codex agent are held back until it can read them',
-    '      if (forCodex(msg)) {',
-    '      if (false) {'],
+  [RECEIVER_UNIT, 'a PDF for a Codex agent is refused before it is written',
+    "  if (pdf !== -1) throw refusal('codex-pdf', { name: files[pdf].name });\n",
+    ''],
   [only(RECEIVER, 'set_workspace waits for the files, which are stored, recorded and dispatched in the first workspace; the next message goes to the second'),
     'a workspace switch waits for every message whose files are on their way',
     '  return inFlight.size > 0;\n',
