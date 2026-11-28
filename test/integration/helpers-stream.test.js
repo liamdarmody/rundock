@@ -279,8 +279,8 @@ test('with helpers on, each helper the lead starts reaches the page as a row, fr
   // not fix, so they are compared by id.
   const byId = (rows) => [...rows].sort((a, b) => a.toolUseId.localeCompare(b.toolUseId));
   assert.deepStrictEqual(byId(all[all.length - 1].helpers), byId([
-    { toolUseId: calls[0].id, agent: 'Explore', kind: 'builtin', task: 'Look around the repo', state: 'completed', step: null },
-    { toolUseId: calls[1].id, agent: 'Plan', kind: 'builtin', task: calls[1].input.description, state: 'completed', step: null },
+    { toolUseId: calls[0].id, agent: 'Explore', kind: 'builtin', task: 'Look around the repo', state: 'completed', step: null, batch: calls[0].id, file: null },
+    { toolUseId: calls[1].id, agent: 'Plan', kind: 'builtin', task: calls[1].input.description, state: 'completed', step: null, batch: calls[0].id, file: null },
   ]));
   assert.strictEqual(helpers().runningCount(convo), 0);
 });
@@ -298,7 +298,113 @@ test('with helpers on, a task_started for a call the lead\'s messages never made
   assert.strictEqual(helpers().runningCount(convo), 1);
   const last = helpersChanged(convo, since).pop();
   assert.ok(last, 'helpers_changed was sent');
-  assert.deepStrictEqual(last.helpers.map((r) => [r.toolUseId, r.state, r.step]), [['toolu_stream_unknown', 'running', 'Glob']]);
+  assert.deepStrictEqual(last.helpers.map((r) => [r.toolUseId, r.state, r.step]), [['toolu_stream_unknown', 'running', { type: 'Glob', detail: null }]]);
+});
+
+// ---------------------------------------------------------------------------
+// What the panel needs: each row's batch, its step and its file
+// ---------------------------------------------------------------------------
+
+// The rows of the last helpers_changed in a conversation, once `ready` holds.
+async function rowsWhen(convo, since, ready, label) {
+  const last = () => { const all = helpersChanged(convo, since); return all.length ? all[all.length - 1].helpers : []; };
+  assert.ok(await h.waitUntil(() => ready(last()), { timeout: 20000 }), `${label}: ${JSON.stringify(last())}`);
+  return last();
+}
+const rowOf = (rows, call) => rows.find((r) => r.toolUseId === call.id);
+
+test('with helpers on, one message with three Agent calls gives one batch, the first call\'s id', async () => {
+  helpers();
+  const convo = open('batch-one');
+  const calls = [agentCall('Explore'), agentCall('Plan'), agentCall('Explore')];
+  h.writeScenario([helpersRule('three calls one batch', calls)]);
+  const since = say(convo, 'three calls one batch');
+  const rows = await rowsWhen(convo, since, (r) => r.length === 3, 'three rows');
+  assert.deepStrictEqual(calls.map((c) => rowOf(rows, c).batch), Array(3).fill(calls[0].id));
+  for (const c of calls) finishHelper(c.id);
+});
+
+test('with helpers on, two Wren messages with Agent calls give two batches', async () => {
+  helpers();
+  const convo = open('batch-two');
+  const first = [agentCall('Explore'), agentCall('Plan')];
+  const second = [agentCall('Explore'), agentCall('Explore')];
+  h.writeScenario([helpersRule('first message of two', first), helpersRule('second message of two', second)]);
+  const since = say(convo, 'first message of two');
+  await nthResult(convo, since, 1);
+  say(convo, 'second message of two');
+  const rows = await rowsWhen(convo, since, (r) => r.length === 4, 'four rows');
+  assert.deepStrictEqual([...first, ...second].map((c) => rowOf(rows, c).batch), [first[0].id, first[0].id, second[0].id, second[0].id]);
+  for (const c of [...first, ...second]) finishHelper(c.id);
+});
+
+test('with helpers on, a row made from a task_started with no known call takes its own id as its batch', async () => {
+  helpers();
+  const convo = open('batch-unknown');
+  h.writeScenario([{ match: { agent: 'wren', promptIncludes: 'unknown batch line' }, turn: [
+    { raw: fx.taskStarted({ taskId: 'task_batch_unknown', toolUseId: 'toolu_stream_batch_unknown', description: 'Look', subagentType: 'Explore' }) },
+    { text: 'carrying on' },
+  ] }]);
+  const since = say(convo, 'unknown batch line');
+  const rows = await rowsWhen(convo, since, (r) => r.length === 1, 'one row');
+  assert.deepStrictEqual([rows[0].toolUseId, rows[0].batch], ['toolu_stream_batch_unknown', 'toolu_stream_batch_unknown']);
+});
+
+test('with helpers on, a helper\'s latest tool call is its row\'s step, with the file\'s name for a file tool, and its last write is its file', async () => {
+  helpers();
+  const convo = open('step-file');
+  const call = agentCall('Explore');
+  const tool = (name, input) => fx.helperToolUse(call.id, name, input, `toolu_stream_inner_${++seq}`);
+  h.writeScenario([helpersRule('steps and a file', [call], {
+    helperTools: { [call.id]: [{ name: 'Read', input: { file_path: 'notes/Content-Metrics-October.md' } }] },
+    then: [{ lines: [tool('Write', { file_path: 'out/report.md', content: 'x' }), tool('Grep', { pattern: 'todo' })] }],
+  })]);
+  const since = say(convo, 'steps and a file');
+  await rowsWhen(convo, since, (r) => r.length === 1 && r[0].step && r[0].step.type === 'Grep', 'the third step');
+  const seen = helpersChanged(convo, since).map((m) => [m.helpers[0].step, m.helpers[0].file]);
+  assert.deepStrictEqual(seen, [
+    [null, null],
+    [{ type: 'Read', detail: 'Content-Metrics-October.md' }, null],
+    [{ type: 'Write', detail: 'report.md' }, 'out/report.md'],
+    [{ type: 'Grep', detail: null }, 'out/report.md'],
+  ]);
+  const { msg: result } = await client.waitFor((m) => m.type === 'result' && m._conversationId === convo, { since, label: 'result' });
+  assert.deepStrictEqual(steps(result), ['Agent'], 'the helper\'s calls are not the lead\'s steps');
+  assert.ok(!wrenReplies(convo).includes('report.md'), 'nor its words');
+  finishHelper(call.id);
+});
+
+test('with helpers on, a task_progress sets the step\'s type alone, until a tool call of the helper\'s is seen', async () => {
+  helpers();
+  const convo = open('step-progress');
+  const call = agentCall('Explore');
+  const progress = (name) => fx.taskProgress({ taskId: `task_${call.id}`, toolUseId: call.id, lastToolName: name });
+  h.writeScenario([helpersRule('progress then a call', [call], {
+    then: [{ lines: [progress('Glob'), fx.helperToolUse(call.id, 'Edit', { file_path: 'a/b/plan.md' }, `toolu_stream_inner_${++seq}`), progress('Bash')] }],
+  })]);
+  const since = say(convo, 'progress then a call');
+  await rowsWhen(convo, since, (r) => r.length === 1 && r[0].step && r[0].step.type === 'Edit', 'the edit');
+  await h.delay(300);
+  assert.deepStrictEqual(helpersChanged(convo, since).map((m) => m.helpers[0].step), [
+    null, { type: 'Glob', detail: null }, { type: 'Edit', detail: 'plan.md' },
+  ], 'a task_progress after a tool call leaves the step');
+  finishHelper(call.id);
+});
+
+test('with helpers on, a lead\'s own tool call never sets a row\'s step or file', async () => {
+  helpers();
+  const convo = open('step-lead');
+  const call = agentCall('Explore');
+  const own = (name, input) => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: `toolu_stream_own_${++seq}`, name, input }] } });
+  h.writeScenario([helpersRule('the lead calls a tool', [call], {
+    then: [{ lines: [fx.helperToolUse(call.id, 'Glob', { pattern: '*.md' }, `toolu_stream_inner_${++seq}`), own('Write', { file_path: 'lead/own.md' }), { ...own('Read', { file_path: 'lead/x.md' }), parent_tool_use_id: null }] }],
+  })]);
+  const since = say(convo, 'the lead calls a tool');
+  await rowsWhen(convo, since, (r) => r.length === 1 && r[0].step && r[0].step.type === 'Glob', 'the helper\'s step');
+  await h.delay(300);
+  const rows = helpersChanged(convo, since).pop().helpers;
+  assert.deepStrictEqual([rows[0].step, rows[0].file], [{ type: 'Glob', detail: null }, null]);
+  finishHelper(call.id);
 });
 
 // ---------------------------------------------------------------------------
@@ -348,6 +454,29 @@ test('with helpers on, a call held at the cap that no slot frees for is refused 
   assert.strictEqual(helpers().runningCount(convo), 5);
   assert.ok(await h.waitUntil(() => capEvents(convo).length >= 2, { timeout: 5000 }), 'the hold and refusal are recorded');
   assert.deepStrictEqual(capEvents(convo).map((e) => e.d.outcome).sort(), ['held', 'refused']);
+});
+
+test('with helpers on, a held call refused by the hold\'s time limit keeps its row, killed and capped, and the rest of the hold is unchanged', async () => {
+  names('runningCount', 'helperRows');
+  const convo = open('cap-kept');
+  const calls = Array.from({ length: 6 }, () => agentCall('Explore'));
+  h.writeScenario([helpersRule('six explorers one kept', calls)]);
+  await withHold(300, async () => {
+    const since = say(convo, 'six explorers one kept');
+    await client.waitFor((m) => m.type === 'result' && m._conversationId === convo, { since, label: 'result' });
+  });
+  const refusedCall = calls.find((c) => hookAnswer(c.id) && hookAnswer(c.id).permissionDecision === 'deny');
+  assert.ok(refusedCall, 'one call was refused');
+  assert.deepStrictEqual(hookAnswer(refusedCall.id), refusedAnswer(CAP_NOTICE), 'refused with the cap\'s reason');
+  const rows = helpers().helperRows(convo);
+  assert.strictEqual(rows.length, 6, 'every call keeps its row');
+  const kept = rows.find((r) => r.toolUseId === refusedCall.id);
+  assert.deepStrictEqual([kept.state, kept.capped], ['killed', true]);
+  assert.strictEqual(rows.filter((r) => r.capped).length, 1, 'only the refused row is capped');
+  assert.strictEqual(helpers().runningCount(convo), 5, 'it is not counted');
+  assert.ok(await h.waitUntil(() => capEvents(convo).length >= 2, { timeout: 5000 }), 'the hold and refusal are recorded');
+  assert.deepStrictEqual(capEvents(convo).map((e) => e.d.outcome).sort(), ['held', 'refused']);
+  for (const c of calls) finishHelper(c.id);
 });
 
 // The count is the server's own. A hook request carries fields a lead's
@@ -879,7 +1008,7 @@ test('with helpers on, active_processes gives a lead whose helpers run its helpe
     const row = msg.processes.find((p) => p.conversationId === convo);
     assert.ok(row, 'the lead is listed');
     assert.strictEqual(row.idle, false);
-    assert.deepStrictEqual(row.helpers, [{ toolUseId: call.id, agent: 'Explore', kind: 'builtin', task: 'Read the notes', state: 'running', step: null }]);
+    assert.deepStrictEqual(row.helpers, [{ toolUseId: call.id, agent: 'Explore', kind: 'builtin', task: 'Read the notes', state: 'running', step: null, batch: call.id, file: null }]);
   } finally {
     other.close();
     entry.idle = false;

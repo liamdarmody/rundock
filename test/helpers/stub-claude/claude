@@ -110,7 +110,9 @@
 // calls are, with "extra" the fields the runtime adds to a subagent's call:
 // one the hook allows starts as any allowed call does, and one it refuses is
 // answered with the runtime's error as a line of the helper ("parent") that
-// made it.
+// made it. "helperTools": { "<tool_use id>": [{ "name", "input" }] } has that
+// helper, once started, write each tool call as an assistant line of its own,
+// in order, as a subagent's lines carry its calls.
 // First matching rule wins; rules are re-read from disk on every message so
 // tests can rewrite the script mid-scenario. The stub also appends every
 // invocation to `stub-invocations.jsonl` (cwd) for spawn-arg assertions.
@@ -1013,7 +1015,10 @@ function startHelper(rule, call) {
   const input = call.input || {};
   const taskId = `task_${call.id}`;
   writeOut(JSON.stringify(fx.taskStarted({ taskId, toolUseId: call.id, description: input.description || '', subagentType: input.subagent_type })) + '\n');
-  const finish = () => writeOut(JSON.stringify(fx.taskNotification({ taskId, toolUseId: call.id, status: 'completed' })) + '\n');
+  ((rule.helperTools && rule.helperTools[call.id]) || []).forEach((tool, i) => {
+    writeOut(JSON.stringify(fx.helperToolUse(call.id, tool.name, tool.input || {}, `${call.id}_tool_${i}`)) + '\n');
+  });
+  const finish =() => writeOut(JSON.stringify(fx.taskNotification({ taskId, toolUseId: call.id, status: 'completed' })) + '\n');
   const finishOn = rule.finishOn && rule.finishOn[call.id];
   if (finishOn) whenFileExists(finishOn, finish);
   else if (!rule.running) finish();

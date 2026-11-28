@@ -159,7 +159,7 @@ describe('the count, read from the lead\'s task lines', () => {
     const convo = freshConvo();
     assert.strictEqual(line(convo, fx.taskStarted({ taskId: 'k9', toolUseId: 'toolu_unknown', description: 'Plan it', subagentType: 'Plan' })), true);
     assert.strictEqual(helpers().runningCount(convo), 1);
-    assert.deepStrictEqual(helpers().helperRows(convo)[0], { toolUseId: 'toolu_unknown', agent: 'Plan', kind: 'builtin', task: 'Plan it', state: 'running', step: null });
+    assert.deepStrictEqual(helpers().helperRows(convo)[0], { toolUseId: 'toolu_unknown', agent: 'Plan', kind: 'builtin', task: 'Plan it', state: 'running', step: null, batch: 'toolu_unknown', file: null });
   });
 
   test('a task_started naming a teammate gives a teammate row', () => {
@@ -173,7 +173,7 @@ describe('the count, read from the lead\'s task lines', () => {
     const convo = freshConvo();
     line(convo, fx.taskStarted({ taskId: 'k1', toolUseId: 'u1', description: 'Look', subagentType: 'Explore' }));
     line(convo, fx.taskProgress({ taskId: 'k1', toolUseId: 'u1', lastToolName: 'Grep' }));
-    assert.strictEqual(helpers().helperRows(convo)[0].step, 'Grep');
+    assert.deepStrictEqual(helpers().helperRows(convo)[0].step, { type: 'Grep', detail: null });
     assert.strictEqual(helpers().runningCount(convo), 1);
   });
 
@@ -263,10 +263,10 @@ describe('helpers_changed', () => {
     line(convo, fx.taskProgress({ taskId: 'k1', toolUseId: 't1', lastToolName: 'Read' }));
     line(convo, fx.taskNotification({ taskId: 'k1', toolUseId: 't1', status: 'completed' }));
     const all = changes(convo);
-    assert.deepStrictEqual(all.map((m) => m.helpers.map((r) => [r.state, r.step])), [[['running', null]], [['running', 'Read']], [['completed', 'Read']]]);
+    assert.deepStrictEqual(all.map((m) => m.helpers.map((r) => [r.state, r.step])), [[['running', null]], [['running', { type: 'Read', detail: null }]], [['completed', { type: 'Read', detail: null }]]]);
     assert.deepStrictEqual(all[2], {
       type: 'helpers_changed', _conversationId: convo, agentId: 'wren',
-      helpers: [{ toolUseId: 't1', agent: 'Explore', kind: 'builtin', task: 'Look around', state: 'completed', step: 'Read' }],
+      helpers: [{ toolUseId: 't1', agent: 'Explore', kind: 'builtin', task: 'Look around', state: 'completed', step: { type: 'Read', detail: null }, batch: 't1', file: null }],
     });
   });
 
@@ -397,8 +397,8 @@ describe('the cap of five helpers at once', () => {
       assert.deepStrictEqual(await answers[5], { allow: false, notice: CAP_NOTICE });
     });
     assert.strictEqual(m.runningCount(convo), 5);
-    assert.deepStrictEqual(states(convo), ['running', 'running', 'running', 'running', 'running'], 'the refused call is dropped');
-    assert.strictEqual(lastRows(convo).length, 5, 'and the page is told');
+    assert.deepStrictEqual(states(convo), ['running', 'running', 'running', 'running', 'running', 'killed'], 'the refused call is kept, stopped');
+    assert.deepStrictEqual(lastRows(convo).map((r) => r.capped === true), [false, false, false, false, false, true], 'and the page is told it was capped');
     assert.deepStrictEqual(outcomes(await capEventsAt(convo, 2)), ['held', 'refused']);
   });
 

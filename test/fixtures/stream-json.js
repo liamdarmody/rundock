@@ -135,6 +135,13 @@ function helperLine(envelope, parentToolUseId) {
   return { ...envelope, parent_tool_use_id: parentToolUseId };
 }
 
+// A helper's own assistant line with one tool call, as Claude Code writes a
+// subagent's: the message's tool_use block, marked with the call that
+// started the helper.
+function helperToolUse(parentToolUseId, name, input = {}, id = `toolu_helper_${name}`) {
+  return helperLine({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } }, parentToolUseId);
+}
+
 function taskStarted({ taskId, toolUseId, description = '', subagentType } = {}) {
   return {
     type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: toolUseId,
@@ -169,4 +176,5 @@ module.exports = {
   toolUseStart, inputJsonDelta, toolUseFlow, messageDelta, messageStop,
   assistantMessage, result, textTurn, toLines, MARKERS, sandboxOverrideDenied, toolResult,
   helperLine, taskStarted, taskProgress, taskUpdated, taskNotification,
+  helperToolUse,
 };
