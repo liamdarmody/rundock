@@ -125,8 +125,48 @@ const MARKERS = {
   saveSkill: (name, payload) => `<!-- RUNDOCK:SAVE_SKILL name=${name} -->\n${payload}\n<!-- /RUNDOCK:SAVE_SKILL -->`,
 };
 
+// Lines about the helpers a lead started with Agent. Claude Code marks every
+// line a helper writes with the tool_use id of the call that started it, and
+// reports each helper's life as `task_*` system lines carrying that same id.
+// A lead's own lines carry no parent id (null or absent).
+
+// Any envelope as a helper's: the same line, marked with its parent call.
+function helperLine(envelope, parentToolUseId) {
+  return { ...envelope, parent_tool_use_id: parentToolUseId };
+}
+
+function taskStarted({ taskId, toolUseId, description = '', subagentType } = {}) {
+  return {
+    type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: toolUseId,
+    description, task_type: 'local_agent',
+    ...(subagentType ? { subagent_type: subagentType } : {}),
+  };
+}
+
+function taskProgress({ taskId, toolUseId, description = '', lastToolName, usage } = {}) {
+  return {
+    type: 'system', subtype: 'task_progress', task_id: taskId, tool_use_id: toolUseId,
+    description, usage: usage || { total_tokens: 0, tool_uses: 0, duration_ms: 0 },
+    ...(lastToolName ? { last_tool_name: lastToolName } : {}),
+  };
+}
+
+// status: completed, killed or failed.
+function taskUpdated(taskId, status) {
+  return { type: 'system', subtype: 'task_updated', task_id: taskId, status };
+}
+
+// status: completed, failed or stopped (a stopped helper is a killed one).
+function taskNotification({ taskId, toolUseId, status = 'completed', summary = '' } = {}) {
+  return {
+    type: 'system', subtype: 'task_notification', task_id: taskId, tool_use_id: toolUseId,
+    status, summary,
+  };
+}
+
 module.exports = {
   init, contentBlockStartText, textDelta, contentBlockStop,
   toolUseStart, inputJsonDelta, toolUseFlow, messageDelta, messageStop,
   assistantMessage, result, textTurn, toLines, MARKERS, sandboxOverrideDenied, toolResult,
+  helperLine, taskStarted, taskProgress, taskUpdated, taskNotification,
 };

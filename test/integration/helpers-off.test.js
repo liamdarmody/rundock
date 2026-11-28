@@ -192,3 +192,165 @@ test('the switch is read when it is used: turned on after boot, the settings sen
   assert.deepStrictEqual(agentHookAnswers(offCalls.map((c) => c.id)), [], 'no call reached the hook');
   assert.strictEqual(m.stateOf(offConvo), undefined, 'nothing was placed');
 });
+
+// THE STREAM AND THE SPAWNS WITH HELPERS OFF. A helper's lines, the task
+// lines, a result and every spawn are handled exactly as before helpers.
+const fx = require('../fixtures/stream-json.js');
+const doneCount = (convo, since) => client.messages.slice(since).filter((m) => m.type === 'system' && m.subtype === 'done' && m._conversationId === convo).length;
+const helpersChanged = (convo) => client.messages.filter((m) => m.type === 'helpers_changed' && m._conversationId === convo);
+const wrenReplies = (convo) => (h.internal.loadTranscript(convo) || []).filter((t) => t.agent === 'wren').map((t) => t.text || t.content || '').join('\n');
+
+// By design this passes before helpers existed too. Its sibling in
+// helpers-stream.test.js, "with helpers on, a line from a helper never joins
+// the lead's reply or its steps", fails without helpers.
+test('with helpers off, a line carrying a parent call joins the lead\'s reply and a task_started line reaches the page as it came', async () => {
+  const convo = open('off-parent');
+  const parent = `toolu_off_parent_${++seq}`;
+  h.writeScenario([{ match: { agent: 'wren', promptIncludes: 'off parent line' }, turn: [
+    { raw: fx.helperLine(fx.contentBlockStartText(0), parent) },
+    { raw: fx.helperLine(fx.textDelta('words a helper wrote', 0), parent) },
+    { raw: fx.helperLine(fx.toolUseStart('Read', 1, `toolu_off_read_${seq}`), parent) },
+    { raw: fx.taskStarted({ taskId: `task_off_${seq}`, toolUseId: parent, description: 'look around', subagentType: 'Explore' }) },
+    { text: 'words the lead wrote' },
+  ] }]);
+  const since = say(convo, 'off parent line');
+  const { msg: result } = await client.waitFor((m) => m.type === 'result' && m._conversationId === convo, { since, label: 'result' });
+  await turnDone(convo, since);
+  const task = client.messages.slice(since).find((m) => m.type === 'system' && m.subtype === 'task_started' && m._conversationId === convo);
+  assert.ok(task, 'the task_started line reached the page');
+  assert.strictEqual(task.tool_use_id, parent, 'as it came');
+  assert.ok(wrenReplies(convo).includes('words a helper wrote'), 'the helper\'s words joined the lead\'s reply, as before');
+  assert.ok(result._toolCalls.some((t) => t.tool === 'Read'), 'the helper\'s tool joined the lead\'s steps, as before');
+  assert.deepStrictEqual(helpersChanged(convo), [], 'no helpers_changed was sent');
+});
+
+// By design this passes before helpers existed too. Its sibling in
+// helpers-stream.test.js, "with helpers on, a helper's result does not end the
+// lead's turn", fails without helpers.
+test('with helpers off, a result sends done, a helper\'s result included', async () => {
+  const convo = open('off-result');
+  const parent = `toolu_off_parent_${++seq}`;
+  h.writeScenario([{ match: { agent: 'wren', promptIncludes: 'off helper result' }, turn: [
+    { raw: fx.helperLine(fx.result({ text: 'a helper finished' }), parent) },
+    { text: 'the lead finished' },
+  ] }]);
+  const since = say(convo, 'off helper result');
+  assert.ok(await h.waitUntil(() => doneCount(convo, since) === 2, { timeout: 15000 }), 'each result sent done, as before');
+  assert.deepStrictEqual(helpersChanged(convo), [], 'no helpers_changed was sent');
+});
+
+// By design this passes before helpers existed too. Its sibling in
+// helpers-stream.test.js, "with helpers on, the lead's result while a helper
+// runs sends no done and leaves it busy, and the first result after the
+// helper ends sends done", fails without helpers.
+test('with helpers off, the helpers scenario\'s task lines change nothing: its result sends done and no helpers_changed is sent', async () => {
+  const convo = open('off-tasks');
+  const calls = [agentCall('Explore'), agentCall('Plan')];
+  h.writeScenario([{ match: { agent: 'wren', promptIncludes: 'off task lines' }, helpers: true, running: true, turn: calls.map((c) => ({ agentTool: c.input, id: c.id })) }]);
+  const since = say(convo, 'off task lines');
+  await turnDone(convo, since);
+  const started = client.messages.slice(since).filter((m) => m.type === 'system' && m.subtype === 'task_started' && m._conversationId === convo);
+  assert.deepStrictEqual(started.map((m) => m.tool_use_id), calls.map((c) => c.id), 'the stub started both, and each line reached the page');
+  assert.deepStrictEqual(helpersChanged(convo), [], 'no helpers_changed was sent');
+  if (fs.existsSync(HELPERS)) assert.strictEqual(require(HELPERS).stateOf(convo), undefined, 'no helper state for the conversation');
+});
+
+// By design this passes before helpers existed too. Its sibling in
+// helpers-stream.test.js, "with helpers on, every conversation spawn carries
+// the depth limit and refuses SendMessage", fails without helpers.
+test('with helpers off, no spawn sets a helper depth or refuses SendMessage', async () => {
+  const convo = open('off-spawn');
+  const ash = agentCall('ash');
+  const back = `handed back ${++seq}`;
+  h.writeScenario([
+    { match: { agent: 'wren', promptIncludes: 'off spawn settings' }, turn: [{ agentTool: ash.input, id: ash.id }] },
+    { match: { agent: 'ash', promptIncludes: ash.input.prompt }, turn: [{ text: `${back}. ${MARKERS.COMPLETE}` }] },
+    { match: { agent: 'wren', promptIncludes: ['[SYSTEM: pipeline-complete]', back] }, turn: [{ text: '<silent>' }] },
+  ]);
+  say(convo, 'off spawn settings');
+  assert.ok(await h.waitUntil(() => invocations('wren', convo).length >= 2 && invocations('ash', convo).length === 1, { timeout: 20000 }), 'Wren, Ash and Wren again were spawned');
+  const spawned = h.readInvocations().filter((i) => i.env.RUNDOCK_CONVO_ID === convo);
+  for (const inv of spawned) {
+    assert.strictEqual(inv.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, null, `${inv.agent}: no depth setting`);
+    const at = inv.argv.indexOf('--disallowed-tools');
+    const list = at >= 0 ? inv.argv[at + 1] : '';
+    assert.ok(!/\bSendMessage\b/.test(list), `${inv.agent}: SendMessage is not refused: ${list}`);
+  }
+});
+
+// EACH READER OF THE SWITCH IN THE STREAM, THE HOLDS AND THE SPAWNS reads it
+// when it is used, never a copy taken at load: the server here loaded with
+// helpers off, and turned on afterwards, each reader acts. One assertion per
+// reader. Fails without helpers.
+const switchFile = (id) => path.join(h.workspaceDir, `switch-${id}`);
+test('the switch is read when it is used by the stream, the holds and the spawns: turned on after boot, each acts', async () => {
+  const m = helpers();
+  for (const name of ['runningCount', 'helperRows']) assert.strictEqual(typeof m[name], 'function', `helpers.${name} is exported`);
+  assert.strictEqual(m.HELPERS_ENABLED, false, 'the server loaded with helpers off');
+  const six = open('switch-six');
+  const one = open('switch-one');
+  const parent = `toolu_off_parent_${++seq}`;
+  const calls = Array.from({ length: 6 }, () => agentCall('Explore'));
+  const lone = agentCall('Explore');
+  h.writeScenario([
+    { match: { agent: 'wren', promptIncludes: 'switch readers six' }, helpers: true, running: true, finishOn: { [calls[0].id]: switchFile(calls[0].id) }, turn: [
+      { raw: fx.helperLine(fx.contentBlockStartText(0), parent) },
+      { raw: fx.helperLine(fx.textDelta('words a helper wrote', 0), parent) },
+      { text: 'Starting six.' },
+      ...calls.map((c) => ({ agentTool: c.input, id: c.id })),
+    ] },
+    { match: { agent: 'wren', promptIncludes: 'switch readers one' }, helpers: true, running: true, turn: [{ text: 'Starting one.' }, { agentTool: lone.input, id: lone.id }],
+      then: [{ untilFile: switchFile(lone.id), lines: [fx.taskNotification({ taskId: `task_${lone.id}`, toolUseId: lone.id })], turn: [{ text: 'It is back.' }] }] },
+  ]);
+  try {
+    m.HELPERS_ENABLED = true;
+    scaffold();
+
+    // A lead with six helper calls, while its helpers run.
+    const answered = () => agentHookAnswers(calls.map((c) => c.id)).map((a) => a.answer.hookSpecificOutput.permissionDecision);
+    let since = say(six, 'switch readers six');
+    assert.ok(await h.waitUntil(() => answered().length >= 5, { timeout: 20000 }), 'five calls were answered');
+    await h.delay(300);
+    assert.deepStrictEqual(answered(), Array(5).fill('allow'), 'the hold of a sixth call: five start and the sixth waits');
+    const rows = helpersChanged(six).pop();
+    assert.deepStrictEqual(rows && rows.helpers.map((r) => r.state).sort(), [...Array(5).fill('running'), 'waiting'], 'helpers_changed: the page is sent the rows');
+    const other = await h.connect();
+    try {
+      const { msg } = await other.waitFor((x) => x.type === 'active_processes', { label: 'active_processes' });
+      const row = msg.processes.find((p) => p.conversationId === six);
+      assert.strictEqual(row && Array.isArray(row.helpers) ? row.helpers.length : null, 6, 'active_processes: the lead\'s row lists its helpers');
+    } finally {
+      other.close();
+    }
+    const [spawn] = invocations('wren', six);
+    assert.strictEqual(spawn.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, '1', 'the spawn env: the depth limit');
+    const at = spawn.argv.indexOf('--disallowed-tools');
+    const refusedTools = at >= 0 ? spawn.argv[at + 1] : '';
+    assert.ok(refusedTools.split(',').includes('SendMessage'), `the spawn's --disallowed-tools: SendMessage is refused: ${refusedTools}`);
+    const lead = h.internal.chatProcesses.get(six);
+    client.send({ type: 'end_delegation', conversationId: six });
+    await h.delay(800);
+    assert.ok(h.internal.chatProcesses.get(six) === lead && !lead.exited && !lead.scopeReturn && h.pidAlive(lead.process.pid),
+      'a return the page asks for waits while the helpers run');
+    fs.writeFileSync(switchFile(calls[0].id), '');
+    assert.ok(await h.waitUntil(() => answered().length === 6, { timeout: 20000 }), 'a task line read from the stream: a helper\'s end starts the held call');
+    await client.waitFor((x) => x.type === 'result' && x._conversationId === six, { since, label: 'the result' });
+    await h.delay(300);
+    assert.strictEqual(doneCount(six, since), 0, 'the lead\'s result while its helpers run sends no done');
+    const reply = wrenReplies(six);
+    assert.ok(reply.includes('Starting six.') && !reply.includes('words a helper wrote'), `the parent filter: a helper's words are not the lead's: ${reply}`);
+    client.send({ type: 'cancel', conversationId: six });
+    assert.ok(await h.waitUntil(() => m.runningCount(six) === 0 && m.helperRows(six).length === 0, { timeout: 10000 }),
+      'the lead\'s close ends its helpers');
+
+    // A lead whose one helper reports back.
+    since = say(one, 'switch readers one');
+    await client.waitFor((x) => x.type === 'result' && x._conversationId === one, { since, label: 'the first result' });
+    fs.writeFileSync(switchFile(lone.id), '');
+    assert.ok(await h.waitUntil(() => doneCount(one, since) >= 1, { timeout: 20000 }), 'the request ended once its helper reported back');
+    assert.deepStrictEqual(m.helperRows(one), [], 'the request\'s end clears its helpers');
+  } finally {
+    m.HELPERS_ENABLED = false;
+    scaffold();
+  }
+});

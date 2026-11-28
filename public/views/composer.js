@@ -285,6 +285,7 @@ function fileSendAnswered(d) {
   composer.waiting = null;
   composer.files = [];
   composer.notice = null;
+  if (typeof RundockSentFiles !== 'undefined') RundockSentFiles.mergeStoredFiles(d.conversationId, d.entry);
   const convo = conversations.find(c => c.id === d.conversationId);
   const onScreen = !!activeConversation && activeConversation.id === d.conversationId;
   if (onScreen) {
@@ -294,7 +295,7 @@ function fileSendAnswered(d) {
     renderComposer(composer);
   } else composer.clearText = true;
   if (!convo) return;
-  if (onScreen) addUserMsg(d.content);
+  if (onScreen) addUserMsg(d.content, true, d.conversationId);
   convo.messages.push({ role: 'user', content: d.content, timestamp: new Date().toISOString() });
   if (convo.persisted) {
     convo.persisted = false;

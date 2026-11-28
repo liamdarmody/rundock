@@ -91,20 +91,25 @@ test('files attached through the + button are sent with the message, drawn from 
 
     const bubble = page.locator('#messages .msg-user').last();
     await expect(bubble).toContainText('see these');
-    await expect.poll(async () => (await bubble.textContent()).split('[Attached: ').length - 1).toBe(2);
-    // Each line names the stored copy, in the order picked, with its kind and size.
-    await expect(bubble).toContainText(/\[Attached: \.rundock\/attachments\/\d+\/1-pixel\.png \(PNG image, \d+ KB\)\]/);
-    await expect(bubble).toContainText(/\[Attached: \.rundock\/attachments\/\d+\/2-notes\.txt \(text file, \d+ KB\)\]/);
-    // The entry the answer reports is the one on record, each line names one
-    // of its files, and each stored copy is the picked file, byte for byte.
+    // The bubble draws the files, in the order picked, in place of their lines.
+    await expect(bubble.locator('.msg-files > *')).toHaveCount(2);
+    await expect(bubble.locator('.msg-files > *').nth(0)).toHaveAttribute('aria-label', 'Open pixel.png');
+    await expect(bubble.locator('.msg-files > *').nth(1)).toHaveAttribute('aria-label', 'notes.txt');
+    await expect(bubble).not.toContainText('[Attached: ');
+    // The entry the answer reports is the one on record, each line of the
+    // stored text names one of its files, and each stored copy is the picked
+    // file, byte for byte.
     await expect.poll(() => stored.filter((m) => m.conversationId === convoId).length).toBe(1);
-    const { entry } = stored.find((m) => m.conversationId === convoId);
+    const { entry, content } = stored.find((m) => m.conversationId === convoId);
+    // Each line names the stored copy, in the order picked, with its kind and size.
+    expect(content).toMatch(/\[Attached: \.rundock\/attachments\/\d+\/1-pixel\.png \(PNG image, \d+ KB\)\]/);
+    expect(content).toMatch(/\[Attached: \.rundock\/attachments\/\d+\/2-notes\.txt \(text file, \d+ KB\)\]/);
     const workspace = await workspaceDir(page);
     expect(store.readRecord(workspace, convoId).messages).toEqual([entry]);
     const picked = { 'pixel.png': fs.readFileSync(files.png), 'notes.txt': fs.readFileSync(files.txt) };
     expect(entry.files.map((f) => f.name)).toEqual(['pixel.png', 'notes.txt']);
-    // The bubble's lines, in order, each the text after its '[Attached: '.
-    const lines = (await bubble.textContent()).split('[Attached: ').slice(1);
+    // The stored text's lines, in order, each the text after its '[Attached: '.
+    const lines = content.split('[Attached: ').slice(1);
     expect(lines).toHaveLength(entry.files.length);
     for (const [i, f] of entry.files.entries()) {
       const names = `.rundock/attachments/${convoId}/${f.file} (`;

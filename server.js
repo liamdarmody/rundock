@@ -21,6 +21,7 @@ const { normalizeWorkspaceMode, NOTES_DISALLOWED_TOOLS } = require('./lib/worksp
 const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES, stripRundockMarkers } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
+const helpers = require('./lib/delegation/helpers.js');
 const config = require('./lib/config.js');
 const { MAX_PAYLOAD, createReceiver, releasePendingImages } = require('./lib/attachments/receive.js');
 const { userTurnText } = require('./lib/attachments/turn-text.js');
@@ -1296,6 +1297,8 @@ function endConvoTransition(convoId, owner) {
 // (see convoTransitions) instead of being written to the dying stdin.
 function scheduleScopeReturnKill(e, convoId) {
   e.pendingKill = true;
+  // HELPERS: while the conversation's helpers run, the kill waits for the request to end.
+  if (helpers.holdWhileHelping(convoId, () => { if (e.pendingKill && !e.exited) scheduleScopeReturnKill(e, convoId); })) return;
   setTimeout(() => {
     if (!e.exited && e.pendingKill) { // no-op if a follow-up cleared pendingKill
       // Only open the window if this entry still executes the conversation;
@@ -1577,7 +1580,7 @@ wss.on('connection', (ws) => {
   // Always send this message, even when empty, so the client can reconcile stale state.
   const active = [];
   for (const [convoId, entry] of chatProcesses) {
-    active.push({ conversationId: convoId, processId: entry.processId, agentId: entry.agentId, idle: !!entry.idle, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null });
+    active.push(helpers.activeRow(convoId, { conversationId: convoId, processId: entry.processId, agentId: entry.agentId, idle: !!entry.idle, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null }));
   }
   ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
   ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION, platform: process.platform }));
@@ -1772,7 +1775,7 @@ wss.on('connection', (ws) => {
             const agentData = findAgentBySlug(agentList, requestedAgent);
 
             const systemPrompt = buildSystemPrompt(agentData);
-            const chatDisallowed = getDisallowedTools();
+            const chatDisallowed = helpers.conversationDisallowedTools(getDisallowedTools());
             const chatPermMode = getPermissionMode();
 
             const args = [...getBareArgs(), ...modelArgs(agentData), '--output-format', 'stream-json', '--input-format', 'stream-json',
@@ -2839,7 +2842,7 @@ function requestServerPermission({ convoId, agentId, toolName, toolInput, onDeci
   console.log(`[Permission] Server request: ${toolName} convo=${convoId} requestId=${requestId}`);
 }
 // The one card a lead's first batch of helpers waits on is raised here too.
-require('./lib/delegation/helpers.js').wireHelpersDeps({ requestServerPermission });
+require('./lib/delegation/helpers.js').wireHelpersDeps({ requestServerPermission, safeSend });
 
 // Graceful shutdown: kill children on exit signals.
 // SIGTERM/SIGINT: graceful (SIGTERM to children, then exit).
@@ -3025,6 +3028,8 @@ function reapIdleAgents(now = Date.now()) {
     if (convoTransitions.has(convoId)) continue;
     // Work that outlives its turn and never reappears in the stream.
     if (chainStartedBackgroundTask(entry)) continue;
+    // Helpers the lead started still run.
+    if (helpers.helping(convoId)) continue;
     const since = entry.idleSince || 0;
     if (!since || now - since < IDLE_REAP_MS) continue;
 
