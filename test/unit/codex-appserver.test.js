@@ -821,3 +821,102 @@ test('shutdown interrupts active turns, terminates the process, and never restar
   assert.strictEqual(restarted, false, 'no auto-restart after an intentional shutdown');
   await assert.rejects(server.start(), /shut down/);
 });
+
+// ── Extra input items ───────────────────────────────────────────────────────
+
+// Whether startTurn puts a fourth argument's items into the turn it starts:
+// checked on a server that is never started, whose request is caught before
+// anything could be written.
+function readyExtraItems() {
+  const server = makeServer(os.tmpdir());
+  const sent = [];
+  server.request = (method, params) => { sent.push(params.input); return new Promise(() => {}); };
+  try { server.startTurn('ready-check', 'look', {}, [{ type: 'text', text: 'more' }]); } catch (e) { /* asserted below */ }
+  assert.deepStrictEqual(sent, [[{ type: 'text', text: 'look' }, { type: 'text', text: 'more' }]], 'startTurn sends a fourth argument\'s items');
+}
+
+// The input of every turn/start the stub was sent, once `sub` is done.
+async function sentInputs(dir, sub) {
+  await nextEvent(sub, 'done');
+  return readInvocations(dir).filter(e => e.method === 'turn/start').map(e => e.params.input);
+}
+
+async function withThread(fn) {
+  const dir = makeDir({ appServer: { rules: [] } });
+  const server = makeServer(dir);
+  try {
+    await server.start();
+    const { threadId } = await server.startThread({ cwd: dir });
+    await fn({ dir, server, threadId });
+  } finally {
+    await server.shutdown();
+  }
+}
+
+const IMAGE = () => ({ type: 'localImage', path: path.join(os.tmpdir(), 'shots', '1-screenshot.png') });
+
+test('extra items: a localImage item follows the text in params.input', async () => {
+  readyExtraItems();
+  await withThread(async ({ dir, server, threadId }) => {
+    const image = IMAGE();
+    const sub = server.startTurn(threadId, 'look at this', {}, [image]);
+    assert.deepStrictEqual(await sentInputs(dir, sub), [[{ type: 'text', text: 'look at this' }, image]]);
+  });
+});
+
+test('extra items: a text item follows the text in params.input', async () => {
+  readyExtraItems();
+  await withThread(async ({ dir, server, threadId }) => {
+    const sub = server.startTurn(threadId, 'look at this', {}, [{ type: 'text', text: 'and this' }]);
+    assert.deepStrictEqual(await sentInputs(dir, sub), [[{ type: 'text', text: 'look at this' }, { type: 'text', text: 'and this' }]]);
+  });
+});
+
+test('extra items: a localImage and a text item go in the order given', async () => {
+  readyExtraItems();
+  await withThread(async ({ dir, server, threadId }) => {
+    const image = IMAGE();
+    const sub = server.startTurn(threadId, 'look at this', {}, [{ type: 'text', text: 'first' }, image]);
+    assert.deepStrictEqual(await sentInputs(dir, sub), [[{ type: 'text', text: 'look at this' }, { type: 'text', text: 'first' }, image]]);
+  });
+});
+
+// Each refusal: a TypeError before anything is written, with no turn left
+// active, so a valid turn on the same thread starts and is the only one sent.
+async function refuses(extraItems) {
+  readyExtraItems();
+  await withThread(async ({ dir, server, threadId }) => {
+    assert.throws(() => server.startTurn(threadId, 'refused turn', {}, extraItems), TypeError);
+    const sub = server.startTurn(threadId, 'the next turn');
+    assert.deepStrictEqual(await sentInputs(dir, sub), [[{ type: 'text', text: 'the next turn' }]], 'the refused turn was never written');
+  });
+}
+
+test('extra items: an extraItems that is not an array is refused before anything is written', async () => {
+  await refuses({ type: 'text', text: 'not in an array' });
+});
+
+test('extra items: an item of an unknown type is refused before anything is written', async () => {
+  await refuses([{ type: 'image', path: IMAGE().path }]);
+});
+
+test('extra items: a localImage with a relative path is refused before anything is written', async () => {
+  await refuses([{ type: 'localImage', path: path.join('shots', '1-screenshot.png') }]);
+});
+
+test('extra items: an item with an extra key is refused before anything is written', async () => {
+  await refuses([{ ...IMAGE(), detail: 'high' }]);
+});
+
+test('extra items: a text item whose text is not a string is refused before anything is written', async () => {
+  await refuses([{ type: 'text', text: 42 }]);
+});
+
+// Passes on main by design: it pins the input main writes. The localImage
+// test above is the sibling that fails there.
+test('extra items: with no fourth argument, params.input is the text alone', async () => {
+  await withThread(async ({ dir, server, threadId }) => {
+    const sub = server.startTurn(threadId, 'just text', {});
+    assert.deepStrictEqual(await sentInputs(dir, sub), [[{ type: 'text', text: 'just text' }]]);
+  });
+});

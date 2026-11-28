@@ -1925,31 +1925,119 @@ function formatToolShort(name) {
   return name;
 }
 
-function buildActivitySummary(toolCalls, turnStartTime) {
-  if (!toolCalls || toolCalls.length === 0 || !turnStartTime) return null;
-  const totalMs = Date.now() - turnStartTime;
-  const totalSec = Math.round(totalMs / 1000);
-  const durationLabel = totalSec < 1 ? '<1s' : totalSec >= 60 ? Math.floor(totalSec / 60) + 'm' + (totalSec % 60 ? ' ' + (totalSec % 60) + 's' : '') : totalSec + 's';
+// ===== TURN USED =====
+// What one reply used: how long the agent worked on it, as its runtime
+// reported it, and behind Details the steps it took and the tokens the
+// runtime reported for it. It is only drawn: nothing here is kept with the
+// message or sent to any agent. A value that isn't a valid number is left out.
+let turnTokensSeq = 0;
 
-  const details = document.createElement('details');
-  details.className = 'activity-summary';
+const TURN_TOKEN_KEYS = {
+  claude: ['Claude Code', [['input_tokens', 'input'], ['output_tokens', 'output'], ['cache_read_input_tokens', 'read from cache'], ['cache_creation_input_tokens', 'written to cache']]],
+  codex: ['Codex', [['inputTokens', 'input'], ['cachedInputTokens', 'cached input'], ['outputTokens', 'output'], ['reasoningOutputTokens', 'reasoning output']]],
+};
 
-  const summary = document.createElement('summary');
-  summary.textContent = `${toolCalls.length} step${toolCalls.length === 1 ? '' : 's'} \u00b7 ${durationLabel}`;
-  details.appendChild(summary);
+function isTurnDuration(ms) {
+  return Number.isFinite(ms) && ms >= 0 && ms <= Number.MAX_SAFE_INTEGER;
+}
 
-  const list = document.createElement('div');
-  list.className = 'activity-list';
-  for (const tc of toolCalls) {
-    const elapsedSec = (tc.time - turnStartTime) / 1000;
-    const elapsedLabel = elapsedSec >= 60 ? Math.floor(elapsedSec / 60) + 'm' + (Math.round(elapsedSec % 60) ? ' ' + Math.round(elapsedSec % 60) + 's' : '') : elapsedSec.toFixed(1) + 's';
-    const row = document.createElement('div');
-    row.className = 'activity-row';
-    row.innerHTML = `<span class="activity-time">${elapsedLabel}</span><span class="activity-tool">${esc(formatToolShort(tc.tool))}</span>`;
-    list.appendChild(row);
+function isTurnCount(n) {
+  return Number.isSafeInteger(n) && n >= 0;
+}
+
+// Whole seconds, rounded down: a reply that took 59.9 s worked 59 s.
+function turnWorkedLabel(ms) {
+  const s = Math.floor(ms / 1000);
+  const two = (n) => String(n).padStart(2, '0');
+  if (s < 1) return 'Worked under 1 s';
+  if (s < 60) return `Worked ${s} s`;
+  if (s < 3600) return `Worked ${Math.floor(s / 60)} min ${two(s % 60)} s`;
+  return `Worked ${Math.floor(s / 3600)} h ${two(Math.floor(s / 60) % 60)} min`;
+}
+
+// Commas every three digits, whatever the locale.
+function groupThousands(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// The counts the runtime reported, as a sentence, or '' when it reported none.
+// Each runtime's own keys only: Codex's are camelCase.
+function turnTokenSentence(usage, runtime) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return '';
+  const [name, keys] = TURN_TOKEN_KEYS[runtime === 'codex' ? 'codex' : 'claude'];
+  const parts = keys.filter(([key]) => isTurnCount(usage[key])).map(([key, label]) => `${groupThousands(usage[key])} ${label}`);
+  return parts.length ? `Tokens as ${name} reported them: ${parts.join(', ')}.` : '';
+}
+
+// The line under a reply: "6 steps \u00b7 Worked 4 min 05 s", then Details, which
+// opens the step rows and the token sentence in place. Null when the turn has
+// neither steps nor a valid time.
+function buildActivitySummary(toolCalls, turnStartTime, durationMs, usage, runtime) {
+  const steps = Array.isArray(toolCalls) ? toolCalls : [];
+  const worked = isTurnDuration(durationMs) ? turnWorkedLabel(durationMs) : '';
+  const words = [steps.length ? `${steps.length} step${steps.length === 1 ? '' : 's'}` : '', worked].filter(Boolean).join(' \u00b7 ');
+  if (!words) return null;
+  const tokens = turnTokenSentence(usage, runtime);
+
+  const used = document.createElement('div');
+  used.className = 'turn-used activity-summary';
+  const row = document.createElement('div');
+  row.className = 'turn-used-row';
+  const line = document.createElement('span');
+  line.className = 'turn-used-line';
+  line.textContent = words;
+  row.appendChild(line);
+  used.appendChild(row);
+  if (!steps.length && !tokens) return used;
+
+  const panel = document.createElement('div');
+  panel.className = 'turn-tokens';
+  panel.id = `turn-tokens-${++turnTokensSeq}`;
+  panel.hidden = true;
+  // Focusable by a click, never by Tab, so Escape works from inside it too.
+  panel.tabIndex = -1;
+  if (steps.length) {
+    const list = document.createElement('div');
+    list.className = 'activity-list';
+    for (const tc of steps) {
+      const elapsedSec = (tc.time - turnStartTime) / 1000;
+      const elapsedLabel = !turnStartTime ? '' : elapsedSec >= 60 ? Math.floor(elapsedSec / 60) + 'm' + (Math.round(elapsedSec % 60) ? ' ' + Math.round(elapsedSec % 60) + 's' : '') : elapsedSec.toFixed(1) + 's';
+      const stepRow = document.createElement('div');
+      stepRow.className = 'activity-row';
+      stepRow.innerHTML = `<span class="activity-time">${elapsedLabel}</span><span class="activity-tool">${esc(formatToolShort(tc.tool))}</span>`;
+      list.appendChild(stepRow);
+    }
+    panel.appendChild(list);
   }
-  details.appendChild(list);
-  return details;
+  if (tokens) {
+    const sentence = document.createElement('div');
+    sentence.className = 'turn-tokens-line';
+    sentence.textContent = tokens;
+    panel.appendChild(sentence);
+  }
+
+  const details = document.createElement('button');
+  details.type = 'button';
+  details.className = 'turn-details';
+  details.setAttribute('aria-expanded', 'false');
+  details.setAttribute('aria-controls', panel.id);
+  details.textContent = 'Details';
+  const setOpen = (open) => { details.setAttribute('aria-expanded', String(open)); panel.hidden = !open; };
+  details.addEventListener('click', () => setOpen(details.getAttribute('aria-expanded') !== 'true'));
+  // Escape closes it from the button or from inside it, and hands focus back
+  // to the button. With it shut, Escape is left for the find bar.
+  const closeOnEscape = (e) => {
+    if (e.key !== 'Escape' || panel.hidden) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(false);
+    details.focus();
+  };
+  details.addEventListener('keydown', closeOnEscape);
+  panel.addEventListener('keydown', closeOnEscape);
+  row.appendChild(details);
+  used.appendChild(panel);
+  return used;
 }
 
 function scrollBottom(force) {

@@ -42,6 +42,7 @@
 
 const { EventEmitter } = require('node:events');
 const { spawn } = require('node:child_process');
+const path = require('node:path');
 
 const { classifyCodexError, resolveCodexBin } = require('./codex.js');
 const { guardChildStdin } = require('./lib/runtime/child-stdin.js');
@@ -76,15 +77,22 @@ function normalizeErrorKind(codexErrorInfo, message) {
 // tokenUsage.last -> the flat usage object the runtime consumes. Usage rides
 // its own notification and arrives BEFORE turn/completed (RESEARCH.md
 // section 6), so it is buffered per turn and attached to the done event.
-function normalizeUsage(last) {
-  const u = last || {};
-  return {
-    inputTokens: u.inputTokens || 0,
-    cachedInputTokens: u.cachedInputTokens || 0,
-    outputTokens: u.outputTokens || 0,
-    reasoningOutputTokens: u.reasoningOutputTokens || 0,
-  };
+// Only the counts the server reported: one it left out, or sent as anything
+// but a whole number, is left out here too, never written as zero.
+const USAGE_KEYS = ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningOutputTokens'];
+function isTokenCount(n) {
+  return Number.isSafeInteger(n) && n >= 0;
 }
+function normalizeUsage(last) {
+  const u = last && typeof last === 'object' ? last : {};
+  const out = {};
+  for (const key of USAGE_KEYS) if (isTokenCount(u[key])) out[key] = u[key];
+  return out;
+}
+
+// The clock a turn's measured time is read from when turn/completed carries
+// none. A module attribute, so a test replaces it in-process.
+const clock = { now: () => Date.now() };
 
 // The only version signal the protocol offers (RESEARCH.md section 2):
 // userAgent is "<clientName>/<serverVersion> (OS ...) ...".
@@ -474,9 +482,11 @@ class CodexAppServer extends EventEmitter {
   // Start a turn and return its subscription (an EventEmitter emitting the
   // normalised events documented at the top of this file on the 'event'
   // channel). Also exposed: sub.threadId, sub.turnId (populated once known)
-  // and sub.started (a promise resolving to { turnId }).
-  startTurn(threadId, inputText, perTurnOpts = {}) {
+  // and sub.started (a promise resolving to { turnId }). extraItems follow
+  // the text in the turn's input; see checkExtraItems.
+  startTurn(threadId, inputText, perTurnOpts = {}, extraItems = []) {
     if (typeof inputText !== 'string') throw new TypeError('inputText must be a string');
+    checkExtraItems(extraItems);
     if (this._activeTurns.has(threadId)) {
       // The server enforces one active turn per thread (RESEARCH.md section
       // 9); failing fast here keeps the error synchronous and the wire clean.
@@ -486,7 +496,7 @@ class CodexAppServer extends EventEmitter {
     if (sp && sp.type === 'dangerFullAccess') {
       throw new Error('refusing to pass dangerFullAccess: the sandbox invariant is never weakened');
     }
-    const params = { threadId, input: [{ type: 'text', text: inputText }] };
+    const params = { threadId, input: [{ type: 'text', text: inputText }, ...extraItems] };
     for (const key of TURN_OPT_KEYS) {
       if (perTurnOpts[key] !== undefined) params[key] = perTurnOpts[key];
     }
@@ -499,6 +509,8 @@ class CodexAppServer extends EventEmitter {
       sub,
       turnId: null,
       usage: null,             // buffered from thread/tokenUsage/updated (section 6)
+      lastCountedTotal: null,  // total.totalTokens of the last update added in
+      startedAt: clock.now(),  // the measured time's start, when the server sends none
       agentItemIds: new Set(), // delta guard: only items announced as agentMessage
       approvals: new Map(),    // server request id -> { timer, respond }
       finished: false,
@@ -631,7 +643,7 @@ class CodexAppServer extends EventEmitter {
   }
 
   // Terminal: emits done exactly once and releases the thread's active slot.
-  _finishTurn(state, { status, error = null }) {
+  _finishTurn(state, { status, error = null, durationMs }) {
     if (state.finished) return;
     if (state.interruptFailsafeTimer) {
       clearTimeout(state.interruptFailsafeTimer);
@@ -650,7 +662,11 @@ class CodexAppServer extends EventEmitter {
     state.approvals.clear();
     state.finished = true;
     if (this._activeTurns.get(state.threadId) === state) this._activeTurns.delete(state.threadId);
-    state.sub.emit('event', { type: 'done', status, usage: state.usage, error: status === 'failed' ? error : null });
+    if (!isTokenCount(durationMs)) durationMs = clock.now() - state.startedAt;
+    // Kept on the subscription too, for a caller that holds the turn's
+    // subscription when it reports the turn rather than its done event.
+    state.sub.durationMs = durationMs;
+    state.sub.emit('event', { type: 'done', status, usage: state.usage, durationMs, error: status === 'failed' ? error : null });
   }
 
   // ── Notifications (server to client) ─────────────────────────────────────
@@ -733,8 +749,17 @@ class CodexAppServer extends EventEmitter {
         // Arrives BEFORE turn/completed; buffer per turn (section 6).
         // Cross-turn mismatches were already dropped by the turn-strict
         // routing above.
+        // Each update reports the call it follows (last), so a turn's usage
+        // is their sum. The server repeats an update unchanged: one whose
+        // running total matches the last one added is not added again.
         if (state) {
-          state.usage = normalizeUsage(params.tokenUsage && params.tokenUsage.last);
+          const tokenUsage = params.tokenUsage || {};
+          const total = tokenUsage.total && tokenUsage.total.totalTokens;
+          if (isTokenCount(total) && total === state.lastCountedTotal) return;
+          state.lastCountedTotal = isTokenCount(total) ? total : null;
+          const sum = { ...state.usage };
+          for (const [key, n] of Object.entries(normalizeUsage(tokenUsage.last))) sum[key] = (sum[key] || 0) + n;
+          state.usage = sum;
           this._emitTurnEvent(state, { type: 'usage', usage: state.usage });
         }
         return;
@@ -756,7 +781,7 @@ class CodexAppServer extends EventEmitter {
       case 'turn/completed': {
         if (!state) return;
         const turn = params.turn || {};
-        this._finishTurn(state, { status: turn.status || 'completed', error: turn.error || null });
+        this._finishTurn(state, { status: turn.status || 'completed', error: turn.error || null, durationMs: turn.durationMs });
         return;
       }
       default:
@@ -888,8 +913,22 @@ function permissionsRefusal() {
   return { permissions: {}, scope: 'turn' };
 }
 
+// The extra items a turn's input may carry: a local image by absolute path,
+// or more text, each with no other key. Anything else throws before the turn
+// is registered or anything is written, so the thread stays free.
+function checkExtraItems(extraItems) {
+  if (!Array.isArray(extraItems)) throw new TypeError('extraItems must be an array');
+  for (const item of extraItems) {
+    const plain = !!item && typeof item === 'object' && Object.getPrototypeOf(item) === Object.prototype;
+    const keys = plain ? Reflect.ownKeys(item).map(String).sort().join(',') : '';
+    const image = keys === 'path,type' && item.type === 'localImage' && typeof item.path === 'string' && path.isAbsolute(item.path);
+    const text = keys === 'text,type' && item.type === 'text' && typeof item.text === 'string';
+    if (!image && !text) throw new TypeError('each extra item must be { type: \'localImage\', path } with an absolute path, or { type: \'text\', text }');
+  }
+}
+
 function createCodexAppServer(opts = {}) {
   return new CodexAppServer(opts);
 }
 
-module.exports = { createCodexAppServer, normalizeErrorKind, parseUserAgentVersion, permissionsRefusal };
+module.exports = { createCodexAppServer, normalizeErrorKind, parseUserAgentVersion, permissionsRefusal, normalizeUsage, clock };

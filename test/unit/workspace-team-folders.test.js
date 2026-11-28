@@ -419,14 +419,13 @@ describe('the steps around a refusal', () => {
   // (the PreToolUse matchers name the file tools, the shell tools and
   // connector actions), so the hand-over never meets it in the app. Asked
   // here anyway, before and after the refusal, so the refusal is shown to
-  // leave its answer exactly as it was: Code mode allows it with no card,
-  // and Notes mode asks Rundock as for any other tool, whose answer here is
-  // an Allow.
+  // leave its answer exactly as it was: the hook never approves an Agent
+  // call itself, so both modes ask Rundock, whose answer here is an Allow.
   const handOver = {
     tool_name: 'Agent',
     tool_input: { subagent_type: 'rundock-guide', description: 'Update the helper agent', prompt: 'Change the helper agent\'s description to say it drafts replies.' },
   };
-  for (const [label, ws, cards] of [['Code mode', wsCode, 0], ['Notes mode', wsNotes, 1]]) {
+  for (const [label, ws, cards] of [['Code mode', wsCode, 1], ['Notes mode', wsNotes, 1]]) {
     test(`the most common next step: after the refusal, handing the change to Doc is allowed, in ${label}, a conversation`, async () => {
       const env = envFor(ws, 'conversation');
       asked.length = 0;

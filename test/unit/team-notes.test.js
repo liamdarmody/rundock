@@ -413,6 +413,22 @@ describe('the next message a Claude Code process is written', () => {
     p.send('again?');
     assert.deepStrictEqual(p.contents(), ['did it work?', `${expectedNote}and now?`, 'again?']);
   });
+
+  test('a turn sent with an image carries the note in front of its first text block, and the rest as written', () => {
+    const p = processFor();
+    teamNotes.keepOutcomes(p.convoId, [refused]);
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo' } };
+    // A tool result is never the person's message: left alone, the note kept.
+    const result = [{ type: 'tool_result', tool_use_id: 'example-tool', content: 'done' }, { type: 'text', text: 'beside it' }, image];
+    p.send(result);
+    p.send([{ type: 'text', text: 'what is in this?' }, image, { type: 'text', text: 'and this' }]);
+    p.send('and now?');
+    assert.deepStrictEqual(p.contents(), [
+      result,
+      [{ type: 'text', text: `${expectedNote}what is in this?` }, image, { type: 'text', text: 'and this' }],
+      'and now?',
+    ]);
+  });
 });
 
 describe('a Codex turn\'s input', () => {

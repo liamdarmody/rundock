@@ -296,6 +296,10 @@ describe('the five sequences', () => {
     assert.deepStrictEqual(ourPre(after).map((e) => e.hooks[0].onFailure), ['block', 'block', 'block', 'block'], 'every Rundock entry has it');
     const expected = JSON.parse(JSON.stringify(left));
     for (const e of ourPre(expected)) for (const h of e.hooks) if (isOurs(h)) h.onFailure = 'block';
+    // The record was captured before the PermissionRequest entry existed, so
+    // the open adds it, with the same hook as the PostToolUse entry
+    // (test/unit/scaffold-permission-request.test.js).
+    expected.hooks.PermissionRequest = [{ matcher: 'Bash|PowerShell', hooks: JSON.parse(JSON.stringify(left.hooks.PostToolUse[0].hooks)) }];
     assert.deepStrictEqual(after, expected, 'and nothing else changed');
   });
 

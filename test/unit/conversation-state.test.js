@@ -411,11 +411,103 @@ test('init: a delegate session never replaces an existing primary, and duplicate
   }]);
 });
 
-test('init: a delegate session becomes primary when no primary exists yet', () => {
+test('init: another agent\'s session joins the chain and never becomes the primary, even with no primary yet', () => {
+  // Taking it as the primary when none was left had the conversation's own
+  // agent resume a teammate's session on its next message.
   const ctx = { convoExists: true, convoAgentId: 'cos', hasPrimarySession: false, knownSessionIds: [] };
   const r = reduce(createState(), seq.initMsg('sess-dev', 'dev', 'p2'), ctx);
+  assert.deepStrictEqual(r.effects, [{
+    type: 'set-session', sessionId: 'sess-dev', agentId: 'dev', setPrimary: false, addToChain: true,
+  }]);
+});
+
+test('init: the conversation\'s own agent\'s session becomes the primary when there is none', () => {
+  const ctx = { convoExists: true, convoAgentId: 'cos', hasPrimarySession: false, knownSessionIds: [] };
+  const r = reduce(createState(), seq.initMsg('sess-cos', 'cos', 'p1'), ctx);
   assert.strictEqual(r.effects[0].setPrimary, true);
-  assert.strictEqual(r.effects[0].addToChain, true);
+});
+
+test('init: a session stamped with no agent counts as the conversation\'s own agent\'s and becomes the primary', () => {
+  const ctx = { convoExists: true, convoAgentId: 'cos', hasPrimarySession: false, knownSessionIds: [] };
+  const message = seq.initMsg('sess-unstamped', 'cos', 'p1');
+  delete message._agent;
+  const r = reduce(createState(), message, ctx);
+  assert.strictEqual(r.effects[0].setPrimary, true);
+  assert.strictEqual(r.effects[0].agentId, 'cos');
+});
+
+// A window's record, kept as app.js keeps it: set-session applied as its
+// executor applies it, and forget-session through forgetSession.
+function windowRecord(convoAgentId) {
+  const convo = { agentId: convoAgentId, sessionId: null, sessionIds: [] };
+  let state = createState();
+  return {
+    convo,
+    feed(msg) {
+      const ctx = msg.subtype === 'init'
+        ? { convoExists: true, convoAgentId: convo.agentId, hasPrimarySession: !!convo.sessionId, knownSessionIds: convo.sessionIds.map(s => s.sessionId) }
+        : { hasPrimarySession: !!convo.sessionId };
+      const r = reduce(state, msg, ctx);
+      state = r.state;
+      for (const ef of r.effects) {
+        if (ef.type === 'set-session') {
+          if (ef.setPrimary) convo.sessionId = ef.sessionId;
+          if (ef.addToChain) convo.sessionIds.push({ sessionId: ef.sessionId, agentId: ef.agentId });
+        } else if (ef.type === 'forget-session') {
+          forgetSession(convo, ef.sessionId);
+        }
+      }
+      return r.effects;
+    },
+  };
+}
+
+const FORGETS = {
+  session_expired: { type: 'system', subtype: 'session_expired', sessionId: 'sess-cos' },
+  info: { type: 'system', subtype: 'info', content: 'Previous session expired. Starting fresh.', expiredSessionId: 'sess-cos' },
+};
+
+function specialistFirstAfterForget(forget) {
+  const w = windowRecord('cos');
+  w.feed(seq.initMsg('sess-cos', 'cos', 'p1'));
+  w.feed(seq.initMsg('sess-doc', 'rundock-guide', 'p2'));
+  w.feed(forget);
+  w.feed(seq.initMsg('sess-doc', 'rundock-guide', 'p3'));
+  return w;
+}
+
+function assertNothingLeftForTheLead(w) {
+  assert.strictEqual(w.convo.sessionId, null, 'the specialist\'s session was made the primary');
+  assert.strictEqual(resumeSessionFor(w.convo, 'cos'), null, 'the lead was handed the specialist\'s session');
+  assert.strictEqual(resumeSessionFor(w.convo, 'rundock-guide'), 'sess-doc');
+  w.feed(seq.initMsg('sess-cos-2', 'cos', 'p4'));
+  assert.strictEqual(w.convo.sessionId, 'sess-cos-2', 'the lead\'s fresh start becomes the primary');
+  assert.strictEqual(resumeSessionFor(w.convo, 'cos'), 'sess-cos-2', 'and the lead\'s next message resumes it');
+}
+
+test('after session_expired forgets the lead\'s session, a specialist\'s init arriving first leaves the lead nothing to resume', () => {
+  assertNothingLeftForTheLead(specialistFirstAfterForget(FORGETS.session_expired));
+});
+
+test('after an info naming the expired session forgets the lead\'s session, a specialist\'s init arriving first leaves the lead nothing to resume', () => {
+  assertNothingLeftForTheLead(specialistFirstAfterForget(FORGETS.info));
+});
+
+test('a specialist records its session once and resumes its latest before and after the lead\'s session is forgotten', () => {
+  for (const [kind, forget] of Object.entries(FORGETS)) {
+    const w = windowRecord('cos');
+    w.feed(seq.initMsg('sess-cos', 'cos', 'p1'));
+    const [first] = w.feed(seq.initMsg('sess-doc', 'rundock-guide', 'p2'));
+    assert.strictEqual(first.addToChain, true, `${kind}: the specialist's first session joins the chain`);
+    assert.strictEqual(resumeSessionFor(w.convo, 'rundock-guide'), 'sess-doc', `${kind}: before the forget`);
+    w.feed(forget);
+    const [again] = w.feed(seq.initMsg('sess-doc', 'rundock-guide', 'p3'));
+    assert.strictEqual(again.addToChain, false, `${kind}: a session already listed never rejoins`);
+    assert.strictEqual(resumeSessionFor(w.convo, 'rundock-guide'), 'sess-doc', `${kind}: after the forget`);
+    const [later] = w.feed(seq.initMsg('sess-doc-2', 'rundock-guide', 'p4'));
+    assert.strictEqual(later.addToChain, true, `${kind}: a new session of the specialist's joins the chain`);
+    assert.strictEqual(resumeSessionFor(w.convo, 'rundock-guide'), 'sess-doc-2', `${kind}: its latest`);
+  }
 });
 
 test('info that names no session is a notice and forgets nothing, primary or not; notice never forgets', () => {
@@ -493,6 +585,29 @@ test('resumeSessionFor keeps the primary for a record that predates the chain', 
   assert.strictEqual(resumeSessionFor({ agentId: 'orch', sessionId: 'sess-old' }, 'writer'), 'sess-old');
   assert.strictEqual(resumeSessionFor({ agentId: 'orch', sessionId: 'sess-old', sessionIds: [] }, 'writer'), 'sess-old');
   assert.strictEqual(resumeSessionFor(null, 'writer'), null);
+});
+
+test('resumeSessionFor starts the conversation\'s own agent fresh when the chain lists its primary only under another agent', () => {
+  // The record a page saved after taking a specialist's init as the primary.
+  const convo = { agentId: 'chief-of-staff', sessionId: 'sess-doc', sessionIds: [{ sessionId: 'sess-doc', agentId: 'rundock-guide' }] };
+  assert.strictEqual(resumeSessionFor(convo, 'chief-of-staff'), null);
+  assert.strictEqual(resumeSessionFor(convo, 'rundock-guide'), 'sess-doc', 'the session\'s own agent still resumes it');
+});
+
+test('resumeSessionFor resumes a primary the chain lists under the conversation\'s agent as well as another', () => {
+  const convo = { agentId: 'chief-of-staff', sessionId: 'sess-shared', sessionIds: [
+    { sessionId: 'sess-shared', agentId: 'rundock-guide' }, { sessionId: 'sess-shared', agentId: 'chief-of-staff' },
+  ] };
+  assert.strictEqual(resumeSessionFor(convo, 'chief-of-staff'), 'sess-shared');
+});
+
+test('resumeSessionFor resumes a primary listed under an entry that names no agent', () => {
+  const alone = { agentId: 'chief-of-staff', sessionId: 'sess-unnamed', sessionIds: [{ sessionId: 'sess-unnamed' }] };
+  assert.strictEqual(resumeSessionFor(alone, 'chief-of-staff'), 'sess-unnamed');
+  const beside = { agentId: 'chief-of-staff', sessionId: 'sess-unnamed', sessionIds: [
+    { sessionId: 'sess-unnamed', agentId: 'rundock-guide' }, { sessionId: 'sess-unnamed' },
+  ] };
+  assert.strictEqual(resumeSessionFor(beside, 'chief-of-staff'), 'sess-unnamed', 'beside an entry that names another agent');
 });
 
 // ── streaming ───────────────────────────────────────────────────────────────
