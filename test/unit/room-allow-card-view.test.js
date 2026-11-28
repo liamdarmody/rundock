@@ -9,6 +9,7 @@
 // value drawn as anything but text shows.
 const { test, before, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 
@@ -34,9 +35,10 @@ before(() => {
   global.escAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   global.RundockPermissions = require(path.join(ROOT, 'public', 'permissions.js'));
   global.RundockChatMarkup = require(path.join(ROOT, 'public', 'chat-markup.js'));
-  global.RundockRoomWords = require(path.join(ROOT, 'public', 'room-words.js'));
-  try { global.RundockRoomPanel = require(path.join(ROOT, 'public', 'room-panel.js')); } catch (e) {
-    if (!(e && e.code === 'MODULE_NOT_FOUND')) throw e;
+  // Each page module is loaded only where it exists, so a page without one
+  // fails a test on its assertion rather than in this hook.
+  for (const [name, file] of [['RundockRoomWords', 'room-words.js'], ['RundockRoomPanel', 'room-panel.js']]) {
+    if (fs.existsSync(path.join(ROOT, 'public', file))) global[name] = require(path.join(ROOT, 'public', file));
   }
   global.serverPlatform = 'darwin';
   global.workspaceMode = 'code';

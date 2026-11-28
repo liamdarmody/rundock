@@ -73,7 +73,10 @@ before(() => {
   global.RundockChatMarkup = require(path.join(ROOT, 'public', 'chat-markup.js'));
   global.RundockMarkers = require(path.join(ROOT, 'public', 'markers.js'));
   global.RundockPermissions = require(path.join(ROOT, 'public', 'permissions.js'));
-  global.RundockRoomWords = require(path.join(ROOT, 'public', 'room-words.js'));
+  // Each page module is loaded only where it exists, so a page without one
+  // fails a test on its assertion rather than in this hook.
+  const words = path.join(ROOT, 'public', 'room-words.js');
+  if (fs.existsSync(words)) global.RundockRoomWords = require(words);
   if (fs.existsSync(PANEL)) global.RundockRoomPanel = require(PANEL);
   global.stripRundockMarkers = (t) => global.RundockMarkers.stripMarkers(String(t || ''));
   global.restoredActiveAgentId = require(path.join(ROOT, 'public', 'delegation-restore.js')).restoredActiveAgentId;
