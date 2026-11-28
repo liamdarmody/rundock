@@ -944,33 +944,51 @@ describe('dispatch table', () => {
     ['a key in a form the card cannot show', { name: 'example-alpha', content: '{"command":"node","args":[null]}' }, connectorShapeRefused('args')],
     ['a setting the card does not show', { name: 'example-alpha', content: '{"command":"node","timeout":1}' }, hiddenSetting('timeout')],
   ];
-  // One save: the replies, and whether a card was raised.
+  // One save from `conversationId`: the replies, whether a card was raised,
+  // and what the conversation keeps (its waiting outcomes and the lines in its
+  // history), read before the workspace goes. Each conversation id is new to
+  // the process, since the server's history writer keeps lines in memory.
+  let checked = 0;
   function savedOnce(fields, holds = '{"mcpServers":{}}') {
     const { dir, file, card, ctx } = connectorWorkspace('proto-connector-replies-');
     return inWorkspace(dir, () => {
       if (holds !== null) fs.writeFileSync(file, holds);
       const w = captureWs();
       buildDispatch().save_connector(ctx, w, fields);
-      return { sent: w.sent, cards: card.asked.length, dir };
+      const read = (p) => { try { return JSON.parse(fs.readFileSync(path.join(dir, '.rundock', p), 'utf-8')); } catch (e) { return null; } };
+      const record = (read('conversations.json') || []).find((c) => c.id === fields.conversationId);
+      const history = read(path.join('transcripts', `${fields.conversationId}.json`)) || [];
+      return {
+        sent: w.sent, cards: card.asked.length, rundock: fs.existsSync(path.join(dir, '.rundock')),
+        waiting: (record && record.teamOutcomes) || [], lines: history.filter((e) => e.type === 'team').map((e) => e.text),
+      };
     });
   }
   for (const [what, fields, message] of PRE_CHECKS) {
-    test(`a connector save refused for ${what} answers the conversation that asked`, () => {
-      const { sent, cards } = savedOnce({ ...fields, conversationId: 'convo-checks' });
-      assert.deepStrictEqual(sent, [{ type: 'connector_error', message, conversationId: 'convo-checks' }], 'one reply, carrying the id');
+    test(`a connector save refused for ${what} answers the conversation that asked, and keeps its outcome there`, () => {
+      const conversationId = `convo-checks-${process.pid}-${++checked}`;
+      const { sent, cards, waiting, lines } = savedOnce({ ...fields, conversationId });
+      assert.deepStrictEqual(sent, [{ type: 'connector_error', message, conversationId }], 'one reply, carrying the id');
       assert.strictEqual(cards, 0, 'and nobody is asked');
+      assert.deepStrictEqual(lines, [message], 'its message is the one line in the history');
+      assert.deepStrictEqual(waiting, [{ kind: 'save_connector', name: fields.name, author: null, outcome: 'refused', message, reason: 'invalid' }], 'and one outcome waits, with its reason');
     });
   }
 
-  test('a connector save refused because the connector file cannot be read answers the conversation that asked', () => {
-    const { sent, cards } = savedOnce({ name: 'example-alpha', content: '{"command":"node"}', conversationId: 'convo-checks' }, BROKEN);
-    assert.deepStrictEqual(sent, [{ type: 'connector_error', message: 'The connector file is not valid JSON, so nothing was changed. Fix or remove it first: writing over it now would discard whatever was meant to be there.', conversationId: 'convo-checks' }]);
+  test('a connector save refused because the connector file cannot be read answers the conversation that asked, and keeps its outcome there', () => {
+    const conversationId = `convo-checks-${process.pid}-${++checked}`;
+    const message = 'The connector file is not valid JSON, so nothing was changed. Fix or remove it first: writing over it now would discard whatever was meant to be there.';
+    const { sent, cards, waiting, lines } = savedOnce({ name: 'example-alpha', content: '{"command":"node"}', conversationId }, BROKEN);
+    assert.deepStrictEqual(sent, [{ type: 'connector_error', message, conversationId }]);
     assert.strictEqual(cards, 0);
+    assert.deepStrictEqual(lines, [message]);
+    assert.deepStrictEqual(waiting, [{ kind: 'save_connector', name: 'example-alpha', author: null, outcome: 'error', message, reason: 'unreadable' }]);
   });
 
-  test('a connector save refused for its name, from a conversation id that is not well formed, answers with no id', () => {
-    const { sent } = savedOnce({ name: '-tools', content: '{"command":"node"}', conversationId: '../escape' });
+  test('a connector save refused for its name, from a conversation id that is not well formed, answers with no id and keeps nothing', () => {
+    const { sent, rundock } = savedOnce({ name: '-tools', content: '{"command":"node"}', conversationId: '../escape' });
     assert.deepStrictEqual(sent, [{ type: 'connector_error', message: CONNECTOR_NAME_REFUSED }], 'the id is never echoed');
+    assert.strictEqual(rundock, false, 'and nothing is written under .rundock/');
   });
 
   test('routes exactly the enumerated message types, every entry a function', () => {
