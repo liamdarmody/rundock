@@ -391,6 +391,119 @@ test('with helpers on, a task_progress sets the step\'s type alone, until a tool
   finishHelper(call.id);
 });
 
+test('with helpers on, helpers_changed carries most, per batch the highest number running at once while the batch ran, and it never goes down', async () => {
+  helpers();
+  const convo = open('most-batches');
+  const first = [agentCall('Explore'), agentCall('Plan')];
+  const second = [agentCall('Explore')];
+  h.writeScenario([helpersRule('first batch for most', first), helpersRule('second batch for most', second)]);
+  const since = say(convo, 'first batch for most');
+  await rowsWhen(convo, since, (r) => r.length === 2, 'the first batch');
+  assert.deepStrictEqual(helpersChanged(convo, since).pop().most, { [first[0].id]: 2 });
+  await nthResult(convo, since, 1);
+  say(convo, 'second batch for most');
+  await rowsWhen(convo, since, (r) => r.length === 3, 'the second batch');
+  assert.deepStrictEqual(helpersChanged(convo, since).pop().most, { [first[0].id]: 3, [second[0].id]: 3 });
+  for (const c of first) finishHelper(c.id);
+  await rowsWhen(convo, since, (r) => r.filter((x) => x.state === 'completed').length === 2, 'the first batch finished');
+  assert.deepStrictEqual(helpersChanged(convo, since).pop().most, { [first[0].id]: 3, [second[0].id]: 3 }, 'a row that finishes lowers nothing');
+  finishHelper(second[0].id);
+});
+
+test('with helpers on, a waiting or capped row is never counted in most', async () => {
+  helpers();
+  const convo = open('most-cap');
+  const calls = Array.from({ length: 6 }, () => agentCall('Explore'));
+  h.writeScenario([helpersRule('six for most', calls)]);
+  await withHold(300, async () => {
+    const since = say(convo, 'six for most');
+    await rowsWhen(convo, since, (r) => r.some((x) => x.state === 'waiting'), 'one waits');
+    assert.deepStrictEqual(helpersChanged(convo, since).pop().most, { [calls[0].id]: 5 }, 'the waiting row is not counted');
+    await rowsWhen(convo, since, (r) => r.some((x) => x.capped), 'one is capped');
+    assert.deepStrictEqual(helpersChanged(convo, since).pop().most, { [calls[0].id]: 5 }, 'nor the capped one');
+  });
+  for (const c of calls) finishHelper(c.id);
+});
+
+// The rows of a second window's active_processes for a conversation.
+async function activeRowOf(convo) {
+  const other = await h.connect();
+  try {
+    const { msg } = await other.waitFor((m) => m.type === 'active_processes', { label: 'active_processes' });
+    return msg.processes.find((p) => p.conversationId === convo);
+  } finally {
+    other.close();
+  }
+}
+
+test('with helpers on, active_processes gives most, and replying false while the held result waits and true once the lead\'s next turn begins', async () => {
+  helpers();
+  const convo = open('active-replying');
+  const call = agentCall('Explore');
+  h.writeScenario([helpersRule('one explorer replying', [call], {
+    finishOn: {},
+    then: [
+      { untilFile: wakeFile('replying-1'), lines: [ended(call), fx.contentBlockStartText(0)] },
+      { untilFile: wakeFile('replying-2'), turn: [{ text: 'The explorer is back.' }] },
+    ],
+  })]);
+  const since = say(convo, 'one explorer replying');
+  await nthResult(convo, since, 1);
+  await h.delay(200);
+  const held = await activeRowOf(convo);
+  assert.ok(held, 'the lead is listed');
+  assert.deepStrictEqual([held.idle, held.replying, held.most], [false, false, { [call.id]: 1 }]);
+  wake('replying-1');
+  assert.ok(await h.waitUntil(() => !entryOf(convo).helpersWake, { timeout: 20000 }), 'the lead\'s next turn began');
+  const replying = await activeRowOf(convo);
+  assert.deepStrictEqual([replying.idle, replying.replying, replying.most], [false, true, { [call.id]: 1 }]);
+  wake('replying-2');
+  await requestDone(convo, since);
+});
+
+test('with helpers on, a lead woken by a helper\'s end sends helpers_wake once, before its turn\'s first line', async () => {
+  helpers();
+  const convo = open('wake-once');
+  const call = agentCall('Explore');
+  h.writeScenario([helpersRule('one explorer to wake', [call], {
+    finishOn: {},
+    then: [{ untilFile: wakeFile('wake-once'), lines: [ended(call)], turn: [{ text: 'Woken and back.' }] }],
+  })]);
+  const since = say(convo, 'one explorer to wake');
+  await nthResult(convo, since, 1);
+  const before = client.messages.length;
+  wake('wake-once');
+  await requestDone(convo, since);
+  const after = client.messages.slice(before).filter((m) => m._conversationId === convo);
+  const wakes = after.filter((m) => m.type === 'system' && m.subtype === 'helpers_wake');
+  const entry = entryOf(convo);
+  assert.deepStrictEqual(wakes, [{ type: 'system', subtype: 'helpers_wake', _conversationId: convo, _processId: entry.processId, _agent: 'wren' }]);
+  const firstLine = after.findIndex((m) => m.type === 'stream_event');
+  assert.ok(firstLine > after.indexOf(wakes[0]), 'it comes before the turn\'s first line');
+});
+
+test('with helpers on, a turn the person\'s own message started sends no helpers_wake', async () => {
+  helpers();
+  const convo = open('wake-person');
+  const call = agentCall('Explore');
+  h.writeScenario([
+    helpersRule('one explorer and a person', [call], {
+      finishOn: {},
+      then: [{ untilFile: wakeFile('wake-person'), lines: [ended(call)], turn: [{ text: 'The explorer reported back.' }] }],
+    }),
+    { match: { agent: 'wren', promptIncludes: 'a word from the person' }, turn: [{ text: 'Heard you.' }] },
+  ]);
+  const since = say(convo, 'one explorer and a person');
+  await nthResult(convo, since, 1);
+  const from = say(convo, 'a word from the person');
+  await nthResult(convo, since, 2);
+  const wakesFrom = (at) => client.messages.slice(at).filter((m) => m.type === 'system' && m.subtype === 'helpers_wake' && m._conversationId === convo);
+  assert.deepStrictEqual(wakesFrom(from), [], 'the person\'s turn sends none');
+  wake('wake-person');
+  await requestDone(convo, since);
+  assert.strictEqual(wakesFrom(from).length, 1, 'the helper\'s end sends one');
+});
+
 test('with helpers on, a lead\'s own tool call never sets a row\'s step or file', async () => {
   helpers();
   const convo = open('step-lead');

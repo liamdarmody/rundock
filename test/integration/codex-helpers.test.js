@@ -100,9 +100,10 @@ test('a helper Fern starts is a row on Fern\'s list, named, counted while it run
   const row = rowNamed(msg, 'rates');
   const { firstBatch, ...rest } = row;
   assert.match(rest.toolUseId, UUID_RE, 'the row is keyed by the helper\'s thread id');
+  assert.match(rest.batch, UUID_RE, 'its batch is Fern\'s turn');
   assert.deepStrictEqual(rest, {
     toolUseId: rest.toolUseId, agent: 'rates', kind: 'codex', role: 'worker', task: null,
-    state: 'running', step: null, file: null, capped: false,
+    state: 'running', step: null, file: null, capped: false, batch: rest.batch,
   });
   assert.strictEqual(firstBatch, true, 'the first helper Fern starts in the conversation is her first batch');
   assert.strictEqual(helpers().runningCount(convo), 1, 'a running helper is counted');
@@ -386,7 +387,7 @@ test('a helper\'s approval raises a card on Fern\'s turn naming the helper, and 
   assert.strictEqual(card._agent, 'fern', 'the card is on Fern');
   assert.ok(card._helper, 'the card names a helper');
   assert.match(card._helper.agentId, UUID_RE);
-  assert.deepStrictEqual(card._helper, { agentId: card._helper.agentId, agentType: 'rates' });
+  assert.deepStrictEqual(card._helper, { agentId: card._helper.agentId, agentType: 'rates', runtime: 'codex' });
   assert.strictEqual(card.request.tool_name, SHELL);
   assert.strictEqual(card.request.input.command, 'rm -rf build');
   const row = rowNamed(changes(convo, since).pop(), 'rates');
@@ -396,6 +397,41 @@ test('a helper\'s approval raises a card on Fern\'s turn naming the helper, and 
   assert.deepStrictEqual(await decidedOn(card._helper.agentId), ['accept']);
   await turnDone(convo, since);
   assert.strictEqual(cards(convo, since).length, 1, 'one card');
+});
+
+test('a helper\'s card still waiting when a window connects is replayed naming the helper on Codex', async () => {
+  const convo = open('cxreplay');
+  const { card } = await ratesAsks(convo, 'REPLAY-ONE');
+  const other = await h.connect();
+  try {
+    const { msg } = await other.waitFor((m) => m.type === 'control_request' && m.request_id === card.request_id, { label: 'the replayed card' });
+    assert.deepStrictEqual(msg._helper, { agentId: card._helper.agentId, agentType: 'rates', runtime: 'codex' });
+    assert.strictEqual(msg._agent, 'fern');
+  } finally {
+    other.close();
+  }
+  answer(convo, card, false);
+  assert.deepStrictEqual(await decidedOn(card._helper.agentId), ['decline']);
+});
+
+test('each helper Fern starts in one turn shares that turn as its batch, and a later turn\'s helpers have their own', async () => {
+  const convo = open('cxbatch');
+  h.writeCodexScenario([
+    { match: { promptIncludes: 'BATCH-ONE' }, text: 'Two.', awaitHelpers: true, helpers: [{ nickname: 'rates' }, { nickname: 'pipeline' }] },
+    { match: { promptIncludes: 'BATCH-TWO' }, text: 'One.', awaitHelpers: true, helpers: [{ nickname: 'deck' }] },
+  ]);
+  const one = say(convo, 'BATCH-ONE please');
+  await turnDone(convo, one);
+  const two = say(convo, 'BATCH-TWO please');
+  await turnDone(convo, two);
+  const rows = changes(convo, one).pop().helpers;
+  const batchOf = (name) => rows.find((r) => r.agent === name).batch;
+  assert.match(batchOf('rates'), UUID_RE, 'a batch is a turn id');
+  assert.strictEqual(batchOf('pipeline'), batchOf('rates'), 'one turn, one batch');
+  assert.notStrictEqual(batchOf('deck'), batchOf('rates'), 'a later turn, its own batch');
+  const most = changes(convo, two).pop().most;
+  assert.deepStrictEqual(Object.keys(most).sort(), [batchOf('rates'), batchOf('deck')].sort(), 'most is kept per batch for Codex rows too');
+  assert.strictEqual(most[batchOf('deck')], 1, 'deck ran alone');
 });
 
 test('Deny on a helper\'s card answers decline on the helper\'s request', async () => {
@@ -543,7 +579,7 @@ test('a helper Sky starts as a delegate is a row on Sky\'s list, and its approva
   const { msg: card } = await cardAfter(convo, since);
   assert.strictEqual(card._agent, 'sky', 'the card is on Sky, the delegate');
   assert.ok(card._helper, 'the card names a helper');
-  assert.deepStrictEqual(card._helper, { agentId: card._helper.agentId, agentType: 'rates' });
+  assert.deepStrictEqual(card._helper, { agentId: card._helper.agentId, agentType: 'rates', runtime: 'codex' });
   assert.strictEqual(card.request.input.command, 'rm -rf build');
   const listed = changes(convo, since).filter((m) => rowNamed(m, 'rates'));
   assert.ok(listed.every((m) => m.agentId === 'sky'), 'the list is Sky\'s');

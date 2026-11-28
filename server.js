@@ -1580,7 +1580,7 @@ wss.on('connection', (ws) => {
   // Always send this message, even when empty, so the client can reconcile stale state.
   const active = [];
   for (const [convoId, entry] of chatProcesses) {
-    active.push(helpers.activeRow(convoId, { conversationId: convoId, processId: entry.processId, agentId: entry.agentId, idle: !!entry.idle, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null }));
+    active.push(helpers.activeRow(convoId, { conversationId: convoId, processId: entry.processId, agentId: entry.agentId, idle: !!entry.idle, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null }, entry));
   }
   ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
   ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION, platform: process.platform }));
@@ -1606,12 +1606,16 @@ wss.on('connection', (ws) => {
         // carried it.
         ...(pending.answerFile && !pending.boundary ? { answer_file: true, resolved_path: pending.resolvedPath, grant_dir: null } : {}),
         ...(pending.credential && !pending.boundary ? { credential: true, resolved_path: pending.resolvedPath, grant_dir: null } : {}),
-        ...(pending.startupFile ? { startup_file: pending.startupFile } : {})
+        ...(pending.startupFile ? { startup_file: pending.startupFile } : {}),
+        // A lead's first batch: the teammates it would start and the rest.
+        ...(pending.helpers ? { helpers: pending.helpers, helper_others: pending.helperOthers } : {})
       },
       _conversationId: pending.conversationId,
       // The agent the server filed it for, as the first delivery named it.
       ...(pending.agentId ? { _agent: pending.agentId } : {}),
-      ...(pending.run ? { _run: pending.run } : {})
+      ...(pending.run ? { _run: pending.run } : {}),
+      // The helper that asked, as the first delivery named it.
+      ...(pending.helper ? { _helper: pending.helper } : {})
     }));
   }
   // WHAT IS STILL WAITING, said once after the replay. A window that was away
@@ -2807,18 +2811,23 @@ function getRuntimeStatus() {
 // Code-mode verdict, a boundary crossing, an answer file), in the same fields a
 // hook request carries, so the card is drawn the same way whichever runtime
 // asked. Only those fields pass.
-const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'startup_file', 'put_back', 'helpers'];
+const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'startup_file', 'put_back', 'helpers', 'helper_others'];
 // `agentId` is the agent whose process asked, when the caller knows it from
 // the process it holds; the card is then labelled with it, live and on replay.
 function requestServerPermission({ convoId, agentId, toolName, toolInput, onDecision, grading, helper }) {
   // An id nothing can guess: an answer is matched to its card by this alone.
   const requestId = 'perm-' + require('crypto').randomBytes(16).toString('hex');
+  // A Codex helper's request names the helper, as a Claude helper's does.
+  const helperField = helper ? { agentId: helper.threadId, agentType: helper.name, runtime: 'codex' } : null;
   pendingPermissionRequests.set(requestId, {
     onDecision,
     conversationId: convoId,
     agentId,
     toolName,
     toolInput,
+    // Kept for the replay: a first batch's teammates and the helper that asked.
+    ...(grading && grading.helpers ? { helpers: grading.helpers, helperOthers: grading.helper_others } : {}),
+    ...(helperField ? { helper: helperField } : {}),
     timer: setTimeout(() => {
       const pending = pendingPermissionRequests.get(requestId);
       if (pending) {
@@ -2838,8 +2847,7 @@ function requestServerPermission({ convoId, agentId, toolName, toolInput, onDeci
     },
     _conversationId: convoId,
     ...(agentId ? { _agent: agentId } : {}),
-    // A Codex helper's request names the helper, as a Claude helper's does.
-    ...(helper ? { _helper: { agentId: helper.threadId, agentType: helper.name } } : {}),
+    ...(helperField ? { _helper: helperField } : {}),
   }));
   console.log(`[Permission] Server request: ${toolName} convo=${convoId} requestId=${requestId}`);
 }

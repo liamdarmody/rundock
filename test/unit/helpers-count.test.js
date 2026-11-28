@@ -267,6 +267,7 @@ describe('helpers_changed', () => {
     assert.deepStrictEqual(all[2], {
       type: 'helpers_changed', _conversationId: convo, agentId: 'wren',
       helpers: [{ toolUseId: 't1', agent: 'Explore', kind: 'builtin', task: 'Look around', state: 'completed', step: { type: 'Read', detail: null }, batch: 't1', file: null }],
+      most: { t1: 1 },
     });
   });
 

@@ -357,6 +357,86 @@ test('the switch is read when it is used by the stream, the holds and the spawns
   }
 });
 
+// WHAT THE PANEL ADDS, WITH HELPERS OFF. A Wren turn that calls Agent for Ash
+// and Explore, with Ash's turn held open so a window can connect while it
+// runs, and an ordinary card from a helper's fields left pending.
+//
+// By design these pass on a server without the panel too. Their sibling in
+// helpers-stream.test.js, "with helpers on, active_processes gives most, and
+// replying false while the held result waits and true once the lead's next
+// turn begins", shares the second window's setup and fails there; and in
+// helpers-card.test.js, "a pending helper's card replayed on reconnect keeps
+// _helper" shares the replayed card's.
+const PANEL_FIELDS = ['most', 'replying', 'helper_others', '_helper', 'batch', 'helpers'];
+const carriesPanelField = (value) => value !== null && typeof value === 'object'
+  && (PANEL_FIELDS.some((k) => k in value) || Object.values(value).some(carriesPanelField));
+// The kinds of message the page is sent for the scenario, as at the merge of
+// the helpers stream and its Codex rows, heartbeats left out.
+const SCENARIO_KINDS = [
+  'assistant', 'result/success', 'stream_event',
+  'system/agent_switch', 'system/done', 'system/init', 'system/process_started',
+];
+async function offScenario(tag) {
+  const convo = open(`off-panel-${tag}`);
+  const ash = agentCall('ash');
+  const explore = agentCall('Explore');
+  const gate = path.join(h.workspaceDir, `off-panel-${tag}-${process.pid}`);
+  h.writeScenario([
+    { match: { agent: 'wren', promptIncludes: `off panel ${tag}` }, turn: [{ text: 'Two at once.' }, { agentTool: ash.input, id: ash.id }, { agentTool: explore.input, id: explore.id }] },
+    { match: { agent: 'ash', promptIncludes: ash.input.prompt }, untilFile: gate, turn: [{ text: `Ash is done. ${MARKERS.COMPLETE}` }] },
+  ]);
+  const since = say(convo, `off panel ${tag}`);
+  assert.ok(await h.waitUntil(() => invocations('ash', convo).length === 1, { timeout: 15000 }), 'Ash took over');
+  return { convo, since, gate };
+}
+
+test('with helpers off, the panel\'s messages are never sent: no helpers_changed, no helpers_wake, and no card carries helpers or helper_others', async () => {
+  const { convo, since, gate } = await offScenario('messages');
+  fs.writeFileSync(gate, 'go');
+  await h.delay(800);
+  const page = client.messages.slice(since).filter((m) => m._conversationId === convo);
+  assert.ok(page.some((m) => m.type === 'result'), 'the scenario reached the page');
+  assert.deepStrictEqual(page.filter((m) => m.type === 'helpers_changed' || m.subtype === 'helpers_wake'), []);
+  assert.deepStrictEqual(page.filter((m) => m.type === 'control_request' && m.request && ('helpers' in m.request || 'helper_others' in m.request)), []);
+});
+
+test('with helpers off, the page\'s messages for the scenario are the kinds they were, and none carries a field of the panel\'s', async () => {
+  const { convo, since, gate } = await offScenario('kinds');
+  fs.writeFileSync(gate, 'go');
+  assert.ok(await h.waitUntil(() => client.messages.slice(since).some((m) => m._conversationId === convo && m.type === 'result' && m._agent === 'ash'), { timeout: 15000 }), 'Ash answered');
+  await h.delay(800);
+  const page = client.messages.slice(since).filter((m) => m._conversationId === convo && m.subtype !== 'keepalive');
+  const kinds = [...new Set(page.map((m) => (m.subtype ? `${m.type}/${m.subtype}` : m.type)))].sort();
+  assert.deepStrictEqual(kinds, SCENARIO_KINDS, 'the same kinds of message, none new');
+  assert.deepStrictEqual(page.filter(carriesPanelField).map((m) => m.type), [], 'no message carries a field of the panel\'s');
+});
+
+test('with helpers off, active_processes carries no helpers, most or replying, and a pending card is replayed as it always was', async () => {
+  const { convo, gate } = await offScenario('active');
+  const command = `node tools/build.js --step ${++seq}`;
+  const at = client.messages.length;
+  const asked = ask(bash(command, convo, { agent_id: 'agent-off-1', agent_type: 'Explore' }), { headers: h.hookHeaders(convo, 'wren') });
+  const { msg: card } = await client.waitFor((m) => m.type === 'control_request' && m._conversationId === convo && m.request.input.command === command, { since: at, label: 'the card' });
+  const other = await h.connect();
+  try {
+    const { msg: listed } = await other.waitFor((m) => m.type === 'active_processes', { label: 'active_processes' });
+    const row = listed.processes.find((p) => p.conversationId === convo);
+    assert.ok(row, 'the conversation\'s process is listed');
+    assert.deepStrictEqual(Object.keys(row).sort(), ['agentId', 'conversationId', 'delegation', 'idle', 'processId', 'responseText'], 'the row as it always was');
+    const { msg: again } = await other.waitFor((m) => m.type === 'control_request' && m.request_id === card.request_id, { label: 'the replayed card' });
+    assert.deepStrictEqual(again, {
+      type: 'control_request', request_id: card.request_id,
+      request: { subtype: 'can_use_tool', tool_name: 'Bash', input: card.request.input },
+      _conversationId: convo, _agent: 'wren',
+    }, 'the replay as it always was');
+  } finally {
+    other.close();
+  }
+  client.send({ type: 'permission_response', requestId: card.request_id, conversationId: convo, allow: false, card: true });
+  await asked.reply;
+  fs.writeFileSync(gate, 'go');
+});
+
 // A CODEX LEAD'S HELPERS WITH HELPERS OFF. Fern's turn on the app-server
 // starts helpers of its own; with the switch off, nothing of theirs reaches
 // Fern's turn, the page or the conversation.

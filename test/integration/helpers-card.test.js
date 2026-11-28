@@ -223,6 +223,76 @@ test('two teammates in one message are helpers: one card names both in message o
   assert.strictEqual(invocations('wren', convo)[0].pid, wren[0].pid, 'the same lead process');
 });
 
+test('a first batch\'s card carries helper_others, the number of its calls that are helpers outside the team, beside helpers', async () => {
+  helpers();
+  const convo = open('helpers-others');
+  const ash = agentCall('ash');
+  const others = [agentCall('Explore'), agentCall('Plan')];
+  h.writeScenario([messageRule('wren', 'a teammate and two others', [others[0], ash, others[1]])]);
+  const since = say(convo, 'wren', 'a teammate and two others');
+  const card = await cardFor(convo, since);
+  assert.deepStrictEqual([card.request.helpers, card.request.helper_others], [[{ agent: 'ash', task: task(ash) }], 2]);
+  answerCard(card, false);
+  await answersOf_([ash, ...others]);
+});
+
+test('a first batch\'s card for teammates alone carries helper_others 0', async () => {
+  helpers();
+  const convo = open('helpers-others-none');
+  const calls = [agentCall('ash'), agentCall('example-research-lead')];
+  h.writeScenario([messageRule('wren', 'two teammates, no others', calls)]);
+  const since = say(convo, 'wren', 'two teammates, no others');
+  const card = await cardFor(convo, since);
+  assert.strictEqual(card.request.helper_others, 0);
+  assert.strictEqual(card.request.helpers.length, 2);
+  answerCard(card, false);
+  await answersOf_(calls);
+});
+
+// What a window that connects now is sent for a pending card.
+async function replayed(card) {
+  const other = await h.connect();
+  try {
+    const { msg } = await other.waitFor((m) => m.type === 'control_request' && m.request_id === card.request_id, { label: 'the replayed card' });
+    return msg;
+  } finally {
+    other.close();
+  }
+}
+
+test('a pending Allow card replayed on reconnect keeps helpers and helper_others', async () => {
+  helpers();
+  const convo = open('helpers-replay');
+  const ash = agentCall('ash');
+  const explore = agentCall('Explore');
+  h.writeScenario([messageRule('wren', 'replay the allow card', [ash, explore])]);
+  const since = say(convo, 'wren', 'replay the allow card');
+  const card = await cardFor(convo, since);
+  const again = await replayed(card);
+  assert.deepStrictEqual(again.request.helpers, card.request.helpers);
+  assert.strictEqual(again.request.helper_others, 1);
+  assert.deepStrictEqual([again._agent, again._conversationId, again.request.tool_name], ['wren', convo, 'Agent']);
+  assert.ok(!('_helper' in again), 'the lead\'s own card names no helper');
+  answerCard(card, false);
+  await answersOf_([ash, explore]);
+});
+
+test('a pending helper\'s card replayed on reconnect keeps _helper', async () => {
+  helpers();
+  const convo = open('helper-replay');
+  const command = `node tools/build.js --step ${++seq}`;
+  const since = client.messages.length;
+  const asked = ask(bash(command, convo, { agent_id: 'agent-r1', agent_type: 'Explore' }), { headers: h.hookHeaders(convo, 'wren') });
+  assert.ok(await h.waitUntil(() => client.messages.slice(since).some((m) => m.type === 'control_request' && m.request.input.command === command), { timeout: 10000 }), 'a card');
+  const card = client.messages.slice(since).find((m) => m.type === 'control_request' && m.request.input.command === command);
+  const again = await replayed(card);
+  assert.deepStrictEqual(again._helper, { agentId: 'agent-r1', agentType: 'Explore' });
+  assert.deepStrictEqual(again._helper, card._helper, 'as the first delivery named it');
+  assert.ok(!('helpers' in again.request), 'an ordinary card carries no teammates');
+  answerCard(card, false);
+  await asked.reply;
+});
+
 test('a lone teammate call sent to the background is a helper under the first batch\'s card; Deny names it back and keeps no yes, and the next batch asks again', async () => {
   helpers();
   const convo = open('helpers-background');
