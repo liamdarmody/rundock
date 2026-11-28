@@ -324,3 +324,43 @@ describe('which Allow a card draws', () => {
     assert.strictEqual(RP.allowButtonClass('Allow', true), 'btn-allow');
   });
 });
+
+// THE ALLOW CARD, on the same card surface. A lead's first batch asks on it:
+// its title and each teammate's name and task at --text-1; the rate line, the
+// helper icon and Deny's label at --text-2-strong; Deny's outline at
+// --border-strong. The card's own lines are ruled in room-panel.css.
+describe('the Allow card\'s colors on the card surface', () => {
+  const PANEL_CSS = path.join(ROOT, 'public', 'styles', 'components', 'room-panel.css');
+  function panelDecl(selector, prop) {
+    assert.ok(fs.existsSync(PANEL_CSS), 'room-panel.css exists');
+    const rule = chatRules(PANEL_CSS).get(selector);
+    assert.ok(rule && rule.has(prop), `room-panel.css declares no ${prop} on ${selector}`);
+    return rule.get(prop);
+  }
+  // [what, the declaration, the token it reads, bar]
+  const GROUPS = [
+    ['the title and each teammate\'s name and task', [
+      ['the title', () => decl('.risk-medium .permission-header', 'color'), '--text-1', 4.5],
+      ['a teammate\'s name', () => panelDecl('.allow-helper-name', 'color'), '--text-1', 4.5],
+      ['a teammate\'s task', () => panelDecl('.allow-helper-task', 'color'), '--text-1', 4.5],
+    ]],
+    ['the rate line, the helper icon and Deny', [
+      ['the rate line', () => panelDecl('.allow-rate', 'color'), '--text-2-strong', 4.5],
+      ['the helper icon', () => panelDecl('.room-bolt', 'color'), '--text-2-strong', 3],
+      ['Deny\'s label', () => decl('.btn-deny', 'color'), '--text-2-strong', 4.5],
+      ['Deny\'s outline', () => decl('.btn-deny', 'border-color'), '--border-strong', 3],
+    ]],
+  ];
+  for (const themeName of ['dark', 'light']) {
+    for (const [group, rows] of GROUPS) {
+      test(`${group} each read their token and clear their bar, ${themeName}`, () => {
+        for (const [what, read, token, bar] of rows) {
+          const value = read();
+          assert.strictEqual(value, `var(${token})`, `${what} reads ${token}`);
+          const r = ratio(rgb(resolve(value, T[themeName], what), what), cardBackground(themeName));
+          assert.ok(r >= bar, `${what}: ${round2(r)}:1, below ${bar}:1`);
+        }
+      });
+    }
+  }
+});
