@@ -47,6 +47,35 @@ function pngBytes(width = 640, height = 480, size = 33) {
   b.writeUInt32BE(height, 20);
   return b;
 }
+function jpegBytes(width = 10, height = 10) {
+  const frame = Buffer.alloc(19);
+  frame[0] = 0xff; frame[1] = 0xc0;
+  frame.writeUInt16BE(17, 2);
+  frame[4] = 8;
+  frame.writeUInt16BE(height, 5);
+  frame.writeUInt16BE(width, 7);
+  frame[9] = 3;
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), frame, Buffer.from([0xff, 0xd9])]);
+}
+function gifBytes(width = 10, height = 10) {
+  const b = Buffer.alloc(13);
+  b.write('GIF89a', 0, 'latin1');
+  b.writeUInt16LE(width, 6);
+  b.writeUInt16LE(height, 8);
+  return b;
+}
+function webpBytes(width = 10, height = 10) {
+  const b = Buffer.alloc(40);
+  b.write('RIFF', 0, 'latin1');
+  b.writeUInt32LE(32, 4);
+  b.write('WEBPVP8 ', 8, 'latin1');
+  b.writeUInt32LE(20, 16);
+  b[20] = 0x10; b[21] = 0x02; b[22] = 0x00;
+  b[23] = 0x9d; b[24] = 0x01; b[25] = 0x2a;
+  b.writeUInt16LE(width, 26);
+  b.writeUInt16LE(height, 28);
+  return b;
+}
 const pdfBytes = () => Buffer.from('%PDF-1.7\na report\n%%EOF\n', 'latin1');
 const NOTES = Buffer.from('ten bytes\n');
 const IMAGE = { width: 640, height: 480 };
@@ -131,7 +160,8 @@ describe('buildTurn: a Codex turn names an image only with the image', () => {
 
   test('each of the four image types is given an item', () => {
     const ws = workspace();
-    const files = ['1-a.png', '2-b.jpg', '3-c.gif', '4-d.webp'].map((file) => ({ file, bytes: Buffer.alloc(40, file[2]), width: 10, height: 10 }));
+    const bytes = { png: pngBytes(10, 10), jpg: jpegBytes(), gif: gifBytes(), webp: webpBytes() };
+    const files = ['1-a.png', '2-b.jpg', '3-c.gif', '4-d.webp'].map((file) => ({ file, bytes: bytes[file.slice(4)], width: 10, height: 10 }));
     const d = recorded(ws, [{ id: 'entry-1', files }]);
     const text = files.map((f) => lineOf(d[f.file])).join('\n');
     for (const f of files) assert.ok(Object.prototype.hasOwnProperty.call(receive.LABELS, d[f.file].type), `${d[f.file].type} has a label`);
@@ -271,6 +301,21 @@ describe('buildTurn: a Codex turn names an image only with the image', () => {
     ]);
   });
 
+  test('an image whose stored bytes are a PDF or a JPEG, recorded as a PNG with their size and fingerprint, is given the changed form and no item, and a real PNG its item', () => {
+    const ws = workspace();
+    const d = recorded(ws, [{ id: 'entry-1', files: [
+      { file: '1-diagram.png', bytes: pdfBytes(), ...IMAGE },
+      { file: '2-chart.png', bytes: jpegBytes(640, 480), ...IMAGE },
+      { file: '3-photo.png', bytes: pngBytes(320, 240), width: 320, height: 240 },
+    ] }]);
+    assert.strictEqual(d['1-diagram.png'].type, 'png', 'the record says PNG');
+    const text = ['1-diagram.png', '2-chart.png', '3-photo.png'].map((f) => lineOf(d[f])).join('\n');
+    const { content, extraItems, sent } = codexTurn(ws, text, { entryId: 'entry-1' });
+    assert.strictEqual(content, [CHANGED('1-diagram.png'), CHANGED('2-chart.png'), lineOf(d['3-photo.png'])].join('\n'));
+    assert.deepStrictEqual(extraItems, [imageItem(ws, '3-photo.png')]);
+    assert.deepStrictEqual(sent, { files: ['3-photo.png'], bytes: 33, images: 1 });
+  });
+
   test('a changed image and a missing image each give their form and no item', () => {
     const ws = workspace();
     const d = recorded(ws, [{ id: 'entry-1', files: [
@@ -392,6 +437,22 @@ describe('buildTurn: a thread resumed on another app-server process', () => {
     assert.deepStrictEqual(extraItems, [imageItem(ws, '1-diagram.png')]);
     assert.deepStrictEqual(sent, { files: ['1-diagram.png'], bytes: 33, images: 1 });
     assert.ok(!content.includes('2-photo.png'), content);
+  });
+
+  test('an image the thread was sent whose stored bytes are now a PDF or a JPEG, recorded as a PNG, is given the changed form and not sent again, and a real PNG is', () => {
+    const ws = workspace();
+    const d = recorded(ws, [{ id: 'entry-1', files: [
+      { file: '1-diagram.png', bytes: pdfBytes(), ...IMAGE },
+      { file: '2-chart.png', bytes: jpegBytes(640, 480), ...IMAGE },
+      { file: '3-photo.png', bytes: pngBytes(320, 240), width: 320, height: 240 },
+    ] }], { sent: { [THREAD]: { files: ['1-diagram.png', '2-chart.png', '3-photo.png'], bytes: 99, images: 3, instance: 'server-a' } } });
+    const named = codexTurn(ws, `again ${lineOf(d['1-diagram.png'])} and ${lineOf(d['2-chart.png'])}`, COLD);
+    assert.strictEqual(named.content, `again ${CHANGED('1-diagram.png')} and ${CHANGED('2-chart.png')}\n${lineOf(d['3-photo.png'])}`);
+    assert.deepStrictEqual(named.extraItems, [imageItem(ws, '3-photo.png')]);
+    const unnamed = codexTurn(ws, 'and now?', COLD);
+    assert.strictEqual(unnamed.content, `and now?\n${lineOf(d['3-photo.png'])}`);
+    assert.deepStrictEqual(unnamed.extraItems, [imageItem(ws, '3-photo.png')]);
+    assert.deepStrictEqual(unnamed.sent, { files: ['3-photo.png'], bytes: 33, images: 1 });
   });
 
   test('an image the turn already carries is not sent again', () => {
