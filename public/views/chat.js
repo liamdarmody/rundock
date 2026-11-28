@@ -1429,6 +1429,14 @@ function renderPermissionCard(d, convoId, host, settled) {
     : (owner.kind === 'unattributed'
       ? `<div class="permission-origin unattributed"><span>Unattributed: no conversation or routine could be matched to this request</span></div>`
       : (asker ? RundockChatMarkup.askedByHtml(asker) : ''));
+  // A lead's first batch asks on the Allow card: its title, then a line per
+  // teammate and the rate line in place of the detail, all drawn as text.
+  const allowCard = Array.isArray(req.helpers) && req.helpers.length > 0 && typeof RundockRoomPanel !== 'undefined';
+  if (allowCard) {
+    summary = RundockRoomWords.allowTitle(agentDisplayName(d._agent), req.helpers.map(h => agentDisplayName(h.agent)));
+    context = '';
+    fieldsBox = allowCardBody(d, convoId);
+  }
   card.innerHTML = `
     <div class="permission-card risk-${renderRisk}">
       ${originHtml}
@@ -1472,6 +1480,15 @@ function renderPermissionCard(d, convoId, host, settled) {
       plain.textContent = detail;
       slot.replaceWith(plain);
     }
+  }
+  // A batch is asked about each time: Allow and Deny, no standing answer.
+  if (allowCard) card.querySelectorAll('[data-perm-action="always"]').forEach((b) => b.remove());
+  // A card a helper raised names the helper and the lead it helps.
+  if (d._helper && owner.kind === 'conversation' && typeof RundockRoomPanel !== 'undefined') {
+    const line = helperOrigin(d);
+    const old = card.querySelector('.permission-origin');
+    if (old) old.replaceWith(line);
+    else card.querySelector('.permission-card').prepend(line);
   }
 
   // Attach event listeners safely (no inline onclick)
@@ -2218,6 +2235,52 @@ function clearSummarising(convoId) {
   const m = document.getElementById('messages');
   const row = m ? summarisingRow(m, convoId) : null;
   if (row) row.remove();
+}
+
+// The Allow card's body: a line per teammate with its avatar, name and task,
+// then how fast the plan's allowance would go, counting the teammates, the
+// helpers beside them and whoever already runs in the conversation, plus one.
+function allowCardBody(d, convoId) {
+  const words = RundockRoomWords;
+  const req = d.request;
+  const box = document.createElement('div');
+  box.className = 'allow-helpers';
+  for (const h of req.helpers) {
+    const line = document.createElement('div');
+    line.className = 'allow-helper';
+    const name = document.createElement('span');
+    name.className = 'allow-helper-name';
+    name.textContent = agentDisplayName(h.agent);
+    const task = document.createElement('span');
+    task.className = 'allow-helper-task';
+    task.textContent = String(h.task || '');
+    line.append(RundockRoomPanel.avatar(h.agent), name, task);
+    box.append(line);
+  }
+  const lead = agentDisplayName(d._agent);
+  const running = RundockRoomPanel.running(convoId);
+  const members = req.helpers.map(h => ({ name: agentDisplayName(h.agent) }))
+    .concat(Array.from({ length: Number(req.helper_others) || 0 }, () => ({ name: null })));
+  const rate = document.createElement('div');
+  rate.className = 'allow-rate';
+  rate.textContent = words.rateLine(lead, members, members.length + running.length + 1, words.names(lead, running));
+  box.append(rate);
+  return box;
+}
+
+// "Asked by <helper>, helping <lead>": a teammate after its avatar, any other
+// helper after the bolt by its label, a Codex helper by its nickname.
+function helperOrigin(d) {
+  const h = d._helper || {};
+  const codex = h.runtime === 'codex';
+  const mate = codex ? null : agents.find(a => a && a.id === h.agentType);
+  const line = document.createElement('div');
+  line.className = 'permission-origin';
+  const words = document.createElement('span');
+  const name = mate ? agentDisplayName(mate.id) : (codex ? String(h.agentType || '') : RundockRoomWords.helperLabel(h.agentType));
+  words.textContent = RundockRoomWords.askedBy(name, agentDisplayName(d._agent));
+  line.append(mate ? RundockRoomPanel.avatar(mate.id) : RundockRoomPanel.bolt(), words);
+  return line;
 }
 
 return {

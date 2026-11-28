@@ -218,5 +218,11 @@
     if (node.textContent !== text) node.textContent = text;
   }
 
-  return { changed, draw, note, bolt, avatar };
+  // Who runs in a conversation now, as a rate line names them.
+  function running(convoId) {
+    const room = rooms.get(convoId);
+    return room ? [...room.batches.values()].flatMap((b) => b.rows).filter((r) => r.state === 'running').map(member) : [];
+  }
+
+  return { changed, draw, note, bolt, avatar, running };
 }));

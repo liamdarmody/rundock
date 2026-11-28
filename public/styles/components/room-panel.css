@@ -21,6 +21,13 @@
 .room-stop:focus-visible, .room-stop-all:focus-visible, .room-file:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
 .helpers-note { flex-basis: 100%; display: flex; align-items: center; gap: 8px; margin-right: 54px; font-size: var(--caption); color: var(--text-2-strong); }
 .permission-origin > .room-bolt { width: 14px; height: 14px; }
+/* The Allow card: a line per teammate, then the rate line, in the card's text column. */
+.allow-helpers { display: flex; flex-direction: column; gap: 6px; padding-left: var(--permission-text-column); min-width: 0; }
+.allow-helper { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--caption); }
+.allow-helper > .avatar::before { content: attr(data-icon); }
+.allow-helper-name { flex-shrink: 0; font-weight: 600; color: var(--text-1); }
+.allow-helper-task { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-1); }
+.allow-rate { font-size: var(--caption); color: var(--text-2-strong); }
 @media (max-width: 480px) {
   .room-panel { margin-left: 0; }
   .room-row { grid-template-columns: minmax(0, 1fr) auto; }
