@@ -948,6 +948,8 @@ function openConversation(id, withAnchor) {
   // until the server's permission timeout expires them. (Session-history
   // loads prepend above existing content, so these cards keep their place.)
   renderPendingPermissionCards(id);
+  // The live panels of the lead's helpers, after its last message.
+  if (typeof RundockRoomPanel !== 'undefined') RundockRoomPanel.draw(id);
   showView('chat'); scrollBottom(true); renderConvoList();
 }
 

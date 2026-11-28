@@ -142,7 +142,9 @@
     }
     // Stale permission cards from the previous process are removed on every
     // new process.
-    const effects = [{ type: 'remove-permission-cards' }];
+    // The process already running keeps its cards: a helper's card stays
+    // answerable when the person writes to its lead.
+    const effects = message._processId !== state.activeProcessId ? [{ type: 'remove-permission-cards' }] : [];
     // Auto-continue: orchestrator picking up after a specialist return.
     // Silent-park turns suppress all UI, including the thinking indicator.
     if (message.autoContinue && !next.silentTurn) {
@@ -496,8 +498,18 @@
       case 'status': return reduceStatus(state, message);
       case 'compact_boundary': return reduceCompactBoundary(state, message, ctx);
       case 'delegate_stopped': return reduceDelegateStopped(state, message);
+      case 'helpers_wake': return reduceHelpersWake(state, message);
       default: return none(state);
     }
+  }
+
+  // A helper's end woke the lead for a turn of its own: it is replying again,
+  // as when the person's message starts a turn, and every card stays.
+  function reduceHelpersWake(state, message) {
+    if (state.isProcessing) return none(state);
+    const next = { ...state };
+    applyStartProcessing(next);
+    return { state: next, effects: [{ type: 'start-processing', attribution: attribution(message) }] };
   }
 
   // ── stream-inactivity watchdog ────────────────────────────────────────────

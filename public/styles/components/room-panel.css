@@ -1,0 +1,28 @@
+/* The panel under a lead's message while its teammates and helpers work, and
+   the note under the composer while only helpers work. Every colour is a
+   token whose pair is measured in test/unit/room-panel-contrast.test.js. */
+.room-panel { margin: 4px 0 12px 40px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); color: var(--text-1); font-size: var(--caption); line-height: 1.5; min-width: 0; }
+.room-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.room-title { flex: 1; min-width: 0; font-weight: 600; color: var(--text-1); }
+.room-rate, .room-notice { margin-top: 4px; color: var(--text-2-strong); }
+.room-notice[hidden], .helpers-note[hidden] { display: none; }
+.room-rows { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.room-row { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-width: 0; }
+.room-who { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 600; color: var(--text-1); }
+.room-who > .avatar::before { content: attr(data-icon); }
+.room-bolt { width: 14px; height: 14px; flex-shrink: 0; color: var(--text-2-strong); }
+.room-role { font-size: var(--label); font-weight: 400; color: var(--text-2-strong); }
+/* The task as the server cut it; CSS cuts it further, the text never changes. */
+.room-task { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-1); }
+.room-state { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--text-2-strong); }
+.room-row[data-state="running"] .room-state::before, .helpers-note::before { content: ''; width: 6px; height: 6px; flex-shrink: 0; border-radius: var(--radius-circle); background: var(--working-text); }
+.room-file { padding: 0; border: 0; background: none; font: inherit; color: var(--link-text); text-decoration: underline; cursor: pointer; }
+.room-stop, .room-stop-all { padding: 2px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: none; font: inherit; color: var(--text-2-strong); cursor: pointer; white-space: nowrap; }
+.room-stop:focus-visible, .room-stop-all:focus-visible, .room-file:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+.helpers-note { flex-basis: 100%; display: flex; align-items: center; gap: 8px; margin-right: 54px; font-size: var(--caption); color: var(--text-2-strong); }
+.permission-origin > .room-bolt { width: 14px; height: 14px; }
+@media (max-width: 480px) {
+  .room-panel { margin-left: 0; }
+  .room-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .room-task, .room-state { grid-column: 1 / -1; }
+}

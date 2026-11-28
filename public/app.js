@@ -772,6 +772,12 @@ function handle(d) {
         convoState[convoId] = r.state;
         executeEffects(convoId, r.effects);
       }
+      // A helper's end woke the lead: it is replying again.
+      if(d.subtype==='helpers_wake' && convoId) {
+        const r = RundockConversationState.reduce(getConvoState(convoId), d, {});
+        convoState[convoId] = r.state;
+        executeEffects(convoId, r.effects);
+      }
       break;
     case 'stream_event':
       if(convoId && !isStaleProcess(d, convoId)) handleStreamEvent(d, convoId);
@@ -971,6 +977,8 @@ function handle(d) {
     case 'conversation_files_kept': showFilesKeptNotice(d.text); break;
     // The answer to a message sent with files, for the composer that waits.
     case 'chat_stored': case 'chat_refused': fileSendAnswered(d); break;
+    // A lead's teammates and helpers changed: their panels and the composer's note.
+    case 'helpers_changed': if (convoId && typeof RundockRoomPanel !== 'undefined') RundockRoomPanel.changed(convoId, d); break;
   }
 }
 function getConvoState(convoId) {

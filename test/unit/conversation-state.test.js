@@ -1060,3 +1060,29 @@ test('a silent switch never starts a working indicator, even for a specialist', 
   assert.ok(loud.effects.some(e => e.type === 'start-processing'),
     'an ordinary delegation still shows the delegate as working');
 });
+
+// ── A lead's helpers: the cards a process keeps, and the wake ──────────────
+
+// Passes as it always has, by design: a new process still clears every card.
+// The sibling that shares its setup and fails before the change is "a
+// process_started for the process already running keeps every permission card".
+test('a process_started for a new process removes every permission card, as it always has', () => {
+  const r = reduce({ ...createState(), activeProcessId: 'p1' }, { type: 'system', subtype: 'process_started', _processId: 'p2' }, {});
+  assert.deepStrictEqual(types(r.effects), ['remove-permission-cards']);
+  assert.strictEqual(r.state.activeProcessId, 'p2');
+});
+
+test('a process_started for the process already running keeps every permission card', () => {
+  const r = reduce({ ...createState(), activeProcessId: 'p1', streamingRawText: 'kept' }, { type: 'system', subtype: 'process_started', _processId: 'p1' }, {});
+  assert.deepStrictEqual(types(r.effects), [], 'no card is removed');
+  assert.deepStrictEqual([r.state.activeProcessId, r.state.streamingRawText], ['p1', 'kept'], 'the process carries on');
+});
+
+test('a helpers_wake starts processing for the lead\'s next turn and removes no card', () => {
+  const msg = { type: 'system', subtype: 'helpers_wake', _conversationId: 'c1', _processId: 'p1', _agent: 'wren' };
+  const r = reduce({ ...createState(), activeProcessId: 'p1' }, msg, {});
+  assert.strictEqual(r.state.isProcessing, true, 'processing');
+  assert.deepStrictEqual(r.effects, [{ type: 'start-processing', attribution: { agentId: 'wren', processId: 'p1', timestamp: null } }]);
+  const again = reduce(r.state, msg, {});
+  assert.deepStrictEqual([again.state.isProcessing, again.effects], [true, []], 'a second wake while it replies starts nothing more');
+});

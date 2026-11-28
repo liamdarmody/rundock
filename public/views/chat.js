@@ -161,6 +161,7 @@ function startProcessing(convoId) {
     const od=document.querySelector(`[data-org-status="${statusAgentId}"]`); if(od) od.classList.add('working');
   }
   updateWorkingBadge();
+  if (typeof RundockRoomPanel !== 'undefined') RundockRoomPanel.note(convoId);
 }
 function finishProcessing(convoId) {
   const state = getConvoState(convoId);
@@ -215,6 +216,7 @@ function finishProcessing(convoId) {
     const od=document.querySelector(`[data-org-status="${statusAgentId}"]`); if(od) od.classList.remove('working');
   }
   updateWorkingBadge();
+  if (typeof RundockRoomPanel !== 'undefined') RundockRoomPanel.note(convoId);
   // Refresh file tree after a short delay to let file writes flush to disk
   setTimeout(() => {
     if(ws && ws.readyState === WebSocket.OPEN) {
@@ -254,7 +256,10 @@ function handleActiveProcesses(active) {
       state.activeAgentId = proc.agentId;
       state.delegationActive = !!proc.delegation;
     }
-    if (proc.idle) continue; // No thinking indicator for idle processes
+    // The lead's helpers, drawn again; while only they work the lead isn't
+    // replying, so Send stays.
+    if (proc.helpers && typeof RundockRoomPanel !== 'undefined') RundockRoomPanel.changed(proc.conversationId, proc);
+    if (proc.idle || proc.replying === false) continue; // No thinking indicator for idle processes
     if (!state.isProcessing) {
       if (proc.responseText) {
         state.streamingRawText = proc.responseText;
