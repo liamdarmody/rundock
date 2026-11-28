@@ -53,6 +53,8 @@ const SPAWN_ENV = { src: path.join(ROOT, 'lib', 'runtime', 'claude.js'), suite: 
 const STREAM_COUNT = { src: path.join(ROOT, 'lib', 'delegation', 'helpers.js'), suite: STREAM_SUITE };
 // The server loaded with helpers off, then turned on.
 const OFF = { src: path.join(ROOT, 'lib', 'delegation', 'helpers.js'), suite: 'test/integration/helpers-off.test.js' };
+// The lead's heartbeat, driven over a fake process.
+const HEARTBEAT = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: 'test/unit/helpers-count.test.js' };
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. The integration suite
 // starts a server and agents for every test, and a broken guard can leave
@@ -131,6 +133,9 @@ const MUTATIONS = [
     'the lead\'s result sends done while its helpers run',
     "if (!helping) safeSend(JSON.stringify({ type: 'system', subtype: 'done'",
     "safeSend(JSON.stringify({ type: 'system', subtype: 'done'"],
+  [HEARTBEAT, 'a result held for the lead\'s helpers stops its heartbeat',
+    '          if (!helping) stopClaudeTurnKeepalive(entry);\n',
+    '          stopClaudeTurnKeepalive(entry);\n'],
   [only(SERVER, 'with helpers on, a lead the person started keeps its handoff marker\'s kill waiting while its helpers run'),
     'a handoff marker\'s kill is scheduled while the lead\'s helpers run',
     '  if (helpers.holdWhileHelping(convoId, () => { if (e.pendingKill && !e.exited) scheduleScopeReturnKill(e, convoId); })) return;\n',
@@ -160,6 +165,10 @@ const MUTATIONS = [
   [only(SPAWN_ENV, 'with helpers on, every conversation spawn carries the depth limit and refuses SendMessage'),
     'a conversation spawn is given no subagent spawn depth',
     "  if (convoId && require('../delegation/helpers.js').HELPERS_ENABLED) env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH = '1';\n",
+    ''],
+  [only(STREAM_COUNT, 'with helpers on, a running helper\'s Agent call, as Claude Code sends a subagent\'s, is refused through the hook and starts nothing'),
+    'a running helper\'s own Agent call is no longer refused for coming from a helper',
+    "  if (typeof data.agent_id === 'string') return { allow: false, notice: NOTICES.fromHelper };\n",
     ''],
 ];
 
