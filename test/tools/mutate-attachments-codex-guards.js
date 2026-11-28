@@ -3,17 +3,20 @@
 // Break each rule that sending attached files to an agent on Codex depends
 // on, in turn, and report which tests notice.
 //
-// A Codex turn names an image only beside its localImage item, gives a PDF a
-// line saying Codex can't read it, and sends a short text file of the
-// message's own entry as its text, which search leaves out of the session it
-// indexes. What each session or thread is sent natively is recorded, and
+// A Codex turn names an image only beside its localImage item, and only when
+// its stored bytes are an image of its recorded type and no entry past a
+// message's limits lists it; it gives a PDF a line saying Codex can't read
+// it, and sends a short text file of the message's own entry as its text,
+// which search leaves out of a Codex session it indexes, and only of one.
+// What each session or thread is sent natively is recorded, and
 // bounds what it is sent again: a file it was sent is not sent again, the
 // budget holds at its figures exactly, an entry of the wrong shape counts as
 // spent, and what a Claude Code process was sent before it reported its
 // session is recorded under the ID it reports. A thread resumed on another
 // app-server process is sent its images again, and one resumed on the same
 // process is not. The server refuses images that would take a Codex session
-// past the budget, counted with what it was already sent, and checks every
+// past the budget, counted with what it was already sent and what messages
+// accepted before them hold until their turns record them, and checks every
 // file once the record is written. Each of those is a small rule that can be
 // deleted with attaching still looking alive in most tests, which is why
 // each is broken on purpose here and a test must go red for it.
@@ -51,6 +54,8 @@ const CODEX_TURN = { src: TURN_SRC, suite: CODEX_TURN_UNIT };
 const SENT_TURN = { src: TURN_SRC, suite: SENT_UNIT };
 // A thread resumed on the same app-server process or on another.
 const RESUME = { src: TURN_SRC, suite: CODEX_INTEGRATION };
+// A Codex turn as the stub Codex logs its turn/start.
+const LOGGED_TURN = { src: TURN_SRC, suite: CODEX_INTEGRATION };
 // The budget's two figures.
 const BUDGET = { src: path.join(ROOT, 'lib', 'attachments', 'detect.js'), suite: SENT_UNIT };
 // Search's reading of a session line.
@@ -108,6 +113,25 @@ const MUTATIONS = [
   [CODEX_TURN, 'a text file sent inline is read as Latin-1',
     "const inlineItem = (file, bytes) => ({ type: 'text', text: `[Text of attached file ${file}]\\n${bytes.toString('utf8')}` });\n",
     "const inlineItem = (file, bytes) => ({ type: 'text', text: `[Text of attached file ${file}]\\n${bytes.toString('latin1')}` });\n"],
+  [CODEX_TURN, 'other bytes recorded under an image\'s description are shown as that image',
+    "      if (images && read.state === 'present' && isImage(read.described.type) && !imageOf(read)) read = { state: 'changed', described: read.described };\n",
+    ''],
+  [CODEX_TURN, 'an image of another type recorded under an image\'s description is shown as that image',
+    "    return detectFile(read.bytes, '').type === read.described.type;\n",
+    "    return isImage(detectFile(read.bytes, '').type);\n"],
+  [CODEX_TURN, 'a line naming an image of an entry past a message\'s limits is given its item',
+    '    if (unfit.has(file)) return { line: notShown(file) };\n',
+    ''],
+  [only(LOGGED_TURN, 'a turn naming the PNG of an entry altered to list six files, its PNG still present, is sent the not-shown form and no localImage item'),
+    'a turn/start carries the item for an image of an entry past a message\'s limits',
+    '    if (unfit.has(file)) return { line: notShown(file) };\n',
+    ''],
+  [CODEX_TURN, 'a cold resume sends again an image of an entry past a message\'s limits',
+    '      if (unfit.has(file)) continue;\n',
+    ''],
+  [SEARCH, 'search leaves out a Claude Code message that begins like an inline file',
+    '    const text = userText.trim();\n',
+    "    const text = isInlineFileText(userText) ? '' : userText.trim();\n"],
 
   // ===== WHAT A SESSION WAS SENT BOUNDS WHAT IT IS SENT AGAIN =====
   [SENT_TURN, 'a file the session was sent is sent to it again',
@@ -189,6 +213,24 @@ const MUTATIONS = [
   [WRITE, 'the files are not checked once the record is written',
     "    if (!stored.every((described) => checkRecordedFile(root, id, described.file) === 'present')) {\n",
     '    if (false) {\n'],
+  [RECEIVE, 'images for a Codex agent are counted without what messages accepted before them hold',
+    '  const entry = withPending(sentEntry(record.sent, msg.sessionId), root, msg);\n',
+    '  const entry = sentEntry(record.sent, msg.sessionId);\n'],
+  [WRITE, 'a message accepted for a Codex agent holds none of its images',
+    '    if (admitted) admitted(entry);\n',
+    ''],
+  [only(OPENED, 'once each message\'s send is recorded its images count from the record alone, so a thread at 17 is sent three more one at a time'),
+    'a recorded send leaves its message\'s images held',
+    "    // Recorded, so the message's images now count from the record alone.\n    releasePendingImages(entry.attachmentEntry);\n",
+    ''],
+  [only(OPENED, 'a one-image message whose turn fails to start leaves nothing counted, so the next one for a thread at 19 is stored'),
+    'a turn that fails to start leaves its message\'s images held',
+    "  // The message's images were never sent, so they no longer count as held.\n  releasePendingImages(entry.attachmentEntry);\n",
+    ''],
+  [only(OPENED, 'a one-image message whose turn a newer message takes over before it starts leaves nothing counted, so the next one for a thread at 19 is stored'),
+    'a turn a newer message takes over before it starts leaves its message\'s images held',
+    '    if (!opened) {\n      releasePendingImages(entry.attachmentEntry);\n      return;\n    }\n',
+    '    if (!opened) return;\n'],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
