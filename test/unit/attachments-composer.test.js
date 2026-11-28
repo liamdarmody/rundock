@@ -33,6 +33,7 @@ function between(src, from, to, label, through = false) {
 
 const COMPOSER = path.join(ROOT, 'public', 'views', 'composer.js');
 const SNIFF = path.join(ROOT, 'public', 'attachment-sniff.js');
+const SCALE = path.join(ROOT, 'public', 'attachment-scale.js');
 const INDEX = read('public', 'index.html');
 const CONVERSATIONS = read('public', 'views', 'conversations.js');
 const APP = read('public', 'app.js');
@@ -60,6 +61,7 @@ function page({ agentId = 'lead', activeAgentId = null } = {}) {
     function makeConvo(id, agentId) { return { id, agentId, agent: agents.find(a => a.id === agentId), title: id, status: 'active', messages: [] }; }`);
   w.eval(read('public', 'attachment-wording.js'));
   if (fs.existsSync(SNIFF)) w.eval(fs.readFileSync(SNIFF, 'utf-8'));
+  if (fs.existsSync(SCALE)) w.eval(fs.readFileSync(SCALE, 'utf-8'));
   w.eval(fs.readFileSync(COMPOSER, 'utf-8'));
   // The last pick's add, for `pick` to wait on.
   let lastAdd = Promise.resolve();

@@ -18,6 +18,8 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { JSDOM } = require('jsdom');
 const { typed, png, ftyp, pdf, ascii } = require('../helpers/attachment-bytes.js');
+const { jpeg, gifOf, webpLossy } = require('../helpers/attachment-bytes.js');
+const { detectFile } = require('../../lib/attachments/detect.js');
 const { makeTempDir } = require('../helpers/workspace.js');
 const config = require('../../lib/config.js');
 const { receiveAttachments, createReceiver, whenReceived } = require('../../lib/attachments/receive.js');
@@ -25,6 +27,7 @@ const { receiveAttachments, createReceiver, whenReceived } = require('../../lib/
 const ROOT = path.join(__dirname, '..', '..');
 const read = (...parts) => fs.readFileSync(path.join(ROOT, ...parts), 'utf-8');
 const SNIFF = path.join(ROOT, 'public', 'attachment-sniff.js');
+const SCALE = path.join(ROOT, 'public', 'attachment-scale.js');
 
 // A stretch of shipped source from one anchor to another, the second
 // included when `through` is set.
@@ -73,6 +76,7 @@ function page({ agentId = 'lead' } = {}) {
   for (const lib of ['markers.js', 'chat-markup.js', 'conversation-state.js', 'conversation-list.js', 'attachment-wording.js']) w.eval(read('public', lib));
   // Guarded, so a tree without the detector fails on needs() below.
   if (fs.existsSync(SNIFF)) w.eval(fs.readFileSync(SNIFF, 'utf-8'));
+  if (fs.existsSync(SCALE)) w.eval(fs.readFileSync(SCALE, 'utf-8'));
   for (const v of ['chat.js', 'conversations.js', 'composer.js']) w.eval(read('public', 'views', v));
   // The last pick's add, for `pick` to wait on.
   let lastAdd = Promise.resolve();
@@ -1475,5 +1479,328 @@ describe('a file\'s name is shown as text', () => {
     const twin = page({ agentId: 'coder' });
     await pick(twin, twin.file('plain.png', pdf()));
     shownAsText(p, twin);
+  });
+});
+
+// ===== A LARGE IMAGE IS SCALED BEFORE IT IS SENT =====
+//
+// jsdom has no canvas, so each test that reaches the window's codec puts a
+// stand-in in its place on the window's module, as the composer reads it at
+// each add.
+
+// What the base lacks, asserted before a test relies on it: the scaling
+// module, and the window loading it.
+function needsScale(p) {
+  needs(p);
+  let scale = null;
+  try { scale = require(SCALE); } catch (e) {
+    if (!(e && e.code === 'MODULE_NOT_FOUND')) throw e;
+  }
+  assert.ok(scale && typeof scale.animated === 'function' && typeof scale.prepareImage === 'function' && scale.codec,
+    'public/attachment-scale.js loads and exports animated, prepareImage and codec');
+  assert.ok(p.w.RundockAttachmentScale, 'the window loads public/attachment-scale.js');
+}
+
+const PNG_TYPE = 'image/png';
+const JPEG_TYPE = 'image/jpeg';
+
+// A stand-in for the window's codec. Decoding answers `width` by `height`,
+// opaque unless `opaque` is false, or rejects when `rejects` is set. An
+// encode answers a Blob of the size `sizes` gives it, a JPEG by its quality
+// and a PNG by its longest edge, starting with a header of its type, width
+// and height. Returns the calls, in order.
+function fakeCodec(p, { width, height, opaque = true, rejects = false, sizes = {} }) {
+  const calls = [];
+  p.w.RundockAttachmentScale.codec = {
+    decode(file) {
+      calls.push(['decode', file.name]);
+      return rejects ? Promise.reject(new Error('not an image')) : Promise.resolve({ source: {}, width, height, opaque });
+    },
+    encode(source, w, h, type, quality) {
+      calls.push(['encode', w, h, type, quality]);
+      const bytes = new Uint8Array(type === JPEG_TYPE ? sizes[quality] : sizes[Math.max(w, h)]);
+      bytes.set(type === JPEG_TYPE ? jpeg(w, h) : png(w, h));
+      return Promise.resolve(new p.w.Blob([bytes], { type }));
+    },
+  };
+  return calls;
+}
+
+// An image of `size` bytes whose header is `header`.
+function imageFile(p, name, header, size = header.length) {
+  const bytes = new Uint8Array(Math.max(size, header.length));
+  bytes.set(header);
+  return new p.w.File([bytes], name);
+}
+
+// A chip's name and second line, and the icon leading that line, if any.
+function chipLine(p, index = 0) {
+  const chip = p.doc.querySelectorAll('#composer-chips .composer-chip')[index];
+  const meta = chip.querySelector('.composer-chip-meta');
+  const icon = meta.firstElementChild;
+  const style = icon ? p.w.getComputedStyle(icon) : null;
+  return {
+    name: chip.querySelector('.composer-chip-name').textContent,
+    meta: meta.textContent,
+    icon: icon && { tag: icon.tagName.toLowerCase(), hidden: icon.getAttribute('aria-hidden'), size: [style.width, style.height] },
+  };
+}
+const ICON = { tag: 'svg', hidden: 'true', size: ['11px', '11px'] };
+
+// The files of the first chat frame sent, each as its name and bytes.
+async function sentFiles(p, text = 'see this') {
+  type(p, text);
+  pressEnter(p);
+  const frames = () => Array.from(p.w.ws.sent).filter((raw) => raw.startsWith('{"type":"chat"'));
+  await until(() => frames().length === 1, 'the chat frame');
+  const frame = JSON.parse(frames()[0]);
+  return { frame, files: (frame.attachments || []).map((a) => ({ name: a.name, bytes: Buffer.from(a.data, 'base64') })) };
+}
+
+const STILL_OVER = (bytes) => `This image is still ${bytes} after scaling; the limit is 3.5 MB per image`;
+
+describe('a large image is scaled before it is sent', () => {
+  test('public/index.html loads attachment-scale.js after attachment-sniff.js and before composer.js', () => {
+    const srcs = [...new JSDOM(INDEX).window.document.querySelectorAll('script[src]')].map((el) => el.getAttribute('src'));
+    const at = (src) => srcs.indexOf(src);
+    assert.ok(at('/attachment-scale.js') !== -1, 'index.html loads /attachment-scale.js');
+    assert.ok(at('/attachment-sniff.js') < at('/attachment-scale.js') && at('/attachment-scale.js') < at('/views/composer.js'),
+      `the order is ${JSON.stringify(srcs.filter((s) => /attachment|composer/.test(s)))}`);
+  });
+
+  test('the second line of an image scaled to 2,576 px reads "Scaled to 2,576 px" after its icon', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { width: 4000, height: 3000, sizes: { 2576: 2000000 } });
+    await pick(p, imageFile(p, 'shot.png', png(4000, 3000), 3000000));
+    assert.deepStrictEqual(chipLine(p), { name: 'shot.png', meta: 'Scaled to 2,576 px', icon: ICON });
+  });
+
+  test('the file the composer holds and sends is the scaled one, under the name it came with', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { width: 4000, height: 3000, sizes: { 2576: 2000000 } });
+    await pick(p, imageFile(p, 'shot.png', png(4000, 3000), 3000000));
+    const { files } = await sentFiles(p);
+    assert.deepStrictEqual(files.map((f) => [f.name, f.bytes.length]), [['shot.png', 2000000]]);
+    assert.deepStrictEqual(detectFile(files[0].bytes, 'shot.png'), { type: 'png', width: 2576, height: 1932 });
+  });
+
+  test('"Screenshot 2026-11-24 at 09.12.40.png" re-encoded to 2,900,000 bytes shows that name over "JPEG · 2.9 MB"', async () => {
+    const p = page();
+    needsScale(p);
+    const name = 'Screenshot 2026-11-24 at 09.12.40.png';
+    fakeCodec(p, { width: 2000, height: 1000, sizes: { 0.9: 2900000 } });
+    await pick(p, imageFile(p, name, png(2000, 1000), 3600000));
+    assert.deepStrictEqual(chipLine(p), { name, meta: 'JPEG · 2.9 MB', icon: null });
+    assert.deepStrictEqual(p.notices(), []);
+  });
+
+  test('the second line of an image with see-through pixels stepped to 1,568 px reads "Scaled to 1,568 px"', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { width: 4000, height: 3000, opaque: false, sizes: { 2576: 5000000, 2048: 3600000, 1568: 2100000 } });
+    await pick(p, imageFile(p, 'diagram.png', png(4000, 3000), 9000000));
+    assert.deepStrictEqual(chipLine(p), { name: 'diagram.png', meta: 'Scaled to 1,568 px', icon: ICON });
+  });
+});
+
+describe('an image that still can\'t fit, or can\'t be decoded, is refused on its own', () => {
+  const overAt = { 0.9: 5000000, 0.8: 4600000, 0.7: 4300000, 0.6: 4100000 };
+
+  test('an image still over after its steps gets its own message, titled with its name', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { width: 2000, height: 1000, sizes: overAt });
+    await pick(p, imageFile(p, 'big.png', png(2000, 1000), 3600000));
+    assert.deepStrictEqual(p.chips(), []);
+    assert.deepStrictEqual(p.notices(), [{ title: 'big.png', text: STILL_OVER('4.1 MB') }]);
+  });
+
+  test('an image the window can\'t decode is refused as unsupported', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { rejects: true });
+    await pick(p, imageFile(p, 'broken.png', png(4000, 3000), 1000));
+    assert.deepStrictEqual(p.chips(), []);
+    assert.deepStrictEqual(p.notices(), [{ title: 'broken.png', text: UNSUPPORTED }]);
+  });
+
+  test('an add of an image refused after its steps and a PDF adds the PDF', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { width: 2000, height: 1000, sizes: overAt });
+    await pick(p, imageFile(p, 'big.png', png(2000, 1000), 3600000), p.file('report.pdf'));
+    assert.deepStrictEqual(p.chips(), ['report.pdf']);
+    assert.deepStrictEqual(p.notices(), [{ title: 'big.png', text: STILL_OVER('4.1 MB') }]);
+  });
+});
+
+describe('the total for a message counts each image at the size it is sent', () => {
+  test('an add of three 9,000,000-byte images at 4,000 px, each scaled to 3,000,000 bytes, adds all three', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { width: 4000, height: 3000, sizes: { 2576: 3000000 } });
+    await pick(p, ...['a.png', 'b.png', 'c.png'].map((n) => imageFile(p, n, png(4000, 3000), 9000000)));
+    assert.deepStrictEqual(p.chips(), ['a.png', 'b.png', 'c.png']);
+    assert.deepStrictEqual(p.notices(), []);
+  });
+
+  test('18,000,000 bytes held and an add of one image scaled to 3,000,000 bytes is refused with "That would make 21 MB; the limit is 20 MB per message"', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { width: 4000, height: 3000, sizes: { 2576: 3000000 } });
+    await pick(p, p.file('a.pdf', 9000000), p.file('b.pdf', 9000000));
+    await pick(p, imageFile(p, 'shot.png', png(4000, 3000), 9000000));
+    assert.deepStrictEqual(p.chips(), ['a.pdf', 'b.pdf']);
+    assert.deepStrictEqual(p.notices(), [{ title: 'shot.png', text: 'That would make 21 MB; the limit is 20 MB per message' }]);
+  });
+});
+
+describe('an animated image is marked "First frame only"', () => {
+  test('an animated GIF at or under both limits reads "First frame only" and is stored as it came', async () => {
+    const p = page();
+    needsScale(p);
+    const calls = fakeCodec(p, { width: 1, height: 1 });
+    const bytes = Uint8Array.from(gifOf(2));
+    await pick(p, new p.w.File([bytes], 'signup-flow.gif'));
+    assert.deepStrictEqual(chipLine(p), { name: 'signup-flow.gif', meta: 'First frame only', icon: ICON });
+    assert.deepStrictEqual(calls, [], 'never decoded');
+    const { files } = await sentFiles(p);
+    assert.ok(files[0].bytes.equals(Buffer.from(bytes)), 'the bytes sent are the bytes added');
+  });
+
+  test('an animated GIF over 2,576 px reads "First frame only", not "Scaled to"', async () => {
+    const p = page();
+    needsScale(p);
+    const calls = fakeCodec(p, { width: 4000, height: 3000, sizes: { 2576: 1000000 } });
+    await pick(p, new p.w.File([Uint8Array.from(gifOf(2, { width: 4000, height: 3000 }))], 'signup-flow.gif'));
+    assert.deepStrictEqual(calls.map(([what]) => what), ['decode', 'encode'], 'scaled from its first frame');
+    assert.deepStrictEqual(chipLine(p), { name: 'signup-flow.gif', meta: 'First frame only', icon: ICON });
+  });
+
+  // As on the base, so it needs nothing the base lacks.
+  test('a still GIF reads its type and size', async () => {
+    const p = page();
+    await pick(p, new p.w.File([Uint8Array.from(gifOf(1))], 'logo.gif'));
+    assert.deepStrictEqual(chipLine(p), { name: 'logo.gif', meta: 'GIF · 1 KB', icon: null });
+  });
+});
+
+describe('the sequences of adding an image', () => {
+  // As on the base, so it needs nothing the base lacks.
+  test('an image at or under both limits is stored with its bytes unchanged and shows its type and size', async () => {
+    const p = page();
+    const bytes = new Uint8Array(820000);
+    bytes.set(png(2576, 1610));
+    await pick(p, new p.w.File([bytes], 'diagram.png'));
+    assert.deepStrictEqual(chipLine(p), { name: 'diagram.png', meta: 'PNG · 820 KB', icon: null });
+    const { files } = await sentFiles(p);
+    assert.ok(files[0].bytes.equals(Buffer.from(bytes)), 'the bytes sent are the bytes added');
+  });
+
+  // As on the base, so it needs nothing the base lacks.
+  test('a still PNG, JPEG, GIF and WebP are not marked, each showing its type and size', async () => {
+    const p = page();
+    const still = [['a.png', png(800, 600)], ['b.jpg', jpeg(800, 600)], ['c.gif', gifOf(1)], ['d.webp', webpLossy(800, 600)]];
+    await pick(p, ...still.map(([name, header]) => imageFile(p, name, header, 2000)));
+    assert.deepStrictEqual([0, 1, 2, 3].map((i) => chipLine(p, i).meta), ['PNG · 2 KB', 'JPEG · 2 KB', 'GIF · 2 KB', 'WebP · 2 KB']);
+    assert.ok([0, 1, 2, 3].every((i) => chipLine(p, i).icon === null), 'no line leads with an icon');
+  });
+
+  test('an image that fits after a step is added, not refused', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { width: 2000, height: 1000, sizes: { 0.9: 3600000, 0.8: 3400000 } });
+    await pick(p, imageFile(p, 'photo.png', png(2000, 1000), 3600000));
+    fakeCodec(p, { width: 2000, height: 1000, opaque: false, sizes: { 1568: 3400000 } });
+    await pick(p, imageFile(p, 'diagram.png', png(2000, 1000), 3600000));
+    assert.deepStrictEqual(p.chips(), ['photo.png', 'diagram.png']);
+    assert.deepStrictEqual(p.notices(), []);
+    assert.deepStrictEqual([chipLine(p, 0).meta, chipLine(p, 1).meta], ['JPEG · 3.4 MB', 'Scaled to 1,568 px']);
+  });
+
+  test('the same image added again is scaled to the same edge and stepped to the same quality, so its second line reads the same', async () => {
+    const p = page();
+    needsScale(p);
+    const calls = fakeCodec(p, { width: 4000, height: 3000, sizes: { 2576: 3600000, 0.9: 3600000, 0.8: 3000000 } });
+    const file = imageFile(p, 'shot.png', png(4000, 3000), 9000000);
+    await pick(p, file);
+    const first = calls.splice(0);
+    await pick(p, file);
+    assert.deepStrictEqual(calls, first, 'the same steps');
+    assert.deepStrictEqual(chipLine(p, 1), chipLine(p, 0));
+    assert.deepStrictEqual(chipLine(p, 1).meta, 'Scaled to 2,576 px');
+  });
+
+  test('an image refused after its steps is refused again with the same size', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { width: 2000, height: 1000, sizes: { 0.9: 5000000, 0.8: 4600000, 0.7: 4300000, 0.6: 4100000 } });
+    const file = imageFile(p, 'big.png', png(2000, 1000), 3600000);
+    await pick(p, file);
+    await pick(p, file);
+    const refused = { title: 'big.png', text: STILL_OVER('4.1 MB') };
+    assert.deepStrictEqual(p.notices(), [refused, refused]);
+    assert.deepStrictEqual(p.chips(), []);
+  });
+
+  test('a 5K screen capture pasted and sent with Enter is stored at 2,576 px and at or under 3,500,000 bytes', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { width: 5120, height: 2880, sizes: { 2576: 3200000 } });
+    const capture = imageFile(p, 'image.png', png(5120, 2880), 9000000);
+    paste(p, [capture]);
+    await until(() => p.chips().length === 1, 'the pasted capture');
+    const { frame, files } = await sentFiles(p, 'what is wrong here?');
+    assert.ok(files[0].bytes.length <= 3500000, `the page sends ${files[0].bytes.length} bytes`);
+    const workspace = fs.realpathSync(makeTempDir('attach-add-'));
+    const { entry } = await receiveAttachments(workspace, frame);
+    assert.deepStrictEqual(entry.files.map((f) => [f.file, f.type]), [['1-Pasted_image.png', 'png']]);
+    const stored = fs.readFileSync(path.join(workspace, '.rundock', 'attachments', 'c1', '1-Pasted_image.png'));
+    const { width, height } = detectFile(stored, 'Pasted image');
+    assert.strictEqual(Math.max(width, height), 2576);
+    assert.ok(stored.length <= 3500000, `${stored.length} bytes stored`);
+  });
+
+  test('with the page\'s scaling made to pass an image through, the server refuses it on Send and the text and files stay', async () => {
+    const p = page();
+    needsScale(p);
+    // The window's scaling swapped whole for one that sends every image as
+    // it came, as scaling gone wrong would; the composer reads it at each add.
+    const scale = p.w.RundockAttachmentScale;
+    p.w.RundockAttachmentScale = { ...scale, prepareImage: (file) => Promise.resolve({ file, scaledTo: null, refusal: null }) };
+    await pick(p, imageFile(p, 'big.png', png(2000, 1000), 4000000));
+    assert.deepStrictEqual([p.chips(), p.notices()], [['big.png'], []], 'the page let the image through');
+    const { frame } = await sentFiles(p);
+    const workspace = fs.realpathSync(makeTempDir('attach-add-'));
+    const sock = new EventEmitter();
+    Object.assign(sock, { readyState: 1, sent: [], back: [] });
+    sock.send = (raw) => sock.sent.push(JSON.parse(raw));
+    sock.on('message', (raw) => sock.back.push(raw));
+    const was = config.getWorkspace();
+    config.setWorkspace(workspace);
+    try {
+      createReceiver({ clients: new Set([sock]), findAgent: () => ({ runtime: 'claude' }) }).takes(frame, sock, true);
+      await whenReceived('c1');
+    } finally {
+      config.setWorkspace(was);
+    }
+    assert.deepStrictEqual(sock.sent.map((m) => [m.type, m.code]), [['chat_refused', 'image-bytes']]);
+    assert.deepStrictEqual(sock.back, [], 'nothing went on to the agent');
+    assert.strictEqual(fs.existsSync(path.join(workspace, '.rundock', 'attachments')), false, 'nothing was written');
+    p.w.fileSendAnswered(sock.sent[0]);
+    assert.deepStrictEqual(p.notices(), [{ title: 'big.png', text: STILL_OVER('4 MB') }]);
+    assert.deepStrictEqual([p.chips(), p.$('msg-input').value], [['big.png'], 'see this'], 'the image and the text stay');
+  });
+
+  test('an image the window can\'t decode is refused as unsupported and never sent', async () => {
+    const p = page();
+    needsScale(p);
+    fakeCodec(p, { rejects: true });
+    await pick(p, imageFile(p, 'broken.png', png(4000, 3000), 1000), p.file('notes.txt'));
+    assert.deepStrictEqual(p.notices(), [{ title: 'broken.png', text: UNSUPPORTED }]);
+    const { files } = await sentFiles(p);
+    assert.deepStrictEqual(files.map((f) => f.name), ['notes.txt']);
   });
 });

@@ -18,14 +18,20 @@
 // that would pass 5 files or 20,000,000 bytes whole. The server checks every
 // file again before it stores one.
 //
+// AN IMAGE IS SENT AS THE MODEL READS IT. Each image added is fitted to the
+// limits as it is added (attachment-scale.js): a large one is scaled down or
+// re-encoded, one that still can't fit is refused, and the composer holds and
+// sends the fitted file. Its chip's second line says when it was scaled, or
+// that an animated image is seen as its first frame only.
+//
 // A FILE NAME IS TEXT. It reaches the page only through textContent and
 // setAttribute, never through markup.
 //
 // Shared state reached through the global lexical environment at call time:
 // agents, conversations, activeConversation, getConvoState, ws, addUserMsg,
 // startProcessing, persistConversation, renderConvoList, plus the
-// classic-script globals RundockAttachmentWording, RundockAttachmentSniff and
-// RundockConversationState.
+// classic-script globals RundockAttachmentWording, RundockAttachmentSniff,
+// RundockAttachmentScale and RundockConversationState.
 (/** @param {any} root @param {() => object} factory */ function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else {
@@ -63,6 +69,10 @@ function attachmentWording() {
 
 function attachmentSniff() {
   return typeof RundockAttachmentSniff !== 'undefined' ? RundockAttachmentSniff : require('../attachment-sniff.js');
+}
+
+function attachmentScale() {
+  return typeof RundockAttachmentScale !== 'undefined' ? RundockAttachmentScale : require('../attachment-scale.js');
 }
 
 // Drawn for the conversation setupChat opens: its chips, its inline message
@@ -137,6 +147,7 @@ function chipFor(composer, file, index) {
   const meta = document.createElement('span');
   meta.className = 'composer-chip-meta';
   meta.textContent = `${CHIP_TYPES.get((kinds.get(file) || {}).type) || 'File'} · ${attachmentWording().formatSize(file.size)}`;
+  markImage(meta, kinds.get(file));
   text.append(name, meta);
   const remove = document.createElement('button');
   remove.type = 'button';
@@ -347,6 +358,8 @@ function composersWorkspaceChanged() {
 //      whole add before any file is read.
 //   2. Each file's bytes are read and checked on its own (checkFile), and a
 //      pasted image is named "Pasted image", then "Pasted image 2" and on.
+//      Each image is fitted to the limits, one at a time (fitImage), and the
+//      steps after this take it as it will be sent.
 //   3. Each refused file gets its own message.
 //   4. The total: bytes held plus the passing files' bytes over
 //      LIMITS.messageBytes refuses every passing file, with one message.
@@ -391,6 +404,11 @@ async function addInTurn(convoId, composer, added, source) {
     (buffer) => checkFile(new Uint8Array(buffer), file.name),
     () => ({ code: 'unsupported', name: file.name }))));
   if (!live()) return;
+  // Each file and its answer replaced by the file to send and what it is.
+  for (let i = 0; i < added.length; i++) {
+    ({ file: added[i], kind: checked[i] } = await fitImage(added[i], checked[i]));
+    if (!live()) return;
+  }
   const own = [];
   const passed = [];
   added.forEach((file, i) => {
@@ -428,6 +446,25 @@ function pastedImage(file, held) {
   return new File([file], highest ? `Pasted image ${highest + 1}` : 'Pasted image', { type: file.type });
 }
 
+// The type an image re-encoded on the page is stored as.
+const ENCODED_TYPES = new Map([['image/png', 'png'], ['image/jpeg', 'jpg']]);
+
+// A file and its answer, as the add will take them: an image fitted to the
+// limits (prepareImage), its answer then carrying the type it is sent as, the
+// edge it was scaled to and whether it is animated, read from the bytes it
+// came with; or the refusal saying why it can't be sent. Any other file, and a
+// file already refused, as they came.
+async function fitImage(file, kind) {
+  if (kind.code || !kind.width) return { file, kind };
+  const scale = attachmentScale();
+  const bytes = await file.arrayBuffer().then((buffer) => new Uint8Array(buffer), () => null);
+  if (!bytes) return { file, kind: { code: 'unsupported', name: file.name } };
+  const fit = await scale.prepareImage(file, kind, scale.codec);
+  if (fit.refusal) return { file, kind: fit.refusal };
+  const type = fit.file === file ? kind.type : ENCODED_TYPES.get(fit.file.type);
+  return { file: fit.file, kind: { ...kind, type, scaledTo: fit.scaledTo, animated: scale.animated(bytes, kind.type) } };
+}
+
 // ===== PASTE =====
 //
 // A paste into the field adds the files on the clipboard. Its default is
@@ -456,6 +493,10 @@ const ICON_IMAGE = [['rect', { width: '18', height: '18', x: '3', y: '3', rx: '2
   ['path', { d: 'm21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21' }]];
 const ICON_LINES = ICON_FILE.concat([['path', { d: 'M10 9H8' }], ['path', { d: 'M16 13H8' }], ['path', { d: 'M16 17H8' }]]);
 const ICON_TABLE = ICON_FILE.concat([['path', { d: 'M8 13h2' }], ['path', { d: 'M14 13h2' }], ['path', { d: 'M8 17h2' }], ['path', { d: 'M14 17h2' }]]);
+const ICON_SCALED = [['polyline', { points: '4 14 10 14 10 20' }], ['polyline', { points: '20 10 14 10 14 4' }],
+  ['line', { x1: '14', x2: '21', y1: '10', y2: '3' }], ['line', { x1: '3', x2: '10', y1: '21', y2: '14' }]];
+const ICON_FRAME = [['line', { x1: '22', x2: '2', y1: '6', y2: '6' }], ['line', { x1: '22', x2: '2', y1: '18', y2: '18' }],
+  ['line', { x1: '6', x2: '6', y1: '2', y2: '22' }], ['line', { x1: '18', x2: '18', y1: '2', y2: '22' }]];
 
 // A 24 by 24 icon stroked in the text's color, each shape a tag and its
 // attributes.
@@ -481,6 +522,22 @@ function tileFor(kind) {
   const { type, width } = kind || {};
   tile.appendChild(iconOf(width ? ICON_IMAGE : type === 'csv' ? ICON_TABLE : ICON_LINES, '1.8'));
   return tile;
+}
+
+// An image's second line, when it says more than the type and size: "First
+// frame only" for an animated image, since the agent sees its first frame,
+// ahead of "Scaled to <n> px" for one the page scaled, each after its icon.
+function markImage(meta, kind) {
+  const { animated, scaledTo } = kind || {};
+  const mark = animated ? [ICON_FRAME, 'First frame only'] : scaledTo ? [ICON_SCALED, `Scaled to ${grouped(scaledTo)} px`] : null;
+  if (!mark) return;
+  meta.classList.add('state');
+  meta.replaceChildren(iconOf(mark[0], '1.8'), mark[1]);
+}
+
+// A whole number with its thousands marked by commas, as "2,576".
+function grouped(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 // ===== DROP =====

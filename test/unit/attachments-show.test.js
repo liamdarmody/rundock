@@ -86,6 +86,7 @@ function page() {
   // The new modules load only where they exist, so a tree without them
   // builds the page as it ships and fails on the assertions below.
   for (const lib of ['attachment-lines.js', 'sent-files.js', 'attachment-sniff.js']) if (exists('public', lib)) libs.push(lib);
+  if (exists('public', 'attachment-scale.js')) libs.push('attachment-scale.js');
   for (const lib of libs) w.eval(read('public', lib));
   for (const view of ['chat.js', 'conversations.js', 'composer.js']) w.eval(read('public', 'views', view));
   w.renderPendingPermissionCards = () => {};
