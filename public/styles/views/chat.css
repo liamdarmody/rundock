@@ -332,3 +332,36 @@ body.light .stopped-detail { background: var(--elevated); }
 .composer-notice:not(:empty) { margin-top: 8px; display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--attention) 40%, transparent); border-radius: var(--radius-lg); font-size: var(--caption); color: var(--text-2); line-height: 1.55; }
 .composer-notice-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .composer-notice-title { display: block; color: var(--text-1); font-weight: 600; }
+
+/* A sent message's files, above its text: a thumbnail for an image, a chip
+   for a document, and a dashed chip for a file that isn't there as it was
+   sent. Only the thumbnail and a PDF's chip open anything. */
+.msg-files { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.msg-files:last-child { margin-bottom: 0; }
+.msg-thumb { display: block; padding: 0; border-radius: var(--radius-lg); overflow: hidden; border: 1px solid var(--border); background: var(--card); cursor: zoom-in; }
+.msg-thumb img { display: block; }
+.msg-files .att-chip { position: relative; display: flex; align-items: center; gap: 8px; height: 52px; box-sizing: border-box; max-width: min(232px, 100%); min-width: 0; padding: 5px 12px 5px 5px; background: var(--card); border: 1px solid transparent; border-radius: var(--radius-lg); text-align: left; cursor: pointer; white-space: normal; }
+.msg-thumb:focus-visible, .msg-files .att-chip:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+.msg-files .att-tile { width: 40px; height: 40px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-md); background: var(--elevated); color: var(--text-2-strong); }
+.msg-files .att-tile .ic { width: 18px; height: 18px; }
+.msg-files .att-txt { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.msg-files .att-name { font-size: var(--caption); font-weight: 500; line-height: 1.35; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-files .att-meta { font-size: var(--label); line-height: 1.35; color: var(--text-2-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-files .att-chip.plain { cursor: default; }
+.msg-files .att-chip.gone { background: var(--elevated); border: 1px dashed var(--text-1); cursor: default; }
+/* A gone chip is all --text-1, so it still reads at the history's 60%. */
+.msg-files .att-chip.gone .att-tile { background: transparent; }
+.msg-files .att-chip.gone .att-name, .msg-files .att-chip.gone .att-meta, .msg-files .att-chip.gone .att-tile { color: var(--text-1); }
+/* A sent image or PDF open over the conversation, on the palette's scrim
+   (.palette-overlay), inset from the window's edges. */
+.sent-file { position: absolute; inset: 20px; display: flex; flex-direction: column; overflow: hidden; background: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius-xl); }
+.sent-file-head { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--border); }
+.sent-file-title { flex: 1; min-width: 0; }
+.sent-file-name { font-size: var(--caption); font-weight: 600; line-height: 1.35; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sent-file-line { font-size: var(--label); line-height: 1.35; color: var(--text-2-strong); }
+.sent-file-close { width: 28px; height: 28px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-md); color: var(--text-2-strong); }
+.sent-file-close:hover { color: var(--text-1); background: var(--card); }
+.sent-file-close:focus-visible { outline: 2px solid var(--accent-control); outline-offset: 2px; }
+.sent-file-close .ic { width: 16px; height: 16px; }
+.sent-file-body { flex: 1; min-height: 0; }
+.sent-file-body.pdf { background: var(--card); }

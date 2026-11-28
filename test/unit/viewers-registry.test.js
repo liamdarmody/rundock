@@ -192,6 +192,18 @@ describe('viewer mounts', () => {
     assert.equal(el.querySelector('img'), null);
   });
 
+  test('image viewer: an alt it is given is the image\'s alt', () => {
+    const el = pane();
+    mountImageViewer({ paneElement: el, path: '.rundock/attachments/1764000000000/1-diagram.png', alt: 'diagram.png' });
+    assert.equal(el.querySelector('img').getAttribute('alt'), 'diagram.png');
+  });
+
+  test('image viewer: with no alt, the image\'s alt is its path', () => {
+    const el = pane();
+    mountImageViewer({ paneElement: el, path: 'shots/final render.png' });
+    assert.equal(el.querySelector('img').getAttribute('alt'), 'shots/final render.png');
+  });
+
   test('pdf viewer: iframe src over the binary endpoint, no srcdoc', () => {
     const el = pane();
     const handle = mountPdfViewer({ paneElement: el, path: 'docs/report.pdf' });
