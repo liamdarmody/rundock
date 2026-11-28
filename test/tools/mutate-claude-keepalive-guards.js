@@ -82,8 +82,8 @@ const MUTATIONS = [
     ''],
   // ===== IT STOPS =====
   [ENGINE, 'the result stops it',
-    '          entry.lastTurnOutcome = parsed.is_error ? \'error\' : \'success\';\n          stopClaudeTurnKeepalive(entry);\n',
-    '          entry.lastTurnOutcome = parsed.is_error ? \'error\' : \'success\';\n'],
+    '          if (!helping) stopClaudeTurnKeepalive(entry);\n',
+    ''],
   // A process replaced in its entry no longer speaks for it: a late result
   // from it would park its successor's turn and so silence its heartbeat.
   [ENGINE, 'a replaced process\'s output never reaches its entry',
