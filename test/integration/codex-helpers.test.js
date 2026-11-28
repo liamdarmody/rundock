@@ -246,7 +246,8 @@ test('a Codex routine that starts a helper shows no rows, and the helper\'s appr
   assert.deepStrictEqual(client.messages.slice(since).filter((m) => m.type === 'helpers_changed' || m.type === 'control_request'), [], 'no rows and no card');
 });
 
-test('rows work the same on codex-cli 0.144.3 and 0.156.1', async () => {
+test('rows work the same on codex-cli 0.144.3 and 0.156.1, and 0.156.1 still warns that it is outside the tested range', async () => {
+  const RANGE_WARNING = '[CodexAppServer] codex-cli 0.156.1 is outside the tested range (>=0.144 <0.146); the app-server protocol may have drifted';
   for (const version of ['0.156.1', '0.144.3']) {
     const convo = open('cxver');
     h.writeCodexScenario([{
@@ -254,13 +255,28 @@ test('rows work the same on codex-cli 0.144.3 and 0.156.1', async () => {
       helpers: [{ nickname: 'rates' }],
     }], { version });
     glue().shutdownCodexAppServer();
-    const since = say(convo, `VERSION-ONE on ${version}`);
-    await rowsWhere(convo, since, (rows) => stateOf(rows, 'rates') === 'completed', `the rates row on ${version}`);
-    assert.strictEqual((await glue().getCodexAppServer()).version(), version, `the app-server reported ${version}`);
-    await turnDone(convo, since);
+    // Every warning while the app-server starts on this version.
+    const warned = [];
+    const warn = console.warn;
+    console.warn = (...args) => { warned.push(args.map(String).join(' ')); warn.apply(console, args); };
+    try {
+      const since = say(convo, `VERSION-ONE on ${version}`);
+      await rowsWhere(convo, since, (rows) => stateOf(rows, 'rates') === 'completed', `the rates row on ${version}`);
+      assert.strictEqual((await glue().getCodexAppServer()).version(), version, `the app-server reported ${version}`);
+      await turnDone(convo, since);
+    } finally {
+      console.warn = warn;
+    }
+    const ranged = warned.filter((line) => line.includes('tested range'));
+    if (version === '0.156.1') assert.deepStrictEqual(ranged, [RANGE_WARNING], 'the warning, word for word, as today');
+    else assert.deepStrictEqual(ranged, [], '0.144.3 is in the tested range: no warning');
   }
 });
 
+// By design this passes before helpers existed too. Its sibling, "rows work
+// the same on codex-cli 0.144.3 and 0.156.1, and 0.156.1 still warns that it
+// is outside the tested range", starts the app-server and a helper the same
+// way and fails without helpers.
 test('with helpers on, no feature flag or agent setting reaches the app-server', async () => {
   h.clearInvocations();
   const convo = open('cxflags');
@@ -491,6 +507,62 @@ test('after Deny, the helper\'s next request raises a new card', async () => {
   await turnDone(convo, since);
 });
 
+// A CODEX DELEGATE'S HELPERS. Ash hands a task to Sky, on Codex, whose
+// delegate turn starts rates, which asks to run a command. Rates is a row on
+// Sky's list and its approval reaches a card naming Sky and rates, as a chat
+// turn's does. With helpers off, the same turn shows neither.
+async function skyAsDelegate(convo, tag) {
+  h.clearInvocations();
+  h.writeScenario([{ match: { agent: 'ash', promptIncludes: `${tag}-ASH` }, turn: [{ text: 'Ash will hand this on.' }] }]);
+  h.writeCodexScenario([{ match: { promptIncludes: `${tag}-SKY brief` }, text: 'Sky heard from rates.', awaitHelpers: true,
+    helpers: [{ nickname: 'rates', approval: { command: 'rm -rf build', reason: 'clear the old build' } }] }]);
+  const first = sayAs('ash', convo, `${tag}-ASH please`);
+  await turnDone(convo, first);
+  const since = client.messages.length;
+  client.send({ type: 'delegate', conversationId: convo, targetAgent: 'sky', context: `${tag}-SKY brief` });
+  return since;
+}
+const skyResult = (convo, since) => client.waitFor((m) => m.type === 'result' && m._conversationId === convo && m._agent === 'sky',
+  { since, timeout: 20000, label: 'Sky\'s result' });
+
+test('a helper Sky starts as a delegate is a row on Sky\'s list, and its approval raises a card naming Sky and the helper, answered on the helper\'s request', async () => {
+  const convo = open('cxdelsky');
+  const since = await skyAsDelegate(convo, 'SKYDEL');
+  assert.ok(await h.waitUntil(() => changes(convo, since).some((m) => rowNamed(m, 'rates')), { timeout: 15000 }), 'rates is listed');
+  const { msg: card } = await cardAfter(convo, since);
+  assert.strictEqual(card._agent, 'sky', 'the card is on Sky, the delegate');
+  assert.ok(card._helper, 'the card names a helper');
+  assert.deepStrictEqual(card._helper, { agentId: card._helper.agentId, agentType: 'rates' });
+  assert.strictEqual(card.request.input.command, 'rm -rf build');
+  const listed = changes(convo, since).filter((m) => rowNamed(m, 'rates'));
+  assert.ok(listed.every((m) => m.agentId === 'sky'), 'the list is Sky\'s');
+  assert.strictEqual(rowNamed(listed.pop(), 'rates').toolUseId, card._helper.agentId, 'the same helper as its row');
+  assert.deepStrictEqual(decisions(), [], 'nothing answered before the person does');
+  answer(convo, card, true);
+  assert.deepStrictEqual(await decidedOn(card._helper.agentId), ['accept']);
+  await skyResult(convo, since);
+  assert.strictEqual(cards(convo, since).length, 1, 'one card');
+});
+
+test('with helpers off, the same helper of Sky\'s as a delegate gets no row and no card, and its request is declined at once', async () => {
+  // By design this passes before helpers existed too. Its sibling, "a helper
+  // Sky starts as a delegate is a row on Sky's list, and its approval raises a
+  // card naming Sky and the helper, answered on the helper's request", fails
+  // without helpers.
+  const convo = open('cxdelskyoff');
+  helpers().HELPERS_ENABLED = false;
+  try {
+    const since = await skyAsDelegate(convo, 'SKYOFF');
+    await skyResult(convo, since);
+    assert.deepStrictEqual(decisions().map((d) => d.approvalDecision), ['decline'], 'the helper\'s request was declined at once');
+    assert.notStrictEqual(decisions()[0].threadId, appServer('turn/start')[0].params.threadId, 'on the helper\'s thread, not Sky\'s');
+    assert.deepStrictEqual(cards(convo, since), [], 'no card');
+    assert.deepStrictEqual(changes(convo, since), [], 'no row');
+  } finally {
+    helpers().HELPERS_ENABLED = true;
+  }
+});
+
 // THE CAP. At most five helpers run at once in a conversation. A Codex helper
 // is running before Rundock hears of it, so a sixth is stopped: it gets no
 // row or count, its turn is interrupted, its row is shown stopped, Fern reads
@@ -613,6 +685,34 @@ test('when Fern cannot be steered, the line about a stopped helper is put in her
   const prompts = h.codexTurnPrompts();
   assert.ok(!prompts[0].includes(CAP_LINE('inbox')));
   assert.ok(prompts[1].includes(CAP_LINE('inbox')), 'the line is in Fern\'s next turn');
+});
+
+test('when Fern\'s turn has ended before a sixth helper\'s turn is known, it is still stopped, no steer reaches her ended turn and the line opens her next', async () => {
+  const convo = open('cxcapended');
+  const gate = hold('capended');
+  h.clearInvocations();
+  h.writeCodexScenario([
+    { match: { promptIncludes: 'ENDED-ONE' }, text: 'Fern is done for now.', helpers: [...fiveOn(gate), { nickname: 'inbox', afterLead: true, holdForInterrupt: true }] },
+    { match: { promptIncludes: 'ENDED-NEXT' }, text: 'Fern again.' },
+  ]);
+  const since = say(convo, 'ENDED-ONE please');
+  await turnDone(convo, since);
+  assert.ok(changes(convo, since).some((m) => rowNamed(m, 'rates')), 'Fern\'s five were listed');
+  const { msg } = await rowsWhere(convo, since, stopped('inbox'), 'the inbox row, stopped');
+  const inbox = rowNamed(msg, 'inbox');
+  assert.deepStrictEqual([inbox.state, inbox.capped], ['killed', true]);
+  assert.deepStrictEqual(appServer('turn/interrupt').map((s) => s.params.threadId), [inbox.toolUseId], 'the inbox\'s own turn was interrupted');
+  assert.ok(await h.waitUntil(() => capEvents(convo).length === 1), 'the refusal was recorded');
+  await h.delay(200);
+  assert.deepStrictEqual(appServer('turn/steer'), [], 'no steer reached Fern\'s ended turn');
+  const next = say(convo, 'ENDED-NEXT please');
+  await turnDone(convo, next);
+  const prompts = h.codexTurnPrompts();
+  assert.strictEqual(prompts.length, 2, 'Fern\'s next turn ran');
+  assert.ok(!prompts[0].includes(CAP_LINE('inbox')));
+  assert.ok(prompts[1].includes(CAP_LINE('inbox')), 'the exact line opens Fern\'s next turn');
+  assert.strictEqual(capEvents(convo).length, 1, 'recorded once');
+  release(gate);
 });
 
 test('while five run from an earlier turn, a helper Fern starts in a later turn is stopped and she reads why in that turn', async () => {

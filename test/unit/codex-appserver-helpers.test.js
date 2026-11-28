@@ -609,6 +609,27 @@ describe("the cap on a lead's Codex helpers", () => {
     assert.strictEqual(helpers.runningCount(c), 6);
   });
 
+  test('after a sixth\'s interrupt fails and one of the first five ends, it is among five running, so the next is stopped, shown stopped and never counted', async () => {
+    const c = convo();
+    const recs = five(c);
+    const inbox = rec('inbox');
+    begin(c, inbox, ctl({ interrupt: () => Promise.reject(new Error('turn cannot be interrupted')) }));
+    await settle();
+    assert.strictEqual(helpers.runningCount(c), 6, 'the one not stopped runs and is counted');
+    recs[0].state = 'completed';
+    tell(c, recs[0], 'end');
+    assert.strictEqual(helpers.runningCount(c), 5, 'five run, it among them');
+    log = [];
+    begin(c, rec('drafts'));
+    await settle();
+    assert.deepStrictEqual(steps(), ['interrupt', 'rows', 'steer', 'event'], 'the next is stopped as any sixth is');
+    const shown = rowOf(log[1][1], 'drafts');
+    assert.deepStrictEqual([shown.state, shown.capped], ['killed', true]);
+    assert.deepStrictEqual([rowOf(log[1][1], 'inbox').state, rowOf(log[1][1], 'inbox').capped], ['running', false], 'the one not stopped still runs');
+    assert.deepStrictEqual(log[2], ['steer', LINE('drafts')]);
+    assert.strictEqual(helpers.runningCount(c), 5, 'never counted');
+  });
+
   test('while five run, a helper given more work is stopped the same way, its row shown stopped', async () => {
     const c = convo();
     const rates = rec('rates');

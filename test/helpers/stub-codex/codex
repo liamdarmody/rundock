@@ -105,6 +105,8 @@
 //           "approval": {...},               // as the rule's, on the helper's turn
 //           "text": "...", "usage": {...}, "status": "completed",  // or failed
 //           "delayMs": 0, "untilFile": "...", "holdForInterrupt": true,
+//           "afterLead": true,               // its turn starts only once the
+//                                            // lead's turn has ended
 //           "interruptFails": true,          // turn/interrupt answered with an
 //                                            // error; the turn carries on
 //           "dropInterrupt": true,           // turn/interrupt never answered; the
@@ -289,6 +291,10 @@ function runAppServer() {
 
   async function helperTurnBody(ht, h) {
     const { threadId, turnId } = ht;
+    if (h.afterLead) {
+      const until = Date.now() + 30000;
+      while (!ht.lead.finished && Date.now() < until) await tick(5);
+    }
     send(asfx.threadStatusChanged(threadId, 'active'));
     send(asfx.turnStarted(threadId, turnId));
     await tick();
