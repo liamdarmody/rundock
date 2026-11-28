@@ -162,6 +162,9 @@ const MUTATIONS = [
     '    if (rec.firstBatch === undefined) rec.firstBatch = row ? row.firstBatch : firstBatchOf(convoId, lead, rec);',
     '    if (runs.get(convoId)) leadOf(runs.get(convoId), lead, null);\n'
       + '    if (rec.firstBatch === undefined) rec.firstBatch = row ? row.firstBatch : firstBatchOf(convoId, lead, rec);'],
+  [ROWS, 'a Codex helper\'s end leaves a Claude Code lead\'s call held at the cap waiting with a slot free',
+    '    if (run) startHeld(convoId, run);\n',
+    ''],
 
   // ===== A WITHDRAWN THREAD GIVES BACK ITS FIRST-BATCH MARK =====
   [ROWS, 'a thread withdrawn as upkeep or a helper\'s own helper keeps the lead\'s first batch used up',
