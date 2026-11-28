@@ -4,6 +4,9 @@
 // setup's, goes through proposeConnectorChange: these tests pin what it
 // refuses before any card, the card it raises, and what an Allow writes once
 // the file is read again.
+// Some tests hold a turn's guard, which watches the home folder's shell
+// startup files.
+require('../helpers/made-up-home.js');
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -723,5 +726,255 @@ test('a connector file with no mcpServers gets one as its last key, after every 
     assert.deepStrictEqual(Object.keys(written), ['$schema', 'extra', 'mcpServers']);
     assert.deepStrictEqual(written, { $schema: 'https://example.com/schema.json', extra: { a: [1, 2] }, mcpServers: { 'local-tools': { command: 'node' } } });
     assert.strictEqual((await outcome).ok, true);
+  });
+});
+
+// ===== The copy a change is built on =====
+
+const guard = require('../../lib/workspace/answer-file-guard.js');
+const formatted = (value) => `${JSON.stringify(value, null, 2)}\n`;
+const ALPHA = { alpha: { url: 'https://mcp.example.com/mcp' } };
+const LOCAL_TOOLS = { 'local-tools': { command: 'node' } };
+
+// A turn's guard on the workspace, its poll pushed far out so only a check a
+// test makes, or the writer runs, finds a change. `heard` is every change the
+// guard hands the turn.
+function turnIn(s) {
+  const heard = [];
+  const held = guard.acquireAnswerFileGuard(s.dir, (c) => heard.push(c), { intervalMs: 60 * 60 * 1000, convoId: 'convo-write' });
+  return { heard, release: () => held.release() };
+}
+// A turn that starts and ends, so the guard holds the file as it stands now.
+const turnEnded = (s) => turnIn(s).release();
+const told = (heard) => heard.map((c) => ({ relative: c.relative, kept: c.kept, outsideTurn: c.outsideTurn }));
+const NAMED_ONCE = [{ relative: '.mcp.json', kept: true, outsideTurn: true }];
+
+test('while a turn watches, an allowed add is built on the copy the guard accepted, and an agent\'s change is not carried in', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(formatted({ mcpServers: ALPHA }), async (s) => {
+    const t = turnIn(s);
+    try {
+      const { w, outcome } = propose(s, s.request());
+      assert.strictEqual(s.asked.length, 1, 'one card');
+      const agents = formatted({ mcpServers: { ...ALPHA, 'example-beta': { command: 'node' } }, extra: 1 });
+      fs.writeFileSync(s.file, agents);
+      s.answer(0, true);
+      const written = fs.readFileSync(s.file);
+      assert.strictEqual(written.toString('utf-8'), formatted({ mcpServers: { ...ALPHA, ...LOCAL_TOOLS } }), 'the accepted copy and the add, nothing else');
+      assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+      assert.strictEqual((await outcome).ok, true);
+      assert.deepStrictEqual(t.heard.map((c) => [c.relative, c.agentContent]), [['.mcp.json', agents]], 'the agent\'s change was put back and handed to the turn');
+      assert.deepStrictEqual(guard.checkAnswerFilesNow(s.dir), [], 'the next check puts nothing back');
+      assert.deepStrictEqual(guard.answerFileBaseline(s.dir, s.file), written, 'and the baseline is the bytes written');
+    } finally { t.release(); }
+  });
+});
+
+test('while a turn watches, a replace card shows the accepted entry an agent changed before the save handler read, and Allow writes over it', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  const team = require('../../lib/protocol/handlers/team.js');
+  const config = require('../../lib/config.js');
+  await inWorkspace(formatted({ mcpServers: { calendar: { url: 'https://accepted.example.com/mcp' } } }), async (s) => {
+    const previous = config.getWorkspace();
+    config.setWorkspace(s.dir);
+    const t = turnIn(s);
+    try {
+      fs.writeFileSync(s.file, formatted({ mcpServers: { calendar: { url: 'https://planted.example.com/mcp' } } }));
+      const w = captureWs();
+      team.handleSaveConnector(s.ctx, w, { name: 'calendar', content: JSON.stringify({ url: 'https://new.example.com/mcp' }), conversationId: 'convo-write' });
+      assert.strictEqual(s.asked.length, 1, 'one card');
+      assert.deepStrictEqual(s.asked[0].toolInput, { name: 'calendar', action: 'replace', url: 'https://new.example.com/mcp', current: { url: 'https://accepted.example.com/mcp' } },
+        'the card shows the entry the guard accepted, not the agent\'s');
+      s.answer(0, true);
+      assert.deepStrictEqual(s.servers(), { calendar: { url: 'https://new.example.com/mcp' } });
+      assert.deepStrictEqual(w.sent, SAVED('calendar', 'saved'));
+    } finally { t.release(); config.setWorkspace(previous); }
+  });
+});
+
+test('with no turn watching, a person\'s edit made while the card waits is kept beside the add, and the next turn start names it once', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(formatted({ mcpServers: ALPHA }), async (s) => {
+    turnEnded(s);
+    const { w, outcome } = propose(s, s.request());
+    const persons = { ...ALPHA, 'example-gamma': { url: 'https://gamma.example.com/mcp' } };
+    s.rewrite(persons);
+    s.answer(0, true);
+    assert.deepStrictEqual(s.servers(), { ...persons, ...LOCAL_TOOLS }, 'the person\'s edit is kept, and the add beside it');
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.strictEqual((await outcome).ok, true);
+    const written = s.bytes();
+    const next = turnIn(s);
+    try {
+      assert.deepStrictEqual(told(next.heard), NAMED_ONCE, 'the next turn start takes it with its notice');
+      assert.deepStrictEqual(s.bytes(), written, 'and puts nothing back');
+    } finally { next.release(); }
+  });
+});
+
+test('with no turn watching, the same name added by a person while the card waits is kept, and Allow ends exists', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(formatted({ mcpServers: ALPHA }), async (s) => {
+    turnEnded(s);
+    const persons = { 'local-tools': { url: 'https://tools.example.com/mcp' } };
+    await refusedAtAllow(s, s.request(), () => s.rewrite({ ...ALPHA, ...persons }), 'exists', ALREADY_SET_UP('local-tools'));
+    assert.deepStrictEqual(s.servers(), { ...ALPHA, ...persons }, 'the person\'s entry is kept');
+  });
+});
+
+test('with no turn watching and the file as the guard holds it, the write is recorded and the next turn start says nothing', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(formatted({ mcpServers: ALPHA }), async (s) => {
+    turnEnded(s);
+    const { w, outcome } = propose(s, s.request());
+    s.answer(0, true);
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.strictEqual((await outcome).ok, true);
+    const written = s.bytes();
+    const next = turnIn(s);
+    try {
+      assert.deepStrictEqual(next.heard, [], 'no notice and nothing put back');
+      assert.deepStrictEqual(s.bytes(), written);
+      assert.deepStrictEqual(guard.answerFileBaseline(s.dir, s.file), written, 'Rundock\'s write is the baseline');
+    } finally { next.release(); }
+  });
+});
+
+test('with no guard, the change is built on the file as it stands', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(formatted({ mcpServers: ALPHA }), async (s) => {
+    const { w, outcome } = propose(s, s.request());
+    s.rewrite({ ...ALPHA, 'example-beta': { url: 'https://beta.example.com/mcp' } });
+    s.answer(0, true);
+    assert.deepStrictEqual(s.servers(), { ...ALPHA, 'example-beta': { url: 'https://beta.example.com/mcp' }, ...LOCAL_TOOLS });
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.strictEqual((await outcome).ok, true);
+  });
+});
+
+test('a card raised during a turn and allowed after it ended is built on the file as it stands, and keeps the person\'s edit', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(formatted({ mcpServers: ALPHA }), async (s) => {
+    const t = turnIn(s);
+    let w;
+    let outcome;
+    try { ({ w, outcome } = propose(s, s.request())); } finally { t.release(); }
+    assert.strictEqual(s.asked.length, 1, 'one card, still waiting after the turn');
+    const persons = { ...ALPHA, 'example-gamma': { command: 'node', args: ['gamma.js'] } };
+    s.rewrite(persons);
+    s.answer(0, true);
+    assert.deepStrictEqual(s.servers(), { ...persons, ...LOCAL_TOOLS });
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.strictEqual((await outcome).ok, true);
+    const next = turnIn(s);
+    try { assert.deepStrictEqual(told(next.heard), NAMED_ONCE, 'the next turn start names the edit once'); } finally { next.release(); }
+  });
+});
+
+test('undoing an allowed add during a turn is a remove built on the accepted copy, which leaves the file as it was', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  const before = formatted({ $schema: 'https://example.com/schema.json', mcpServers: ALPHA });
+  await inWorkspace(before, async (s) => {
+    const t = turnIn(s);
+    try {
+      const add = propose(s, s.request());
+      s.answer(0, true);
+      assert.strictEqual((await add.outcome).ok, true);
+      assert.deepStrictEqual(guard.checkAnswerFilesNow(s.dir), [], 'the poll after it takes the add as Rundock\'s own');
+      fs.writeFileSync(s.file, formatted({ $schema: 'https://example.com/schema.json', mcpServers: { ...ALPHA, ...LOCAL_TOOLS }, extra: 1 }));
+      const remove = propose(s, s.request({ change: 'remove', entry: undefined }));
+      assert.strictEqual(s.asked.length, 2, 'the remove has its own card');
+      s.answer(1, true);
+      assert.deepStrictEqual(remove.w.sent, SAVED('local-tools', 'removed'));
+      assert.strictEqual(fs.readFileSync(s.file, 'utf-8'), before, 'byte for byte as before the add, with nothing of the agent\'s');
+    } finally { t.release(); }
+  });
+});
+
+test('a connector file the guard holds as the person\'s own link is still refused, and what it leads to is untouched', { skip: NO_LINKS }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(undefined, (s) => elsewhere(async (dir) => {
+    const target = path.join(dir, 'servers.json');
+    fs.writeFileSync(target, OUTSIDE);
+    fs.symlinkSync(target, s.file);
+    const t = turnIn(s);
+    try {
+      await linkRefusedAtRequest(s, target);
+      assert.deepStrictEqual(standing(s.file), { link: target }, 'the person\'s link is left as it was');
+    } finally { t.release(); }
+  }));
+});
+
+test('while a turn watches, a link an agent swaps in is put back as the plain file, and the change lands on that file, not where the link led', { skip: NO_LINKS }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(formatted({ mcpServers: ALPHA }), (s) => elsewhere(async (dir) => {
+    const target = path.join(dir, 'servers.json');
+    fs.writeFileSync(target, OUTSIDE);
+    const t = turnIn(s);
+    try {
+      const { w, outcome } = propose(s, s.request());
+      fs.rmSync(s.file);
+      fs.symlinkSync(target, s.file);
+      s.answer(0, true);
+      assert.strictEqual(fs.readFileSync(target, 'utf-8'), OUTSIDE, 'what the link led to is byte-identical');
+      assert.ok(standing(s.file).bytes, 'a plain file stands at .mcp.json again');
+      assert.strictEqual(fs.readFileSync(s.file, 'utf-8'), formatted({ mcpServers: { ...ALPHA, ...LOCAL_TOOLS } }), 'the change is on the plain file');
+      assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+      assert.strictEqual((await outcome).ok, true);
+    } finally { t.release(); }
+  }));
+});
+
+// ===== Nothing else in the file changes =====
+
+// Every top-level key and every other entry as in the copy built on, in the
+// same order: an add goes last, a replace stays in place, a remove leaves the
+// rest in order.
+const SCHEMA_FIRST = {
+  $schema: 'https://example.com/schema.json',
+  mcpServers: {
+    alpha: { url: 'https://mcp.example.com/mcp' },
+    'example-beta': { command: 'node', args: ['beta.js'] },
+    'local-tools': { url: 'https://tools.example.com/mcp' },
+  },
+  extra: { a: [1, 2] },
+};
+function keptInOrder(written, servers) {
+  assert.deepStrictEqual(Object.keys(written), ['$schema', 'mcpServers', 'extra'], 'the top-level keys in their order');
+  assert.strictEqual(written.$schema, SCHEMA_FIRST.$schema);
+  assert.deepStrictEqual(written.extra, SCHEMA_FIRST.extra);
+  assert.deepStrictEqual(Object.keys(written.mcpServers), Object.keys(servers), 'the connectors in their order');
+  for (const n of Object.keys(servers)) assert.deepStrictEqual(written.mcpServers[n], servers[n], n);
+}
+
+test('an add, a replace of the middle entry and a remove of it each keep every other key and connector, in order', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  const { alpha, 'local-tools': tools } = SCHEMA_FIRST.mcpServers;
+  const gamma = { url: 'https://gamma.example.com/mcp' };
+  for (const [fields, servers] of [
+    [{ name: 'example-gamma', entry: gamma }, { ...SCHEMA_FIRST.mcpServers, 'example-gamma': gamma }],
+    [{ change: 'replace', name: 'example-beta', entry: gamma }, { alpha, 'example-beta': gamma, 'local-tools': tools }],
+    [{ change: 'remove', name: 'example-beta', entry: undefined }, { alpha, 'local-tools': tools }],
+  ]) {
+    await inWorkspace(formatted(SCHEMA_FIRST), async (s) => {
+      const { outcome } = propose(s, s.request(fields));
+      s.answer(0, true);
+      assert.strictEqual((await outcome).ok, true, fields.change || 'add');
+      keptInOrder(JSON.parse(fs.readFileSync(s.file, 'utf-8')), servers);
+    });
+  }
+});
+
+test('an own __proto__ entry in the connector file is kept in its place', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  const held = '{"mcpServers": {"alpha": {"url": "https://mcp.example.com/mcp"}, "__proto__": {"command": "node", "args": ["proto.js"]}, "example-beta": {"command": "node"}}}';
+  await inWorkspace(held, async (s) => {
+    const { outcome } = propose(s, s.request());
+    s.answer(0, true);
+    assert.strictEqual((await outcome).ok, true);
+    const servers = JSON.parse(fs.readFileSync(s.file, 'utf-8')).mcpServers;
+    assert.deepStrictEqual(Object.keys(servers), ['alpha', '__proto__', 'example-beta', 'local-tools']);
+    assert.ok(Object.prototype.hasOwnProperty.call(servers, '__proto__'), 'still an entry of its own');
+    assert.deepStrictEqual(Object.getOwnPropertyDescriptor(servers, '__proto__').value, { command: 'node', args: ['proto.js'] });
   });
 });
