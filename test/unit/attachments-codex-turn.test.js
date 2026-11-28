@@ -548,4 +548,28 @@ describe('search: a Codex turn is found by what the person typed', () => {
       idx.close();
     }
   });
+
+  test('a Claude Code user line whose typed text begins with the inline header is still found by that text', noSqlite, () => {
+    assert.strictEqual(typeof (search && search.createSearchIndex), 'function');
+    const dir = fs.realpathSync(makeTempDir('attach-claude-search-'));
+    const session = path.join(dir, 'session.jsonl');
+    const line = (content) => JSON.stringify({ type: 'user', timestamp: '2026-07-14T10:00:00.000Z', message: { role: 'user', content } });
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: pngBytes().toString('base64') } };
+    fs.writeFileSync(session, [
+      line('[Text of attached file notes.md] is what WOMBAT typed'),
+      line([{ type: 'text', text: '[Text of attached file notes.md] and NUMBAT beside an image' }, image]),
+    ].join('\n') + '\n');
+    const idx = search.createSearchIndex({ dbPath: path.join(dir, 'search-index.db'), DatabaseSync: probe.DatabaseSync });
+    idx.open();
+    try {
+      idx.reconcileConversations([{ conversationId: ID, sessions: [{ sessionId: 'session-1', agentId: 'helper', filePath: session }] }]);
+      for (const word of ['WOMBAT', 'NUMBAT']) {
+        const hits = idx.searchMessages(word, { collapse: false });
+        assert.strictEqual(hits.length, 1, `${word} is found`);
+        assert.strictEqual(hits[0].conversationId, ID);
+      }
+    } finally {
+      idx.close();
+    }
+  });
 });
