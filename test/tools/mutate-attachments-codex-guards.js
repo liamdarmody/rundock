@@ -21,6 +21,10 @@
 // deleted with attaching still looking alive in most tests, which is why
 // each is broken on purpose here and a test must go red for it.
 //
+// A message refused, dropped or failing before its turn holds no images from
+// then on, a page's message refused or failing lets go of none, and letting
+// one message go lets go of no other. Each of those is broken here too.
+//
 // A guard whose mutation turns nothing red is reported as a FAILURE rather
 // than passed over. An experiment that changes nothing has not been run.
 //
@@ -71,6 +75,10 @@ const LEGACY_SEND = { src: path.join(ROOT, 'server.js'), suite: CODEX_INTEGRATIO
 const HANDOVER_SEND = { src: path.join(ROOT, 'lib', 'delegation', 'engine.js'), suite: CODEX_INTEGRATION };
 // The app-server process a Codex thread is opened on.
 const OPENED = { src: path.join(ROOT, 'lib', 'runtime', 'codex-glue.js'), suite: CODEX_INTEGRATION };
+// A stored message's reference, checked as it comes back into the server.
+const REFERENCE = { src: path.join(ROOT, 'lib', 'attachments', 'receive.js'), suite: CODEX_INTEGRATION };
+// The chat handler, and the buffer a hand-over holds its chats back in.
+const CHAT_HANDLER = { src: path.join(ROOT, 'server.js'), suite: CODEX_INTEGRATION };
 
 // ONE NAMED TEST, FOR A ROW WHOSE SUITE STARTS A SERVER. The integration
 // suite starts a server and runs for a while unbroken, and a broken guard can
@@ -231,6 +239,40 @@ const MUTATIONS = [
     'a turn a newer message takes over before it starts leaves its message\'s images held',
     '    if (!opened) {\n      releasePendingImages(entry.attachmentEntry);\n      return;\n    }\n',
     '    if (!opened) return;\n'],
+
+  // ===== A MESSAGE THAT NEVER REACHES ITS TURN HOLDS NO IMAGES =====
+  [RECEIVE, 'a stored message refused at its reference check keeps its images held',
+    '      if (!fromPage) releasePendingImages(msg.attachmentEntry);\n',
+    ''],
+  [only(REFERENCE, 'a one-image message whose entry an agent takes out of the record before its reference is checked starts no turn and leaves nothing counted, so the next one for a thread at 19 is stored and sent'),
+    'a message whose entry is taken out before its reference is checked keeps its images held',
+    '      if (!fromPage) releasePendingImages(msg.attachmentEntry);\n',
+    ''],
+  [only(REFERENCE, 'a one-image message held back by a hand-over, its entry taken out of the record while it waits, is refused once let through and leaves nothing counted, so the next one for a thread at 19 is stored and sent'),
+    'a held-back message refused at its reference check once let through keeps its images held',
+    '      if (!fromPage) releasePendingImages(msg.attachmentEntry);\n',
+    ''],
+  [RECEIVE, 'a page\'s message refused at its reference check lets go of a stored message\'s images',
+    '      if (!fromPage) releasePendingImages(msg.attachmentEntry);\n',
+    '      releasePendingImages(msg.attachmentEntry);\n'],
+  [RECEIVE, 'a stored message whose reference checks out lets go of its images before its send is recorded',
+    "    if (own(msg, 'attachmentEntry') && !checkReference(getWorkspace(), msg)) {\n",
+    "    if (!fromPage) releasePendingImages(msg.attachmentEntry);\n    if (own(msg, 'attachmentEntry') && !checkReference(getWorkspace(), msg)) {\n"],
+  [RECEIVE, 'letting go of one message\'s images lets go of every message\'s',
+    '  pending.delete(entryId);\n',
+    '  pending.clear();\n'],
+  [only(CHAT_HANDLER, 'a one-image message whose way to its turn throws, its conversation\'s transcript file made a folder, leaves nothing counted, so the next one for a thread at 19 is stored and sent'),
+    'a stored message that throws on its way to its turn keeps its images held',
+    "      if (msg && msg.type === 'chat' && typeof data === 'string') releasePendingImages(msg.attachmentEntry);\n",
+    ''],
+  [only(CHAT_HANDLER, 'a page\'s message naming a stored message\'s entry, which throws on its way to a turn, leaves that message\'s images held, so the next one for a thread at 19 is refused codex-images'),
+    'a page\'s message that throws on its way to a turn lets go of a stored message\'s images',
+    "      if (msg && msg.type === 'chat' && typeof data === 'string') releasePendingImages(msg.attachmentEntry);\n",
+    "      if (msg && msg.type === 'chat') releasePendingImages(msg.attachmentEntry);\n"],
+  [only(CHAT_HANDLER, 'a one-image message held back by a hand-over and dropped when no window is connected to let it through leaves nothing counted, so the next one for a thread at 19 is stored and sent'),
+    'a held-back message dropped with no window connected keeps its images held',
+    '    for (const queued of t.queued) releasePendingImages(queued.attachmentEntry);\n',
+    ''],
 ];
 
 const REPORTER = ['--test-reporter', 'spec'];
