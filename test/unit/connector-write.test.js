@@ -1113,3 +1113,111 @@ test('after a write that failed during a turn, an agent writing the bytes it tri
     } finally { turn.release(); }
   });
 });
+
+// ===== Only a confirmed read-back is called saved =====
+
+const NOT_CONFIRMED = 'Rundock saved the connector file but couldn\'t confirm it holds the change. Check Connectors in Settings.';
+const readsBackItsOwnWay = () => assert.strictEqual(typeof (cw.io && cw.io.readBack), 'function', 'the writer reads the file again through its own no-follow step');
+
+// An allowed change whose read-back is `readBack` (handed the writer's own):
+// one message, no save and no line saying saved, and the outcome not-confirmed.
+async function notConfirmed(t, s, readBack) {
+  readsBackItsOwnWay();
+  const { w, outcome } = propose(s, s.request());
+  const logged = t.mock.method(console, 'log', () => {});
+  t.mock.method(console, 'warn', () => {});
+  const real = cw.io.readBack;
+  cw.io.readBack = (file) => readBack(file, real);
+  try { s.answer(0, true); } finally { cw.io.readBack = real; t.mock.restoreAll(); }
+  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: NOT_CONFIRMED }], 'one message, and no save');
+  assert.deepStrictEqual(await outcome, { ok: false, reason: 'not-confirmed', message: NOT_CONFIRMED });
+  assert.ok(!logged.mock.calls.some((c) => /\[Connector\] saved/.test(String(c.arguments[0]))), 'and no line says it was saved');
+}
+
+test('a read-back that finds other bytes than were written is not called saved', async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(ALPHA, async (s) => {
+    await notConfirmed(t, s, () => ({ bytes: Buffer.from(formatted({ mcpServers: ALPHA })) }));
+  });
+});
+
+test('a read-back in which another connector differs is not called saved', async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(ALPHA, async (s) => {
+    const other = formatted({ mcpServers: { alpha: { url: 'https://other.example.com/mcp' }, ...LOCAL_TOOLS } });
+    await notConfirmed(t, s, () => ({ bytes: Buffer.from(other) }));
+  });
+});
+
+test('a read-back that throws is not called saved', async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(ALPHA, async (s) => {
+    await notConfirmed(t, s, () => { throw Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' }); });
+  });
+});
+
+test('a read-back that finds a link at .mcp.json is not called saved, and reads nothing through it', { skip: NO_LINKS }, async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(ALPHA, (s) => elsewhere(async (dir) => {
+    const target = path.join(dir, 'servers.json');
+    fs.writeFileSync(target, formatted({ mcpServers: { ...ALPHA, ...LOCAL_TOOLS } }));
+    await notConfirmed(t, s, (file, real) => {
+      fs.renameSync(file, path.join(s.dir, 'moved.json'));
+      fs.symlinkSync(target, file);
+      return real(file);
+    });
+  }));
+});
+
+test('connector_saved is sent after the read-back, never before it', async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  readsBackItsOwnWay();
+  await inWorkspace(ALPHA, async (s) => {
+    const { w, outcome } = propose(s, s.request());
+    const real = cw.io.readBack;
+    let sentByThen = null;
+    cw.io.readBack = (file) => { sentByThen = w.sent.map((m) => m.type); return real(file); };
+    try { s.answer(0, true); } finally { cw.io.readBack = real; }
+    assert.deepStrictEqual(sentByThen, [], 'nothing was sent before the file was read again');
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.strictEqual((await outcome).ok, true);
+  });
+});
+
+test('after not-confirmed, asking again raises a card showing the connector as the file now holds it', async (t) => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  readsBackItsOwnWay();
+  await inWorkspace({ calendar: { url: 'https://old.example.com/mcp' } }, async (s) => {
+    const replace = { change: 'replace', name: 'calendar', entry: { url: 'https://new.example.com/mcp' } };
+    const first = propose(s, s.request(replace));
+    const real = cw.io.readBack;
+    // Another writer lands between the write and the read-back.
+    cw.io.readBack = (file) => { s.rewrite({ calendar: { url: 'https://other.example.com/mcp' } }); return real(file); };
+    t.mock.method(console, 'warn', () => {});
+    try { s.answer(0, true); } finally { cw.io.readBack = real; t.mock.restoreAll(); }
+    assert.deepStrictEqual(await first.outcome, { ok: false, reason: 'not-confirmed', message: NOT_CONFIRMED });
+    propose(s, s.request(replace));
+    assert.strictEqual(s.asked.length, 2, 'asking again gets its own card');
+    assert.deepStrictEqual(s.asked[1].toolInput.current, { url: 'https://other.example.com/mcp' }, 'showing the file as it now stands');
+  });
+});
+
+// ===== Honest changes, formatted as before =====
+
+test('an honest add, replace and remove with no turn and no guard are written two-space indented with a closing newline, and confirmed', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  const held = { alpha: { url: 'https://mcp.example.com/mcp' }, 'local-tools': { command: 'node', args: ['old.js'] } };
+  for (const [fields, servers, said] of [
+    [{ name: 'example-beta', entry: { url: 'https://beta.example.com/mcp' } }, { ...held, 'example-beta': { url: 'https://beta.example.com/mcp' } }, 'saved'],
+    [{ change: 'replace', entry: { command: 'node', args: ['new.js'] } }, { ...held, 'local-tools': { command: 'node', args: ['new.js'] } }, 'saved'],
+    [{ change: 'remove', name: 'alpha', entry: undefined }, { 'local-tools': held['local-tools'] }, 'removed'],
+  ]) {
+    await inWorkspace(held, async (s) => {
+      const { w, outcome } = propose(s, s.request(fields));
+      s.answer(0, true);
+      assert.strictEqual(fs.readFileSync(s.file, 'utf-8'), `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`);
+      assert.deepStrictEqual(w.sent, SAVED(fields.name || 'local-tools', said));
+      assert.strictEqual((await outcome).ok, true);
+    });
+  }
+});
