@@ -1018,7 +1018,7 @@ function startHelper(rule, call) {
   ((rule.helperTools && rule.helperTools[call.id]) || []).forEach((tool, i) => {
     writeOut(JSON.stringify(fx.helperToolUse(call.id, tool.name, tool.input || {}, `${call.id}_tool_${i}`)) + '\n');
   });
-  const finish =() => writeOut(JSON.stringify(fx.taskNotification({ taskId, toolUseId: call.id, status: 'completed' })) + '\n');
+  const finish = () => writeOut(JSON.stringify(fx.taskNotification({ taskId, toolUseId: call.id, status: 'completed' })) + '\n');
   const finishOn = rule.finishOn && rule.finishOn[call.id];
   if (finishOn) whenFileExists(finishOn, finish);
   else if (!rule.running) finish();
