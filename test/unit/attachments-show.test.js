@@ -449,6 +449,39 @@ describe('what the page knows of each file, and where it comes from', () => {
   });
 });
 
+// The page above builds its own list of scripts, so the window's own order is
+// read from public/index.html as a browser reads it.
+describe('the window finds a message\'s lines with the function the server uses', () => {
+  test('the window loads attachment-lines.js before chat.js', () => {
+    const dom = new JSDOM(INDEX);
+    try {
+      const scripts = [...dom.window.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src'));
+      const once = (src) => {
+        const at = scripts.indexOf(src);
+        assert.ok(at !== -1 && scripts.lastIndexOf(src) === at, `public/index.html loads ${src} once`);
+        return at;
+      };
+      assert.ok(once('/attachment-lines.js') < once('/views/chat.js'), 'attachment-lines.js loads before chat.js');
+    } finally {
+      dom.window.close();
+    }
+  });
+
+  test('the bubble finds its lines through the global RundockAttachmentLines', () => {
+    const p = page();
+    const shared = p.w.RundockAttachmentLines;
+    assert.strictEqual(typeof (shared && shared.splitAttachmentLines), 'function',
+      'public/attachment-lines.js sets the global RundockAttachmentLines in the window');
+    const real = shared.splitAttachmentLines;
+    const asked = [];
+    shared.splitAttachmentLines = (text) => { asked.push(text); return real(text); };
+    remember(p, ID, { [PNG.file]: present(PNG) });
+    const text = stored('see this', ID, PNG);
+    assert.ok(chip(draw(p, text)).matches('button.msg-thumb'), 'the line draws as its thumbnail');
+    assert.ok(asked.includes(text), 'the bubble asked RundockAttachmentLines.splitAttachmentLines for its lines');
+  });
+});
+
 // The viewers the files pane loads. A document here has no module loader, so
 // the page is given the shipped module in its place.
 let registry = null;

@@ -28,8 +28,9 @@ function contentBlockStop(index = 0) {
 }
 
 // Tool use block (Agent, Read, Bash, ...) streamed as start -> input_json_delta -> stop.
-function toolUseStart(name, index = 1) {
-  return { type: 'stream_event', event: { type: 'content_block_start', index, content_block: { type: 'tool_use', id: `toolu_${index}`, name } } };
+// `id` is the block's tool_use id; by default it is made from the index.
+function toolUseStart(name, index = 1, id = `toolu_${index}`) {
+  return { type: 'stream_event', event: { type: 'content_block_start', index, content_block: { type: 'tool_use', id, name } } };
 }
 
 function inputJsonDelta(partialJson, index = 1) {
@@ -51,11 +52,11 @@ function messageStop() {
 }
 
 // Full tool_use flow with the input JSON split into two deltas.
-function toolUseFlow(name, input, index = 1) {
+function toolUseFlow(name, input, index = 1, id = undefined) {
   const json = JSON.stringify(input);
   const mid = Math.max(1, Math.floor(json.length / 2));
   return [
-    toolUseStart(name, index),
+    toolUseStart(name, index, id),
     inputJsonDelta(json.slice(0, mid), index),
     inputJsonDelta(json.slice(mid), index),
     contentBlockStop(index),
@@ -92,6 +93,23 @@ function textTurn(text, { sessionId = null, deltaChunks = 2 } = {}) {
   return events;
 }
 
+// Claude Code's own refusal of a command outside the sandbox that no
+// PermissionRequest hook allowed, in headless mode: this line, then the call's
+// error result. Nothing ran. The line carries the session's id and an id of
+// its own, as the CLI's does (test/fixtures/claude-cli-sandbox-override.json).
+function sandboxOverrideDenied(toolName, index = 1, sessionId = 'stub-session') {
+  return {
+    type: 'system', subtype: 'permission_denied', tool_name: toolName, tool_use_id: `toolu_${index}`,
+    decision_reason_type: 'sandboxOverride', decision_reason: 'dangerouslyDisableSandbox', message: 'Run outside of the sandbox',
+    session_id: sessionId, uuid: require('crypto').randomUUID(),
+  };
+}
+
+// A tool's result, as the user message that carries it.
+function toolResult(index, content, isError = false) {
+  return { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${index}`, content, is_error: isError }] } };
+}
+
 function toLines(events) {
   return events.map(e => JSON.stringify(e)).join('\n') + '\n';
 }
@@ -107,8 +125,48 @@ const MARKERS = {
   saveSkill: (name, payload) => `<!-- RUNDOCK:SAVE_SKILL name=${name} -->\n${payload}\n<!-- /RUNDOCK:SAVE_SKILL -->`,
 };
 
+// Lines about the helpers a lead started with Agent. Claude Code marks every
+// line a helper writes with the tool_use id of the call that started it, and
+// reports each helper's life as `task_*` system lines carrying that same id.
+// A lead's own lines carry no parent id (null or absent).
+
+// Any envelope as a helper's: the same line, marked with its parent call.
+function helperLine(envelope, parentToolUseId) {
+  return { ...envelope, parent_tool_use_id: parentToolUseId };
+}
+
+function taskStarted({ taskId, toolUseId, description = '', subagentType } = {}) {
+  return {
+    type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: toolUseId,
+    description, task_type: 'local_agent',
+    ...(subagentType ? { subagent_type: subagentType } : {}),
+  };
+}
+
+function taskProgress({ taskId, toolUseId, description = '', lastToolName, usage } = {}) {
+  return {
+    type: 'system', subtype: 'task_progress', task_id: taskId, tool_use_id: toolUseId,
+    description, usage: usage || { total_tokens: 0, tool_uses: 0, duration_ms: 0 },
+    ...(lastToolName ? { last_tool_name: lastToolName } : {}),
+  };
+}
+
+// status: completed, killed or failed.
+function taskUpdated(taskId, status) {
+  return { type: 'system', subtype: 'task_updated', task_id: taskId, status };
+}
+
+// status: completed, failed or stopped (a stopped helper is a killed one).
+function taskNotification({ taskId, toolUseId, status = 'completed', summary = '' } = {}) {
+  return {
+    type: 'system', subtype: 'task_notification', task_id: taskId, tool_use_id: toolUseId,
+    status, summary,
+  };
+}
+
 module.exports = {
   init, contentBlockStartText, textDelta, contentBlockStop,
   toolUseStart, inputJsonDelta, toolUseFlow, messageDelta, messageStop,
-  assistantMessage, result, textTurn, toLines, MARKERS,
+  assistantMessage, result, textTurn, toLines, MARKERS, sandboxOverrideDenied, toolResult,
+  helperLine, taskStarted, taskProgress, taskUpdated, taskNotification,
 };

@@ -53,11 +53,37 @@ const NEAR_MISSES = {
   'with details holding a closing parenthesis': CSV_LINE.replace('CSV file', 'CSV file)'),
   'with details holding a closing bracket': CSV_LINE.replace('CSV file', 'CSV ] file'),
   'with details holding a line break': CSV_LINE.replace('CSV file, ', 'CSV file,\n'),
+  'with details holding a carriage return': CSV_LINE.replace('CSV file, ', 'CSV file,\r'),
+  'with details holding a line separator': CSV_LINE.replace('CSV file, ', 'CSV file,\u2028'),
+  'with details holding a paragraph separator': CSV_LINE.replace('CSV file, ', 'CSV file,\u2029'),
 };
 
 function leftAsText(text) {
   const answer = split(text);
   assert.deepStrictEqual(answer, { text, files: [] });
+}
+
+// A whole line of each form, and the characters that, put after it, make it
+// no longer the whole line: JavaScript reads each as a line terminator, but a
+// line ends only at a line break, so each is part of the line. The two
+// separators are built from their code points, so this file stays ASCII.
+const FORMS = {
+  'an attached-file line': CSV_LINE,
+  'the not-available form': '[Attached file not available: 1-diagram.png]',
+  'the changed form': "[Attached file changed since it was attached, so it isn't shown: 2-report.pdf]",
+};
+const CARRIAGE_RETURN = String.fromCharCode(0x0d);
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
+
+// Each form followed by `character`, as a message of its own and between two
+// other lines, stays in the text as it was, and names no file.
+function eachFormFollowedBy(character) {
+  for (const [form, line] of Object.entries(FORMS)) {
+    for (const text of [line + character, `top\n${line}${character}\nbottom`]) {
+      assert.deepStrictEqual(split(text), { text, files: [] }, `${form} followed by the character, in ${JSON.stringify(text)}`);
+    }
+  }
 }
 
 const pngBytes = () => {
@@ -99,6 +125,12 @@ describe('the attached-file lines in a message', () => {
   test('a line whose details hold a closing parenthesis is left as text', () => leftAsText(NEAR_MISSES['with details holding a closing parenthesis']));
   test('a line whose details hold a closing bracket is left as text', () => leftAsText(NEAR_MISSES['with details holding a closing bracket']));
   test('a line whose details hold a line break is left as text', () => leftAsText(NEAR_MISSES['with details holding a line break']));
+  test('a line whose details hold a carriage return is left as text', () => leftAsText(NEAR_MISSES['with details holding a carriage return']));
+  test('a line whose details hold a line separator is left as text', () => leftAsText(NEAR_MISSES['with details holding a line separator']));
+  test('a line whose details hold a paragraph separator is left as text', () => leftAsText(NEAR_MISSES['with details holding a paragraph separator']));
+  test('a whole line of each form followed by a carriage return is left as text', () => eachFormFollowedBy(CARRIAGE_RETURN));
+  test('a whole line of each form followed by a line separator is left as text', () => eachFormFollowedBy(LINE_SEPARATOR));
+  test('a whole line of each form followed by a paragraph separator is left as text', () => eachFormFollowedBy(PARAGRAPH_SEPARATOR));
 
   test('the form for a file that is not available is found with its kind and no id', () => {
     assert.deepStrictEqual(split('Look at this\n[Attached file not available: 1-diagram.png]'),
@@ -119,6 +151,17 @@ describe('the attached-file lines in a message', () => {
     split('');
     assert.strictEqual(lines.ID_PATTERN.source, store.ID_PATTERN.source);
     assert.strictEqual(lines.STORED_NAME.source, store.STORED_NAME.source);
+  });
+
+  // The history says which files a reply names, and the page draws them, so
+  // the two read the lines with the same function. A pattern of its own in
+  // the history would have to spell a form, and every form opens with
+  // "[Attached".
+  test('the server\'s history finds the lines with this function and spells no form of its own', () => {
+    const history = fs.readFileSync(path.join(__dirname, '..', '..', 'lib', 'protocol', 'handlers', 'history.js'), 'utf8');
+    assert.ok(history.includes("require('../../../public/attachment-lines.js')"), 'history.js requires public/attachment-lines.js');
+    assert.ok(history.includes('splitAttachmentLines('), 'history.js calls splitAttachmentLines');
+    assert.ok(!history.toLowerCase().includes('[attached'), 'history.js spells no form of an attached-file line itself');
   });
 
   test('every line the server writes is found, and the server leaves each near miss as typed', async () => {

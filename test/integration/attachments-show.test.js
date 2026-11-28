@@ -15,6 +15,7 @@ const path = require('node:path');
 
 const h = require('../helpers/harness.js');
 const auth = require('../../lib/auth/index.js');
+const { getWorkspace } = require('../../lib/config.js');
 const store = require('../../lib/attachments/store.js');
 const receive = require('../../lib/attachments/receive.js');
 
@@ -208,14 +209,53 @@ describe('the file route serves a stored file only as its record describes it', 
   test("the bytes served are the ones the record check read, never read again by path", async () => {
     const real = store.readRecordedFile;
     const checked = Buffer.from('bytes the record check read');
-    store.readRecordedFile = (...args) => ({ ...real(...args), state: 'present', bytes: checked });
+    const calls = [];
+    store.readRecordedFile = (...args) => { calls.push(args); return { ...real(...args), state: 'present', bytes: checked }; };
     try {
       const res = await get(fileUrl(storedPath(ID, '1-diagram.png')));
       assert.strictEqual(res.status, 200);
       assert.ok(res.body.equals(checked), 'the body is what the record check answered');
+      assert.deepStrictEqual(calls, [[getWorkspace(), ID, '1-diagram.png', { keep: true }]],
+        'one record check, of this file, asked to keep the bytes it reads');
     } finally {
       store.readRecordedFile = real;
     }
+  });
+
+  // A throw that left the route would send no answer, and the request would
+  // wait for good. The process hears of such a throw as an uncaught
+  // exception, so hearing this one ends the request, and the test fails on
+  // what it asserts rather than by waiting out a limit.
+  test('a stored-file request whose record check throws is refused, and the server answers the next one', async () => {
+    const real = store.readRecordedFile;
+    const thrown = new Error('the record could not be read');
+    let asked = 0;
+    let escaped = false;
+    let request;
+    const heard = (e) => { if (e !== thrown) return; escaped = true; request.destroy(); };
+    process.on('uncaughtException', heard);
+    store.readRecordedFile = () => { asked++; throw thrown; };
+    let res;
+    try {
+      res = await new Promise((resolve) => {
+        request = http.request({ host: '127.0.0.1', port: h.port, method: 'GET', path: fileUrl(storedPath(ID, '1-diagram.png')), headers: h.authHeaders() }, (r) => {
+          const chunks = [];
+          r.on('data', (c) => chunks.push(c));
+          r.on('end', () => resolve({ status: r.statusCode, body: Buffer.concat(chunks), headers: r.headers }));
+        });
+        request.on('error', () => resolve(null));
+        request.end();
+      });
+    } finally {
+      store.readRecordedFile = real;
+      process.removeListener('uncaughtException', heard);
+    }
+    assert.strictEqual(escaped, false, "the record check's throw stayed inside the route, which answered");
+    assert.strictEqual(asked, 1, 'the record check was asked once, and threw');
+    refused(res);
+    const next = await get(fileUrl(storedPath(ID, '1-diagram.png')));
+    assert.strictEqual(next.status, 200, 'the server still answers a request for a file that is there');
+    assert.ok(next.body.equals(PNG));
   });
 });
 
@@ -357,6 +397,27 @@ describe('the history reply says which of its named files are there', () => {
     const sessionId = session([said("Here it is\n[Attached file changed since it was attached, so it isn't shown: 1-diagram.png]")]);
     const res = await history({ conversationId: ID, sessionId });
     assert.deepStrictEqual(res.files, {});
+  });
+
+  // JavaScript reads each of these as a line terminator, but a line ends only
+  // at a line break, so a line with one after it is not the whole line. The
+  // row is handed to the history by its session reader, which a session file
+  // can't do for the two separators: the reader splits its lines at them. The
+  // two are built from their code points, so this file stays ASCII.
+  test('a line followed by a carriage return, a line separator or a paragraph separator gives no key', async () => {
+    const after = {
+      'a carriage return': String.fromCharCode(0x0d),
+      'a line separator': String.fromCharCode(0x2028),
+      'a paragraph separator': String.fromCharCode(0x2029),
+    };
+    for (const [label, character] of Object.entries(after)) {
+      const text = sent('Here is the diagram', entry.files[0]) + character;
+      const row = { role: 'user', content: text, timestamp: null };
+      const res = await withReader(async () => ({ messages: [row], totalCount: 1, hasMore: false }),
+        () => history({ conversationId: ID, sessionId: 'sess-files-reader' }));
+      assert.deepStrictEqual(res.messages, [row], `the row holds the line and ${label} as written`);
+      assert.deepStrictEqual(res.files, {}, `a line followed by ${label} names no file`);
+    }
   });
 
   test('a file named in two messages is one key, read once', async () => {

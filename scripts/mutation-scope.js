@@ -103,7 +103,20 @@ const SECONDS_PER_SHARD = 600;
 // at seventeen. Nineteen plans the longest at 889 s with those rows, and
 // leaves room for the rows still to come
 // (docs/evidence/mutation-shard-cap-evidence.md has the plans).
-const MAX_SHARDS = 19;
+// Raised to twenty-four when main's full set planned its longest shard at
+// 899 s at nineteen, and changes adding rows, each merged with main, planned
+// a shard past the 900 s bound. Twenty fits them, the longest at up to 880 s;
+// twenty-four is the smallest cap that plans the longest shard of each at or
+// under 750 s, a sixth under the bound, which keeps a margin for the rows
+// still to come (the same evidence file has these plans).
+// Raised to thirty-three because the full set keeps growing: at its pace
+// from 2026-11-17 to 2026-11-28, 218 s a day, the heaviest tree known (main
+// with two changes adding rows) is projected to plan a shard past the 900 s
+// bound at twenty-four first on 2026-12-16, within weeks. Thirty-three is the
+// smallest cap that plans that tree, with the growth projected to
+// 2027-01-11, its longest shard at or under 850 s, at 830 s; at that pace it
+// first passes 900 s on 2027-01-20 (the same evidence file has the plans).
+const MAX_SHARDS = 33;
 const COSTS_FILE = 'mutation-costs.json';
 const FALLBACK_SECONDS_PER_ROW = 5;
 

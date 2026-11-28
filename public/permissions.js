@@ -355,9 +355,28 @@
   const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
   const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
   const SETTING_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+  const listOf = v => (Array.isArray(v) ? v.map(String) : []);
+  // A REPLACE CARD SHOWS BOTH ENTRIES, each drawn line by line the same way,
+  // every name on a line that says what kind of name it is.
+  function connectorLines(e) {
+    const out = [];
+    if (typeof e.command === 'string') out.push([e.command, ...listOf(e.args)].map(shellWord).join(' '));
+    if (typeof e.url === 'string') out.push(`URL: ${shownValue(e.url)}`);
+    if (typeof e.transport === 'string') out.push(`Transport: ${shownValue(e.transport)}`);
+    for (const [names, plain, label] of [[listOf(e.env), ENV_NAME, 'Environment names'], [listOf(e.headers), HEADER_NAME, 'Header names'], [listOf(e.others), SETTING_NAME, 'Other settings']]) {
+      if (names.length) out.push(`${label}: ${names.map(n => (plain.test(n) ? n : escapeControl(JSON.stringify(n)))).join(', ')}`);
+    }
+    if (typeof e.headersHelper === 'string') out.push(`Header helper: ${shownValue(e.headersHelper)}`);
+    return out;
+  }
+  // ENVIRONMENT NAMES THAT CHANGE WHAT RUNS: each can load other code into the
+  // process, or change which program a command name finds, so the card names
+  // them again in a sentence of their own.
+  const CHANGES_WHAT_RUNS = /^(NODE_OPTIONS|PATH|LD_PRELOAD|PYTHONPATH|DYLD_\w*)$/i;
+  const andList = names => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names.join(''));
   function connectorCopy(toolName, input) {
     const i = input || {};
-    const list = v => (Array.isArray(v) ? v.map(String) : []);
+    const list = listOf;
     const runs = typeof i.command === 'string' ? [i.command, ...list(i.args)].map(shellWord).join(' ') : '';
     const removing = toolName === 'DeleteConnector';
     const verb = removing ? 'Remove' : (i.action === 'replace' ? 'Change' : 'Add');
@@ -370,14 +389,16 @@
     else if (runs) said.push('An agent asked Rundock to write this into .mcp.json. Claude Code would run this command as its own process, outside the sandbox, whenever an agent starts.');
     else said.push('An agent asked Rundock to write this into .mcp.json. Agents would connect to it whenever one starts.');
     if (!removing) {
-      for (const [names, plain, sentence, label] of [
-        [list(i.env), ENV_NAME, 'It would be started with these set', 'Other environment names'],
-        [list(i.headers), HEADER_NAME, 'It would send these headers', 'Other header names'],
-        [list(i.others), SETTING_NAME, 'It also sets', 'Other settings'],
+      const warned = list(i.env).filter(n => ENV_NAME.test(n) && CHANGES_WHAT_RUNS.test(n));
+      for (const [names, plain, sentence, label, warn] of [
+        [list(i.env), ENV_NAME, 'It would be started with these set', 'Other environment names', warned],
+        [list(i.headers), HEADER_NAME, 'It would send these headers', 'Other header names', []],
+        [list(i.others), SETTING_NAME, 'It also sets', 'Other settings', []],
       ]) {
         const ok = names.filter(n => plain.test(n));
         const odd = names.filter(n => !plain.test(n));
         if (ok.length) said.push(`${sentence}: ${ok.join(', ')}.`);
+        if (warn.length) said.push(`This connector sets ${andList(warn)}, which can change what runs on your computer.`);
         if (odd.length) lines.push(`${label}: ${odd.map(n => escapeControl(JSON.stringify(n))).join(', ')}`);
       }
       if (typeof i.headersHelper === 'string') {
@@ -387,7 +408,13 @@
       if (lines.some(l => /^Other /.test(l))) said.push('It also sets the names shown quoted below.');
     }
     said.push('Rundock asks about every connector an agent adds or removes, so there is no Always allow.');
-    return { summary: `${verb} the connector ${i.name || ''}`.trim(), context: said.join(' '), detail: lines.length ? lines.join('\n') : JSON.stringify(i) };
+    // The sentences speak of the new entry only, so a replace card's context is
+    // the same with or without the entry it replaces.
+    const current = !removing && i.action === 'replace' && i.current && typeof i.current === 'object' && !Array.isArray(i.current) ? i.current : null;
+    const detail = current
+      ? ['Now:', ...connectorLines(current), 'After:', ...connectorLines(i)].join('\n')
+      : (lines.length ? lines.join('\n') : JSON.stringify(i));
+    return { summary: `${verb} the connector ${i.name || ''}`.trim(), context: said.join(' '), detail };
   }
 
   // THE CARD FOR DOC'S CHANGE IN A HAND-OFF: for a save, the whole file, since the

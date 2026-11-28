@@ -199,6 +199,27 @@ describe('a Codex turn carries the items for the files it names', () => {
     h.reapConvo(id);
   });
 
+  test('a turn naming the PNG of an entry altered to list six files, its PNG still present, is sent the not-shown form and no localImage item', async () => {
+    const id = h.freshConvoId('codex-six');
+    codexAnswers(['SIX-T']);
+    h.clearInvocations();
+    const ok = await receiveAttachments(h.workspaceDir, { conversationId: id, content: 'SIX-T what is this', attachments: [file('diagram.png', DIAGRAM)] });
+    const recordFile = path.join(h.workspaceDir, '.rundock', 'attachments', id, 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    const extra = [2, 3, 4, 5, 6].map((n) => `${n}-extra.txt`);
+    record.messages[0].files.push(...extra.map((stored) => ({ file: stored, name: 'extra.txt', type: 'txt', bytes: 1, sha256: '0'.repeat(64) })));
+    fs.writeFileSync(recordFile, JSON.stringify(record));
+    const stored = ok.entry.files[0].file;
+    assert.strictEqual(store.checkRecordedFile(h.workspaceDir, id, stored), 'present', 'the PNG is still present');
+    const since = client.messages.length;
+    chat(id, ok.content, undefined, { agent: 'researcher', attachmentEntry: ok.entry.id });
+    assert.ok(await resultFor(id, 'DONE-SIX-T', since), 'the message is answered');
+    const text = textThen(await turnStartWith('SIX-T'), []);
+    const notShown = `[Attached image not shown to you: ${stored}. If you need it, tell the person you can't see it.]`;
+    assert.ok(text.endsWith(['SIX-T what is this', notShown, ...extra.map((f) => `[Attached file not available: ${f}]`)].join('\n')), text);
+    h.reapConvo(id);
+  });
+
   test('a Codex specialist whose brief leaves out the PNG\'s line is sent the line and the item', async () => {
     const id = h.freshConvoId('codex-brief-png');
     const stored = await claudeOpening(id, 'SETUP-BP', [file('diagram.png', DIAGRAM)]);
@@ -478,6 +499,70 @@ describe('a thread resumed on another app-server process is sent its images agai
     assert.match(String(instance), /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'with the instance it was sent through');
     h.reapConvo(id);
   });
+
+  // The thread's entry as an agent could leave it, written as given.
+  function plantEntry(id, threadId, entry) {
+    const record = JSON.parse(fs.readFileSync(recordFile(id), 'utf8'));
+    record.sent = { ...record.sent, [threadId]: entry };
+    fs.writeFileSync(recordFile(id), JSON.stringify(record));
+  }
+
+  test('a thread whose entry names no instance is sent its PNG again', async () => {
+    const id = h.freshConvoId('codex-no-instance');
+    codexAnswers(['BARE-TA', 'BARE-TB']);
+    h.clearInvocations();
+    const { ok, threadId, stored } = await opening(id, 'BARE-TA', [file('diagram.png', DIAGRAM)]);
+    plantEntry(id, threadId, { files: stored, bytes: DIAGRAM.length, images: 1 });
+    await followUp(id, threadId, 'BARE-TB and now?');
+    const text = textThen(await turnStartWith('BARE-TB'), [localImage(id, stored[0])]);
+    assert.strictEqual(text, `BARE-TB and now?\n${lineIn(ok.content)}`, 'the PNG\'s line after the person\'s text');
+    h.reapConvo(id);
+  });
+
+  test('a thread with no entry is sent nothing again when it is resumed', async () => {
+    const id = h.freshConvoId('codex-no-entry');
+    codexAnswers(['NONE-TA', 'NONE-TB']);
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'NONE-TA hello', undefined, { agent: 'researcher' });
+    const threadId = await threadOf(id, since);
+    await doneAfter(id, since);
+    // A PNG the conversation keeps that this thread was never sent.
+    await receiveAttachments(h.workspaceDir, { conversationId: id, content: 'for another agent', attachments: [file('diagram.png', DIAGRAM)] });
+    assert.strictEqual(entryOf(id, threadId), undefined, 'the thread has no entry');
+    await followUp(id, threadId, 'NONE-TB anything new?');
+    const params = await turnStartWith('NONE-TB');
+    assert.deepStrictEqual(params, { threadId, input: [{ type: 'text', text: 'NONE-TB anything new?' }] }, 'the person\'s text alone');
+    h.reapConvo(id);
+  });
+
+  test('a Codex turn is recorded with its app-server process\'s instance, the same on a follow-up to that process and a new one once it respawns', async () => {
+    needsRecording();
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    const id = h.freshConvoId('codex-instance');
+    h.writeCodexScenario([
+      { match: { promptIncludes: 'INST-TC' }, deltas: ['about to die'], crashMidTurn: true },
+      ...['INST-TA', 'INST-TB', 'INST-TD'].map((tag) => ({ match: { promptIncludes: tag }, text: `DONE-${tag}` })),
+    ]);
+    h.clearInvocations();
+    const { threadId } = await opening(id, 'INST-TA', [file('diagram.png', DIAGRAM)]);
+    const first = (entryOf(id, threadId) || {}).instance;
+    assert.match(String(first), UUID, 'the thread is recorded with the instance it was opened on');
+    await followUp(id, threadId, 'INST-TB on the same process');
+    assert.strictEqual((entryOf(id, threadId) || {}).instance, first, 'a follow-up to the same process keeps it');
+    let since = client.messages.length;
+    chat(id, 'INST-TC crash now', undefined, { agent: 'researcher', sessionId: threadId });
+    assert.ok(await arrived((m) => m.type === 'system' && m.subtype === 'codex_error' && m._conversationId === id, { since }), 'the turn dies with the app-server');
+    await doneAfter(id, since);
+    since = client.messages.length;
+    chat(id, 'INST-TD after the respawn', undefined, { agent: 'researcher', sessionId: threadId });
+    assert.ok(await resultFor(id, 'DONE-INST-TD', since), 'the follow-up is answered on the respawned app-server');
+    await doneAfter(id, since);
+    const second = (entryOf(id, threadId) || {}).instance;
+    assert.match(String(second), UUID, 'recorded with the respawned process\'s instance');
+    assert.notStrictEqual(second, first, 'which is a new one');
+    h.reapConvo(id);
+  });
 });
 
 describe('what a Claude Code session is recorded as sent', () => {
@@ -603,6 +688,124 @@ describe('what a Claude Code session is recorded as sent', () => {
     assert.deepStrictEqual(sent.content.slice(1), [blockOf(DIAGRAM)], 'sent the block the lost session was');
     const once = { files: filesOf(first), bytes: DIAGRAM.length, images: 1 };
     assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).sent, { [lost]: once, [session]: once });
+    h.reapConvo(id);
+  });
+
+  test('a legacy start records what it was sent under the ID its process reports', async () => {
+    needsRecording();
+    const id = h.freshConvoId('claude-legacy');
+    claudeAnswers(['LEGACY-C1']);
+    h.clearInvocations();
+    const since = client.messages.length;
+    let stored;
+    let session;
+    process.env.RUNDOCK_LEGACY_SPAWN = '1';
+    try {
+      chat(id, 'LEGACY-C1 have a look', [file('diagram.png', DIAGRAM)]);
+      stored = await storedFor(id, since);
+      assert.ok(stored, 'the message is stored');
+      session = await sessionOf(id, since);
+      assert.ok(await resultFor(id, 'DONE-LEGACY-C1', since), 'the turn is answered');
+    } finally {
+      delete process.env.RUNDOCK_LEGACY_SPAWN;
+    }
+    assert.deepStrictEqual(spawnsFor(id).map((i) => i.print), [true], 'by a process started in legacy mode');
+    assert.deepStrictEqual((await readWith('LEGACY-C1')).content.slice(1), [blockOf(DIAGRAM)], 'the turn carries the block');
+    assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).sent, { [session]: { files: filesOf(stored), bytes: DIAGRAM.length, images: 1 } },
+      'recorded under the reported ID');
+    h.reapConvo(id);
+  });
+
+  test('a brief handed to a delegate records what it was sent under the ID the delegate\'s process reports', async () => {
+    needsRecording();
+    const id = h.freshConvoId('claude-handover');
+    scenario([
+      { match: { agent: 'chief-of-staff', promptIncludes: 'HANDOVER-C1', promptExcludes: '[SYSTEM:' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: 'BRIEF-HC do it' } }] },
+      { match: { agent: 'content-lead', promptIncludes: 'BRIEF-HC' }, turn: [{ text: 'Handed back.' }] },
+      { match: { promptIncludes: '[SYSTEM:' }, turn: [{ text: '<silent>' }] },
+    ]);
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'HANDOVER-C1 have a look', [file('diagram.png', DIAGRAM)]);
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is stored');
+    const initOf = (agent) => arrived((m) => m.type === 'system' && m.subtype === 'init' && m._conversationId === id && m._agent === agent, { since });
+    const lead = await initOf('chief-of-staff');
+    const delegate = await initOf('content-lead');
+    assert.ok(lead && delegate && typeof delegate._sessionId === 'string', 'the leader and the delegate each report a session');
+    assert.notStrictEqual(delegate._sessionId, lead._sessionId, 'two sessions');
+    const pick = () => h.readPrompts().filter((p) => p.agent === 'content-lead' && p.line !== undefined && p.prompt.includes('BRIEF-HC'));
+    assert.ok(await h.waitUntil(() => pick().length > 0, { timeout: 15000 }), 'the delegate reads its brief');
+    assert.strictEqual(pick().length, 1, 'once');
+    assert.deepStrictEqual(JSON.parse(pick()[0].line).message.content.slice(1), [blockOf(DIAGRAM)], 'the brief carries the block');
+    const once = { files: filesOf(stored), bytes: DIAGRAM.length, images: 1 };
+    assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).sent, { [lead._sessionId]: once, [delegate._sessionId]: once },
+      'each session recorded under the ID its process reported');
+    h.reapConvo(id);
+  });
+
+  // A conversation whose delegate's stored session is gone: the leader,
+  // resumed, hands it a brief, its resume is refused, and it starts fresh.
+  function staleDelegate(id, t, ask, brief, extra) {
+    seedRecord(id, { agentId: 'chief-of-staff', sessionId: `live-orch-${t}`,
+      sessionIds: [{ agentId: 'chief-of-staff', sessionId: `live-orch-${t}` }, { agentId: 'content-lead', sessionId: `dead-lead-${t}` }] });
+    scenario([
+      { match: { resume: true, promptIncludes: ask, promptExcludes: 'DELEGATION BRIEF' },
+        turn: [{ agentTool: { subagent_type: 'content-lead', prompt: brief } }] },
+      { match: { agent: 'content-lead', promptIncludes: brief }, turn: [{ text: 'Handed back.' }] },
+      { match: { agent: 'content-lead', promptIncludes: 'KEPT-' }, turn: [{ text: 'Followed.' }] },
+      { match: { promptIncludes: '[SYSTEM:' }, turn: [{ text: '<silent>' }] },
+    ], [`dead-lead-${t}`], extra);
+  }
+  const delegateSpawns = (id) => spawnsFor(id).filter((i) => i.agent === 'content-lead').map((i) => i.resume);
+  const freshInit = (id, since) => arrived((m) => m.type === 'system' && m.subtype === 'init' && m._conversationId === id && m._agent === 'content-lead', { since });
+  // The one stdin line holding `tag` that the delegate's fresh start read.
+  async function readFresh(tag) {
+    const pick = () => h.readPrompts().filter((p) => p.agent === 'content-lead' && p.resume == null && p.line !== undefined && p.prompt.includes(tag));
+    assert.ok(await h.waitUntil(() => pick().length > 0, { timeout: 15000 }), `the fresh start reads a turn with ${tag}`);
+    assert.strictEqual(pick().length, 1, `one turn with ${tag}`);
+    return JSON.parse(pick()[0].line).message.content;
+  }
+
+  test('a delegate started fresh after its session was refused records what its brief was sent under the ID the fresh process reports', async () => {
+    needsRecording();
+    const id = h.freshConvoId('claude-fresh-brief');
+    staleDelegate(id, 'rc', 'REFUSED-C1', 'BRIEF-RC do it');
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'REFUSED-C1 have a look', [file('diagram.png', DIAGRAM)], { sessionId: 'live-orch-rc' });
+    const stored = await storedFor(id, since);
+    assert.ok(stored, 'the message is stored');
+    const fresh = await freshInit(id, since);
+    assert.ok(fresh && typeof fresh._sessionId === 'string', 'the fresh start reports its session');
+    assert.deepStrictEqual((await readFresh('BRIEF-RC do it')).slice(1), [blockOf(DIAGRAM)], 'its brief carries the block');
+    assert.deepStrictEqual(delegateSpawns(id), ['dead-lead-rc', null], 'refused once, then started fresh');
+    const once = { files: filesOf(stored), bytes: DIAGRAM.length, images: 1 };
+    assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).sent, { 'live-orch-rc': once, [fresh._sessionId]: once },
+      'the leader\'s session and the fresh one each recorded, and the refused one not at all');
+    h.reapConvo(id);
+  });
+
+  test('a message kept for a delegate starting fresh records what it was sent under the ID the fresh process reports', async () => {
+    needsRecording();
+    const id = h.freshConvoId('claude-fresh-kept');
+    const chart = png(800, 600, 50);
+    staleDelegate(id, 'kc', 'ASKING-C2', 'BRIEF-KC do it', { refusalExitMs: 1200 });
+    h.clearInvocations();
+    const since = client.messages.length;
+    chat(id, 'ASKING-C2 please', undefined, { sessionId: 'live-orch-kc' });
+    assert.ok(await arrived((m) => m.subtype === 'session_expired' && m._conversationId === id, { since }), 'the delegate\'s resume is refused and still lingering');
+    const mid = client.messages.length;
+    chat(id, 'KEPT-C2 and this one', [file('chart.png', chart)], { agent: 'content-lead' });
+    const stored = await storedFor(id, mid);
+    assert.ok(stored, 'the message is stored');
+    const fresh = await freshInit(id, since);
+    assert.ok(fresh && typeof fresh._sessionId === 'string', 'the fresh start reports its session');
+    assert.deepStrictEqual(await readFresh('KEPT-C2'), [{ type: 'text', text: stored.content }, blockOf(chart)], 'the kept message with its own block');
+    assert.deepStrictEqual(delegateSpawns(id), ['dead-lead-kc', null], 'one fresh start carries it');
+    assert.deepStrictEqual(store.readRecord(h.workspaceDir, id).sent, { [fresh._sessionId]: { files: filesOf(stored), bytes: chart.length, images: 1 } },
+      'recorded under the fresh ID alone');
     h.reapConvo(id);
   });
 });
@@ -753,6 +956,309 @@ describe('what the server stores and refuses for an agent on Codex', () => {
     const attachments = [...shots(2, 3500000), file('shot-3.png', png(10, 10, 3000000))];
     const { threadId } = await storedAndAnswered(id, 'TENMB-S', attachments);
     assert.strictEqual(entryOf(id, threadId).bytes, 10000000, 'the thread was sent 10,000,000 bytes');
+    h.reapConvo(id);
+  });
+
+  // The thread's record entry put at `images` images of 33 bytes, its files
+  // and instance kept, as if earlier turns had sent it them.
+  function sentSoFar(id, threadId, images) {
+    const recordFile = path.join(folderOf(id), 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    record.sent[threadId] = { ...record.sent[threadId], bytes: images * 33, images };
+    fs.writeFileSync(recordFile, JSON.stringify(record));
+  }
+  // A thread of the researcher's opened by a one-image message, then put at
+  // `images` images sent.
+  async function threadAt(id, tag, images) {
+    const { threadId } = await storedAndAnswered(id, tag, shots(1, 33, 1));
+    sentSoFar(id, threadId, images);
+    return threadId;
+  }
+  // Holds every thread the app-server is asked to resume until the answer is
+  // called, so no turn on one starts before the test lets it.
+  async function holdResumes() {
+    const server = await glue.getCodexAppServer();
+    const resumeThread = server.resumeThread;
+    let open;
+    const gate = new Promise((resolve) => { open = resolve; });
+    server.resumeThread = async function (...args) {
+      await gate;
+      return resumeThread.apply(this, args);
+    };
+    return () => {
+      open();
+      server.resumeThread = resumeThread;
+    };
+  }
+  const startedWith = (tag) => h.readInvocations().filter((i) => i.method === 'turn/start' && JSON.stringify(i.params).includes(tag));
+  const processStarted = (id) => (m) => m.type === 'system' && m.subtype === 'process_started' && m._conversationId === id;
+
+  test('a second one-image message for a thread at 19 images, sent before the first one\'s turn starts, is refused codex-images and never started', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-race');
+    codexAnswers(['RACE-S1', 'RACE-S2', 'RACE-S3']);
+    const threadId = await threadAt(id, 'RACE-S1', 19);
+    h.clearInvocations();
+    const release = await holdResumes();
+    let stored;
+    const since = client.messages.length;
+    try {
+      toResearcher(id, 'RACE-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      stored = await storedFor(id, since);
+      assert.ok(stored, 'the first is stored');
+      await refusedAsBefore({ conversationId: id, agent: 'researcher', sessionId: threadId, content: 'RACE-S3 and this', attachments: shots(1, 33, 3) },
+        { code: 'codex-images', title: 'Message not sent', text: IMAGES_TEXT });
+      release();
+      assert.ok(await resultFor(id, 'DONE-RACE-S2', since), 'the first is answered');
+      await doneAfter(id, since);
+    } finally {
+      release();
+    }
+    textThen(await turnStartWith('RACE-S2'), [localImage(id, stored.entry.files[0].file)]);
+    assert.deepStrictEqual(startedWith('RACE-S3'), [], 'the second is never started');
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the thread was sent 20 images');
+    h.reapConvo(id);
+  });
+
+  test('once each message\'s send is recorded its images count from the record alone, so a thread at 17 is sent three more one at a time', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-recorded');
+    const tags = ['FREED-S1', 'FREED-S2', 'FREED-S3', 'FREED-S4'];
+    codexAnswers(tags);
+    const threadId = await threadAt(id, tags[0], 17);
+    for (const [i, tag] of tags.slice(1).entries()) {
+      await storedAndAnswered(id, tag, shots(1, 33, 2 + i), { sessionId: threadId });
+    }
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the thread was sent 20 images');
+    h.reapConvo(id);
+  });
+
+  test('a one-image message whose turn fails to start leaves nothing counted, so the next one for a thread at 19 is stored', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-unstarted');
+    codexAnswers(['UNSTARTED-S1', 'UNSTARTED-S2', 'UNSTARTED-S3']);
+    const threadId = await threadAt(id, 'UNSTARTED-S1', 19);
+    const server = await glue.getCodexAppServer();
+    const startTurn = server.startTurn;
+    // A bad item after the turn's own, so startTurn's check throws.
+    server.startTurn = function (thread, text, opts, items) {
+      return startTurn.call(this, thread, text, opts, [...items, { type: 'localImage', path: 'diagram.png' }]);
+    };
+    try {
+      const since = client.messages.length;
+      toResearcher(id, 'UNSTARTED-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      assert.ok(await storedFor(id, since), 'the message is stored');
+      assert.ok(await arrived((m) => m.type === 'system' && m.subtype === 'codex_error' && m._conversationId === id, { since }), 'its turn fails to start');
+      await doneAfter(id, since);
+    } finally {
+      server.startTurn = startTurn;
+    }
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await storedAndAnswered(id, 'UNSTARTED-S3', shots(1, 33, 3), { sessionId: threadId });
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the next one is sent');
+    h.reapConvo(id);
+  });
+
+  test('a one-image message whose turn a newer message takes over before it starts leaves nothing counted, so the next one for a thread at 19 is stored', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-superseded');
+    codexAnswers(['OVER-S1', 'OVER-S2', 'OVER-S3', 'OVER-S4']);
+    const threadId = await threadAt(id, 'OVER-S1', 19);
+    h.clearInvocations();
+    const release = await holdResumes();
+    try {
+      let since = client.messages.length;
+      toResearcher(id, 'OVER-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      assert.ok(await storedFor(id, since), 'the message is stored');
+      assert.ok(await arrived(processStarted(id), { since }), 'and its turn begins to open the thread');
+      since = client.messages.length;
+      toResearcher(id, 'OVER-S3 never mind', undefined, { sessionId: threadId });
+      assert.ok(await arrived(processStarted(id), { since }), 'a newer message takes over');
+      release();
+      assert.ok(await resultFor(id, 'DONE-OVER-S3', since), 'the newer message is answered');
+      await doneAfter(id, since);
+    } finally {
+      release();
+    }
+    assert.deepStrictEqual(startedWith('OVER-S2'), [], 'the earlier turn never started');
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await storedAndAnswered(id, 'OVER-S4', shots(1, 33, 3), { sessionId: threadId });
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the next one is sent');
+    h.reapConvo(id);
+  });
+
+  // The record with the entry `entryId` taken out, as an agent could leave it.
+  function withoutEntry(id, entryId) {
+    const recordFile = path.join(folderOf(id), 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    fs.writeFileSync(recordFile, JSON.stringify({ ...record, messages: record.messages.filter((m) => m.id !== entryId) }));
+  }
+  // Takes a stored message's entry out of the record the moment the server
+  // tells the window it stored it, which is before the message comes back
+  // into the chat handler and its reference is checked. Answers the undo.
+  function entryGoneOnceStored(id) {
+    const sockets = [...h.internal.connectedClients];
+    const sends = sockets.map((sock) => sock.send);
+    for (const [i, sock] of sockets.entries()) {
+      sock.send = function (data, ...rest) {
+        let m = null;
+        try { m = JSON.parse(String(data)); } catch (e) { /* not a message this looks at */ }
+        if (m && m.type === 'chat_stored' && m.conversationId === id) withoutEntry(id, m.entry.id);
+        return sends[i].call(this, data, ...rest);
+      };
+    }
+    return () => { for (const [i, sock] of sockets.entries()) sock.send = sends[i]; };
+  }
+  // Holds the conversation's chats back as a hand-over does. Answers the end,
+  // which lets them through to whatever window is connected.
+  function inTransition(id) {
+    const { transitions } = h.internal.wsHandlerContext;
+    const owner = {};
+    transitions.beginConvoTransition(id, 'restoring', owner);
+    return () => transitions.endConvoTransition(id, owner);
+  }
+  const heldBack = (id) => (h.internal.convoTransitions.get(id) || { queued: [] }).queued.length;
+  // The next one-image message for a thread at 19 images: stored, not
+  // refused, then sent with its image, which takes the thread to 20.
+  async function nextOneIsSent(id, threadId, tag) {
+    const since = client.messages.length;
+    toResearcher(id, `${tag} have a look`, shots(1, 33, 3), { sessionId: threadId });
+    const answer = await arrived((m) => (m.type === 'chat_stored' || m.type === 'chat_refused') && m.conversationId === id, { since });
+    assert.strictEqual(answer && (answer.code || answer.type), 'chat_stored', `${tag} is stored`);
+    assert.ok(await resultFor(id, `DONE-${tag}`, since), `${tag} is answered`);
+    await doneAfter(id, since);
+    textThen(await turnStartWith(tag), [localImage(id, answer.entry.files[0].file)]);
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the thread was sent 20 images');
+  }
+
+  test('a one-image message whose entry an agent takes out of the record before its reference is checked starts no turn and leaves nothing counted, so the next one for a thread at 19 is stored and sent', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-unreferenced');
+    codexAnswers(['GONE-S1', 'GONE-S2', 'GONE-S3']);
+    const threadId = await threadAt(id, 'GONE-S1', 19);
+    h.clearInvocations();
+    const undo = entryGoneOnceStored(id);
+    try {
+      const since = client.messages.length;
+      toResearcher(id, 'GONE-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      assert.ok(await storedFor(id, since), 'the message is stored');
+      const refused = await arrived((m) => m.type === 'chat_refused' && m.conversationId === id, { since });
+      assert.strictEqual(refused && refused.code, 'bad-entry', 'and refused at its reference check');
+    } finally {
+      undo();
+    }
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await nextOneIsSent(id, threadId, 'GONE-S3');
+    assert.deepStrictEqual(startedWith('GONE-S2'), [], 'the refused one never started');
+    h.reapConvo(id);
+  });
+
+  test('a one-image message held back by a hand-over, its entry taken out of the record while it waits, is refused once let through and leaves nothing counted, so the next one for a thread at 19 is stored and sent', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-replay-unreferenced');
+    codexAnswers(['REPLAY-S1', 'REPLAY-S2', 'REPLAY-S3']);
+    const threadId = await threadAt(id, 'REPLAY-S1', 19);
+    h.clearInvocations();
+    const since = client.messages.length;
+    const letThrough = inTransition(id);
+    try {
+      toResearcher(id, 'REPLAY-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      const stored = await storedFor(id, since);
+      assert.ok(stored, 'the message is stored');
+      assert.strictEqual(heldBack(id), 1, 'and held back');
+      withoutEntry(id, stored.entry.id);
+    } finally {
+      letThrough();
+    }
+    const refused = await arrived((m) => m.type === 'chat_refused' && m.conversationId === id, { since });
+    assert.strictEqual(refused && refused.code, 'bad-entry', 'it is refused at its reference check');
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await nextOneIsSent(id, threadId, 'REPLAY-S3');
+    assert.deepStrictEqual(startedWith('REPLAY-S2'), [], 'the refused one never started');
+    h.reapConvo(id);
+  });
+
+  test('a one-image message held back by a hand-over and dropped when no window is connected to let it through leaves nothing counted, so the next one for a thread at 19 is stored and sent', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-dropped');
+    codexAnswers(['DROP-S1', 'DROP-S2', 'DROP-S3']);
+    const threadId = await threadAt(id, 'DROP-S1', 19);
+    h.clearInvocations();
+    const letThrough = inTransition(id);
+    try {
+      const since = client.messages.length;
+      toResearcher(id, 'DROP-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      assert.ok(await storedFor(id, since), 'the message is stored');
+      assert.strictEqual(heldBack(id), 1, 'and held back');
+      client.close();
+      assert.ok(await h.waitUntil(() => h.internal.connectedClients.size === 0), 'no window is connected');
+    } finally {
+      letThrough();
+      if (client.closed) client = await h.connect();
+    }
+    assert.strictEqual(heldBack(id), 0, 'nothing is held back any more');
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await nextOneIsSent(id, threadId, 'DROP-S3');
+    assert.deepStrictEqual(startedWith('DROP-S2'), [], 'the dropped one never started');
+    h.reapConvo(id);
+  });
+
+  test('a one-image message whose way to its turn throws, its conversation\'s transcript file made a folder, leaves nothing counted, so the next one for a thread at 19 is stored and sent', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-thrown');
+    codexAnswers(['THROWN-S1', 'THROWN-S2', 'THROWN-S3']);
+    const threadId = await threadAt(id, 'THROWN-S1', 19);
+    h.clearInvocations();
+    const transcript = path.join(h.workspaceDir, '.rundock', 'transcripts', `${id}.json`);
+    assert.ok(fs.existsSync(transcript), 'the conversation has a transcript file');
+    fs.rmSync(transcript);
+    fs.mkdirSync(transcript);
+    try {
+      const since = client.messages.length;
+      toResearcher(id, 'THROWN-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      assert.ok(await storedFor(id, since), 'the message is stored');
+    } finally {
+      fs.rmSync(transcript, { recursive: true, force: true });
+    }
+    assert.strictEqual(entryOf(id, threadId).images, 19, 'nothing more is recorded');
+    await nextOneIsSent(id, threadId, 'THROWN-S3');
+    assert.deepStrictEqual(startedWith('THROWN-S2'), [], 'the one that threw never started');
+    h.reapConvo(id);
+  });
+
+  test('a page\'s message naming a stored message\'s entry, which throws on its way to a turn, leaves that message\'s images held, so the next one for a thread at 19 is refused codex-images', async () => {
+    needsRecording();
+    const id = h.freshConvoId('codex-page-thrown');
+    codexAnswers(['NAMED-S1', 'NAMED-S2', 'NAMED-S3', 'NAMED-S4']);
+    const threadId = await threadAt(id, 'NAMED-S1', 19);
+    h.clearInvocations();
+    const transcript = path.join(h.workspaceDir, '.rundock', 'transcripts', `${id}.json`);
+    const release = await holdResumes();
+    const since = client.messages.length;
+    try {
+      toResearcher(id, 'NAMED-S2 have a look', shots(1, 33, 2), { sessionId: threadId });
+      const stored = await storedFor(id, since);
+      assert.ok(stored, 'the message is stored');
+      assert.ok(await arrived(processStarted(id), { since }), 'and its turn begins to open the thread');
+      fs.rmSync(transcript);
+      fs.mkdirSync(transcript);
+      try {
+        toResearcher(id, 'NAMED-S3 about that', undefined, { sessionId: threadId, attachmentEntry: stored.entry.id });
+        const reached = () => (h.internal.convoTranscripts.get(id) || []).some((row) => row.text === 'NAMED-S3 about that');
+        assert.ok(await h.waitUntil(reached), 'the page\'s message reaches the step that throws');
+      } finally {
+        fs.rmSync(transcript, { recursive: true, force: true });
+      }
+      await refusedAsBefore({ conversationId: id, agent: 'researcher', sessionId: threadId, content: 'NAMED-S4 and this', attachments: shots(1, 33, 3) },
+        { code: 'codex-images', title: 'Message not sent', text: IMAGES_TEXT });
+      release();
+      assert.ok(await resultFor(id, 'DONE-NAMED-S2', since), 'the stored one is answered');
+      await doneAfter(id, since);
+    } finally {
+      release();
+    }
+    assert.deepStrictEqual(startedWith('NAMED-S3'), [], 'the page\'s message never started');
+    assert.strictEqual(entryOf(id, threadId).images, 20, 'the thread was sent 20 images');
     h.reapConvo(id);
   });
 

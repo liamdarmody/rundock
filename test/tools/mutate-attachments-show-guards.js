@@ -68,6 +68,10 @@ const MUTATIONS = [
     'the route reads the file by path after the record check',
     '    res.end(answer.bytes);\n',
     '    fs.createReadStream(path.join(getWorkspace(), ...segments)).pipe(res);\n'],
+  [only(ROUTE, 'the bytes served are the ones the record check read, never read again by path'),
+    'the route asks the record check without keeping the bytes it reads',
+    'store.readRecordedFile(getWorkspace(), id, file, { keep: true })',
+    'store.readRecordedFile(getWorkspace(), id, file)'],
   [only(ROUTE, 'a stored PNG rewritten at the same size with other bytes is refused'),
     'the folder rule is skipped, so a stored file is served by path',
     '    if (stored) { serveStoredFile(res, stored, inside); return; }\n',
@@ -80,6 +84,14 @@ const MUTATIONS = [
     'the type compare is skipped',
     "answer.state === 'present' && answer.described.type === name[1]",
     "answer.state === 'present'"],
+  [only(ROUTE, 'a stored-file request whose record check throws is refused, and the server answers the next one'),
+    'a throw from the record check leaves the route unanswered',
+    '  let answer = null;\n  try {\n'
+      + '    answer = mime && inside ? store.readRecordedFile(getWorkspace(), id, file, { keep: true }) : null;\n'
+      + '  } catch (e) {\n'
+      + "    console.warn(`[Workspace file] A stored-file request was answered 404: its record check failed (${e && typeof e.code === 'string' ? e.code : 'no code'}).`);\n"
+      + '  }\n',
+    '  const answer = mime && inside ? store.readRecordedFile(getWorkspace(), id, file, { keep: true }) : null;\n'],
 
   // ===== THE HISTORY SAYS ONLY WHICH OF ITS OWN NAMED FILES ARE THERE =====
   [only(HISTORY, 'a file of the record that no message names gives no key'),
@@ -102,6 +114,15 @@ const MUTATIONS = [
   [LINES, 'the stripper finds a line inside a sentence',
     'const whole = (core) => new RegExp(`^${core}$`);',
     'const whole = (core) => new RegExp(core);'],
+  // The replacement spells the anchors in double quotes: String.replace reads
+  // a dollar sign followed by a backtick or a single quote as a pattern of
+  // its own, which would write the rest of the file into the line.
+  [LINES, 'a line followed by a carriage return or a Unicode separator is found, as the multiline flag reads its end',
+    'const whole = (core) => new RegExp(`^${core}$`);',
+    'const whole = (core) => new RegExp("^" + core + "$", "m");'],
+  [LINES, "a line's details may hold a carriage return",
+    '[^)\\\\]\\\\r\\\\n\\\\u2028\\\\u2029]*',
+    '[^)\\\\]\\\\n\\\\u2028\\\\u2029]*'],
 
   // ===== THE BUBBLE DRAWS EACH FILE FROM WHAT THE SERVER SAID OF IT =====
   [PAGE, 'changed draws as present',

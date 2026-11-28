@@ -193,3 +193,122 @@ With the cap at nineteen on main at `3cb47720`, `node --test test/unit/mutation-
 - **The nightly sweep** (`.github/workflows/mutation-nightly.yml`): `run: node scripts/mutation-scope.js --all --plan --out mutation-plan.json` (`:88`), `matrix: ${{ steps.plan.outputs.matrix }}` (`:65`), `matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}` (`:111`), and `timeout-minutes: 30` (`:108`).
 
 A pull request's scoped plan is the same at seventeen and nineteen unless it needs more than seventeen shards, which "a plan the cap does not reach is the same whatever the cap" in `test/unit/mutation-scope.test.js` pins.
+
+## Raised to twenty-four
+
+Main at `7e6e0e8c` plans the full set's longest shard at 899 s at nineteen, a second under the 900 s the planner suite allows. Changes adding rows, laid over main, each plan a shard past 900 s at nineteen, so the planner test fails on their merge with main. Twenty is the smallest cap at which every tree below plans under 900 s; this raise goes to the smallest at which every tree plans its longest shard at or under 750 s, a sixth under the bound, to leave room for the rows still to come. Each tree is an export (`git archive`) of main at `7e6e0e8c` with the harness files named laid over it. Every tree is costed the same way, by main's committed table, `test/tools/mutation-costs.json`, which none of these changes alters.
+
+- **Main at `7e6e0e8c`** (3,636 rows).
+- **Main with #508** (3,685 rows): #508's four harness files at `4d664308`, `mutate-atomic-write-guards.js`, `mutate-attachments-codex-guards.js`, `mutate-attachments-compose-guards.js` and `mutate-stale-session-guards.js`.
+- **Main with #509** (3,655 rows): `mutate-attachments-show-guards.js` at `1b7dcce7`.
+- **Main with both** (3,704 rows): the five files above.
+- **Main with #508 and two more changes** (3,708 rows): #508's four files, the seven harness files `402591d2` changes against main, and the five of a change not yet pushed, by blob: `mutate-room-helpers-codex-guards.js` (`49d3893f`), `mutate-room-helpers-guards.js` (`1af2bde1`), `mutate-stale-session-guards.js` (`22821b55`), `mutate-turn-usage-guards.js` (`f441f3a1`) and `mutate-workspace-boundary-guards.js` (`8f6f8643`). Where more than one of these changes a file, the version with the most rows is used, #508's each time: `mutate-attachments-codex-guards.js` has 49 rows at #508 and 12 at `402591d2`; `mutate-attachments-compose-guards.js` has 23 at both, and `mutate-stale-session-guards.js` 124 at #508, at `402591d2` and in blob `22821b55`. Those two ties keep #508's version, and the tree planned with either other version instead gives the same figures at every cap below.
+
+Each plan is `plan-caps.js` from the section "Raised to nineteen", its caps changed to `[19, 20, 21, 22, 23, 24, 25, 26]`, run as `node plan-caps.js <dir>` on each tree. It plans the full set with `planShards`, passing each cap as `maxShards`. Measured 2026-11-28.
+
+Each cell is the plan's longest shard, its average shard and its total. Every plan uses all the shards its cap allows, so each column's shard count is its cap. Totals differ by a second between caps because each slice's seconds are rounded.
+
+| Tree | Cap 19 (19 shards) | Cap 20 (20 shards) | Cap 22 (22 shards) | Cap 23 (23 shards) | Cap 24 (24 shards) |
+|---|---|---|---|---|---|
+| main at `7e6e0e8c` | 899 s, 887 s, 16,860 s | 850 s, 843 s, 16,860 s | 819 s, 766 s, 16,861 s | 743 s, 733 s, 16,861 s | 723 s, 703 s, 16,860 s |
+| main with #508 | 904 s, 900 s, 17,105 s | 870 s, 855 s, 17,105 s | 786 s, 778 s, 17,105 s | 763 s, 744 s, 17,106 s | 725 s, 713 s, 17,105 s |
+| main with #509 | 901 s, 892 s, 16,955 s | 853 s, 848 s, 16,955 s | 786 s, 771 s, 16,955 s | 749 s, 737 s, 16,956 s | 725 s, 706 s, 16,955 s |
+| main with both | 911 s, 905 s, 17,200 s | 880 s, 860 s, 17,200 s | 788 s, 782 s, 17,200 s | 765 s, 748 s, 17,201 s | 736 s, 717 s, 17,201 s |
+| main with #508 and two more | 924 s, 905 s, 17,186 s | 876 s, 859 s, 17,185 s | 791 s, 781 s, 17,186 s | 763 s, 747 s, 17,185 s | 744 s, 716 s, 17,185 s |
+
+## Why twenty-four
+
+Twenty-four is the smallest cap at which every tree plans its longest shard at or under 750 s. At twenty-three three trees still plan past it, main with #508 at 763 s, main with both at 765 s and main with #508 and two more at 763 s, and at twenty-one and twenty-two every tree plans its longest at 786 s or more. At twenty-four the longest shard of every tree is a slice of the boundary harness, `mutate-workspace-boundary-guards.js`: alone on main with both (rows 153:253, 736 s) and on main with #508 and two more (rows 151:253, 744 s), and with one small harness on the other three (rows 1194:1244, 663 s, with `mutate-turn-usage-guards.js`, 60 s, on main, and with `mutate-shell-config-dir-guards.js`, 62 s, on main with #508 and on main with #509).
+
+Twenty, the smallest cap at which every tree plans under 900 s, leaves the two heaviest trees 20 s and 24 s under the bound: main with both plans its longest at 880 s and main with #508 and two more at 876 s. Headroom was measured as in the section "Why nineteen": rows of 28.8 s each, added one at a time, once as a harness of their own and once as new rows at the end of the boundary harness, planning with `planShards` at the cap until a shard passes 900 s; each figure is the smallest count that tips one. At twenty either tree takes 25 rows (720 s) as their own harness and 12 (346 s) in the boundary harness. At twenty-four main with both, the heaviest by total (17,201 s), takes 141 rows (4,061 s) as their own harness, the 142nd putting a shard at 901 s, and 132 (3,802 s) in the boundary harness, the 133rd putting one at 907 s. Main with #508 and two more, the heaviest by rows, takes 148 (4,262 s) and 130 (3,744 s), the next row putting a shard at 903 s and at 907 s.
+
+Each shard past nineteen is another CI job on every run of the full set, so twenty-four adds five to the nightly sweep and to every pull request that touches what every harness depends on. Past twenty-four each shard buys less: from nineteen to twenty-four the longest shard of each tree falls by 35 to 36 s a shard on average, and from twenty-four to twenty-six by 21 to 32.5 s, with the longest at 700 to 706 s at twenty-five and 672 to 684 s at twenty-six. The planner's ten-minute target (`SECONDS_PER_SHARD`) would want about twenty-nine shards for this set (17,201 s over 600 s), so the cap is what holds the count, as before.
+
+## The planner suite and both workflows, at twenty-four
+
+With the cap at twenty-four on main at `7e6e0e8c`, `node --test test/unit/mutation-scope.test.js` passes 61 of 61 tests with none skipped, the suite unchanged, "the full set, planned with the real costs, keeps every shard well under its limit" included. Run 2026-11-28. Twenty-four shards need no workflow change. On main at `7e6e0e8c` the lines in both workflows are where they were at nineteen:
+
+- **Pull requests** (`.github/workflows/ci.yml`): `node scripts/mutation-scope.js --plan --out mutation-plan.json --base "$BASE"` (`:225`) and `node scripts/mutation-scope.js --plan --out mutation-plan.json` (`:227`), `matrix: ${{ steps.plan.outputs.matrix }}` (`:163`), `matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}` (`:258`), and `timeout-minutes: 30` (`:255`).
+- **The nightly sweep** (`.github/workflows/mutation-nightly.yml`): `run: node scripts/mutation-scope.js --all --plan --out mutation-plan.json` (`:88`), `matrix: ${{ steps.plan.outputs.matrix }}` (`:65`), `matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}` (`:111`), and `timeout-minutes: 30` (`:108`).
+
+A pull request's scoped plan is the same at nineteen and twenty-four unless it needs more than nineteen shards, which "a plan the cap does not reach is the same whatever the cap" in `test/unit/mutation-scope.test.js` pins.
+
+## Raised to thirty-three
+
+Main at `c60588be` plans the full set's longest shard at 736 s at twenty-four, but the set keeps growing. Its full-set total was 14,805 s at `3cb47720` on 2026-11-17 (the section "Raised to nineteen") and is 17,201 s at `c60588be` on 2026-11-28: 2,396 s in 11 days, 217.8 s a day. Projected at that pace from 2026-11-28 to 2027-01-11, the projection's horizon, 44 days, the set gains 9,584 s. This raise goes to the smallest cap that plans the heaviest tree below, with that growth added, at or under 850 s on its longest shard. At the slower pace this file's totals gave before #508 and #509 merged (16,860 s at `7e6e0e8c`, about 187 s a day), that cap was expected to be thirty-two. At the measured pace the plans below put the longest shard at 859 s at thirty-two and 830 s at thirty-three, so the plans decide, and the cap is thirty-three.
+
+Each tree is an export (`git archive`) of main at `c60588be` with the harness files named laid over it. Every tree is costed by main's committed table, `test/tools/mutation-costs.json`, which neither change alters; the two harnesses new to them have no entry there and are planned at its default, 5 s a row.
+
+- **Main at `c60588be`** (3,704 rows).
+- **Main with `402591d2`** (3,720 rows): of the seven harness files `402591d2` changes against main, only one has more rows than main's copy: a harness new to main, blob `0dacc8e1`, 16 rows. Main's is kept for the rest: `mutate-attachments-codex-guards.js` has 49 rows on main and 12 at `402591d2`, `mutate-attachments-show-guards.js` 19 and 15, `mutate-attachments-compose-guards.js` 23 at both and `mutate-stale-session-guards.js` 124 at both, and `mutate-attachments-turn-guards.js` and `mutate-history-guards.js` are main's own blobs.
+- **Main with `402591d2` and a change not yet pushed** (3,733 rows): that tree with the unpushed change's five harness files, by blob. `mutate-room-helpers-codex-guards.js` (`49d3893f`, 13 rows, new) is laid; main's copy is kept for `mutate-room-helpers-guards.js` (20 rows, 12 in `1af2bde1`), `mutate-workspace-boundary-guards.js` (1,307 rows, 1,294 in `8f6f8643`), `mutate-stale-session-guards.js` (124 rows, as in `22821b55`) and `mutate-turn-usage-guards.js` (main's own blob, `f441f3a1`). The two ties keep main's version; this tree planned with any other tied version instead, alone or together, gives the same figures at every cap below, today and projected.
+
+Each plan is this script, saved as `plan-growth.js` and run as `node plan-growth.js <dir> <caps> <days>` on each tree, `<days>` 0 for the tree as it is and 44 for it projected to 2027-01-11. It adds the growth as synthetic harnesses and plans the full set with `planShards`, passing each cap as `maxShards`. Each synthetic harness is named `mutate-projected-<i>-guards.js` from 0 up, has 30 rows (the last the rest) labeled `projected <i> row <k>`, each row's suite `test/unit/projected.test.js` (a name only: the planner reads a row's suite only for a harness with costs by label, and these have none), and a cost entry in `secondsPerRow` of 17,201 s over 3,704 rows, main's average cost per row. At 44 days that is 2,064 rows, 68 harnesses of 30 and one of 24. `--date` finds the first day past 900 s and `--headroom` the headroom defined below. Measured 2026-11-28.
+
+```js
+const path = require('node:path');
+const [dir, caps, days, mode] = process.argv.slice(2);
+const root = path.resolve(dir);
+const toolsDir = path.join(root, 'test', 'tools');
+const scope = require(path.join(root, 'scripts', 'mutation-scope.js'));
+const d = scope.decide(['--all'], { root, toolsDir });
+const harnesses = d.harnesses.filter((h) => d.selection.run.includes(h.tool));
+const costs = scope.readCosts(toolsDir);
+const RATE = 17201 / 3704; // main's full-set seconds over its rows at c60588be
+const PACE = (17201 - 14805) / 11; // seconds a day, 2026-11-17 to 2026-11-28
+const rowsOn = (day) => Math.ceil((PACE * day) / RATE);
+function plan(maxShards, rows) {
+  const extra = Array.from({ length: Math.ceil(rows / 30) }, (_, i) => {
+    const labels = Array.from({ length: Math.min(30, rows - i * 30) }, (_, k) => `projected ${i} row ${k}`);
+    return { tool: `mutate-projected-${i}-guards.js`, rows: labels.length, rowLabels: labels, rowSuites: labels.map(() => 'test/unit/projected.test.js') };
+  });
+  const perRow = { ...costs.perRow, ...Object.fromEntries(extra.map((h) => [h.tool, RATE])) };
+  const p = scope.planShards(harnesses.concat(extra), { costs: { ...costs, perRow }, maxShards });
+  const secs = p.shards.map((s) => s.seconds);
+  const total = secs.reduce((a, b) => a + b, 0);
+  return [maxShards, p.total, secs.length, total, Math.round(total / secs.length), Math.max(...secs)];
+}
+const tips = (cap, rows) => plan(cap, rows)[5] > 900;
+for (const cap of caps.split(',').map(Number)) {
+  let n = 0;
+  if (!mode) console.log(...plan(cap, rowsOn(days)));
+  if (mode === '--headroom') { while (!tips(cap, rowsOn(days) + n + 1)) n++; console.log(cap, n, plan(cap, rowsOn(days) + n + 1)[5]); }
+  if (mode === '--date') { while (!tips(cap, rowsOn(n + 1))) n++; console.log(cap, n + 1, plan(cap, rowsOn(n))[5], plan(cap, rowsOn(n + 1))[5]); }
+}
+```
+
+Each cell is the plan's longest shard, its average shard and its total, in seconds, then its shard count. As they are, the trees need 29 shards, the count the planner's ten-minute target (`SECONDS_PER_SHARD`) asks for (17,346 s over 600 s at most), so their plans stop changing at twenty-nine; projected, every plan uses all the shards its cap allows. Totals are sums of rounded slices, so they differ by a second or two between caps, and the projected ones sit about 23 s under the estimate because each 30-row synthetic harness plans at a rounded 139 s.
+
+| Cap | Main at `c60588be` | Main with `402591d2` | With the unpushed change too | That tree projected to 2027-01-11 |
+|---|---|---|---|---|
+| 24 | 736, 717, 17,201 (24) | 736, 720, 17,281 (24) | 736, 723, 17,346 (24) | 1,153, 1,121, 26,907 (24) |
+| 25 | 706, 688, 17,200 (25) | 711, 691, 17,280 (25) | 713, 694, 17,345 (25) | 1,086, 1,076, 26,908 (25) |
+| 26 | 684, 662, 17,200 (26) | 688, 665, 17,280 (26) | 700, 667, 17,345 (26) | 1,046, 1,035, 26,908 (26) |
+| 27 | 648, 637, 17,200 (27) | 657, 640, 17,280 (27) | 659, 642, 17,345 (27) | 1,004, 997, 26,907 (27) |
+| 28 | 634, 614, 17,198 (28) | 637, 617, 17,278 (28) | 641, 619, 17,343 (28) | 976, 961, 26,907 (28) |
+| 29 | 603, 593, 17,198 (29) | 605, 596, 17,278 (29) | 606, 598, 17,343 (29) | 951, 928, 26,907 (29) |
+| 30 | 603, 593, 17,198 (29) | 605, 596, 17,278 (29) | 606, 598, 17,343 (29) | 923, 897, 26,908 (30) |
+| 31 | 603, 593, 17,198 (29) | 605, 596, 17,278 (29) | 606, 598, 17,343 (29) | 895, 868, 26,908 (31) |
+| 32 | 603, 593, 17,198 (29) | 605, 596, 17,278 (29) | 606, 598, 17,343 (29) | 859, 841, 26,908 (32) |
+| 33 | 603, 593, 17,198 (29) | 605, 596, 17,278 (29) | 606, 598, 17,343 (29) | 830, 815, 26,908 (33) |
+| 34 | 603, 593, 17,198 (29) | 605, 596, 17,278 (29) | 606, 598, 17,343 (29) | 817, 791, 26,908 (34) |
+| 35 | 603, 593, 17,198 (29) | 605, 596, 17,278 (29) | 606, 598, 17,343 (29) | 786, 769, 26,908 (35) |
+
+## Why thirty-three
+
+Thirty-three is the smallest cap at which the heaviest tree, main with `402591d2` and the unpushed change (the most rows and the largest total), plans its longest shard at or under 850 s with the growth projected to 2027-01-11: 830 s, where thirty-two plans 859 s and thirty-one 895 s. Projected the same way, main and main with `402591d2` plan their longest at 856 s and 859 s at thirty-two and at 830 s at thirty-three, so the choice holds for each tree.
+
+Planned day by day from 2026-11-28 at the measured pace (`--date`), each day's growth added the same way, the heaviest tree first plans a shard past 900 s at twenty-four on 2026-12-16, day 18, at 901 s (899 s the day before), and at thirty-three on 2027-01-20, day 53, at 904 s (899 s on 2027-01-19), nine days past the projection's horizon. Thirty-two would pass on 2027-01-16, day 49.
+
+Headroom is the last count of added rows that fits before the first count that puts a shard past 900 s. Rows are added one at a time, as the synthetic harnesses above at main's average cost per row, and planned with `planShards` at the cap until a shard passes 900 s (`--headroom`); the packing is greedy, so some larger counts fit again. On the heaviest tree as it is, twenty-four takes 824 rows (3,827 s), the 825th putting a shard at 901 s, and thirty-three takes 2,452 rows (11,387 s), the 2,453rd putting one at 901 s. Projected to 2027-01-11, thirty-three takes 388 rows (1,802 s), the 389th putting one at 901 s: about eight days at the pace, 46.9 rows a day at that cost.
+
+Each shard past twenty-four is another CI job on every run of the full set, the nightly sweep and every pull request that touches what every harness depends on. The full set plans 29 shards today at any cap from twenty-nine up, so the raise adds five jobs now, and all nine once the full set's estimate passes 19,200 s, thirty-three shards of 600 s. Projected to 2027-01-11 the ten-minute target would want 45 shards, so the cap is what holds the count, as before.
+
+## The planner suite and both workflows, at thirty-three
+
+With the cap at thirty-three on main at `c60588be`, `node --test test/unit/mutation-scope.test.js` passes 61 of 61 tests with none skipped, the suite unchanged, "the full set, planned with the real costs, keeps every shard well under its limit" included. Run 2026-11-28. Thirty-three shards need no workflow change: both workflows read their shard matrix from the plan, and on main at `c60588be` their lines are where they were at twenty-four:
+
+- **Pull requests** (`.github/workflows/ci.yml`): `node scripts/mutation-scope.js --plan --out mutation-plan.json --base "$BASE"` (`:225`) and `node scripts/mutation-scope.js --plan --out mutation-plan.json` (`:227`), `matrix: ${{ steps.plan.outputs.matrix }}` (`:163`), `matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}` (`:258`), and `timeout-minutes: 30` (`:255`).
+- **The nightly sweep** (`.github/workflows/mutation-nightly.yml`): `run: node scripts/mutation-scope.js --all --plan --out mutation-plan.json` (`:88`), `matrix: ${{ steps.plan.outputs.matrix }}` (`:65`), `matrix: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}` (`:111`), and `timeout-minutes: 30` (`:108`).
+
+A pull request's scoped plan is the same at twenty-four and thirty-three unless it needs more than twenty-four shards, which "a plan the cap does not reach is the same whatever the cap" in `test/unit/mutation-scope.test.js` pins.

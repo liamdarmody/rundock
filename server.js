@@ -21,8 +21,9 @@ const { normalizeWorkspaceMode, NOTES_DISALLOWED_TOOLS } = require('./lib/worksp
 const { resolveMarkers, noteHandoffMarker, HANDOFF_MODES, stripRundockMarkers } = require('./lib/delegation/markers.js');
 const { createHandbackBuilder } = require('./lib/delegation/handback.js');
 const { createDelegationRecord, attachDelegationRecord } = require('./lib/delegation/state.js');
+const helpers = require('./lib/delegation/helpers.js');
 const config = require('./lib/config.js');
-const { MAX_PAYLOAD, createReceiver } = require('./lib/attachments/receive.js');
+const { MAX_PAYLOAD, createReceiver, releasePendingImages } = require('./lib/attachments/receive.js');
 const { userTurnText } = require('./lib/attachments/turn-text.js');
 const { buildTurn, claudeSession, claudeSent } = require('./lib/attachments/turn.js');
 const agentsDiscovery = require('./lib/agents/discovery.js');
@@ -1278,6 +1279,9 @@ function endConvoTransition(convoId, owner) {
   const liveWs = [...connectedClients].find(c => c.readyState === 1) || [...connectedClients][0];
   if (!liveWs) {
     console.warn(`[KillWindow] convo=${convoId} no client to replay ${t.queued.length} buffered message(s)`);
+    // Dropped, so none of them starts a turn: the images they hold no longer
+    // count.
+    for (const queued of t.queued) releasePendingImages(queued.attachmentEntry);
     return;
   }
   for (const queued of t.queued) {
@@ -1293,6 +1297,8 @@ function endConvoTransition(convoId, owner) {
 // (see convoTransitions) instead of being written to the dying stdin.
 function scheduleScopeReturnKill(e, convoId) {
   e.pendingKill = true;
+  // HELPERS: while the conversation's helpers run, the kill waits for the request to end.
+  if (helpers.holdWhileHelping(convoId, () => { if (e.pendingKill && !e.exited) scheduleScopeReturnKill(e, convoId); })) return;
   setTimeout(() => {
     if (!e.exited && e.pendingKill) { // no-op if a follow-up cleared pendingKill
       // Only open the window if this entry still executes the conversation;
@@ -1574,7 +1580,7 @@ wss.on('connection', (ws) => {
   // Always send this message, even when empty, so the client can reconcile stale state.
   const active = [];
   for (const [convoId, entry] of chatProcesses) {
-    active.push({ conversationId: convoId, processId: entry.processId, agentId: entry.agentId, idle: !!entry.idle, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null });
+    active.push(helpers.activeRow(convoId, { conversationId: convoId, processId: entry.processId, agentId: entry.agentId, idle: !!entry.idle, responseText: entry.responseText || '', delegation: entry.delegation ? { originalAgentId: entry.delegation.originalAgentId } : null }));
   }
   ws.send(JSON.stringify({ type: 'active_processes', processes: active }));
   ws.send(JSON.stringify({ type: 'server_info', version: PKG_VERSION, platform: process.platform }));
@@ -1619,8 +1625,9 @@ wss.on('connection', (ws) => {
   const processes = chatProcesses;
 
   ws.on('message', (data) => {
+    let msg;
     try {
-      const msg = JSON.parse(data.toString());
+      msg = JSON.parse(data.toString());
 
       if (msg.type === 'chat') {
         const convoId = msg.conversationId || 'default';
@@ -1655,6 +1662,7 @@ wss.on('connection', (ws) => {
           const requestedAgent = msg.agent || 'default';
           const agentList = discoverAgents();
           const routedAgent = findAgentBySlug(agentList, requestedAgent);
+          if (routedAgent && sessionOfAnotherAgent(convoId, msg.sessionId, routedAgent)) msg.sessionId = null;
           if (routedAgent && routedAgent.runtime === 'codex') {
             startCodexTurn(convoId, msg, routedAgent);
             return;
@@ -1767,7 +1775,7 @@ wss.on('connection', (ws) => {
             const agentData = findAgentBySlug(agentList, requestedAgent);
 
             const systemPrompt = buildSystemPrompt(agentData);
-            const chatDisallowed = getDisallowedTools();
+            const chatDisallowed = helpers.conversationDisallowedTools(getDisallowedTools());
             const chatPermMode = getPermissionMode();
 
             const args = [...getBareArgs(), ...modelArgs(agentData), '--output-format', 'stream-json', '--input-format', 'stream-json',
@@ -2091,6 +2099,9 @@ wss.on('connection', (ws) => {
       if (dispatchHandler) dispatchHandler(wsHandlerContext, ws, msg);
     } catch (e) {
       console.error('Error handling message:', e);
+      // A stored chat that fails on its way to its turn starts none, so the
+      // images it holds no longer count. A page's own frame holds none.
+      if (msg && msg.type === 'chat' && typeof data === 'string') releasePendingImages(msg.attachmentEntry);
     }
   });
 
@@ -2796,7 +2807,7 @@ function getRuntimeStatus() {
 // Code-mode verdict, a boundary crossing, an answer file), in the same fields a
 // hook request carries, so the card is drawn the same way whichever runtime
 // asked. Only those fields pass.
-const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'startup_file', 'put_back'];
+const SERVER_REQUEST_FIELDS = ['code_mode_verdict', 'boundary', 'resolved_path', 'grant_dir', 'crossings', 'answer_file', 'startup_file', 'put_back', 'helpers'];
 // `agentId` is the agent whose process asked, when the caller knows it from
 // the process it holds; the card is then labelled with it, live and on replay.
 function requestServerPermission({ convoId, agentId, toolName, toolInput, onDecision, grading }) {
@@ -2830,6 +2841,8 @@ function requestServerPermission({ convoId, agentId, toolName, toolInput, onDeci
   }));
   console.log(`[Permission] Server request: ${toolName} convo=${convoId} requestId=${requestId}`);
 }
+// The one card a lead's first batch of helpers waits on is raised here too.
+require('./lib/delegation/helpers.js').wireHelpersDeps({ requestServerPermission, safeSend });
 
 // Graceful shutdown: kill children on exit signals.
 // SIGTERM/SIGINT: graceful (SIGTERM to children, then exit).
@@ -3015,6 +3028,8 @@ function reapIdleAgents(now = Date.now()) {
     if (convoTransitions.has(convoId)) continue;
     // Work that outlives its turn and never reappears in the stream.
     if (chainStartedBackgroundTask(entry)) continue;
+    // Helpers the lead started still run.
+    if (helpers.helping(convoId)) continue;
     const since = entry.idleSince || 0;
     if (!since || now - since < IDLE_REAP_MS) continue;
 
@@ -3576,6 +3591,21 @@ async function runUniversalSearch(msg) {
   }
 
   return { groups, recent: false };
+}
+
+// Whether the conversation's stored chain lists `sessionId` only under agents
+// other than `agent`, the agent the chat resolved to. Such a session is
+// a teammate's: resumed under this agent, the teammate's work would carry on
+// under this agent's name, so the turn starts fresh instead. Where the record
+// cannot tell (no record, the session unlisted, an entry naming no agent), the
+// session is resumed as before. Entries are matched by the resolved agent's id
+// alone, since that is the id every chain entry is written with.
+function sessionOfAnotherAgent(convoId, sessionId, agent) {
+  if (!sessionId) return false;
+  const record = readConversations().find(c => c && c.id === convoId);
+  const chain = record && Array.isArray(record.sessionIds) ? record.sessionIds : [];
+  const listing = chain.filter(s => s && s.sessionId === sessionId);
+  return listing.length > 0 && listing.every(s => s.agentId) && !listing.some(s => s.agentId === agent.id);
 }
 
 // ===== START =====
