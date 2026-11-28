@@ -221,6 +221,42 @@ describe('the file route serves a stored file only as its record describes it', 
       store.readRecordedFile = real;
     }
   });
+
+  // A throw that left the route would send no answer, and the request would
+  // wait for good. The process hears of such a throw as an uncaught
+  // exception, so hearing this one ends the request, and the test fails on
+  // what it asserts rather than by waiting out a limit.
+  test('a stored-file request whose record check throws is refused, and the server answers the next one', async () => {
+    const real = store.readRecordedFile;
+    const thrown = new Error('the record could not be read');
+    let asked = 0;
+    let escaped = false;
+    let request;
+    const heard = (e) => { if (e !== thrown) return; escaped = true; request.destroy(); };
+    process.on('uncaughtException', heard);
+    store.readRecordedFile = () => { asked++; throw thrown; };
+    let res;
+    try {
+      res = await new Promise((resolve) => {
+        request = http.request({ host: '127.0.0.1', port: h.port, method: 'GET', path: fileUrl(storedPath(ID, '1-diagram.png')), headers: h.authHeaders() }, (r) => {
+          const chunks = [];
+          r.on('data', (c) => chunks.push(c));
+          r.on('end', () => resolve({ status: r.statusCode, body: Buffer.concat(chunks), headers: r.headers }));
+        });
+        request.on('error', () => resolve(null));
+        request.end();
+      });
+    } finally {
+      store.readRecordedFile = real;
+      process.removeListener('uncaughtException', heard);
+    }
+    assert.strictEqual(escaped, false, "the record check's throw stayed inside the route, which answered");
+    assert.strictEqual(asked, 1, 'the record check was asked once, and threw');
+    refused(res);
+    const next = await get(fileUrl(storedPath(ID, '1-diagram.png')));
+    assert.strictEqual(next.status, 200, 'the server still answers a request for a file that is there');
+    assert.ok(next.body.equals(PNG));
+  });
 });
 
 describe('the history reply says which of its named files are there', () => {
