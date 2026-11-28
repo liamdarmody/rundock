@@ -786,6 +786,41 @@ describe("a Codex lead's first batch", () => {
     assert.deepStrictEqual(record(c).helpersNoticed, ['fern', 'sky']);
   });
 
+  test('a thread withdrawn as upkeep that was the only one of the first turn leaves the first batch to come: the next turn\'s helper is marked', () => {
+    const c = convo();
+    const tidy = rec(c, 'tidy', 'turn-1');
+    begin(c, tidy);
+    assert.deepStrictEqual(record(c).helpersNoticed, ['fern'], 'marked when it started');
+    codexHelper()(c, 'fern', tidy, 'withdrawn', ctl);
+    assert.deepStrictEqual(helpers.helperRows(c), [], 'its row is withdrawn');
+    assert.strictEqual(record(c).helpersNoticed, undefined, 'and the notice kept for it undone');
+    begin(c, rec(c, 'rates', 'turn-2'));
+    assert.deepStrictEqual(marks(c), { rates: true }, 'the first real helper is the first batch');
+    assert.deepStrictEqual(record(c).helpersNoticed, ['fern']);
+  });
+
+  test('a thread withdrawn beside a real helper of the same first turn leaves that helper marked and the lead noticed', () => {
+    const c = convo();
+    const tidy = rec(c, 'tidy', 'turn-1');
+    begin(c, rec(c, 'rates', 'turn-1'));
+    begin(c, tidy);
+    codexHelper()(c, 'fern', tidy, 'withdrawn', ctl);
+    begin(c, rec(c, 'deck', 'turn-2'));
+    assert.deepStrictEqual(marks(c), { rates: true, deck: false });
+    assert.deepStrictEqual(record(c).helpersNoticed, ['fern']);
+  });
+
+  test('a lead noticed before keeps its notice when a thread of its is withdrawn', () => {
+    const c = convo();
+    plant({ id: c, helpersNoticed: ['fern'] });
+    const tidy = rec(c, 'tidy', 'turn-1');
+    begin(c, tidy);
+    codexHelper()(c, 'fern', tidy, 'withdrawn', ctl);
+    begin(c, rec(c, 'rates', 'turn-2'));
+    assert.deepStrictEqual(marks(c), { rates: false });
+    assert.deepStrictEqual(record(c), { id: c, helpersNoticed: ['fern'] });
+  });
+
   test('a helper with no lead turn known is not marked and leaves the first batch to come', () => {
     const c = convo();
     begin(c, rec(c, 'rates', null));

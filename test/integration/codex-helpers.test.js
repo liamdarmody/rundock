@@ -856,6 +856,21 @@ test('after Sky takes the conversation over from Fern, Sky\'s first batch is mar
   assert.deepStrictEqual(cards(convo, 0), [], 'no card for either');
 });
 
+test('an upkeep thread that was the only one of Fern\'s first turn leaves her first batch to come: her next turn\'s helper is marked', async () => {
+  const convo = open('cxfirstupkeep');
+  h.writeCodexScenario([
+    { match: { promptIncludes: 'UPFIRST-ONE' }, text: 'Fern tidied.', awaitHelpers: true, helpers: [{ nickname: 'tidy', source: 'review' }] },
+    batchRule('UPFIRST-TWO', ['rates']),
+  ]);
+  const one = await batch(convo, 'UPFIRST-ONE please');
+  assert.ok(changes(convo, one).some((m) => rowNamed(m, 'tidy')), 'tidy was a row until its thread said it was upkeep');
+  assert.ok(!rowNamed(changes(convo, one).pop(), 'tidy'), 'and was then withdrawn');
+  assert.ok(!((record(convo) || {}).helpersNoticed || []).includes('fern'), 'Fern is not kept as noticed');
+  const two = await batch(convo, 'UPFIRST-TWO please');
+  assert.deepStrictEqual(marksIn(convo, two).rates, [true], 'her first real helper is her first batch');
+  assert.deepStrictEqual(record(convo).helpersNoticed, ['fern']);
+});
+
 // WHAT A CODEX HELPER HOLDS. A Codex helper's end wakes no process, so it
 // holds nothing: an agent that answers while one runs gets its done at once.
 const doneFor = (agent, convo, since) => client.messages.slice(since)
