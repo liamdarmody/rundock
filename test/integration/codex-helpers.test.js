@@ -856,6 +856,36 @@ test('after Sky takes the conversation over from Fern, Sky\'s first batch is mar
   assert.deepStrictEqual(cards(convo, 0), [], 'no card for either');
 });
 
+// WHAT A CODEX HELPER HOLDS. A Codex helper's end wakes no process, so it
+// holds nothing: an agent that answers while one runs gets its done at once.
+const doneFor = (agent, convo, since) => client.messages.slice(since)
+  .filter((m) => m.type === 'system' && m.subtype === 'done' && m._conversationId === convo && m._agent === agent).length;
+// Fern starts `names` and her turn ends with them still running.
+async function fernLeavesRunning(convo, tag, names, gate) {
+  h.writeCodexScenario([{ match: { promptIncludes: tag }, text: 'Fern started them.', helpers: names.map((nickname) => ({ nickname, untilFile: gate })) }]);
+  const since = say(convo, `${tag} please`);
+  await turnDone(convo, since);
+  const last = changes(convo, since).pop();
+  assert.ok(last, 'Fern\'s helpers were listed');
+  assert.deepStrictEqual(names.map((name) => stateOf(last.helpers, name)), names.map(() => 'running'), 'and still run after her turn');
+  return since;
+}
+
+test('while Fern\'s helper still runs, Ash answering in the same conversation gets his done with his result and is left idle', async () => {
+  const convo = open('cxholdash');
+  const gate = hold('holdash');
+  await fernLeavesRunning(convo, 'HOLD-FERN', ['rates'], gate);
+  h.writeScenario([{ match: { agent: 'ash', promptIncludes: 'HOLD-ASH' }, turn: [{ text: 'Ash answers.' }] }]);
+  const since = sayAs('ash', convo, 'HOLD-ASH please');
+  await client.waitFor((m) => m.type === 'result' && m._conversationId === convo && m._agent === 'ash', { since, timeout: 20000, label: 'Ash\'s result' });
+  await h.delay(300);
+  assert.strictEqual(doneFor('ash', convo, since), 1, 'Ash\'s done was sent with his result');
+  const ash = h.internal.chatProcesses.get(convo);
+  assert.ok(ash && ash.agentId === 'ash', 'Ash answered');
+  assert.strictEqual(ash.idle, true, 'and is idle');
+  release(gate);
+});
+
 test('when the app-server goes, every running helper row fails and the count is zero', async () => {
   const convo = open('cxcrash');
   const gate = hold('crash');

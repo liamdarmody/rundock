@@ -841,3 +841,83 @@ describe("a Codex lead's first batch", () => {
     assert.strictEqual(record(c), undefined);
   });
 });
+
+// WHAT A RUNNING CODEX HELPER HOLDS. A Claude Code lead's helpers run inside
+// its process, so while they run its result ends only a turn, and its return,
+// kill and idle wait for the request to end, which the lead's next result
+// after they finish brings. A Codex helper is a thread of the app-server: its
+// end wakes no process and Codex never ends a request. So it counts toward the
+// cap and is shown, and holds nothing, for its lead or any agent after it.
+describe('what a running Codex helper holds', () => {
+  const helpers = require('../../lib/delegation/helpers.js');
+  let prev;
+  before(() => {
+    prev = { enabled: helpers.HELPERS_ENABLED };
+    helpers.HELPERS_ENABLED = true;
+    prev.deps = helpers.wireHelpersDeps({ safeSend: () => {} });
+  });
+  after(() => {
+    helpers.HELPERS_ENABLED = prev.enabled;
+    helpers.wireHelpersDeps(prev.deps);
+  });
+
+  let n = 0;
+  const convo = () => `holds-unit-${++n}`;
+  const ctl = { interrupt: () => Promise.resolve({}), steer: () => Promise.resolve({}), queue: () => {} };
+  // Fern's helper rates, running.
+  function codexRuns(c) {
+    const rec = { threadId: `${c}-rates`, leadThreadId: LEAD, leadTurnId: null, name: 'rates', role: null, state: 'running', turnId: 'turn-rates', step: null, file: null, capped: false };
+    codexHelper()(c, 'fern', rec, 'start', ctl);
+    assert.deepStrictEqual(helpers.helperRows(c).map((r) => [r.agent, r.kind, r.state]), [['rates', 'codex', 'running']], 'the Codex helper runs');
+    assert.strictEqual(helpers.runningCount(c), 1, 'and is counted');
+    return rec;
+  }
+
+  test("an agent's result while only a Codex helper runs ends its request: nothing holds its done or idle", () => {
+    const c = convo();
+    codexRuns(c);
+    assert.strictEqual(helpers.helping(c), false);
+    assert.strictEqual(helpers.turnHeld(c), false);
+  });
+
+  test('a return or kill asked for while only a Codex helper runs acts at once, so nothing is left waiting that nothing would release', () => {
+    const c = convo();
+    codexRuns(c);
+    let acted = 0;
+    assert.strictEqual(helpers.holdWhileHelping(c, () => { acted += 1; }), false, 'not held: the caller acts now');
+    helpers.requestEnded(c);
+    assert.strictEqual(acted, 0, 'and nothing was kept to act later');
+  });
+
+  test("a lead's row while only a Codex helper runs keeps its own idle and lists the helper", () => {
+    const c = convo();
+    codexRuns(c);
+    const row = helpers.activeRow(c, { conversationId: c, idle: true });
+    assert.strictEqual(row.idle, true);
+    assert.deepStrictEqual(row.helpers.map((r) => [r.agent, r.state]), [['rates', 'running']]);
+  });
+
+  test("a Claude Code lead's helper beside a Codex one still holds its result, return and idle while it runs", () => {
+    const c = convo();
+    codexRuns(c);
+    helpers.noteStarted(c, { lead: 'ash' }, { toolUseId: 'toolu_holds_1', agent: 'Explore', task: 'Look' });
+    assert.strictEqual(helpers.turnHeld(c), true, 'its result ends only a turn');
+    assert.strictEqual(helpers.holdWhileHelping(c, () => {}), true, 'a return waits');
+    assert.strictEqual(helpers.activeRow(c, { conversationId: c, idle: true }).idle, false, 'busy');
+    helpers.noteEnded(c, 'toolu_holds_1', 'completed');
+    helpers.requestEnded(c);
+  });
+
+  test("once a Claude Code lead's helper ends, its held return acts at the request's end, though a Codex helper still runs", () => {
+    const c = convo();
+    codexRuns(c);
+    helpers.noteStarted(c, { lead: 'ash' }, { toolUseId: 'toolu_holds_2', agent: 'Explore', task: 'Look' });
+    assert.strictEqual(helpers.turnHeld(c), true);
+    let acted = 0;
+    assert.strictEqual(helpers.holdWhileHelping(c, () => { acted += 1; }), true);
+    helpers.noteEnded(c, 'toolu_holds_2', 'completed');
+    assert.strictEqual(helpers.turnHeld(c), false, 'its next result is not held');
+    helpers.requestEnded(c);
+    assert.strictEqual(acted, 1, 'the held return acted');
+  });
+});
