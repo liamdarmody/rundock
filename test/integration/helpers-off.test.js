@@ -277,3 +277,80 @@ test('with helpers off, no spawn sets a helper depth or refuses SendMessage', as
     assert.ok(!/\bSendMessage\b/.test(list), `${inv.agent}: SendMessage is not refused: ${list}`);
   }
 });
+
+// EACH READER OF THE SWITCH IN THE STREAM, THE HOLDS AND THE SPAWNS reads it
+// when it is used, never a copy taken at load: the server here loaded with
+// helpers off, and turned on afterwards, each reader acts. One assertion per
+// reader. Fails without helpers.
+const switchFile = (id) => path.join(h.workspaceDir, `switch-${id}`);
+test('the switch is read when it is used by the stream, the holds and the spawns: turned on after boot, each acts', async () => {
+  const m = helpers();
+  for (const name of ['runningCount', 'helperRows']) assert.strictEqual(typeof m[name], 'function', `helpers.${name} is exported`);
+  assert.strictEqual(m.HELPERS_ENABLED, false, 'the server loaded with helpers off');
+  const six = open('switch-six');
+  const one = open('switch-one');
+  const parent = `toolu_off_parent_${++seq}`;
+  const calls = Array.from({ length: 6 }, () => agentCall('Explore'));
+  const lone = agentCall('Explore');
+  h.writeScenario([
+    { match: { agent: 'wren', promptIncludes: 'switch readers six' }, helpers: true, running: true, finishOn: { [calls[0].id]: switchFile(calls[0].id) }, turn: [
+      { raw: fx.helperLine(fx.contentBlockStartText(0), parent) },
+      { raw: fx.helperLine(fx.textDelta('words a helper wrote', 0), parent) },
+      { text: 'Starting six.' },
+      ...calls.map((c) => ({ agentTool: c.input, id: c.id })),
+    ] },
+    { match: { agent: 'wren', promptIncludes: 'switch readers one' }, helpers: true, running: true, turn: [{ text: 'Starting one.' }, { agentTool: lone.input, id: lone.id }],
+      then: [{ untilFile: switchFile(lone.id), lines: [fx.taskNotification({ taskId: `task_${lone.id}`, toolUseId: lone.id })], turn: [{ text: 'It is back.' }] }] },
+  ]);
+  try {
+    m.HELPERS_ENABLED = true;
+    scaffold();
+
+    // A lead with six helper calls, while its helpers run.
+    const answered = () => agentHookAnswers(calls.map((c) => c.id)).map((a) => a.answer.hookSpecificOutput.permissionDecision);
+    let since = say(six, 'switch readers six');
+    assert.ok(await h.waitUntil(() => answered().length >= 5, { timeout: 20000 }), 'five calls were answered');
+    await h.delay(300);
+    assert.deepStrictEqual(answered(), Array(5).fill('allow'), 'the hold of a sixth call: five start and the sixth waits');
+    const rows = helpersChanged(six).pop();
+    assert.deepStrictEqual(rows && rows.helpers.map((r) => r.state).sort(), [...Array(5).fill('running'), 'waiting'], 'helpers_changed: the page is sent the rows');
+    const other = await h.connect();
+    try {
+      const { msg } = await other.waitFor((x) => x.type === 'active_processes', { label: 'active_processes' });
+      const row = msg.processes.find((p) => p.conversationId === six);
+      assert.strictEqual(row && Array.isArray(row.helpers) ? row.helpers.length : null, 6, 'active_processes: the lead\'s row lists its helpers');
+    } finally {
+      other.close();
+    }
+    const [spawn] = invocations('wren', six);
+    assert.strictEqual(spawn.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, '1', 'the spawn env: the depth limit');
+    const at = spawn.argv.indexOf('--disallowed-tools');
+    const refusedTools = at >= 0 ? spawn.argv[at + 1] : '';
+    assert.ok(refusedTools.split(',').includes('SendMessage'), `the spawn's --disallowed-tools: SendMessage is refused: ${refusedTools}`);
+    const lead = h.internal.chatProcesses.get(six);
+    client.send({ type: 'end_delegation', conversationId: six });
+    await h.delay(800);
+    assert.ok(h.internal.chatProcesses.get(six) === lead && !lead.exited && !lead.scopeReturn && h.pidAlive(lead.process.pid),
+      'a return the page asks for waits while the helpers run');
+    fs.writeFileSync(switchFile(calls[0].id), '');
+    assert.ok(await h.waitUntil(() => answered().length === 6, { timeout: 20000 }), 'a task line read from the stream: a helper\'s end starts the held call');
+    await client.waitFor((x) => x.type === 'result' && x._conversationId === six, { since, label: 'the result' });
+    await h.delay(300);
+    assert.strictEqual(doneCount(six, since), 0, 'the lead\'s result while its helpers run sends no done');
+    const reply = wrenReplies(six);
+    assert.ok(reply.includes('Starting six.') && !reply.includes('words a helper wrote'), `the parent filter: a helper's words are not the lead's: ${reply}`);
+    client.send({ type: 'cancel', conversationId: six });
+    assert.ok(await h.waitUntil(() => m.runningCount(six) === 0 && m.helperRows(six).length === 0, { timeout: 10000 }),
+      'the lead\'s close ends its helpers');
+
+    // A lead whose one helper reports back.
+    since = say(one, 'switch readers one');
+    await client.waitFor((x) => x.type === 'result' && x._conversationId === one, { since, label: 'the first result' });
+    fs.writeFileSync(switchFile(lone.id), '');
+    assert.ok(await h.waitUntil(() => doneCount(one, since) >= 1, { timeout: 20000 }), 'the request ended once its helper reported back');
+    assert.deepStrictEqual(m.helperRows(one), [], 'the request\'s end clears its helpers');
+  } finally {
+    m.HELPERS_ENABLED = false;
+    scaffold();
+  }
+});

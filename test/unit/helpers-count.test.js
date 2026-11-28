@@ -31,6 +31,11 @@ function names(...wanted) {
   for (const name of wanted) assert.strictEqual(typeof m[name], 'function', `helpers.${name} is exported`);
   return m;
 }
+// The hold and the cap as the module ships them, read as this file loads,
+// before any test here patches the hold.
+const SHIPPED = fs.existsSync(HELPERS)
+  ? { holdMs: require(HELPERS).HELPER_HOLD_MS, cap: require(HELPERS).HELPER_CAP }
+  : {};
 
 const team = {
   wren: agentFile({ name: 'wren', displayName: 'Wren', role: 'Lead', order: 1 }),
@@ -340,6 +345,12 @@ async function capEventsAt(convo, count) {
 const outcomes = (events) => events.map((e) => e.d && e.d.outcome).sort();
 
 describe('the cap of five helpers at once', () => {
+  test('as shipped, a held call waits 100 seconds for a slot and at most five helpers run at once', () => {
+    helpers();
+    assert.strictEqual(SHIPPED.holdMs, 100000, 'the hold, before any test patches it');
+    assert.strictEqual(SHIPPED.cap, 5, 'the cap');
+  });
+
   test('five helpers start at once and a call that would make a sixth is held, its request left open', async () => {
     const m = names('runningCount', 'helperRows');
     const convo = freshConvo();
