@@ -762,8 +762,34 @@ test('with helpers on, three handoffs deep, nothing in the chain returns while t
   assert.strictEqual(entry.pendingKill, true, 'its auto-return is pending');
   assert.strictEqual(helpers().runningCount(convo), 4);
   wake('hold-deep');
+  // As on main, a resumed parent's hand-back goes to the orchestrator
+  // (handleScopeReturn): after Rowan's one-level return to Ash, Ash's goes to
+  // Sky. The test below runs the same chain with no helpers and sees the same.
   await waitSwitch(convo, since, 'ash', SKY);
   assert.deepStrictEqual(switchPairs(convo, since), [['example-research-lead', 'ash'], ['ash', SKY]]);
+});
+
+// The chain above with no helpers started: its hand-backs are the chain's own.
+// By design this passes before helpers existed too. Its sibling above, "with
+// helpers on, three handoffs deep, nothing in the chain returns while the
+// deepest lead's helpers run, and the hand-backs then return one level at a
+// time", runs the same chain and fails there.
+test('with no helpers started, the same three-deep chain hands back from Rowan to Ash and then from Ash to Sky', async () => {
+  const convo = open('chain-deep');
+  h.writeScenario([
+    SKY_SILENT,
+    { match: { agent: 'ash', promptIncludes: '[SYSTEM: work-continues]' }, turn: [{ text: `All four reviews are in. ${fx.MARKERS.COMPLETE}` }] },
+    handoff('sky', 'chain-deep review', 'wren', 'wren brief chain-deep'),
+    handoff('wren', 'wren brief chain-deep', 'ash', 'ash brief chain-deep'),
+    handoff('ash', 'ash brief chain-deep', 'example-research-lead', 'rowan brief chain-deep'),
+    { match: { agent: 'example-research-lead', promptIncludes: 'rowan brief chain-deep' }, turn: [{ text: 'Rowan did the four reviews. <!-- RUNDOCK:CONTINUE -->' }] },
+  ]);
+  const since = say(convo, 'chain-deep review', 'sky');
+  await waitSwitch(convo, since, 'ash', SKY);
+  assert.deepStrictEqual(switchPairs(convo, since), [['example-research-lead', 'ash'], ['ash', SKY]]);
+  assert.deepStrictEqual(helpersChanged(convo, since), [], 'no helper rows were sent');
+  assert.deepStrictEqual(client.messages.slice(since).filter((m) => m.type === 'system' && m.subtype === 'task_started' && m._conversationId === convo), [],
+    'no helper started');
 });
 
 // A stub that is stopped or killed cannot log the hook's answer for a call
