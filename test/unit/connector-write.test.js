@@ -9,6 +9,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 // Required inside a try, so that without the module each test fails on its
 // first assertion rather than the file failing to load.
@@ -536,5 +537,191 @@ test('an allowed change whose write fails says so in one message and resolves wr
     assert.deepStrictEqual(s.bytes(), before, 'the file is byte-identical');
     assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }]);
     assert.deepStrictEqual(await outcome, { ok: false, reason: 'write-failed', message });
+  });
+});
+
+// ===== Only a regular file is read, never through a link =====
+
+const UNREADABLE_FILE = 'The connector file could not be read, so nothing was changed. Its current contents are unknown and writing now would drop whatever it holds.';
+const NOT_AN_OBJECT = 'The connector file does not hold an object, so nothing was changed.';
+const LINK_REFUSED = 'The connector file is a link, so Rundock does not write through it and nothing was changed.';
+const SERVERS_NOT_AN_OBJECT = 'The connector file\'s "mcpServers" does not hold an object, so nothing was changed.';
+
+// Links need a permission some Windows accounts lack; pipes and file modes
+// are not what they are on Windows, and permissions do not stop root.
+const NO_LINKS = (() => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'connector-link-probe-'));
+  try { fs.symlinkSync(path.join(dir, 'target'), path.join(dir, 'link')); return false; } catch (e) {
+    if (e.code === 'EPERM') return 'this account cannot make links';
+    throw e;
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+})();
+const NO_PIPES = process.platform === 'win32' ? 'no named pipes in the file system on Windows' : false;
+const NO_MODES = process.platform === 'win32' || (process.getuid && process.getuid() === 0) ? 'file modes do not stop this account' : false;
+
+// What stands at `p`, told apart without following a link: a link and where
+// it leads, a folder and what it holds, a pipe, or a file, its bytes (null
+// when they can't be read) and its mode.
+function standing(p) {
+  let st;
+  try { st = fs.lstatSync(p); } catch (e) { return null; }
+  if (st.isSymbolicLink()) return { link: fs.readlinkSync(p) };
+  if (st.isDirectory()) return { dir: fs.readdirSync(p) };
+  if (st.isFIFO()) return { pipe: true };
+  let bytes = null;
+  try { bytes = fs.readFileSync(p); } catch (e) { /* unreadable */ }
+  return { bytes, mode: st.mode & 0o777 };
+}
+
+// A folder outside the workspace, for a link to lead into.
+async function elsewhere(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'connector-elsewhere-'));
+  try { return await fn(dir); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+const OUTSIDE = JSON.stringify({ mcpServers: { alpha: { url: 'https://mcp.example.com/mcp' } } }, null, 2);
+
+// Each thing at .mcp.json that leaves nothing to build on, and what is said.
+const writes = (text) => (s) => fs.writeFileSync(s.file, text);
+const UNREADABLE_CAUSES = [
+  ['a file this account cannot read', (s) => { fs.writeFileSync(s.file, '{"mcpServers": {}}\n'); fs.chmodSync(s.file, 0o000); }, UNREADABLE_FILE, NO_MODES],
+  ['a folder', (s) => fs.mkdirSync(s.file), UNREADABLE_FILE, false],
+  ['a named pipe', (s) => execFileSync('mkfifo', [s.file]), UNREADABLE_FILE, NO_PIPES],
+  ['invalid JSON', writes('{ not json'), UNREADABLE, false],
+  ['a top-level array', writes('[{"mcpServers": {}}]'), NOT_AN_OBJECT, false],
+  ['a top-level null', writes('null'), NOT_AN_OBJECT, false],
+  ['a top-level string', writes('"mcpServers"'), NOT_AN_OBJECT, false],
+  ['a top-level number', writes('42'), NOT_AN_OBJECT, false],
+  ['an mcpServers that is an array', writes('{"mcpServers": [{"command": "node"}]}'), SERVERS_NOT_AN_OBJECT, false],
+  ['an mcpServers that is null', writes('{"mcpServers": null}'), SERVERS_NOT_AN_OBJECT, false],
+  ['an mcpServers that is a string', writes('{"mcpServers": "alpha"}'), SERVERS_NOT_AN_OBJECT, false],
+  ['an mcpServers that is a number', writes('{"mcpServers": 7}'), SERVERS_NOT_AN_OBJECT, false],
+];
+// A read that waited on a pipe would never return, so the pipe's tests first
+// ask whether the writer reads through its own steps at all.
+const readsItsOwnWay = () => assert.strictEqual(typeof (cw.io && cw.io.read), 'function', 'the writer reads the file through its own no-follow, non-blocking step');
+
+for (const [cause, makeIt, message, skip] of UNREADABLE_CAUSES) {
+  test(`${cause} at .mcp.json is refused at request time, and nobody is asked`, { skip }, async () => {
+    assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+    if (cause === 'a named pipe') readsItsOwnWay();
+    await inWorkspace(undefined, async (s) => {
+      try {
+        makeIt(s);
+        const before = standing(s.file);
+        const { w, outcome } = propose(s, s.request());
+        assert.strictEqual(s.asked.length, 0, 'no card is raised');
+        assert.deepStrictEqual(standing(s.file), before, 'what stands there is as it was');
+        assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'one message, the refusal\'s');
+        assert.deepStrictEqual(await outcome, { ok: false, reason: 'unreadable', message });
+      } finally { try { fs.chmodSync(s.file, 0o644); } catch (e) { /* not a file */ } }
+    });
+  });
+
+  test(`${cause} put at .mcp.json while the card waits is refused at Allow, and nothing is written`, { skip }, async () => {
+    assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+    if (cause === 'a named pipe') readsItsOwnWay();
+    await inWorkspace({}, async (s) => {
+      try {
+        const { w, outcome } = propose(s, s.request());
+        assert.strictEqual(s.asked.length, 1, 'one card');
+        fs.rmSync(s.file);
+        makeIt(s);
+        const atAllow = standing(s.file);
+        s.answer(0, true);
+        assert.deepStrictEqual(standing(s.file), atAllow, 'what stands there is as it was at the Allow');
+        assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message }], 'one message, the refusal\'s, and no save');
+        assert.deepStrictEqual(await outcome, { ok: false, reason: 'unreadable', message });
+      } finally { try { fs.chmodSync(s.file, 0o644); } catch (e) { /* not a file */ } }
+    });
+  });
+}
+
+// A link at .mcp.json is refused wherever it leads, and what it leads to is
+// never read as the connectors nor written through.
+async function linkRefusedAtRequest(s, target) {
+  const before = standing(target);
+  const { w, outcome } = propose(s, s.request());
+  assert.strictEqual(s.asked.length, 0, 'no card is raised');
+  assert.deepStrictEqual(standing(target), before, 'what the link leads to is byte-identical');
+  assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: LINK_REFUSED }], 'one message, the refusal\'s, and no save');
+  assert.deepStrictEqual(await outcome, { ok: false, reason: 'unreadable', message: LINK_REFUSED });
+}
+
+test('a connector file that is a link to a file outside the workspace is refused at request time, with no guard', { skip: NO_LINKS }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(undefined, (s) => elsewhere(async (dir) => {
+    const target = path.join(dir, 'servers.json');
+    fs.writeFileSync(target, OUTSIDE);
+    fs.symlinkSync(target, s.file);
+    await linkRefusedAtRequest(s, target);
+    assert.deepStrictEqual(standing(s.file), { link: target }, 'the link is left as it was');
+  }));
+});
+
+test('a connector file that is a link to a file inside the workspace is refused at request time', { skip: NO_LINKS }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(undefined, async (s) => {
+    const target = path.join(s.dir, 'servers.json');
+    fs.writeFileSync(target, OUTSIDE);
+    fs.symlinkSync(target, s.file);
+    await linkRefusedAtRequest(s, target);
+  });
+});
+
+test('a connector file that is a dangling link is refused at request time, and nothing is made where it leads', { skip: NO_LINKS }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(undefined, async (s) => {
+    const target = path.join(s.dir, 'nowhere.json');
+    fs.symlinkSync(target, s.file);
+    await linkRefusedAtRequest(s, target);
+    assert.strictEqual(standing(target), null, 'still nothing there');
+  });
+});
+
+test('a link swapped in at .mcp.json while the card waits, no turn watching, is refused at Allow', { skip: NO_LINKS }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace({}, (s) => elsewhere(async (dir) => {
+    const target = path.join(dir, 'servers.json');
+    fs.writeFileSync(target, OUTSIDE);
+    const { w, outcome } = propose(s, s.request());
+    assert.strictEqual(s.asked.length, 1, 'one card');
+    fs.rmSync(s.file);
+    fs.symlinkSync(target, s.file);
+    s.answer(0, true);
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), OUTSIDE, 'what the link leads to is byte-identical');
+    assert.deepStrictEqual(standing(s.file), { link: target }, 'the link is left as it was');
+    assert.deepStrictEqual(w.sent, [{ type: 'connector_error', message: LINK_REFUSED }], 'one message, the refusal\'s, and no save');
+    assert.deepStrictEqual(await outcome, { ok: false, reason: 'unreadable', message: LINK_REFUSED });
+  }));
+});
+
+test('after a link is refused, the same change asked again once the link is a plain file is written', { skip: NO_LINKS }, async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace(undefined, (s) => elsewhere(async (dir) => {
+    const target = path.join(dir, 'servers.json');
+    fs.writeFileSync(target, OUTSIDE);
+    fs.symlinkSync(target, s.file);
+    await linkRefusedAtRequest(s, target);
+    fs.rmSync(s.file);
+    fs.writeFileSync(s.file, OUTSIDE);
+    const { w, outcome } = propose(s, s.request());
+    assert.strictEqual(s.asked.length, 1, 'the change asked again gets its card');
+    s.answer(0, true);
+    assert.deepStrictEqual(s.servers(), { alpha: { url: 'https://mcp.example.com/mcp' }, 'local-tools': { command: 'node' } });
+    assert.deepStrictEqual(w.sent, SAVED('local-tools', 'saved'));
+    assert.strictEqual((await outcome).ok, true);
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), OUTSIDE, 'and the file the link led to is still untouched');
+  }));
+});
+
+test('a connector file with no mcpServers gets one as its last key, after every other key', async () => {
+  assert.strictEqual(typeof cw.proposeConnectorChange, 'function');
+  await inWorkspace('{"$schema": "https://example.com/schema.json", "extra": {"a": [1, 2]}}', async (s) => {
+    const { outcome } = propose(s, s.request());
+    s.answer(0, true);
+    const written = JSON.parse(fs.readFileSync(s.file, 'utf-8'));
+    assert.deepStrictEqual(Object.keys(written), ['$schema', 'extra', 'mcpServers']);
+    assert.deepStrictEqual(written, { $schema: 'https://example.com/schema.json', extra: { a: [1, 2] }, mcpServers: { 'local-tools': { command: 'node' } } });
+    assert.strictEqual((await outcome).ok, true);
   });
 });
