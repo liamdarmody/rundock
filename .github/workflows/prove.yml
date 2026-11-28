@@ -65,6 +65,11 @@ on:
         description: the SHA-256 of tests, a newline, then rows
         required: true
         type: string
+      label:
+        description: 'what the run proves, first in its title: # then the pull request number, a space and the first 7 characters of the fix head, or empty'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -102,6 +107,7 @@ jobs:
           TESTS: ${{ inputs.tests }}
           ROWS: ${{ inputs.rows }}
           INPUTS_SHA256: ${{ inputs.inputs_sha256 }}
+          LABEL: ${{ inputs.label }}
         run: &check-inputs-run |
           'use strict';
           // begin bytes
@@ -139,13 +145,16 @@ jobs:
           }
           // end bytes
           // begin input checks
-          // Each hex input has its pattern, and inputs_sha256 is the digest of tests,
-          // a newline, then rows.
+          // Each hex input has its pattern, the label is empty or names a pull
+          // request and a short head, and inputs_sha256 is the digest of tests, a
+          // newline, then rows. A label left out of the environment is empty.
           function shapeCheck(env) {
             const hex = [[env.NONCE, 'nonce', 32], [env.BLOCKED_SHA, 'blocked', 40], [env.MAIN_SHA, 'main', 40], [env.HEAD_SHA, 'head', 40], [env.INPUTS_SHA256, 'inputs_sha256', 64]];
             for (const [value, name, length] of hex) {
               if (!new RegExp(`^[0-9a-f]{${length}}$`).test(String(value))) return `${name} must be ${length} lowercase hex characters`;
             }
+            const label = env.LABEL || '';
+            if (label !== '' && !/^#[0-9]{1,6} [0-9a-f]{7}$/.test(label)) return 'label must be empty or # then 1 to 6 digits, a space and 7 lowercase hex characters';
             const digest = require('node:crypto').createHash('sha256').update(`${env.TESTS}\n${env.ROWS}`, 'utf8').digest('hex');
             return digest === env.INPUTS_SHA256 ? null : `inputs_sha256 is not the SHA-256 of tests, a newline and rows, which is ${digest}`;
           }

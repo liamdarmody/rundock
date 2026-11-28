@@ -1,13 +1,13 @@
 'use strict';
 // What .github/workflows/prove.yml says, read as text.
 //
-// The workflow is started by hand with seven string inputs, reads the
-// repository and nothing more, and runs each blocker test and each breakage on
-// a fresh runner. These tests hold the parts of it no run of its code would
-// show: the trigger, the permissions, the runner, which expressions it
-// expands and where, what each job runs before the test, and that a step
-// shared by several jobs has its run block and env written once, at its first
-// use, and aliased in each later job, so its copies are the same text.
+// The workflow is started by hand with seven required string inputs and an
+// optional label, reads the repository and nothing more, and runs each blocker
+// test and each breakage on a fresh runner. These tests hold the parts of it no
+// run of its code would show: the trigger, the permissions, the runner, which
+// expressions it expands and where, what each job runs before the test, and
+// that a step shared by several jobs has its run block and env written once, at
+// its first use, and aliased in each later job, so its copies are the same text.
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -24,6 +24,16 @@ const lines = text.split('\n');
 const jobs = Object.values(workflow.jobs);
 
 const INPUTS = ['nonce', 'blocked', 'main', 'head', 'tests', 'rows', 'inputs_sha256'];
+// Each required input's description, exactly as the workflow writes it.
+const DESCRIPTIONS = {
+  nonce: '32 lowercase hex characters that tell this run apart',
+  blocked: 'the blocked head, a full commit SHA',
+  main: 'the main commit the fix is built on, a full commit SHA',
+  head: 'the fix head, a full commit SHA',
+  tests: '\'the blocker tests, a JSON array of {"i", "file", "name"}\'',
+  rows: '\'the breakage rows, a JSON array of {"i", "file", "from", "to", "test"}\'',
+  inputs_sha256: 'the SHA-256 of tests, a newline, then rows',
+};
 const TEST_USER_STEPS = ['prepare the test user', 'install', 'run the test', 'stop the test user', 'check the tree', 'judge the result'];
 const STEPS = {
   red: ["check out the workflow's commit", 'set up Node', 'check inputs', 'merge main into the blocked head',
@@ -38,7 +48,7 @@ const STEPS = {
 const FILE_COMMANDS = ['GITHUB_ENV', 'GITHUB_OUTPUT', 'GITHUB_PATH', 'GITHUB_STATE', 'GITHUB_STEP_SUMMARY'];
 const ENTRY_NAMES = ['ENTRY', 'ROWS', 'RUNNER_TEMP', 'SIDE', 'TESTS'];
 const READS = {
-  'check inputs': ['BLOCKED_SHA', 'HEAD_SHA', 'INPUTS_SHA256', 'MAIN_SHA', 'NONCE', 'ROWS', 'TESTS'],
+  'check inputs': ['BLOCKED_SHA', 'HEAD_SHA', 'INPUTS_SHA256', 'LABEL', 'MAIN_SHA', 'NONCE', 'ROWS', 'TESTS'],
   'merge main into the blocked head': ['BLOCKED_SHA', 'MAIN_SHA'],
   'check the change': ['HEAD_SHA', 'ROWS'],
   'apply the row': ['ENTRY', 'ROWS'],
@@ -131,15 +141,23 @@ describe('how the workflow starts and what it may touch', () => {
     assert.deepStrictEqual(top, ['name', 'run-name', 'on', 'permissions', 'jobs']);
   });
 
-  test('it is started by hand only, with the seven inputs, each a required string', () => {
+  test('it is started through workflow_dispatch alone, with the seven required string inputs and an optional string label that defaults to empty', () => {
     const on = topBlock('on');
     assert.deepStrictEqual(keysAt(on, 2), ['workflow_dispatch']);
     assert.deepStrictEqual(keysAt(on, 4), ['inputs']);
-    assert.deepStrictEqual(keysAt(on, 6), INPUTS);
-    assert.deepStrictEqual([...new Set(keysAt(on, 8))].sort(), ['description', 'required', 'type']);
-    const at8 = on.filter((l) => /^ {8}\S/.test(l));
-    assert.strictEqual(at8.filter((l) => l === '        required: true').length, INPUTS.length);
-    assert.strictEqual(at8.filter((l) => l === '        type: string').length, INPUTS.length);
+    assert.deepStrictEqual(keysAt(on, 6), [...INPUTS, 'label']);
+    // An input's own lines, from below its key to the next input's key.
+    const own = (name) => {
+      const rest = on.slice(on.indexOf(`      ${name}:`) + 1);
+      const end = rest.findIndex((l) => !/^ {8}/.test(l));
+      return end === -1 ? rest : rest.slice(0, end);
+    };
+    for (const name of INPUTS) {
+      assert.deepStrictEqual(own(name), [`        description: ${DESCRIPTIONS[name]}`, '        required: true', '        type: string'], name);
+    }
+    const label = own('label');
+    assert.match(label[0], /^ {8}description: \S/, 'the label has a description');
+    assert.deepStrictEqual(label.slice(1), ['        required: false', '        type: string', "        default: ''"]);
   });
 
   test('the run-name is prove and the five values that tell the run apart', () => {
@@ -283,7 +301,7 @@ describe('what reaches a run block, and what runs before the test', () => {
   // Every expression and the one place it may stand.
   const ENV = {
     NONCE: 'inputs.nonce', BLOCKED_SHA: 'inputs.blocked', MAIN_SHA: 'inputs.main', HEAD_SHA: 'inputs.head',
-    TESTS: 'inputs.tests', ROWS: 'inputs.rows', INPUTS_SHA256: 'inputs.inputs_sha256',
+    TESTS: 'inputs.tests', ROWS: 'inputs.rows', INPUTS_SHA256: 'inputs.inputs_sha256', LABEL: 'inputs.label',
     ENTRY: 'matrix.i', SIDE: 'github.job',
   };
 
