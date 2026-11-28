@@ -3,10 +3,11 @@
 // and its application of a breakage row.
 //
 // Every job checks every input before using any of them, and stops at the
-// first check that fails, named: shape (the hex inputs and the digest of the
-// lists), lists (their entries, indexes and cross references), commits (how
-// main, the blocked head and the fix head are related), then paths (each file
-// a test or row names is a plain path to a regular file in the fix head).
+// first check that fails, named: shape (the hex inputs, the label and the
+// digest of the lists), lists (their entries, indexes and cross references),
+// commits (how main, the blocked head and the fix head are related), then
+// paths (each file a test or row names is a plain path to a regular file in
+// the fix head).
 //
 // The code is cut out of the workflow itself, so these tests run the code the
 // workflow runs, against throwaway repositories for everything git answers.
@@ -18,7 +19,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { loadPiece } = require('../helpers/prove-workflow.js');
+const { loadPiece, runStep } = require('../helpers/prove-workflow.js');
 const { makeTempDir } = require('../helpers/workspace.js');
 
 const { shapeCheck, listsCheck, pathsCheck, checkInputs } =
@@ -27,6 +28,9 @@ const { mergeMain } = loadPiece('merge', ['mergeMain']);
 const { applyRow } = loadPiece('apply row', ['applyRow']);
 
 const HEX40 = (c) => c.repeat(40);
+// What a label that is neither empty nor # then 1 to 6 digits, a space and 7
+// lowercase hex characters is refused with, word for word.
+const LABEL_WHY = 'label must be empty or # then 1 to 6 digits, a space and 7 lowercase hex characters';
 const digest = (tests, rows) => crypto.createHash('sha256').update(`${tests}\n${rows}`, 'utf8').digest('hex');
 
 /** The env a job's `check inputs` step sees, with the digest made to match. */
@@ -98,6 +102,70 @@ describe('shape', () => {
       const why = shapeCheck(worked({ [key]: value }));
       assert.ok(why && why.startsWith(names[key]), `${key}: ${why}`);
     }
+  });
+
+  test('an empty label passes', () => {
+    assert.strictEqual(shapeCheck(worked({ LABEL: '' })), null);
+    // Empty holds nothing: a label of one space is not empty.
+    assert.strictEqual(shapeCheck(worked({ LABEL: ' ' })), LABEL_WHY);
+  });
+
+  test('a label of a pull request and a short head passes', () => {
+    for (const label of ['#515 c1e6428', '#1 0000000', '#999999 abcdef0']) {
+      assert.strictEqual(shapeCheck(worked({ LABEL: label })), null, label);
+    }
+    // Each beside its nearest neighbour that is refused: a head one character
+    // short, no digits, and one digit too many.
+    for (const label of ['#515 c1e642', '# 0000000', '#9999999 abcdef0']) {
+      assert.strictEqual(shapeCheck(worked({ LABEL: label })), LABEL_WHY, label);
+    }
+  });
+
+  test('a label is refused for each way it can be wrong', () => {
+    const WRONG = [
+      ['#1234567 c1e6428', 'seven digits'],
+      ['# c1e6428', 'no digits'],
+      ['515 c1e6428', 'no #'],
+      ['#515 C1E6428', 'uppercase'],
+      ['#515 c1e642', 'six hex'],
+      ['#515 c1e64289', 'eight hex'],
+      ['#515  c1e6428', 'two spaces'],
+      ['#515\tc1e6428', 'a tab'],
+      ['#515 c1e6428\n', 'a trailing newline'],
+      ['\n#515 c1e6428', 'a leading newline'],
+      ['#515 c1e6428 x', 'a word after'],
+      ['#515 0123456789abcdef0123456789abcdef', 'a 32-hex word where the head belongs'],
+      ['${{ github.token }}', 'an expression'],
+      ['$(id)', 'a command substitution'],
+    ];
+    for (const [label, what] of WRONG) assert.strictEqual(shapeCheck(worked({ LABEL: label })), LABEL_WHY, what);
+  });
+
+  test('a run with a well-formed label still fails on a bad hex input first', () => {
+    // Each hex input made bad, in the order they are checked, and its refusal.
+    const BAD = [
+      ['NONCE', 'ABCDEF0123456789abcdef0123456789', 'nonce must be 32 lowercase hex characters'],
+      ['BLOCKED_SHA', HEX40('b').slice(1), 'blocked must be 40 lowercase hex characters'],
+      ['MAIN_SHA', `${HEX40('c').slice(1)}g`, 'main must be 40 lowercase hex characters'],
+      ['HEAD_SHA', `${HEX40('d')}0`, 'head must be 40 lowercase hex characters'],
+      ['INPUTS_SHA256', WORKED.toUpperCase(), 'inputs_sha256 must be 64 lowercase hex characters'],
+    ];
+    // A label that passes stands in for none of them.
+    for (const [key, value, why] of BAD) {
+      assert.strictEqual(shapeCheck(worked({ LABEL: '#515 c1e6428', [key]: value })), why, key);
+    }
+    // Nor does it move among them, which only a label that fails can show:
+    // with every hex input bad, the label malformed and tests that no longer
+    // match the digest, repairing each in turn hands the refusal to the next,
+    // the hex inputs in their order, then the label, then the digest.
+    const env = worked({ ...Object.fromEntries(BAD.map(([key, value]) => [key, value])), LABEL: '#515 C1E6428', TESTS: TESTS.replace('date', 'data') });
+    for (const [key, , why] of BAD) {
+      assert.strictEqual(shapeCheck(env), why, `${key} is the first bad input`);
+      env[key] = worked()[key];
+    }
+    assert.strictEqual(shapeCheck(env), LABEL_WHY, 'the label is the first bad input');
+    env.LABEL = '#515 c1e6428';
+    assert.match(shapeCheck(env), /^inputs_sha256 is not the SHA-256 of tests, a newline and rows, which is [0-9a-f]{64}$/);
   });
 });
 
@@ -224,6 +292,22 @@ describe('every check, through the step, in a repository', () => {
     assert.strictEqual(run(), null);
   });
 
+  test('a run started with no label passes every check, as one started today does', () => {
+    assert.strictEqual(checkInputs({ ...env(), LABEL: '' }, repo.git), null);
+    // A runner that leaves an empty variable out gives no LABEL at all, which
+    // is no label too.
+    assert.strictEqual(checkInputs(env(), repo.git), null);
+    // No label is an empty one, and nothing else: one space is refused.
+    assert.strictEqual(checkInputs({ ...env(), LABEL: ' ' }, repo.git), `shape: ${LABEL_WHY}`);
+  });
+
+  test('a run started with a well-formed label passes every check', () => {
+    assert.strictEqual(checkInputs({ ...env(), LABEL: '#515 c1e6428' }, repo.git), null);
+    // The same label with its head in uppercase is refused, so the label was
+    // checked rather than passed over.
+    assert.strictEqual(checkInputs({ ...env(), LABEL: '#515 C1E6428' }, repo.git), `shape: ${LABEL_WHY}`);
+  });
+
   test('main must be on main, and main and the blocked head inside the fix head', () => {
     for (const [over, what] of [
       [{ main: sha.side }, 'main off main'],
@@ -311,6 +395,32 @@ describe('every check, through the step, in a repository', () => {
     assert.ok(lists && lists.startsWith('lists: '), lists);
     const commits = run({ rows: R('./src/a.js'), main: sha.side });
     assert.ok(commits && commits.startsWith('commits: '), commits);
+  });
+});
+
+describe('a malformed label, through the whole check inputs step of each job', () => {
+  test('a malformed label fails check inputs with the label message in every job, before any later step', (t) => {
+    const said = [];
+    t.mock.method(console, 'error', (line) => said.push(String(line)));
+    t.mock.method(console, 'log', () => {});
+    // The step's git, which nothing may reach once the label is refused.
+    const git = [];
+    const fakeRequire = (name) => (name === 'node:child_process'
+      ? { execFileSync: (cmd, args) => { git.push([cmd, ...args].join(' ')); throw new Error('no git here'); } }
+      : require(name));
+    for (const job of ['red', 'green', 'break']) {
+      said.length = 0;
+      git.length = 0;
+      let code = null;
+      const proc = { env: { ...inputs(), LABEL: '#515 C1E6428' }, exit: (c) => { code = c; throw new Error('exited'); } };
+      assert.throws(() => runStep(job, 'check inputs', fakeRequire, proc), { message: 'exited' }, job);
+      // A step that exits 1 fails its job there, and no later step runs: the
+      // static tests hold that no step is skipped on a condition or lets a
+      // failure pass.
+      assert.strictEqual(code, 1, job);
+      assert.deepStrictEqual(said, [`check inputs failed: shape: ${LABEL_WHY}`], job);
+      assert.deepStrictEqual(git, [], `${job}: no commit was read`);
+    }
   });
 });
 
