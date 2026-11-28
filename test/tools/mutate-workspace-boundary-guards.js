@@ -3974,6 +3974,18 @@ const MUTATIONS = [
   [CONNECTOR_KEPT, 'Connector outcome: the note is not cleared from the record once it is told',
     "  try { persist(convoId, null); } catch (e) { log(convoId, 'could not remove the outcomes told from the record', e); return input; }\n",
     ''],
+  // A card can end after another workspace is opened: its outcome is kept in
+  // the workspace the change was asked in, never in the one open, and nowhere
+  // once that workspace has been removed.
+  [CONNECTOR_OUTCOMES, 'Connector outcome: the writer drops the workspace the change was asked in, so a card that ends after a switch is kept in the one open',
+    '  const asked = { workspace, conversationId, change, name };\n',
+    '  const asked = { conversationId, change, name };\n'],
+  [CONNECTOR_KEPT, 'Connector outcome: outcomes are kept in the open workspace, whichever one they were asked in',
+    '  const askedIn = workspace || getWorkspace();\n',
+    '  const askedIn = getWorkspace();\n'],
+  [CONNECTOR_KEPT, 'Connector outcome: a workspace removed while its card waited is made again to keep the outcome',
+    '  if (askedIn !== getWorkspace() && !isFolder(askedIn)) return;\n',
+    ''],
   [CM_CLIENT, 'launchctl: the card gives no reason of its own',
     "    'launch-environment': () => 'This changes what macOS starts, or the settings every program started from now on is given, Rundock included, beyond anything Rundock can see or check.',\n",
     ''],
