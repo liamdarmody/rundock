@@ -1929,3 +1929,19 @@ describe('the sequences of an image\'s preview', () => {
     assert.deepStrictEqual(p.notices(), []);
   });
 });
+
+describe('the changelog names the change', () => {
+  const BEFORE = '- **Attach files to a message:** the + button beside the message field attaches images (PNG, JPEG, GIF, WebP), PDFs and text, Markdown or CSV files, up to 5 files and 20 MB per message. Rundock keeps them with the conversation, says under the message field if it couldn\'t, and removes them when the conversation is deleted. If it can\'t remove them, a notice says where they are and stays until you close it. An agent on Claude Code sees attached images and PDFs with your message, and so does a teammate it hands the conversation to. An agent on Codex sees attached images and text files too, up to 20 images or 10 MB of images in a conversation. Codex can\'t read PDFs yet, so Rundock won\'t send a PDF to a Codex agent and tells you why. A sent message shows its files, after a reload too: click an image or a PDF to see it larger, and a file that\'s no longer there shows as not available. Paste or drop files onto the conversation to attach them, and a file Rundock can\'t take says why as you add it.';
+  const SENTENCE = 'Large images are scaled down before they\'re sent, and an animated image shows that the agent sees its first frame only.';
+
+  test('the attachments entry under Unreleased and Added ends with the sentence on large and animated images, the rest unchanged', () => {
+    const all = read('CHANGELOG.md').split('\n');
+    const unreleased = all.indexOf('## Unreleased');
+    const added = all.indexOf('### Added', unreleased);
+    const next = all.findIndex((l, i) => i > added && (l.startsWith('## ') || l.startsWith('### ')));
+    assert.ok(unreleased !== -1 && added > unreleased, 'the changelog has Unreleased and its Added');
+    const entries = all.slice(added + 1, next === -1 ? all.length : next).filter((l) => l.startsWith('- **Attach files to a message:**'));
+    assert.deepStrictEqual(entries, [`${BEFORE} ${SENTENCE}`]);
+    assert.strictEqual(all.filter((l) => l.includes(SENTENCE)).length, 1, 'the sentence is added once');
+  });
+});
