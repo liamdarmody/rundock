@@ -823,8 +823,11 @@ async function closeWhileHeld(prefix, close) {
     assert.deepStrictEqual(helpers().helperRows(convo), []);
     assert.strictEqual(helpers().helping(convo), false);
     await requestDone(convo, since);
-    const rows = helpersChanged(convo, since).pop().helpers;
-    assert.deepStrictEqual(rows.map((r) => r.state), Array(5).fill('killed'), 'its helpers ended and the held one is gone');
+    // Stop sends its own done before the lead's process closes, and the rows
+    // its close ends follow, so the last rows are waited for.
+    const lastStates = () => { const all = helpersChanged(convo, since); return all.length ? all[all.length - 1].helpers.map((r) => r.state) : []; };
+    await h.waitUntil(() => lastStates().length === 5 && lastStates().every((s) => s === 'killed'), { timeout: 5000 });
+    assert.deepStrictEqual(lastStates(), Array(5).fill('killed'), 'its helpers ended and the held one is gone');
   });
 }
 
