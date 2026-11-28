@@ -23,6 +23,7 @@ const load = (file) => {
 };
 const turn = load('../../lib/attachments/turn.js');
 const receive = load('../../lib/attachments/receive.js');
+const store = load('../../lib/attachments/store.js');
 const search = load('../../search.js');
 const readyTurn = () => assert.strictEqual(typeof (turn && turn.buildTurn), 'function', 'turn.js loads and exports buildTurn');
 
@@ -112,6 +113,16 @@ function fourFiles(ws, { together = false, sent } = {}) {
   ];
   const messages = together ? [{ id: 'entry-1', files }] : files.map((f, n) => ({ id: `entry-${n + 1}`, files: [f] }));
   return recorded(ws, messages, { sent });
+}
+
+// Five more files described in the record's entry `entryId`, as an agent
+// could add them, so it lists six. Answers their stored names.
+function sixFiles(ws, entryId) {
+  const record = store.readRecord(ws, ID);
+  const extra = [5, 6, 7, 8, 9].map((n) => ({ file: `${n}-extra.txt`, name: 'extra.txt', type: 'txt', bytes: 1, sha256: sha256(Buffer.from('x')) }));
+  record.messages.find((m) => m.id === entryId).files.push(...extra);
+  fs.writeFileSync(recordOf(ws), JSON.stringify(record));
+  return extra.map((f) => f.file);
 }
 
 // The canonical line for a file, as the record describes it.
@@ -316,6 +327,20 @@ describe('buildTurn: a Codex turn names an image only with the image', () => {
     assert.deepStrictEqual(sent, { files: ['3-photo.png'], bytes: 33, images: 1 });
   });
 
+  test('an image of an entry altered to list six files, its PNG still present, is given the not-shown form and no item when a line names it, whichever entry the turn answers', () => {
+    const ws = workspace();
+    const d = fourFiles(ws);
+    const extra = sixFiles(ws, 'entry-1');
+    const text = `look ${lineOf(d['1-diagram.png'])}`;
+    const own = codexTurn(ws, text, { entryId: 'entry-1' });
+    assert.strictEqual(own.content, [`look ${NOT_SHOWN('1-diagram.png')}`, ...extra.map(GONE)].join('\n'));
+    assert.deepStrictEqual(own.extraItems, []);
+    assert.deepStrictEqual(own.sent, { files: [], bytes: 0, images: 0 });
+    const other = codexTurn(ws, text, { entryId: 'entry-2' });
+    assert.strictEqual(other.content, `look ${NOT_SHOWN('1-diagram.png')}\n${lineOf(d['2-notes.md'])}`);
+    assert.deepStrictEqual(other.extraItems, [inlineItem('2-notes.md', 'ten bytes\n')]);
+  });
+
   test('a changed image and a missing image each give their form and no item', () => {
     const ws = workspace();
     const d = recorded(ws, [{ id: 'entry-1', files: [
@@ -453,6 +478,19 @@ describe('buildTurn: a thread resumed on another app-server process', () => {
     assert.strictEqual(unnamed.content, `and now?\n${lineOf(d['3-photo.png'])}`);
     assert.deepStrictEqual(unnamed.extraItems, [imageItem(ws, '3-photo.png')]);
     assert.deepStrictEqual(unnamed.sent, { files: ['3-photo.png'], bytes: 33, images: 1 });
+  });
+
+  test('an image of an entry altered to list six files is not sent again on a cold resume', () => {
+    const ws = workspace();
+    const d = recorded(ws, [
+      { id: 'entry-1', files: [{ file: '1-diagram.png', bytes: pngBytes(), ...IMAGE }] },
+      { id: 'entry-2', files: [{ file: '2-photo.png', bytes: pngBytes(320, 240), width: 320, height: 240 }] },
+    ], { sent: { [THREAD]: { files: ['1-diagram.png', '2-photo.png'], bytes: 66, images: 2, instance: 'server-a' } } });
+    sixFiles(ws, 'entry-1');
+    const { content, extraItems, sent } = codexTurn(ws, 'and now?', COLD);
+    assert.strictEqual(content, `and now?\n${lineOf(d['2-photo.png'])}`);
+    assert.deepStrictEqual(extraItems, [imageItem(ws, '2-photo.png')]);
+    assert.deepStrictEqual(sent, { files: ['2-photo.png'], bytes: 33, images: 1 });
   });
 
   test('an image the turn already carries is not sent again', () => {

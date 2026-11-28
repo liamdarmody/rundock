@@ -199,6 +199,27 @@ describe('a Codex turn carries the items for the files it names', () => {
     h.reapConvo(id);
   });
 
+  test('a turn naming the PNG of an entry altered to list six files, its PNG still present, is sent the not-shown form and no localImage item', async () => {
+    const id = h.freshConvoId('codex-six');
+    codexAnswers(['SIX-T']);
+    h.clearInvocations();
+    const ok = await receiveAttachments(h.workspaceDir, { conversationId: id, content: 'SIX-T what is this', attachments: [file('diagram.png', DIAGRAM)] });
+    const recordFile = path.join(h.workspaceDir, '.rundock', 'attachments', id, 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    const extra = [2, 3, 4, 5, 6].map((n) => `${n}-extra.txt`);
+    record.messages[0].files.push(...extra.map((stored) => ({ file: stored, name: 'extra.txt', type: 'txt', bytes: 1, sha256: '0'.repeat(64) })));
+    fs.writeFileSync(recordFile, JSON.stringify(record));
+    const stored = ok.entry.files[0].file;
+    assert.strictEqual(store.checkRecordedFile(h.workspaceDir, id, stored), 'present', 'the PNG is still present');
+    const since = client.messages.length;
+    chat(id, ok.content, undefined, { agent: 'researcher', attachmentEntry: ok.entry.id });
+    assert.ok(await resultFor(id, 'DONE-SIX-T', since), 'the message is answered');
+    const text = textThen(await turnStartWith('SIX-T'), []);
+    const notShown = `[Attached image not shown to you: ${stored}. If you need it, tell the person you can't see it.]`;
+    assert.ok(text.endsWith(['SIX-T what is this', notShown, ...extra.map((f) => `[Attached file not available: ${f}]`)].join('\n')), text);
+    h.reapConvo(id);
+  });
+
   test('a Codex specialist whose brief leaves out the PNG\'s line is sent the line and the item', async () => {
     const id = h.freshConvoId('codex-brief-png');
     const stored = await claudeOpening(id, 'SETUP-BP', [file('diagram.png', DIAGRAM)]);
