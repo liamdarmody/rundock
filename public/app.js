@@ -869,6 +869,15 @@ function handle(d) {
     case 'skill_error':
       addSystemMsgToConvo(d.message || 'Skill operation failed', d.conversationId, false, true);
       break;
+    // A connector change an agent asked for: the window sent it with this
+    // conversation's id, and the server answers with that id when it is well
+    // formed, so each outcome is drawn where it was asked.
+    case 'connector_saved':
+      addSystemMsgToConvo(connectorSavedLine(d), d.conversationId, false, true);
+      break;
+    case 'connector_error':
+      addSystemMsgToConvo(d.message || 'Connector change failed', d.conversationId, false, true);
+      break;
     // A routine write is the one save in this client the user waits on: the
     // editor stays on screen until the server answers, so a refusal has
     // somewhere to land. Both replies go to the editor AND to the message
@@ -1310,14 +1319,22 @@ function handleResult(d, convoId) {
   }
 }
 
-// `keep`: a line about an agent or skill change, which the server also
-// stores in the conversation's history (lib/agents/team-notes.js). It is kept
-// with its own conversation when that one's messages are loaded, so coming
+// `keep`: a line about an agent, skill or connector change, which the server
+// also stores in the conversation's history (lib/agents/team-notes.js). It is
+// kept with its own conversation when that one's messages are loaded, so coming
 // back to it draws it again; one not loaded yet brings it with its history.
 function addSystemMsgToConvo(text, convoId, isError = true, keep = false) {
   const c = keep && convoId ? conversations.find(x => x.id === convoId) : null;
   if (c && c.messages.length) c.messages.push({ role: 'system', content: text });
   if(!convoId || activeConversation?.id === convoId) addSystemMsg((isError ? 'Error: ' : '') + text);
+}
+
+// A connector change made: the words the server stores for it in the
+// conversation's history too (lib/agents/team-notes.js).
+function connectorSavedLine(d) {
+  const named = 'Connector "' + (d.name || '') + '" ';
+  if (d.change === 'remove') return named + 'removed. Agents stop using it the next time they start.';
+  return named + (d.change === 'replace' ? 'replaced' : 'added') + '. It starts the next time an agent starts.';
 }
 
 // The line saying a delegate stopped, which the server also stores. Kept with

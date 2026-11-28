@@ -394,6 +394,13 @@ const CONNECTOR_VIEW = { src: path.join(ROOT, 'public', 'views', 'chat.js'), sui
 const CONNECTOR_WRITE = { src: path.join(ROOT, 'lib', 'workspace', 'connector-write.js'), suite: 'test/unit/connector-write.test.js' };
 const CONNECTOR_WRITE_ASK = { src: path.join(ROOT, 'lib', 'workspace', 'connector-write.js'), suite: 'test/unit/protocol-handlers-lib.test.js' };
 const CONNECTOR_WRITE_FLOW = { src: path.join(ROOT, 'lib', 'workspace', 'connector-write.js'), suite: 'test/integration/connector-asks.test.js' };
+// What a connector change ended as, kept in the conversation that asked: the
+// writer that keeps it, the record that holds it, the note that tells the
+// agent, and the page that draws it.
+const CONNECTOR_OUTCOMES = { src: path.join(ROOT, 'lib', 'workspace', 'connector-write.js'), suite: 'test/unit/connector-outcomes.test.js' };
+const CONNECTOR_KEPT = { src: path.join(ROOT, 'lib', 'agents', 'team-notes.js'), suite: 'test/unit/connector-outcomes.test.js' };
+const CONNECTOR_NOTE = { src: path.join(ROOT, 'lib', 'delegation', 'catch-up.js'), suite: 'test/unit/connector-outcomes.test.js' };
+const CONNECTOR_PAGE = { src: path.join(ROOT, 'public', 'app.js'), suite: 'test/unit/marker-pill-routing.test.js' };
 // The per-user connector file, through the real hook and the card's words.
 const SECRETS_HOOK = { src: path.join(ROOT, 'scripts', 'permission-hook.js'), suite: 'test/unit/connector-secrets-file.test.js' };
 const SECRETS_CARD = { src: path.join(ROOT, 'public', 'permissions.js'), suite: 'test/unit/connector-secrets-file.test.js' };
@@ -3569,60 +3576,60 @@ const MUTATIONS = [
     "    if (!validConnectorName(name)) return refuse('invalid', CONNECTOR_NAME_REFUSED);",
     "    if (!(typeof name === 'string' && /^[\\w.-]{1,64}$/.test(name) && !name.includes('..'))) return refuse('invalid', CONNECTOR_NAME_REFUSED);"],
   [CONNECTOR_ASK, 'Connector: a save reads the file before it checks the name',
-    'function handleSaveConnector(ctx, ws, msg) {\n'
-    + '  if (!validConnectorName(msg.name)) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_NAME_REFUSED }));\n"
+    '  if (!validConnectorName(msg.name)) {\n'
+    + "    refuse('invalid', CONNECTOR_NAME_REFUSED);\n"
     + '    return;\n'
     + '  }\n'
     + '  let entry;\n'
     + '  try {\n'
     + '    entry = JSON.parse(msg.content);\n'
     + '  } catch (e) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: 'The connector entry is not valid JSON, so nothing was changed.' }));\n"
+    + "    refuse('invalid', 'The connector entry is not valid JSON, so nothing was changed.');\n"
     + '    return;\n'
     + '  }\n'
     + '  if (!validConnectorEntry(entry)) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
+    + "    refuse('invalid', CONNECTOR_ENTRY_REFUSED);\n"
     + '    return;\n'
     + '  }\n'
     + '  const unshown = unshownConnectorKey(entry);\n'
     + '  if (unshown) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + "    refuse('invalid', connectorShapeRefused(unshown));\n"
     + '    return;\n'
     + '  }\n'
     + '  const hidden = hiddenSettingRefusal(entry);\n'
     + '  if (hidden) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + "    refuse('invalid', hidden);\n"
     + '    return;\n'
     + '  }\n'
-    + '  const found = connectorFile(ctx, ws, getWorkspace());\n'
+    + "  // connectorFile says why it could not read; that message is the refusal.\n"
+    + "  const found = connectorFile(ctx, { send: (data) => refuse('unreadable', JSON.parse(data).message) }, getWorkspace());\n"
     + '  if (!found) return;\n',
-    'function handleSaveConnector(ctx, ws, msg) {\n'
-    + '  let entry;\n'
+    '  let entry;\n'
     + '  try {\n'
     + '    entry = JSON.parse(msg.content);\n'
     + '  } catch (e) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: 'The connector entry is not valid JSON, so nothing was changed.' }));\n"
+    + "    refuse('invalid', 'The connector entry is not valid JSON, so nothing was changed.');\n"
     + '    return;\n'
     + '  }\n'
     + '  if (!validConnectorEntry(entry)) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_ENTRY_REFUSED }));\n"
+    + "    refuse('invalid', CONNECTOR_ENTRY_REFUSED);\n"
     + '    return;\n'
     + '  }\n'
     + '  const unshown = unshownConnectorKey(entry);\n'
     + '  if (unshown) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + "    refuse('invalid', connectorShapeRefused(unshown));\n"
     + '    return;\n'
     + '  }\n'
     + '  const hidden = hiddenSettingRefusal(entry);\n'
     + '  if (hidden) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + "    refuse('invalid', hidden);\n"
     + '    return;\n'
     + '  }\n'
-    + '  const found = connectorFile(ctx, ws, getWorkspace());\n'
+    + "  // connectorFile says why it could not read; that message is the refusal.\n"
+    + "  const found = connectorFile(ctx, { send: (data) => refuse('unreadable', JSON.parse(data).message) }, getWorkspace());\n"
     + '  if (!found) return;\n'
     + '  if (!validConnectorName(msg.name)) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: CONNECTOR_NAME_REFUSED }));\n"
+    + "    refuse('invalid', CONNECTOR_NAME_REFUSED);\n"
     + '    return;\n'
     + '  }\n'],
   [CONNECTOR_WRITE_ASK, 'Connector: an entry with neither a command nor a URL passes',
@@ -3640,7 +3647,7 @@ const MUTATIONS = [
     + "    }\n"
     + "    if (!CHANGES.has(change) || !SOURCES.has(source) || typeof workspace !== 'string' || !workspace) return refuse('invalid', CHANGE_REFUSED);\n"
     + "    if (source === 'rundock' && change !== 'add') return refuse('invalid', SETUP_ADDS_ONLY);\n"
-    + "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
+    + "    if (source !== 'rundock' && !askingConversation(conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
     + "    // connectorFile says why it could not read; that message is the outcome.\n"
     + "    let unread = '';\n"
     + "    const heard = { send: (data) => { unread = JSON.parse(data).message; } };\n"
@@ -3666,7 +3673,7 @@ const MUTATIONS = [
     + "    }\n"
     + "    if (!CHANGES.has(change) || !SOURCES.has(source) || typeof workspace !== 'string' || !workspace) return refuse('invalid', CHANGE_REFUSED);\n"
     + "    if (source === 'rundock' && change !== 'add') return refuse('invalid', SETUP_ADDS_ONLY);\n"
-    + "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
+    + "    if (source !== 'rundock' && !askingConversation(conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
     + "    // connectorFile says why it could not read; that message is the outcome.\n"
     + "    let unread = '';\n"
     + "    const heard = { send: (data) => { unread = JSON.parse(data).message; } };\n"
@@ -3729,26 +3736,28 @@ const MUTATIONS = [
   [CONNECTOR_ASK, 'Connector: an entry the card cannot show is checked only after the file is read',
     '  const unshown = unshownConnectorKey(entry);\n'
     + '  if (unshown) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + "    refuse('invalid', connectorShapeRefused(unshown));\n"
     + '    return;\n'
     + '  }\n'
     + '  const hidden = hiddenSettingRefusal(entry);\n'
     + '  if (hidden) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + "    refuse('invalid', hidden);\n"
     + '    return;\n'
     + '  }\n'
-    + '  const found = connectorFile(ctx, ws, getWorkspace());\n'
+    + "  // connectorFile says why it could not read; that message is the refusal.\n"
+    + "  const found = connectorFile(ctx, { send: (data) => refuse('unreadable', JSON.parse(data).message) }, getWorkspace());\n"
     + '  if (!found) return;\n',
     '  const hidden = hiddenSettingRefusal(entry);\n'
     + '  if (hidden) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + "    refuse('invalid', hidden);\n"
     + '    return;\n'
     + '  }\n'
-    + '  const found = connectorFile(ctx, ws, getWorkspace());\n'
+    + "  // connectorFile says why it could not read; that message is the refusal.\n"
+    + "  const found = connectorFile(ctx, { send: (data) => refuse('unreadable', JSON.parse(data).message) }, getWorkspace());\n"
     + '  if (!found) return;\n'
     + '  const unshown = unshownConnectorKey(entry);\n'
     + '  if (unshown) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: connectorShapeRefused(unshown) }));\n"
+    + "    refuse('invalid', connectorShapeRefused(unshown));\n"
     + '    return;\n'
     + '  }\n'],
   [CONNECTOR_WRITE_FLOW, 'Connector: through the real server, an entry the card cannot show is checked only once the card is allowed',
@@ -3759,7 +3768,7 @@ const MUTATIONS = [
     + "    }\n"
     + "    if (!CHANGES.has(change) || !SOURCES.has(source) || typeof workspace !== 'string' || !workspace) return refuse('invalid', CHANGE_REFUSED);\n"
     + "    if (source === 'rundock' && change !== 'add') return refuse('invalid', SETUP_ADDS_ONLY);\n"
-    + "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
+    + "    if (source !== 'rundock' && !askingConversation(conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
     + "    // connectorFile says why it could not read; that message is the outcome.\n"
     + "    let unread = '';\n"
     + "    const heard = { send: (data) => { unread = JSON.parse(data).message; } };\n"
@@ -3783,7 +3792,7 @@ const MUTATIONS = [
     + "    }\n"
     + "    if (!CHANGES.has(change) || !SOURCES.has(source) || typeof workspace !== 'string' || !workspace) return refuse('invalid', CHANGE_REFUSED);\n"
     + "    if (source === 'rundock' && change !== 'add') return refuse('invalid', SETUP_ADDS_ONLY);\n"
-    + "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
+    + "    if (source !== 'rundock' && !askingConversation(conversationId)) return refuse('invalid', NO_CONVERSATION);\n"
     + "    // connectorFile says why it could not read; that message is the outcome.\n"
     + "    let unread = '';\n"
     + "    const heard = { send: (data) => { unread = JSON.parse(data).message; } };\n"
@@ -3820,7 +3829,7 @@ const MUTATIONS = [
     "      if (change !== 'add' && !util.isDeepStrictEqual(now.parsed.mcpServers[name], before)) return refuse('changed', CHANGED);\n",
     ''],
   [CONNECTOR_WRITE, 'Connector: an agent\'s change is taken without its conversation',
-    "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n",
+    "    if (source !== 'rundock' && !askingConversation(conversationId)) return refuse('invalid', NO_CONVERSATION);\n",
     ''],
   [CONNECTOR_WRITE, 'Connector: Rundock\'s setup may replace a connector',
     "    if (source === 'rundock' && change !== 'add') return refuse('invalid', SETUP_ADDS_ONLY);\n",
@@ -3880,24 +3889,103 @@ const MUTATIONS = [
   [CONNECTOR_WRITE, 'Connector: while a turn watches, the change is built on what the disk held after the guard\'s check',
     '    return { bytes: accepted.bytes, record: true };\n',
     '    return { bytes: disk.bytes, record: true };\n'],
+  [CONNECTOR_WRITE, 'Connector: while a turn watches, a baseline the guard could not read is built on as an empty file',
+    '    if (accepted.bytes === null && !answerFileHeldAbsent(workspace, file)) return { refused: UNREADABLE };\n',
+    ''],
   [CONNECTOR_ASK, 'Connector: a save checks for a setting the card cannot show only after it reads the file',
     '  const hidden = hiddenSettingRefusal(entry);\n'
     + '  if (hidden) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + "    refuse('invalid', hidden);\n"
     + '    return;\n'
     + '  }\n'
-    + '  const found = connectorFile(ctx, ws, getWorkspace());\n'
+    + "  // connectorFile says why it could not read; that message is the refusal.\n"
+    + "  const found = connectorFile(ctx, { send: (data) => refuse('unreadable', JSON.parse(data).message) }, getWorkspace());\n"
     + '  if (!found) return;\n',
-    '  const found = connectorFile(ctx, ws, getWorkspace());\n'
+    "  // connectorFile says why it could not read; that message is the refusal.\n"
+    + "  const found = connectorFile(ctx, { send: (data) => refuse('unreadable', JSON.parse(data).message) }, getWorkspace());\n"
     + '  if (!found) return;\n'
     + '  const hidden = hiddenSettingRefusal(entry);\n'
     + '  if (hidden) {\n'
-    + "    ws.send(JSON.stringify({ type: 'connector_error', message: hidden }));\n"
+    + "    refuse('invalid', hidden);\n"
     + '    return;\n'
     + '  }\n'],
   [CONNECTOR_ASK, 'Connector: a save takes its change from the message',
     "change: has(found, msg.name) ? 'replace' : 'add'",
     "change: msg.change || (has(found, msg.name) ? 'replace' : 'add')"],
+  // ===== WHAT A CONNECTOR CHANGE ENDED AS =====
+  // Every reply names the conversation that asked, when its id is well formed,
+  // and is kept there in the same step: one line in its history and one
+  // outcome the agent is told once, at its next turn, in lines built from
+  // fixed words and a name that passes the writer's own rule.
+  [CONNECTOR_ASK, 'Connector outcome: a refusal before the file is read names no conversation',
+    "    ws.send(replyTo(asked, { type: 'connector_error', message }));\n",
+    "    ws.send(JSON.stringify({ type: 'connector_error', message }));\n"],
+  [CONNECTOR_WRITE, 'Connector outcome: the writer\'s reply names no conversation',
+    '  ws.send(JSON.stringify(convoId ? { ...payload, conversationId: convoId } : payload));\n',
+    '  ws.send(JSON.stringify(payload));\n'],
+  [CONNECTOR_PAGE, 'Connector outcome: the page has no case for a change made',
+    "    case 'connector_saved':\n      addSystemMsgToConvo(connectorSavedLine(d), d.conversationId, false, true);\n      break;\n",
+    ''],
+  [CONNECTOR_PAGE, 'Connector outcome: the page has no case for a refusal',
+    "    case 'connector_error':\n      addSystemMsgToConvo(d.message || 'Connector change failed', d.conversationId, false, true);\n      break;\n",
+    ''],
+  [CONNECTOR_PAGE, 'Connector outcome: a change made is drawn in the conversation on screen, whichever asked',
+    'addSystemMsgToConvo(connectorSavedLine(d), d.conversationId, false, true);',
+    'addSystemMsgToConvo(connectorSavedLine(d), null, false, true);'],
+  [CONNECTOR_NOTE, 'Connector outcome: the note quotes a refusal\'s message',
+    '  return `- ${opens}: ${verb} connector${named}. ${sentence}`;\n',
+    '  return `- ${opens}: ${verb} connector${named}. ${o.message || sentence}`;\n'],
+  [CONNECTOR_NOTE, 'Connector outcome: the note quotes the message of a refusal with no reason it knows',
+    "  if (!isConnectorEnd(o.reason)) return `- Failed: ${verb} connector. Rundock could not complete this change.`;\n",
+    "  if (!isConnectorEnd(o.reason)) return `- Failed: ${verb} connector. ${o.message || 'Rundock could not complete this change.'}`;\n"],
+  [CONNECTOR_NOTE, 'Connector outcome: the note names any connector name it is given',
+    '  const named = validConnectorName(o.name) ? ` "${o.name}"` : \'\';\n',
+    '  const named = o.name ? ` "${o.name}"` : \'\';\n'],
+  [CONNECTOR_NOTE, 'Connector outcome: the note checks a name by the note\'s own rule, not the writer\'s',
+    '  const named = validConnectorName(o.name) ? ` "${o.name}"` : \'\';\n',
+    '  const named = typeof o.name === \'string\' && /^[\\w-]+$/.test(o.name) ? ` "${o.name}"` : \'\';\n'],
+  [CONNECTOR_ASK, 'Connector outcome: a refusal before the file is read is not kept',
+    '    connectorWrite.keepConnectorOutcome(asked, reason, message);\n',
+    ''],
+  [CONNECTOR_OUTCOMES, 'Connector outcome: the writer\'s reply is not kept',
+    '  keepConnectorOutcome(asked, reason, payload.message);\n',
+    ''],
+  [CONNECTOR_OUTCOMES, 'Connector outcome: a name that is not text is kept as it was sent',
+    "    name: typeof asked.name === 'string' ? asked.name : null,\n",
+    '    name: asked.name,\n'],
+  [CONNECTOR_OUTCOMES, 'Connector outcome: the writer\'s reply is kept a step after it is sent',
+    '  keepConnectorOutcome(asked, reason, payload.message);\n',
+    '  setImmediate(() => keepConnectorOutcome(asked, reason, payload.message));\n'],
+  [CONNECTOR_WRITE, 'Connector outcome: any non-empty string is taken as a conversation id',
+    "const askingConversation = (id) => (typeof id === 'string' && ID_PATTERN.test(id) ? id : null);\n",
+    "const askingConversation = (id) => (typeof id === 'string' && id ? id : null);\n"],
+  [CONNECTOR_WRITE, 'Connector outcome: a conversation id is not checked for its form',
+    "const askingConversation = (id) => (typeof id === 'string' && ID_PATTERN.test(id) ? id : null);\n",
+    "const askingConversation = (id) => (typeof id === 'string' ? id : null);\n"],
+  [CONNECTOR_WRITE, 'Connector outcome: an agent\'s change is taken with any non-empty conversation id',
+    "    if (source !== 'rundock' && !askingConversation(conversationId)) return refuse('invalid', NO_CONVERSATION);\n",
+    "    if (source !== 'rundock' && !(typeof conversationId === 'string' && conversationId)) return refuse('invalid', NO_CONVERSATION);\n"],
+  [CONNECTOR_KEPT, 'Connector outcome: a connector change\'s reason is kept only when it is a card\'s',
+    "  ...((NOUNS[o.kind] === 'Connector' ? isConnectorEnd : isCardEnd)(o.reason) ? { reason: o.reason } : {}),\n",
+    '  ...(isCardEnd(o.reason) ? { reason: o.reason } : {}),\n'],
+  [CONNECTOR_KEPT, 'Connector outcome: the note is not cleared once it is told',
+    '  waiting.delete(convoId);\n  if (proc) proc.teamOutcomesGiven = list;\n',
+    '  if (proc) proc.teamOutcomesGiven = list;\n'],
+  [CONNECTOR_KEPT, 'Connector outcome: the note is not cleared from the record once it is told',
+    "  try { persist(convoId, null); } catch (e) { log(convoId, 'could not remove the outcomes told from the record', e); return input; }\n",
+    ''],
+  // A card can end after another workspace is opened: its outcome is kept in
+  // the workspace the change was asked in, never in the one open, and nowhere
+  // once that workspace has been removed.
+  [CONNECTOR_OUTCOMES, 'Connector outcome: the writer drops the workspace the change was asked in, so a card that ends after a switch is kept in the one open',
+    '  const asked = { workspace, conversationId, change, name };\n',
+    '  const asked = { conversationId, change, name };\n'],
+  [CONNECTOR_KEPT, 'Connector outcome: outcomes are kept in the open workspace, whichever one they were asked in',
+    '  const askedIn = workspace || getWorkspace();\n',
+    '  const askedIn = getWorkspace();\n'],
+  [CONNECTOR_KEPT, 'Connector outcome: a workspace removed while its card waited is made again to keep the outcome',
+    '  if (askedIn !== getWorkspace() && !isFolder(askedIn)) return;\n',
+    ''],
   [CM_CLIENT, 'launchctl: the card gives no reason of its own',
     "    'launch-environment': () => 'This changes what macOS starts, or the settings every program started from now on is given, Rundock included, beyond anything Rundock can see or check.',\n",
     ''],

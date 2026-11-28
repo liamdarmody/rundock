@@ -135,7 +135,7 @@ describe('the client sends what the server needs to route', () => {
   const fs2 = require('node:fs');
   const src = fs2.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
 
-  const KINDS = ['agent_saved', 'skill_saved', 'agent_deleted', 'skill_deleted', 'agent_error', 'skill_error'];
+  const KINDS = ['agent_saved', 'skill_saved', 'agent_deleted', 'skill_deleted', 'agent_error', 'skill_error', 'connector_saved', 'connector_error'];
 
   test('marker actions carry the conversation that produced them', () => {
     assert.match(src, /MARKER_SENDS\[action\.kind\]\(action\), conversationId: convoId/,
@@ -256,4 +256,92 @@ describe('the delete handlers echo the id too', () => {
         'success or failure, the reply carries the id it was asked with');
     });
   }
+});
+
+describe('a connector change\'s outcome is drawn in the conversation that asked', () => {
+  // The page's two connector cases and the helpers they call, lifted out of
+  // app.js's source as the routing rule is above, and run over a page with
+  // two conversations: what each case draws, where, and what it keeps.
+  const appSrc = require('node:fs').readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
+  const fnOf = (name) => {
+    const at = appSrc.indexOf(`function ${name}(`);
+    return at === -1 ? '' : appSrc.slice(at, appSrc.indexOf('\n}', at) + 2);
+  };
+  const caseOf = (kind) => {
+    const at = appSrc.indexOf(`case '${kind}':`);
+    return at === -1 ? '' : appSrc.slice(at + `case '${kind}':`.length, appSrc.indexOf('break;', at));
+  };
+  function page(activeId, loaded = ['convo-A', 'convo-B']) {
+    const ctx = {
+      activeConversation: activeId ? { id: activeId } : null,
+      conversations: ['convo-A', 'convo-B', 'convo-C'].map((id) => ({ id, messages: loaded.includes(id) ? [{ role: 'user', content: 'hello' }] : [] })),
+      drawn: [],
+      addSystemMsg: (text) => { ctx.drawn.push(text); },
+    };
+    // eslint-disable-next-line no-new-func
+    const make = new Function('ctx', `with (ctx) { ${fnOf('addSystemMsgToConvo')}; ${fnOf('connectorSavedLine')};
+      return { connector_saved: (d) => { ${caseOf('connector_saved')} }, connector_error: (d) => { ${caseOf('connector_error')} } }; }`);
+    const cases = make(ctx);
+    const kept = (id) => ctx.conversations.find((c) => c.id === id).messages.filter((m) => m.role === 'system').map((m) => m.content);
+    return { ctx, cases, kept };
+  }
+  const { storedLine } = require(path.join(ROOT, 'lib', 'agents', 'team-notes.js'));
+
+  for (const [change, outcome, kind, action] of [['add', 'saved', 'save_connector', 'saved'], ['replace', 'updated', 'save_connector', 'saved'], ['remove', 'deleted', 'delete_connector', 'removed']]) {
+    test(`the line drawn for ${change === 'add' ? 'an' : 'a'} ${change} is the line the conversation's history keeps for it`, () => {
+      assert.ok(fnOf('connectorSavedLine'), 'the page builds the line in one place');
+      const p = page('convo-A');
+      p.cases.connector_saved({ type: 'connector_saved', name: 'example.alpha', change, action, takesEffect: 'next agent start', conversationId: 'convo-A' });
+      assert.deepStrictEqual(p.ctx.drawn, [storedLine({ kind, name: 'example.alpha', author: null, outcome })]);
+    });
+  }
+
+  test('the Done lines read as Rundock says them', () => {
+    const p = page('convo-A');
+    for (const change of ['add', 'replace', 'remove']) p.cases.connector_saved({ name: 'example.alpha', change, conversationId: 'convo-A' });
+    assert.deepStrictEqual(p.ctx.drawn, [
+      'Connector "example.alpha" added. It starts the next time an agent starts.',
+      'Connector "example.alpha" replaced. It starts the next time an agent starts.',
+      'Connector "example.alpha" removed. Agents stop using it the next time they start.',
+    ]);
+  });
+
+  test('a refusal draws its own message, with no "Error:" in front, and a refusal with none says the change failed', () => {
+    const p = page('convo-A');
+    p.cases.connector_error({ type: 'connector_error', message: 'The change was not allowed, so nothing was changed.', conversationId: 'convo-A' });
+    p.cases.connector_error({ type: 'connector_error', conversationId: 'convo-A' });
+    assert.deepStrictEqual(p.ctx.drawn, ['The change was not allowed, so nothing was changed.', 'Connector change failed']);
+  });
+
+  test('an outcome for another conversation is kept with that one and not drawn on screen', () => {
+    const p = page('convo-B');
+    p.cases.connector_saved({ name: 'example.alpha', change: 'add', conversationId: 'convo-A' });
+    p.cases.connector_error({ message: 'The change was not allowed, so nothing was changed.', conversationId: 'convo-A' });
+    assert.deepStrictEqual(p.ctx.drawn, [], 'nothing drawn in the conversation on screen');
+    assert.deepStrictEqual(p.kept('convo-A'), ['Connector "example.alpha" added. It starts the next time an agent starts.', 'The change was not allowed, so nothing was changed.']);
+    assert.deepStrictEqual(p.kept('convo-B'), []);
+  });
+
+  // The inverse: the add and the remove that undoes it, each in its own words,
+  // in the conversation that asked and no other.
+  test('an add is shown as added, and the remove that undoes it as removed, in the conversation that asked', () => {
+    const p = page('convo-A');
+    p.cases.connector_saved({ name: 'example.alpha', change: 'add', action: 'saved', conversationId: 'convo-A' });
+    p.cases.connector_saved({ name: 'example.alpha', change: 'remove', action: 'removed', conversationId: 'convo-A' });
+    const lines = ['Connector "example.alpha" added. It starts the next time an agent starts.', 'Connector "example.alpha" removed. Agents stop using it the next time they start.'];
+    assert.deepStrictEqual(p.ctx.drawn, lines);
+    assert.deepStrictEqual(p.kept('convo-A'), lines);
+    assert.deepStrictEqual(p.kept('convo-B'), []);
+  });
+
+  // The undo: coming back to a conversation draws its line from what it
+  // keeps, once. One whose messages are loaded keeps the line itself; one not
+  // loaded yet keeps nothing here, and brings the line with its history.
+  test('coming back to a refused change\'s conversation draws its line once, from what it keeps', () => {
+    const p = page('convo-B', ['convo-A', 'convo-B']);
+    p.cases.connector_error({ message: 'The change was not allowed, so nothing was changed.', conversationId: 'convo-A' });
+    p.cases.connector_error({ message: 'The change was not allowed, so nothing was changed.', conversationId: 'convo-C' });
+    assert.deepStrictEqual(p.kept('convo-A'), ['The change was not allowed, so nothing was changed.'], 'kept once with the loaded conversation');
+    assert.deepStrictEqual(p.kept('convo-C'), [], 'and none kept for one not loaded yet, which brings it with its history');
+  });
 });
