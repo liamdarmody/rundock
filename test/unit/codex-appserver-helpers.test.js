@@ -919,5 +919,127 @@ describe('what a running Codex helper holds', () => {
     assert.strictEqual(helpers.turnHeld(c), false, 'its next result is not held');
     helpers.requestEnded(c);
     assert.strictEqual(acted, 1, 'the held return acted');
+    assert.strictEqual(helpers.runningCount(c), 1, 'the Codex helper is still counted');
+  });
+});
+
+// CODEX HELPERS BESIDE A CLAUDE CODE LEAD'S. A Claude Code lead's helpers run
+// inside its process and end with it, or once another process leads. A Codex
+// helper is a thread of the app-server: it ends on its own, when it is
+// withdrawn or when the app-server goes. So nothing a Claude Code process does
+// ends one or drops its row, and a Codex helper starting ends nothing of a
+// Claude Code lead's.
+describe("Codex helpers beside a Claude Code lead's", () => {
+  const helpers = require('../../lib/delegation/helpers.js');
+  const signals = require('../../lib/signals.js');
+  const FIVE = ['rates', 'pipeline', 'deck', 'hooks', 'calendar'];
+  let prev;
+  let interrupts = 0;
+  before(() => {
+    prev = { enabled: helpers.HELPERS_ENABLED, record: signals.recordEvent };
+    helpers.HELPERS_ENABLED = true;
+    prev.deps = helpers.wireHelpersDeps({ safeSend: () => {} });
+    signals.recordEvent = () => {};
+  });
+  after(() => {
+    helpers.HELPERS_ENABLED = prev.enabled;
+    helpers.wireHelpersDeps(prev.deps);
+    signals.recordEvent = prev.record;
+  });
+  beforeEach(() => { interrupts = 0; });
+
+  let n = 0;
+  const convo = () => `beside-unit-${++n}`;
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const ctl = { interrupt: () => { interrupts += 1; return Promise.resolve({}); }, steer: () => Promise.resolve({}), queue: () => {} };
+  // A lead's process, as its entry holds it.
+  const proc = (name) => ({ name, exitCode: null, signalCode: null });
+  const rec = (c, name) => ({ threadId: `${c}-${name}`, leadThreadId: LEAD, leadTurnId: null, name, role: null, state: 'running', turnId: `turn-${name}`, step: null, file: null, capped: false });
+  function fernFive(c) {
+    for (const name of FIVE) codexHelper()(c, 'fern', rec(c, name), 'start', ctl);
+    assert.strictEqual(helpers.runningCount(c), 5, 'Fern\'s five run');
+  }
+  const codexStates = (c) => helpers.helperRows(c).filter((r) => r.kind === 'codex').map((r) => [r.agent, r.state]);
+  const allRunning = FIVE.map((name) => [name, 'running']);
+  const taskStarted = (id) => ({ type: 'system', subtype: 'task_started', task_id: `task-${id}`, tool_use_id: id, description: 'Look', subagent_type: 'Explore', task_type: 'local_agent' });
+
+  test("a Claude Code lead's helper starting leaves Fern's running Codex helpers running and counted", () => {
+    const c = convo();
+    fernFive(c);
+    const ash = proc('ash');
+    helpers.readTaskLine(c, { agentId: 'ash', process: ash }, taskStarted('toolu_beside_1'));
+    assert.deepStrictEqual(codexStates(c), allRunning);
+    assert.strictEqual(helpers.runningCount(c), 6, 'Ash\'s helper is counted beside them');
+    helpers.leadClosed(c, ash);
+  });
+
+  test("a Claude Code lead's process closing ends its own helpers and leaves Fern's running and counted", () => {
+    const c = convo();
+    fernFive(c);
+    const ash = proc('ash');
+    helpers.readTaskLine(c, { agentId: 'ash', process: ash }, taskStarted('toolu_beside_2'));
+    helpers.leadClosed(c, ash);
+    assert.deepStrictEqual(helpers.helperRows(c).map((r) => [r.agent, r.state]), allRunning, 'Ash\'s helper ended with him; Fern\'s run on');
+    assert.strictEqual(helpers.runningCount(c), 5);
+  });
+
+  test("a process with no helpers of its own closing in the conversation leaves Fern's running Codex helpers running and counted", () => {
+    const c = convo();
+    fernFive(c);
+    helpers.leadClosed(c, proc('ash'));
+    assert.deepStrictEqual(codexStates(c), allRunning);
+    assert.strictEqual(helpers.runningCount(c), 5);
+  });
+
+  test("a Claude Code lead's request ending leaves Fern's running Codex helpers running and counted", () => {
+    const c = convo();
+    fernFive(c);
+    helpers.noteStarted(c, { lead: 'ash', proc: proc('ash') }, { toolUseId: 'toolu_beside_3', agent: 'Explore', task: 'Look' });
+    helpers.noteEnded(c, 'toolu_beside_3', 'completed');
+    helpers.requestEnded(c);
+    assert.deepStrictEqual(codexStates(c), allRunning);
+    assert.strictEqual(helpers.runningCount(c), 5);
+  });
+
+  test("after a Claude Code lead's process closes, Fern's next helper while her five still run is stopped", async () => {
+    const c = convo();
+    fernFive(c);
+    const ash = proc('ash');
+    helpers.readTaskLine(c, { agentId: 'ash', process: ash }, taskStarted('toolu_beside_4'));
+    helpers.leadClosed(c, ash);
+    const inbox = rec(c, 'inbox');
+    codexHelper()(c, 'fern', inbox, 'start', ctl);
+    codexHelper()(c, 'fern', inbox, 'turn', ctl);
+    await settle();
+    assert.strictEqual(interrupts, 1, 'interrupted');
+    const shown = helpers.helperRows(c).find((r) => r.agent === 'inbox');
+    assert.deepStrictEqual([shown.state, shown.capped], ['killed', true]);
+    assert.strictEqual(helpers.runningCount(c), 5, 'never more than five');
+  });
+
+  test("a Codex helper starting leaves a Claude Code lead's running helpers running and its call held at the cap still waiting", async () => {
+    const c = convo();
+    const wren = proc('wren');
+    const calls = Array.from({ length: 6 }, (_, i) => ({ id: `toolu_beside_w${i}`, input: { subagent_type: 'Explore', description: `Look ${i}`, prompt: `Look ${i}.` } }));
+    helpers.placeMessage(c, { agentId: 'wren', process: wren }, calls);
+    const answers = calls.map(() => null);
+    calls.forEach((call, i) => {
+      helpers.answerAgentRequest({ convoId: c, askedBy: 'wren', data: { tool_use_id: call.id, tool_input: call.input } }).then((a) => { answers[i] = a; });
+    });
+    await settle();
+    assert.deepStrictEqual(answers, [...Array(5).fill({ allow: true }), null], 'five start and the sixth is held');
+    const rates = rec(c, 'rates');
+    try {
+      codexHelper()(c, 'fern', rates, 'start', ctl);
+      await settle();
+      const wrens = helpers.helperRows(c).filter((r) => r.kind === 'builtin').map((r) => r.state);
+      assert.deepStrictEqual(wrens, [...Array(5).fill('running'), 'waiting'], 'Wren\'s helpers run on, and the sixth still waits');
+      assert.strictEqual(answers[5], null, 'its call is not refused');
+      assert.strictEqual(rates.capped, true, 'Fern\'s helper is the one over the cap');
+    } finally {
+      helpers.leadClosed(c, wren);
+    }
+    await settle();
+    assert.deepStrictEqual(answers[5], { allow: false }, 'Wren\'s close refuses it, as before');
   });
 });

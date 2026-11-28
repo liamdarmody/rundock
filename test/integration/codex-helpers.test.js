@@ -886,6 +886,33 @@ test('while Fern\'s helper still runs, Ash answering in the same conversation ge
   release(gate);
 });
 
+// A Codex helper ends only on its own: Ash starting a helper of his own, or
+// his process closing, ends none of Fern's, so they stay counted.
+const fx = require('../fixtures/stream-json.js');
+test('after Fern hands over with five helpers running, Ash starting a helper and his process closing leave hers running and counted, so her next is still stopped', async () => {
+  const convo = open('cxhandash');
+  const gate = hold('handash');
+  await fernLeavesRunning(convo, 'HAND-FERN', FIVE, gate);
+  h.writeScenario([{ match: { agent: 'ash', promptIncludes: 'HAND-ASH' }, turn: [
+    { raw: fx.taskStarted({ taskId: 'task_hand_ash', toolUseId: 'toolu_hand_ash', description: 'Look around', subagentType: 'Explore' }) },
+    { text: 'Ash started one.' },
+  ] }]);
+  const since = sayAs('ash', convo, 'HAND-ASH please');
+  const { msg } = await rowsWhere(convo, since, (rows) => stateOf(rows, 'Explore') === 'running', 'Ash\'s helper, running');
+  assert.deepStrictEqual(FIVE.map((name) => stateOf(msg.helpers, name)), FIVE.map(() => 'running'), 'Fern\'s five run on beside it');
+  await client.waitFor((m) => m.type === 'result' && m._conversationId === convo && m._agent === 'ash', { since, timeout: 20000, label: 'Ash\'s result' });
+  h.reapConvo(convo);
+  const { msg: closed } = await rowsWhere(convo, since, (rows) => stateOf(rows, 'Explore') === 'killed', 'Ash\'s close, ending his helper');
+  assert.deepStrictEqual(FIVE.map((name) => stateOf(closed.helpers, name)), FIVE.map(() => 'running'), 'and not Fern\'s');
+  assert.strictEqual(helpers().runningCount(convo), 5, 'Fern\'s five are still counted');
+  h.writeCodexScenario([{ match: { promptIncludes: 'HAND-NEXT' }, text: 'Fern waits.', awaitHelpers: true, helpers: [{ nickname: 'inbox', holdForInterrupt: true }] }]);
+  const next = say(convo, 'HAND-NEXT please');
+  await rowsWhere(convo, next, stopped('inbox'), 'the inbox row, stopped');
+  assert.strictEqual(maxRunning(convo, next), 5, 'never more than five');
+  release(gate);
+  await turnDone(convo, next);
+});
+
 test('when the app-server goes, every running helper row fails and the count is zero', async () => {
   const convo = open('cxcrash');
   const gate = hold('crash');
